@@ -1,0 +1,27 @@
+[package]
+name = "wallet-ffi"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "flutter_rust_bridge FFI crate for Argus wallet — opaque handles, no secrets in Dart"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+wallet-core = { path = "../wallet-core" }
+wallet-net = { path = "../wallet-net" }
+ergo-lib = { workspace = true, features = ["mnemonic_gen"] }
+ergo-tx = { workspace = true, features = ["ergo-lib"] }
+ergopay-core = { workspace = true }
+citadel-core = { workspace = true }
+rand = { workspace = true }
+flutter_rust_bridge = "=2.11.1"
+once_cell = "1"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+zeroize = { workspace = true }
+tracing = { workspace = true }

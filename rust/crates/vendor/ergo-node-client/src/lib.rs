@@ -1,0 +1,1097 @@
+pub mod capabilities;
+
+use std::sync::Arc;
+
+use citadel_core::{BlockHeight, NodeConfig, NodeError};
+use ergo_lib::ergotree_ir::chain::address::{AddressEncoder, NetworkPrefix};
+use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
+use ergo_node_interface::NodeInterface;
+use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
+
+const NODE_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Pagination cap for address balance reads (cheap — 1 call per page).
+/// 100 pages × 500 boxes = up to 50,000 UTXOs scanned.
+const MAX_WALLET_PAGES: u32 = 100;
+
+/// Pagination cap for full EIP-12 UTXO fetches. We parse the node JSON response
+/// directly (no per-box round-trip), so this can match the balance cap.
+/// 100 pages × 500 boxes = up to 50,000 UTXOs reachable for tx building.
+const MAX_UTXO_PAGES: u32 = 100;
+
+pub use capabilities::{CapabilityTier, NodeCapabilities};
+
+#[derive(Debug, Clone)]
+pub struct TokenInfo {
+    pub name: Option<String>,
+    pub decimals: Option<u32>,
+    pub emission_amount: Option<i64>,
+}
+
+pub type Result<T> = std::result::Result<T, NodeError>;
+
+#[derive(Clone)]
+pub struct NodeClient {
+    inner: Arc<NodeInterface>,
+    capabilities: Arc<RwLock<Option<NodeCapabilities>>>,
+    config: NodeConfig,
+}
+
+impl NodeClient {
+    pub async fn new(config: NodeConfig) -> Result<Self> {
+        let node = NodeInterface::from_url_str(&config.api_key, &config.url)
+            .await
+            .map_err(|e| NodeError::Unreachable {
+                url: format!("{}: {}", config.url, e),
+            })?;
+
+        let client = Self {
+            inner: Arc::new(node),
+            capabilities: Arc::new(RwLock::new(None)),
+            config,
+        };
+
+        client.refresh_capabilities().await;
+
+        Ok(client)
+    }
+
+    pub fn inner(&self) -> &NodeInterface {
+        &self.inner
+    }
+
+    pub fn config(&self) -> &NodeConfig {
+        &self.config
+    }
+
+    pub async fn refresh_capabilities(&self) {
+        let caps = capabilities::detect_capabilities(&self.inner).await;
+        let mut lock = self.capabilities.write().await;
+        *lock = Some(caps);
+    }
+
+    pub async fn capabilities(&self) -> Option<NodeCapabilities> {
+        let lock = self.capabilities.read().await;
+        lock.clone()
+    }
+
+    pub async fn require_capabilities(&self) -> std::result::Result<NodeCapabilities, String> {
+        self.capabilities()
+            .await
+            .ok_or_else(|| "Node capabilities not available".to_string())
+    }
+
+    pub async fn current_height(&self) -> Result<BlockHeight> {
+        timed_request(self.inner.current_block_height()).await
+    }
+
+    pub async fn is_online(&self) -> bool {
+        timed_request(self.inner.current_block_height())
+            .await
+            .is_ok()
+    }
+
+    pub async fn node_name(&self) -> Option<String> {
+        timed_request(self.inner.node_info())
+            .await
+            .ok()
+            .and_then(|info| info["name"].as_str().map(|s| s.to_string()))
+    }
+
+    /// Returns (nanoErgs, Vec<(token_id, amount)>). Requires extraIndex.
+    /// Paginates up to `MAX_WALLET_PAGES` × 500 boxes to support large wallets
+    /// (e.g. storage-rent bots) where the single 500-box call misses tokens.
+    pub async fn get_address_balances(&self, address: &str) -> Result<(u64, Vec<(String, u64)>)> {
+        let boxes = self
+            .fetch_all_unspent_by_address(address, MAX_WALLET_PAGES)
+            .await?;
+
+        let erg_balance: u64 = boxes.iter().map(|b| *b.value.as_u64()).sum();
+
+        use std::collections::HashMap;
+        let mut token_balances: HashMap<String, u64> = HashMap::new();
+
+        for ergo_box in &boxes {
+            if let Some(tokens) = ergo_box.tokens.as_ref() {
+                for token in tokens.iter() {
+                    let token_id: String = token.token_id.into();
+                    let amount = *token.amount.as_u64();
+                    *token_balances.entry(token_id).or_insert(0) += amount;
+                }
+            }
+        }
+
+        let tokens: Vec<(String, u64)> = token_balances.into_iter().collect();
+        Ok((erg_balance, tokens))
+    }
+
+    /// Get unspent boxes for an address in EIP-12 format.
+    ///
+    /// Uses the raw `/blockchain/box/unspent/byAddress` JSON response to
+    /// extract `transactionId` + `index` per box in a single round-trip.
+    /// This avoids the N-per-box `/blockchain/box/byId` calls the older
+    /// implementation made, so we can paginate the full wallet affordably.
+    /// Paginates up to `MAX_UTXO_PAGES` × 500 boxes = 50,000 UTXOs.
+    pub async fn get_address_utxos(&self, address: &str) -> Result<Vec<ergo_tx::Eip12InputBox>> {
+        self.fetch_eip12_unspent_by_address(address, MAX_UTXO_PAGES)
+            .await
+    }
+
+    /// Unspent boxes at an address (extraIndex). Sends a JSON-quoted address body
+    /// so strict nodes (ergo-rust-node / Axum) accept the request — bare `9f…`
+    /// bodies are accepted by Scala but rejected as `integer 9` elsewhere.
+    pub async fn unspent_boxes_by_address(
+        &self,
+        address: &str,
+        offset: u64,
+        limit: u64,
+    ) -> Result<Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>> {
+        let endpoint = format!(
+            "/blockchain/box/unspent/byAddress?offset={}&limit={}",
+            offset, limit
+        );
+        let response =
+            timed_request(self.inner.send_post_req(&endpoint, json_quoted(address))).await?;
+        let text = response.text().await.map_err(|e| NodeError::ApiError {
+            message: format!("Failed to read unspent response: {}", e),
+        })?;
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| NodeError::ApiError {
+                message: format!("Failed to parse unspent response: {}", e),
+            })?;
+        let items = json_array_items(value);
+        let mut boxes = Vec::with_capacity(items.len());
+        for item in items {
+            // Skip indexer false-positives that still carry spentTransactionId.
+            if !item["spentTransactionId"].is_null() {
+                continue;
+            }
+            match serde_json::from_value::<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>(item) {
+                Ok(b) => boxes.push(b),
+                Err(e) => tracing::debug!("Skipping unparseable unspent box: {}", e),
+            }
+        }
+        Ok(boxes)
+    }
+
+    /// Unspent boxes matching an ErgoTree hex (extraIndex). JSON-quotes the body
+    /// for Axum-compatible nodes (same issue as address POSTs).
+    pub async fn unspent_boxes_by_ergo_tree(
+        &self,
+        ergo_tree: &str,
+        offset: u64,
+        limit: u64,
+    ) -> Result<Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>> {
+        let endpoint = format!(
+            "/blockchain/box/unspent/byErgoTree?offset={}&limit={}",
+            offset, limit
+        );
+        let response =
+            timed_request(self.inner.send_post_req(&endpoint, json_quoted(ergo_tree))).await?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| NodeError::ApiError {
+            message: format!("Failed to read byErgoTree response: {}", e),
+        })?;
+        if status.as_u16() == 404 || text.is_empty() {
+            return Ok(Vec::new());
+        }
+        if !status.is_success() {
+            return Err(NodeError::ApiError {
+                message: format!(
+                    "byErgoTree failed ({}): {}",
+                    status.as_u16(),
+                    text.chars().take(200).collect::<String>()
+                ),
+            });
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| NodeError::ApiError {
+                message: format!("Failed to parse byErgoTree response: {}", e),
+            })?;
+        let items = json_array_items(value);
+        let mut boxes = Vec::with_capacity(items.len());
+        for item in items {
+            if !item["spentTransactionId"].is_null() {
+                continue;
+            }
+            match serde_json::from_value::<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>(item) {
+                Ok(b) => boxes.push(b),
+                Err(e) => tracing::debug!("Skipping unparseable byErgoTree box: {}", e),
+            }
+        }
+        Ok(boxes)
+    }
+
+    /// Internal: paginated fetch of all unspent boxes at an address, capped by `max_pages`.
+    async fn fetch_all_unspent_by_address(
+        &self,
+        address: &str,
+        max_pages: u32,
+    ) -> Result<Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>> {
+        const PAGE_SIZE: u64 = 500;
+        let mut all = Vec::new();
+        for page in 0..max_pages {
+            let offset = (page as u64) * PAGE_SIZE;
+            let boxes = self
+                .unspent_boxes_by_address(address, offset, PAGE_SIZE)
+                .await?;
+            let len = boxes.len();
+            all.extend(boxes);
+            if (len as u64) < PAGE_SIZE {
+                return Ok(all);
+            }
+        }
+        tracing::warn!(
+            address,
+            max_pages,
+            fetched = all.len(),
+            "Hit wallet UTXO pagination cap; some balances may be truncated"
+        );
+        Ok(all)
+    }
+
+    /// Internal: paginated fetch of all unspent boxes at an address as EIP-12
+    /// input boxes, parsing the raw JSON response so tx context
+    /// (`transactionId` + `index`) comes in the same call. This replaces the
+    /// older "fetch ErgoBox then look up context per-box" path — avoiding N
+    /// extra HTTP calls makes a 50k-UTXO wallet feasible.
+    async fn fetch_eip12_unspent_by_address(
+        &self,
+        address: &str,
+        max_pages: u32,
+    ) -> Result<Vec<ergo_tx::Eip12InputBox>> {
+        const PAGE_SIZE: u64 = 500;
+        let mut all: Vec<ergo_tx::Eip12InputBox> = Vec::new();
+        for page in 0..max_pages {
+            let offset = (page as u64) * PAGE_SIZE;
+            let endpoint = format!(
+                "/blockchain/box/unspent/byAddress?offset={}&limit={}",
+                offset, PAGE_SIZE
+            );
+            // POST body must be a JSON-quoted address string (Scala also accepts
+            // bare text; ergo-rust-node / Axum require a real JSON string).
+            let response =
+                timed_request(self.inner.send_post_req(&endpoint, json_quoted(address))).await?;
+            let text = response.text().await.map_err(|e| NodeError::ApiError {
+                message: format!("Failed to read unspent response: {}", e),
+            })?;
+            if text.is_empty() {
+                break;
+            }
+            let value: serde_json::Value =
+                serde_json::from_str(&text).map_err(|e| NodeError::ApiError {
+                    message: format!("Failed to parse unspent response: {}", e),
+                })?;
+            let items = json_array_items(value);
+
+            let page_len = items.len();
+            for item in items {
+                if let Some(box_) = json_box_to_eip12(&item) {
+                    all.push(box_);
+                }
+            }
+            if (page_len as u64) < PAGE_SIZE {
+                return Ok(all);
+            }
+        }
+        tracing::warn!(
+            address,
+            max_pages,
+            fetched = all.len(),
+            "Hit wallet UTXO pagination cap; some UTXOs may be unreachable for tx building"
+        );
+        Ok(all)
+    }
+
+    pub async fn get_token_info(&self, token_id: &str) -> Result<TokenInfo> {
+        let endpoint = format!("/blockchain/token/byId/{}", token_id);
+        let response = timed_request(self.inner.send_get_req(&endpoint)).await?;
+
+        let json: serde_json::Value = response.json().await.map_err(|e| NodeError::ApiError {
+            message: format!("Failed to parse token info: {}", e),
+        })?;
+
+        Ok(TokenInfo {
+            name: json["name"].as_str().map(|s| s.to_string()),
+            decimals: json["decimals"].as_u64().map(|d| d as u32),
+            emission_amount: json["emissionAmount"].as_i64(),
+        })
+    }
+
+    /// Requires extraIndex.
+    pub async fn get_recent_transactions(
+        &self,
+        address: &str,
+        limit: u64,
+    ) -> Result<Vec<serde_json::Value>> {
+        let (items, _) = self.get_transactions_by_address(address, 0, limit).await?;
+        Ok(items)
+    }
+
+    pub async fn get_full_node_info(&self) -> Result<serde_json::Value> {
+        timed_request(self.inner.node_info()).await
+    }
+
+    /// Requires extraIndex.
+    pub async fn get_transaction_by_id(&self, tx_id: &str) -> Result<serde_json::Value> {
+        timed_request(
+            self.inner
+                .blockchain_transaction_from_id(&tx_id.to_string()),
+        )
+        .await
+    }
+
+    pub async fn get_unconfirmed_transaction_by_id(
+        &self,
+        tx_id: &str,
+    ) -> Result<serde_json::Value> {
+        timed_request(self.inner.unconfirmed_transaction_by_id(tx_id)).await
+    }
+
+    pub async fn get_block_by_id(&self, header_id: &str) -> Result<serde_json::Value> {
+        timed_request(self.inner.get_block(header_id)).await
+    }
+
+    pub async fn get_block_header_by_id(&self, header_id: &str) -> Result<serde_json::Value> {
+        timed_request(self.inner.get_block_header(header_id)).await
+    }
+
+    /// May return multiple IDs due to forks.
+    pub async fn get_block_ids_at_height(&self, height: u64) -> Result<Vec<String>> {
+        timed_request(self.inner.block_ids_at_height(height)).await
+    }
+
+    pub async fn get_last_block_headers(
+        &self,
+        count: u32,
+    ) -> Result<Vec<ergo_lib::ergo_chain_types::Header>> {
+        timed_request(self.inner.get_last_block_headers(count)).await
+    }
+
+    pub async fn get_block_tx_count(&self, header_id: &str) -> Result<usize> {
+        let json = timed_request(self.inner.get_block_transactions(header_id)).await?;
+        Ok(json["transactions"]
+            .as_array()
+            .map(|a| a.len())
+            .unwrap_or(0))
+    }
+
+    /// Raw JSON variant that preserves all node fields (unlike the typed version).
+    pub async fn get_last_block_headers_raw(&self, count: u32) -> Result<Vec<serde_json::Value>> {
+        let endpoint = format!("/blocks/lastHeaders/{}", count);
+        let response = timed_request(self.inner.send_get_req(&endpoint)).await?;
+        let json: Vec<serde_json::Value> =
+            response.json().await.map_err(|e| NodeError::ApiError {
+                message: format!("Failed to parse block headers: {}", e),
+            })?;
+        Ok(json)
+    }
+
+    pub async fn get_mempool_transactions(&self) -> Result<Vec<serde_json::Value>> {
+        timed_request(self.inner.mempool_transactions()).await
+    }
+
+    /// Raw blockchain box (includes spentTransactionId, unlike UTXO-set lookups).
+    pub async fn get_blockchain_box_by_id(&self, box_id: &str) -> Result<serde_json::Value> {
+        let endpoint = format!("/blockchain/box/byId/{}", box_id);
+        let response = timed_request(self.inner.send_get_req(&endpoint)).await?;
+        response.json().await.map_err(|e| NodeError::ApiError {
+            message: format!("Failed to parse box: {}", e),
+        })
+    }
+
+    /// Returns (items, total_count). Requires extraIndex.
+    /// Uses a JSON-quoted address body for Axum/scala parity (see
+    /// [`Self::unspent_boxes_by_address`]).
+    pub async fn get_transactions_by_address(
+        &self,
+        address: &str,
+        offset: u64,
+        limit: u64,
+    ) -> Result<(Vec<serde_json::Value>, u64)> {
+        let endpoint = format!(
+            "/blockchain/transaction/byAddress?offset={}&limit={}",
+            offset, limit
+        );
+        let response =
+            timed_request(self.inner.send_post_req(&endpoint, json_quoted(address))).await?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| NodeError::ApiError {
+            message: format!("Failed to read transactions response: {}", e),
+        })?;
+        if status.as_u16() == 404 {
+            return Ok((Vec::new(), 0));
+        }
+        if text.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let res_json: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| NodeError::ApiError {
+                message: format!("Failed to parse transactions response: {}", e),
+            })?;
+        if !status.is_success() {
+            let detail = res_json
+                .get("detail")
+                .or_else(|| res_json.get("reason"))
+                .and_then(|d| d.as_str())
+                .unwrap_or(&text);
+            return Err(NodeError::ApiError {
+                message: format!("transactions byAddress failed ({}): {}", status.as_u16(), detail),
+            });
+        }
+        let total = res_json["total"].as_u64().unwrap_or(0);
+        let items = res_json["items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        Ok((items, total))
+    }
+
+    pub async fn get_unconfirmed_by_address(
+        &self,
+        address: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let ergo_tree_hex = address_to_ergo_tree(address).ok_or_else(|| NodeError::ApiError {
+            message: format!("Could not derive ergoTree from address: {}", address),
+        })?;
+
+        self.get_unconfirmed_by_ergo_tree(&ergo_tree_hex).await
+    }
+
+    pub async fn get_unconfirmed_by_ergo_tree(
+        &self,
+        ergo_tree_hex: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let endpoint = "/transactions/unconfirmed/byErgoTree?offset=0&limit=100";
+        let response =
+            timed_request(self.inner.send_post_req(endpoint, json_quoted(ergo_tree_hex))).await?;
+
+        let text = response.text().await.map_err(|e| NodeError::ApiError {
+            message: format!("Failed to read mempool response: {}", e),
+        })?;
+
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| NodeError::ApiError {
+                message: format!("Failed to parse mempool response: {}", e),
+            })?;
+
+        match value {
+            serde_json::Value::Array(arr) => Ok(arr),
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Works regardless of extraIndex availability.
+    pub async fn get_box_by_id(
+        &self,
+        box_id: &citadel_core::BoxId,
+    ) -> Result<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox> {
+        timed_request(self.inner.box_from_id_with_pool(box_id.as_str()))
+            .await
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("not found") || msg.contains("404") {
+                    NodeError::BoxNotFound {
+                        box_id: box_id.to_string(),
+                    }
+                } else {
+                    e
+                }
+            })
+    }
+
+    /// Requires extraIndex. Returns error in Basic mode.
+    pub async fn get_boxes_by_token_id(
+        &self,
+        capabilities: &NodeCapabilities,
+        token_id: &citadel_core::TokenId,
+        limit: u64,
+    ) -> Result<Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>> {
+        match capabilities.capability_tier {
+            CapabilityTier::Full | CapabilityTier::IndexLagging => {
+                let ergo_token_id: ergo_lib::ergotree_ir::chain::token::TokenId =
+                    token_id.as_str().parse().map_err(|e| NodeError::ApiError {
+                        message: format!("Invalid token ID format: {}", e),
+                    })?;
+
+                let boxes = timed_request(self.inner.unspent_boxes_by_token_id(
+                    &ergo_token_id,
+                    0,
+                    limit,
+                ))
+                .await?;
+
+                if capabilities.capability_tier == CapabilityTier::IndexLagging {
+                    tracing::warn!(
+                        token_id = %token_id,
+                        index_lag = ?capabilities.index_lag(),
+                        "Using potentially stale box data from lagging index"
+                    );
+                }
+
+                Ok(boxes)
+            }
+            CapabilityTier::Basic => Err(NodeError::ExtraIndexRequired {
+                feature: "token ID lookup",
+            }),
+        }
+    }
+
+    pub async fn get_box_by_token_id(
+        &self,
+        capabilities: &NodeCapabilities,
+        token_id: &citadel_core::TokenId,
+    ) -> Result<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox> {
+        let boxes = self
+            .get_boxes_by_token_id(capabilities, token_id, 1)
+            .await?;
+
+        boxes
+            .into_iter()
+            .next()
+            .ok_or_else(|| NodeError::BoxNotFound {
+                box_id: format!("box with token {}", token_id),
+            })
+    }
+
+    /// Returns (transactionId, output index) for EIP-12 input construction.
+    pub async fn get_box_creation_info(&self, box_id: &str) -> Result<(String, u16)> {
+        let endpoint = format!("/blockchain/box/byId/{}", box_id);
+        let response = timed_request(self.inner.send_get_req(&endpoint)).await?;
+
+        let json: serde_json::Value = response.json().await.map_err(|e| NodeError::ApiError {
+            message: format!("Failed to parse box response: {}", e),
+        })?;
+
+        let tx_id = json["transactionId"]
+            .as_str()
+            .ok_or_else(|| NodeError::ApiError {
+                message: format!("Missing transactionId in box {} response", box_id),
+            })?
+            .to_string();
+
+        let index = json["index"].as_u64().ok_or_else(|| NodeError::ApiError {
+            message: format!("Missing index in box {} response", box_id),
+        })? as u16;
+
+        Ok((tx_id, index))
+    }
+
+    async fn get_box_context(&self, box_id: &str) -> Result<(String, u16)> {
+        self.get_box_creation_info(box_id).await
+    }
+
+    /// Mempool-aware UTXOs: confirmed minus mempool-spent, plus unconfirmed outputs.
+    /// Enables 0-conf chained transactions.
+    pub async fn get_effective_utxos(&self, address: &str) -> Result<Vec<ergo_tx::Eip12InputBox>> {
+        let confirmed = self.get_address_utxos(address).await?;
+
+        let user_ergo_tree = match address_to_ergo_tree(address) {
+            Some(tree) => tree,
+            None => {
+                tracing::warn!(
+                    "Could not derive ergoTree from address, using confirmed UTXOs only"
+                );
+                return Ok(confirmed);
+            }
+        };
+
+        let mempool_txs = match self.get_unconfirmed_by_ergo_tree(&user_ergo_tree).await {
+            Ok(txs) => txs,
+            Err(e) => {
+                tracing::warn!("Mempool query failed, using confirmed UTXOs only: {}", e);
+                return Ok(confirmed);
+            }
+        };
+
+        if mempool_txs.is_empty() {
+            return Ok(confirmed);
+        }
+
+        let mut spent_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for tx in &mempool_txs {
+            if let Some(inputs) = tx["inputs"].as_array() {
+                for input in inputs {
+                    if let Some(box_id) = input["boxId"].as_str() {
+                        spent_ids.insert(box_id.to_string());
+                    }
+                }
+            }
+        }
+
+        let mut effective: Vec<ergo_tx::Eip12InputBox> = confirmed
+            .into_iter()
+            .filter(|utxo| !spent_ids.contains(&utxo.box_id))
+            .collect();
+
+        for tx in &mempool_txs {
+            let tx_id = match tx["id"].as_str() {
+                Some(id) => id,
+                None => continue,
+            };
+
+            if let Some(outputs) = tx["outputs"].as_array() {
+                for (idx, output) in outputs.iter().enumerate() {
+                    let ergo_tree = match output["ergoTree"].as_str() {
+                        Some(et) => et,
+                        None => continue,
+                    };
+
+                    if ergo_tree != user_ergo_tree {
+                        continue;
+                    }
+
+                    let box_id = match output["boxId"].as_str() {
+                        Some(id) => id.to_string(),
+                        None => continue,
+                    };
+
+                    if spent_ids.contains(&box_id) {
+                        continue;
+                    }
+
+                    if effective.iter().any(|u| u.box_id == box_id) {
+                        continue;
+                    }
+
+                    if let Some(eip12) = json_output_to_eip12(output, tx_id, idx as u16) {
+                        effective.push(eip12);
+                    }
+                }
+            }
+        }
+
+        Ok(effective)
+    }
+
+    /// Union of mempool-aware UTXOs across multiple wallet addresses.
+    pub async fn get_effective_utxos_multi(
+        &self,
+        addresses: &[String],
+    ) -> Result<Vec<ergo_tx::Eip12InputBox>> {
+        if addresses.is_empty() {
+            return Ok(Vec::new());
+        }
+        if addresses.len() == 1 {
+            return self.get_effective_utxos(&addresses[0]).await;
+        }
+
+        let mut all = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for addr in addresses {
+            let utxos = self.get_effective_utxos(addr).await?;
+            for u in utxos {
+                if seen.insert(u.box_id.clone()) {
+                    all.push(u);
+                }
+            }
+        }
+        Ok(all)
+    }
+
+    /// Sum confirmed balances across multiple addresses.
+    pub async fn get_addresses_balances(
+        &self,
+        addresses: &[String],
+    ) -> Result<(u64, Vec<(String, u64)>)> {
+        if addresses.is_empty() {
+            return Ok((0, Vec::new()));
+        }
+        if addresses.len() == 1 {
+            return self.get_address_balances(&addresses[0]).await;
+        }
+
+        let mut erg_total = 0u64;
+        let mut token_balances: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        for addr in addresses {
+            let (erg, tokens) = self.get_address_balances(addr).await?;
+            erg_total = erg_total.saturating_add(erg);
+            for (tid, amt) in tokens {
+                let entry = token_balances.entry(tid).or_insert(0);
+                *entry = entry.saturating_add(amt);
+            }
+        }
+        Ok((erg_total, token_balances.into_iter().collect()))
+    }
+
+    pub async fn get_eip12_box_by_id(&self, box_id: &str) -> Result<ergo_tx::Eip12InputBox> {
+        let ergo_box = timed_request(self.inner.box_from_id_with_pool(box_id)).await?;
+        let (tx_id, index) = self.get_box_context(box_id).await?;
+        Ok(ergo_tx::Eip12InputBox::from_ergo_box(
+            &ergo_box, tx_id, index,
+        ))
+    }
+
+    /// Dry-run a fully-assembled transaction through the node's `POST /transactions/check`
+    /// endpoint WITHOUT broadcasting it. `tx_json` must be a complete `ErgoTransaction`
+    /// (inputs with `spendingProof`, dataInputs, outputs). Returns `Ok(tx_id)` if the node
+    /// would accept it, or `Err` with the node's rejection message. This validates the
+    /// full script execution against the live UTXO set — the strongest pre-broadcast check
+    /// available. Note the inputs must be currently unspent for the check to run.
+    pub async fn check_transaction(&self, tx_json: &serde_json::Value) -> Result<String> {
+        let body = serde_json::to_string(tx_json).map_err(|e| NodeError::ApiError {
+            message: format!("Failed to serialize tx for check: {}", e),
+        })?;
+        let response = timed_request(self.inner.send_post_req("/transactions/check", body)).await?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| NodeError::ApiError {
+            message: format!("Failed to read /transactions/check response: {}", e),
+        })?;
+        if status.is_success() {
+            // Body is the accepted tx id, JSON-quoted.
+            Ok(text.trim().trim_matches('"').to_string())
+        } else {
+            // Body is a JSON error object; surface `detail`/`reason` if present.
+            let detail = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| {
+                    v.get("detail")
+                        .or_else(|| v.get("reason"))
+                        .and_then(|d| d.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or(text);
+            Err(NodeError::ApiError {
+                message: format!("transaction rejected ({}): {}", status.as_u16(), detail),
+            })
+        }
+    }
+
+    /// Broadcast a fully-assembled transaction via `POST /transactions`. `tx_json` must be
+    /// a complete `ErgoTransaction`. Returns the accepted tx id. Used for the signature-
+    /// free Paideia unstake/refund txs, which carry empty spending proofs and therefore
+    /// need no wallet. Prefer [`Self::check_transaction`] first.
+    pub async fn submit_transaction(&self, tx_json: &serde_json::Value) -> Result<String> {
+        let body = serde_json::to_string(tx_json).map_err(|e| NodeError::ApiError {
+            message: format!("Failed to serialize tx for submit: {}", e),
+        })?;
+        let response = timed_request(self.inner.send_post_req("/transactions", body)).await?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| NodeError::ApiError {
+            message: format!("Failed to read /transactions response: {}", e),
+        })?;
+        if status.is_success() {
+            Ok(text.trim().trim_matches('"').to_string())
+        } else {
+            Err(NodeError::ApiError {
+                message: format!("transaction not accepted ({}): {}", status.as_u16(), text),
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerInfo {
+    pub address: String,
+    pub name: Option<String>,
+    /// Advertised REST API base URL when the peer publishes one.
+    pub rest_api_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeProbeResult {
+    pub url: String,
+    pub name: Option<String>,
+    pub chain_height: u64,
+    pub capability_tier: String,
+    pub latency_ms: u64,
+}
+
+impl NodeClient {
+    pub async fn get_connected_peers(&self) -> Result<Vec<PeerInfo>> {
+        let response = timed_request(self.inner.send_get_req("/peers/connected")).await?;
+
+        let json: Vec<serde_json::Value> =
+            response.json().await.map_err(|e| NodeError::ApiError {
+                message: format!("Failed to parse peers response: {}", e),
+            })?;
+
+        let peers = json
+            .into_iter()
+            .filter_map(|p| {
+                let address = p["address"].as_str()?.to_string();
+                let name = p["name"].as_str().map(|s| s.to_string());
+                let rest_api_url = p["restApiUrl"].as_str().map(|s| s.to_string());
+                Some(PeerInfo {
+                    address,
+                    name,
+                    rest_api_url,
+                })
+            })
+            .collect();
+
+        Ok(peers)
+    }
+}
+
+/// Returns None on timeout (4s) or unreachable.
+pub async fn probe_node(url: &str) -> Option<NodeProbeResult> {
+    let start = std::time::Instant::now();
+
+    let node = tokio::time::timeout(
+        std::time::Duration::from_secs(4),
+        NodeInterface::from_url_str("", url),
+    )
+    .await
+    .ok()?
+    .ok()?;
+
+    let info = tokio::time::timeout(std::time::Duration::from_secs(4), node.node_info())
+        .await
+        .ok()?
+        .ok()?;
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    let chain_height = info["fullHeight"].as_u64().unwrap_or(0);
+    let name = info["name"].as_str().map(|s| s.to_string());
+
+    let tier =
+        match tokio::time::timeout(std::time::Duration::from_secs(4), node.get_indexed_height())
+            .await
+        {
+            Ok(Ok(ih)) => {
+                let indexed = ih.indexed_height as u64;
+                let lag = chain_height.saturating_sub(indexed);
+                if lag <= 10 {
+                    "Full"
+                } else {
+                    "IndexLagging"
+                }
+            }
+            _ => "Basic",
+        };
+
+    Some(NodeProbeResult {
+        url: url.to_string(),
+        name,
+        chain_height,
+        capability_tier: tier.to_string(),
+        latency_ms,
+    })
+}
+
+async fn timed_request<T, E: std::fmt::Display>(
+    fut: impl std::future::Future<Output = std::result::Result<T, E>>,
+) -> Result<T> {
+    tokio::time::timeout(NODE_REQUEST_TIMEOUT, fut)
+        .await
+        .map_err(|_| NodeError::ApiError {
+            message: format!(
+                "Node request timed out after {}s",
+                NODE_REQUEST_TIMEOUT.as_secs()
+            ),
+        })?
+        .map_err(|e| NodeError::ApiError {
+            message: e.to_string(),
+        })
+}
+
+/// JSON-string body for POST endpoints that take a single address / ergoTree.
+fn json_quoted(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s))
+}
+
+/// Bare array or `{items: [...]}` — both appear across node versions.
+fn json_array_items(value: serde_json::Value) -> Vec<serde_json::Value> {
+    match value {
+        serde_json::Value::Array(arr) => arr,
+        serde_json::Value::Object(ref map) => map
+            .get("items")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+pub fn address_to_ergo_tree(address: &str) -> Option<String> {
+    let encoder = AddressEncoder::new(NetworkPrefix::Mainnet);
+    let addr = encoder.parse_address_from_str(address).ok()?;
+    let tree = addr.script().ok()?;
+    let bytes = tree.sigma_serialize_bytes().ok()?;
+    Some(bytes.iter().map(|b| format!("{:02x}", b)).collect())
+}
+
+/// Build an Eip12InputBox from a `/blockchain/box/...` JSON item.
+/// Relies on `transactionId` + `index` being present in the response
+/// (they are on the unspent/byAddress, byId, byTokenId endpoints).
+fn json_box_to_eip12(item: &serde_json::Value) -> Option<ergo_tx::Eip12InputBox> {
+    let box_id = item["boxId"].as_str()?.to_string();
+    let transaction_id = item["transactionId"].as_str()?.to_string();
+    let index = item["index"].as_u64()? as u16;
+    let value = item["value"].as_u64()?.to_string();
+    let ergo_tree = item["ergoTree"].as_str()?.to_string();
+    let creation_height = item["creationHeight"].as_i64()? as i32;
+
+    let assets = item["assets"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| {
+                    Some(ergo_tx::Eip12Asset {
+                        token_id: a["tokenId"].as_str()?.to_string(),
+                        amount: a["amount"].as_u64()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let additional_registers = item["additionalRegisters"]
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| {
+                    // Registers come either as a plain hex string or as an
+                    // object `{serializedValue, sigmaType, renderedValue}`.
+                    let hex = if let Some(s) = v.as_str() {
+                        s.to_string()
+                    } else {
+                        v["serializedValue"].as_str()?.to_string()
+                    };
+                    Some((k.clone(), hex))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(ergo_tx::Eip12InputBox {
+        box_id,
+        transaction_id,
+        index,
+        value,
+        ergo_tree,
+        assets,
+        creation_height,
+        additional_registers,
+        extension: std::collections::HashMap::new(),
+    })
+}
+
+fn json_output_to_eip12(
+    output: &serde_json::Value,
+    tx_id: &str,
+    index: u16,
+) -> Option<ergo_tx::Eip12InputBox> {
+    let box_id = output["boxId"].as_str()?.to_string();
+    let value = output["value"].as_u64()?.to_string();
+    let ergo_tree = output["ergoTree"].as_str()?.to_string();
+    let creation_height = output["creationHeight"].as_i64()? as i32;
+
+    let assets = output["assets"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|a| {
+                    Some(ergo_tx::Eip12Asset {
+                        token_id: a["tokenId"].as_str()?.to_string(),
+                        amount: a["amount"].as_u64()?.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let additional_registers = output["additionalRegisters"]
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .filter_map(|(k, v)| {
+                    let val = v.as_str().unwrap_or_default();
+                    // Node may wrap register values in {"serializedValue": "..."} or return plain hex
+                    let hex = if val.is_empty() {
+                        v["serializedValue"].as_str()?.to_string()
+                    } else {
+                        val.to_string()
+                    };
+                    Some((k.clone(), hex))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(ergo_tx::Eip12InputBox {
+        box_id,
+        transaction_id: tx_id.to_string(),
+        index,
+        value,
+        ergo_tree,
+        assets,
+        creation_height,
+        additional_registers,
+        extension: std::collections::HashMap::new(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = NodeConfig::default();
+        assert_eq!(config.url, "http://127.0.0.1:9053");
+    }
+
+    #[test]
+    fn test_json_output_to_eip12() {
+        let output = serde_json::json!({
+            "boxId": "abc123",
+            "value": 1000000000u64,
+            "ergoTree": "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "assets": [
+                {"tokenId": "token1", "amount": 100u64}
+            ],
+            "creationHeight": 999000,
+            "additionalRegisters": {}
+        });
+
+        let result = json_output_to_eip12(&output, "tx_id_123", 0);
+        assert!(result.is_some());
+
+        let eip12 = result.unwrap();
+        assert_eq!(eip12.box_id, "abc123");
+        assert_eq!(eip12.transaction_id, "tx_id_123");
+        assert_eq!(eip12.index, 0);
+        assert_eq!(eip12.value, "1000000000");
+        assert_eq!(eip12.assets.len(), 1);
+        assert_eq!(eip12.assets[0].token_id, "token1");
+        assert_eq!(eip12.assets[0].amount, "100");
+        assert_eq!(eip12.creation_height, 999000);
+    }
+
+    #[test]
+    fn test_json_output_to_eip12_no_assets() {
+        let output = serde_json::json!({
+            "boxId": "abc123",
+            "value": 1000000u64,
+            "ergoTree": "0008cd...",
+            "creationHeight": 100,
+            "additionalRegisters": {}
+        });
+
+        let result = json_output_to_eip12(&output, "tx1", 1);
+        assert!(result.is_some());
+        assert!(result.unwrap().assets.is_empty());
+    }
+
+    #[test]
+    fn test_json_output_to_eip12_missing_fields() {
+        // Missing boxId
+        let output = serde_json::json!({
+            "value": 1000000u64,
+            "ergoTree": "0008cd..."
+        });
+        assert!(json_output_to_eip12(&output, "tx1", 0).is_none());
+    }
+}

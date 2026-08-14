@@ -1,0 +1,13 @@
+[package]
+name = "core2"
+version = "0.4.0"
+edition = "2018"
+description = "Minimal shim providing core2::io for sigma-rust compatibility"
+
+[features]
+default = ["std"]
+std = []
+alloc = []
+
+[lib]
+path = "src/lib.rs"

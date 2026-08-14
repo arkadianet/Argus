@@ -1,0 +1,22 @@
+[package]
+name = "wallet-net"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Ergo explorer/node HTTP client for Argus wallet"
+
+[dependencies]
+citadel-core = { workspace = true }
+ergo-node-interface = { workspace = true }
+ergo-lib = { workspace = true }
+ergo-tx = { workspace = true, features = ["ergo-lib"] }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# ─── Misc ────────────────────────────────────────────────────────────────
+tracing = { workspace = true }
+num-bigint = { workspace = true }
+base16 = "0.2"
+reqwest = { workspace = true }

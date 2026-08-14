@@ -1,0 +1,35 @@
+# Rust
+rust/target/
+**/*.rs.bk
+
+# Flutter
+app/build/
+app/.dart_tool/
+app/.packages
+app/.pub/
+app/pubspec.lock
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/Flutter.framework
+app/ios/Flutter/Flutter.podspec
+
+# FRB generated (regenerated on demand)
+app/lib/bridge/frb_generated.dart
+app/lib/bridge/frb_generated.io.dart
+app/lib/bridge/frb_generated.web.dart
+app/lib/bridge/api.dart
+rust/crates/wallet-ffi/src/frb_generated.rs
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.env.local

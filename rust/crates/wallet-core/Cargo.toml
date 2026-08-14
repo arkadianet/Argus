@@ -1,0 +1,28 @@
+[package]
+name = "wallet-core"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Pure Ergo wallet domain logic: HD derivation, mnemonic-seed, encryption, transaction building, signing"
+
+[dependencies]
+ergo-lib = { workspace = true }
+ergo-chain-types = { workspace = true }
+ergotree-ir = { workspace = true }
+ergotree-interpreter = { workspace = true }
+citadel-core = { workspace = true }
+ergo-tx = { workspace = true, features = ["ergo-lib"] }
+ergopay-core = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+hex = { workspace = true }
+zeroize = { workspace = true, features = ["zeroize_derive"] }
+sha2 = { workspace = true }
+hmac = { workspace = true }
+argon2 = { workspace = true }
+aes-gcm = { workspace = true, features = ["aes"] }
+rand = { workspace = true }
+tracing = { workspace = true }
