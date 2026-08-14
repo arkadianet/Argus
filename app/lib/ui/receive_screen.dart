@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 class ReceiveScreen extends StatelessWidget {
   const ReceiveScreen({super.key});
@@ -31,21 +32,19 @@ class ReceiveScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-              // QR code placeholder — a real QR renderer needs qr_flutter package
-              Container(
-                width: 200,
-                height: 200,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: theme.colorScheme.outline),
+              QrImageView(
+                data: address,
+                version: QrVersions.auto,
+                size: 200,
+                backgroundColor: Colors.white,
+                padding: const EdgeInsets.all(12),
+                eyeStyle: const QrEyeStyle(
+                  eyeShape: QrEyeShape.square,
+                  color: Color(0xFF00BFA5),
                 ),
-                child: Center(
-                  child: Text(
-                    'QR Placeholder\n(install qr_flutter)',
-                    textAlign: TextAlign.center,
-                    style: theme.textTheme.bodySmall,
-                  ),
+                dataModuleStyle: const QrDataModuleStyle(
+                  dataModuleShape: QrDataModuleShape.square,
+                  color: Color(0xFF00BFA5),
                 ),
               ),
               const SizedBox(height: 24),
