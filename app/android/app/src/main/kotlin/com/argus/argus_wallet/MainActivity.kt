@@ -11,6 +11,6 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        SecureStorageHandler.registerWith(flutterEngine, applicationContext)
+        SecureStorageHandler.registerWith(flutterEngine, this)
     }
 }

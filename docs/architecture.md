@@ -37,7 +37,7 @@ wallet/
 │
 ├── scripts/
 │   ├── build_android.sh          # cargo-ndk → jniLibs
-│   └── build_ios.sh              # Placeholder
+│   └── build_ios.sh              # xcframework (macOS / Xcode)
 │
 └── docs/
     ├── architecture.md           # This file

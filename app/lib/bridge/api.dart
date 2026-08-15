@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `drop_preparations_for`, `err_str`, `node_config`, `open_wallet`, `prepare`, `recover`, `register_handle`, `session_json`, `store_preparation`, `take_preparation`, `with_handle`
+// These functions are ignored because they are not marked as `pub`: `drop_preparations_for`, `err_str`, `node_client`, `open_wallet`, `prepare`, `recover`, `register_handle`, `session_json`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`
 
 /// Create a wallet from a BIP-39 mnemonic. Returns `{handle_id, encrypted_seed_json, wrap_key}`.
@@ -48,6 +48,24 @@ Future<String> createEncryptedSeed({
   passphrase: passphrase,
 );
 
+/// Seal the AES wrap key with a PIN (Argon2id + AES-GCM). Returns pin-wrap JSON.
+Future<String> wrapKeyWithPin({
+  required String wrapKeyHex,
+  required String pin,
+}) => RustLib.instance.api.crateApiWrapKeyWithPin(
+  wrapKeyHex: wrapKeyHex,
+  pin: pin,
+);
+
+/// Recover the AES wrap key from pin-wrap JSON.
+Future<String> unwrapKeyWithPin({
+  required String pinWrapJson,
+  required String pin,
+}) => RustLib.instance.api.crateApiUnwrapKeyWithPin(
+  pinWrapJson: pinWrapJson,
+  pin: pin,
+);
+
 Future<String> signReducedTransaction({
   required BigInt handleId,
   required List<int> reducedTxBytes,
@@ -61,6 +79,12 @@ Future<String> generateMnemonic({required int strength}) =>
 
 Future<String> getBalance({required String address, String? nodeUrl}) =>
     RustLib.instance.api.crateApiGetBalance(address: address, nodeUrl: nodeUrl);
+
+Future<String> getTokenInfo({required String tokenId, String? explorerUrl}) =>
+    RustLib.instance.api.crateApiGetTokenInfo(
+      tokenId: tokenId,
+      explorerUrl: explorerUrl,
+    );
 
 Future<String> getTransactionHistory({
   required String address,
@@ -85,6 +109,7 @@ Future<String> discoverAddresses({
 Future<String> prepareSend({
   required BigInt handleId,
   required String senderAddress,
+  required String changeAddress,
   required String recipientAddress,
   required PlatformInt64 amountNanoErg,
   String? tokenId,
@@ -93,6 +118,7 @@ Future<String> prepareSend({
 }) => RustLib.instance.api.crateApiPrepareSend(
   handleId: handleId,
   senderAddress: senderAddress,
+  changeAddress: changeAddress,
   recipientAddress: recipientAddress,
   amountNanoErg: amountNanoErg,
   tokenId: tokenId,

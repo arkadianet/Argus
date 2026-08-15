@@ -1,14 +1,9 @@
 import 'package:flutter/services.dart';
 
-/// Stores and retrieves the encrypted seed blob using platform-native secure
-/// storage (Android Keystore + EncryptedSharedPreferences / iOS Keychain).
-///
-/// The Dart side never sees the raw seed or mnemonic — only the encrypted blob.
+/// Platform Keystore/Keychain for the sealed seed, PIN wrap, and optional wrap key.
 class SecureStorageService {
   static const _channel = MethodChannel('com.argus.wallet/secure_storage');
 
-  /// Save the encrypted seed JSON blob to platform secure storage.
-  /// Returns true on success.
   static Future<bool> saveEncryptedSeed(String encryptedSeedJson) async {
     try {
       await _channel.invokeMethod('saveEncryptedSeed', {
@@ -16,10 +11,7 @@ class SecureStorageService {
       });
       return true;
     } on PlatformException catch (e) {
-      if (e.code == 'KEY_INVALIDATED') {
-        throw SecureStorageException.biometricChanged();
-      }
-      throw SecureStorageException('Failed to save: ${e.message}');
+      throw _map(e, 'Failed to save');
     }
   }
 
@@ -28,47 +20,51 @@ class SecureStorageService {
       await _channel.invokeMethod('saveWrapKey', {'wrapKey': wrapKey});
       return true;
     } on PlatformException catch (e) {
-      if (e.code == 'KEY_INVALIDATED') {
-        throw SecureStorageException.biometricChanged();
-      }
-      throw SecureStorageException('Failed to save wrap key: ${e.message}');
+      throw _map(e, 'Failed to save wrap key');
     }
   }
 
-  static Future<void> saveWalletSecrets({
+  static Future<void> savePinWrap(String pinWrapJson) async {
+    try {
+      await _channel.invokeMethod('savePinWrap', {'pinWrapJson': pinWrapJson});
+    } on PlatformException catch (e) {
+      throw _map(e, 'Failed to save PIN wrap');
+    }
+  }
+
+  static Future<void> saveWalletWithPin({
     required String encryptedSeedJson,
-    required String wrapKey,
+    required String pinWrapJson,
   }) async {
     await saveEncryptedSeed(encryptedSeedJson);
-    await saveWrapKey(wrapKey);
+    await savePinWrap(pinWrapJson);
+    await deleteWrapKey();
   }
 
   static Future<String?> loadWrapKey() async {
     try {
       return await _channel.invokeMethod<String>('loadWrapKey');
     } on PlatformException catch (e) {
-      if (e.code == 'KEY_INVALIDATED') {
-        throw SecureStorageException.biometricChanged();
-      }
-      throw SecureStorageException('Failed to load wrap key: ${e.message}');
+      throw _map(e, 'Failed to load wrap key');
     }
   }
 
-  /// Load the encrypted seed JSON blob from platform secure storage.
-  /// Returns null if no seed is stored.
+  static Future<String?> loadPinWrap() async {
+    try {
+      return await _channel.invokeMethod<String>('loadPinWrap');
+    } on PlatformException catch (e) {
+      throw _map(e, 'Failed to load PIN wrap');
+    }
+  }
+
   static Future<String?> loadEncryptedSeed() async {
     try {
-      final result = await _channel.invokeMethod<String>('loadEncryptedSeed');
-      return result;
+      return await _channel.invokeMethod<String>('loadEncryptedSeed');
     } on PlatformException catch (e) {
-      if (e.code == 'KEY_INVALIDATED') {
-        throw SecureStorageException.biometricChanged();
-      }
-      throw SecureStorageException('Failed to load: ${e.message}');
+      throw _map(e, 'Failed to load');
     }
   }
 
-  /// Delete the stored encrypted seed and wrap key.
   static Future<void> deleteEncryptedSeed() async {
     try {
       await _channel.invokeMethod('deleteEncryptedSeed');
@@ -77,14 +73,65 @@ class SecureStorageService {
     }
   }
 
-  /// Check if a seed is stored.
+  static Future<void> deleteWrapKey() async {
+    try {
+      await _channel.invokeMethod('deleteWrapKey');
+    } on PlatformException catch (e) {
+      throw SecureStorageException('Failed to delete wrap key: ${e.message}');
+    }
+  }
+
   static Future<bool> hasEncryptedSeed() async {
     try {
-      final result = await _channel.invokeMethod<bool>('hasEncryptedSeed');
-      return result ?? false;
+      return await _channel.invokeMethod<bool>('hasEncryptedSeed') ?? false;
     } on PlatformException catch (e) {
       throw SecureStorageException('Failed to check: ${e.message}');
     }
+  }
+
+  static Future<bool> hasPinWrap() async {
+    try {
+      return await _channel.invokeMethod<bool>('hasPinWrap') ?? false;
+    } on PlatformException catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> hasWrapKey() async {
+    try {
+      return await _channel.invokeMethod<bool>('hasWrapKey') ?? false;
+    } on PlatformException catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> hasBiometric() async {
+    try {
+      return await _channel.invokeMethod<bool>('hasBiometric') ?? false;
+    } on PlatformException catch (_) {
+      return false;
+    }
+  }
+
+  static Future<bool> authenticateBiometric() async {
+    try {
+      return await _channel.invokeMethod<bool>('authenticateBiometric') ?? false;
+    } on PlatformException catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> setSecureFlag(bool enable) async {
+    try {
+      await _channel.invokeMethod('setSecureFlag', {'enable': enable});
+    } on PlatformException catch (_) {}
+  }
+
+  static SecureStorageException _map(PlatformException e, String prefix) {
+    if (e.code == 'KEY_INVALIDATED') {
+      return SecureStorageException.biometricChanged();
+    }
+    return SecureStorageException('$prefix: ${e.message}');
   }
 }
 

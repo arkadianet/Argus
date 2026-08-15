@@ -17,6 +17,7 @@ thiserror = { workspace = true }
 hex = { workspace = true }
 zeroize = { workspace = true, features = ["zeroize_derive"] }
 aes-gcm = { workspace = true, features = ["aes"] }
+argon2 = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
 num-bigint = { workspace = true }

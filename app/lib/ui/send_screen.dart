@@ -13,10 +13,10 @@ class _SendScreenState extends State<SendScreen> {
   final _formKey = GlobalKey<FormState>();
   final _recipientCtrl = TextEditingController();
   final _amountCtrl = TextEditingController();
-  final _tokenIdCtrl = TextEditingController();
   final _tokenAmtCtrl = TextEditingController();
   bool _sending = false;
   String? _resultTxId;
+  String? _assetId;
 
   static const _nano = 1000000000;
 
@@ -24,9 +24,18 @@ class _SendScreenState extends State<SendScreen> {
   void dispose() {
     _recipientCtrl.dispose();
     _amountCtrl.dispose();
-    _tokenIdCtrl.dispose();
     _tokenAmtCtrl.dispose();
     super.dispose();
+  }
+
+  WalletRouteArgs get _args => WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+
+  TokenBalance? get _selectedToken {
+    if (_assetId == null) return null;
+    for (final t in _args.tokens) {
+      if (t.id == _assetId) return t;
+    }
+    return null;
   }
 
   int? _amountNano() => parseErgToNano(_amountCtrl.text);
@@ -35,26 +44,43 @@ class _SendScreenState extends State<SendScreen> {
 
   Future<void> _send() async {
     if (!_formKey.currentState!.validate()) return;
-    final sender = ModalRoute.of(context)?.settings.arguments as String? ?? '';
-    if (sender.isEmpty) {
+    final args = _args;
+    if (args.senderAddress.isEmpty) {
       _snack('No sender address');
       return;
     }
     final amount = _amountNano();
     if (amount == null) return;
+    final token = _selectedToken;
+    int? tokenAmount;
+    if (token != null) {
+      if (token.isNft) {
+        tokenAmount = 1;
+      } else {
+        tokenAmount = parseDecimalToBase(_tokenAmtCtrl.text, token.decimals);
+        if (tokenAmount == null || tokenAmount <= 0) {
+          _snack('Enter a token amount');
+          return;
+        }
+      }
+    }
 
     setState(() => _sending = true);
     try {
       final preview = await walletService.prepareSend(
-        senderAddress: sender,
+        senderAddress: args.senderAddress,
+        changeAddress: args.changeAddress.isEmpty ? args.senderAddress : args.changeAddress,
         recipientAddress: _recipientCtrl.text.trim(),
         amountNanoErg: amount,
-        tokenId: _tokenIdCtrl.text.isNotEmpty ? _tokenIdCtrl.text.trim() : null,
-        tokenAmount: _tokenAmtCtrl.text.isNotEmpty ? int.tryParse(_tokenAmtCtrl.text) : null,
+        tokenId: token?.id,
+        tokenAmount: tokenAmount,
       );
       if (!mounted) return;
       final tokenLines = preview.tokenId != null && preview.tokenId!.isNotEmpty
-          ? '\nToken: ${preview.tokenId}\nToken amount: ${preview.tokenAmount}'
+          ? '\nToken: ${token?.label ?? preview.tokenId}\nToken amount: ${preview.tokenAmount}'
+          : '';
+      final changeLine = preview.changeAddress != null && preview.changeAddress!.isNotEmpty
+          ? '\nChange to: ${preview.changeAddress}'
           : '';
       final ok = await showDialog<bool>(
         context: context,
@@ -64,7 +90,8 @@ class _SendScreenState extends State<SendScreen> {
             'To: ${preview.recipient}\n'
             'Amount: ${_erg(preview.amountNanoErg)}\n'
             'Miner fee: ${_erg(preview.minerFee)}\n'
-            'Change: ${_erg(preview.changeNanoErg)}\n'
+            'Change: ${_erg(preview.changeNanoErg)}'
+            '$changeLine\n'
             'Inputs: ${preview.inputCount}'
             '$tokenLines',
           ),
@@ -97,8 +124,9 @@ class _SendScreenState extends State<SendScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final token = _selectedToken;
     return Scaffold(
-      appBar: AppBar(title: const Text('Send ERG')),
+      appBar: AppBar(title: const Text('Send')),
       body: _resultTxId != null
           ? Center(
               child: Padding(
@@ -129,11 +157,23 @@ class _SendScreenState extends State<SendScreen> {
                       validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
                     ),
                     const SizedBox(height: 12),
+                    DropdownButtonFormField<String?>(
+                      initialValue: _assetId,
+                      decoration: const InputDecoration(labelText: 'Asset'),
+                      items: [
+                        const DropdownMenuItem(value: null, child: Text('ERG')),
+                        ..._args.tokens.map(
+                          (t) => DropdownMenuItem(value: t.id, child: Text(t.label)),
+                        ),
+                      ],
+                      onChanged: (v) => setState(() => _assetId = v),
+                    ),
+                    const SizedBox(height: 12),
                     TextFormField(
                       controller: _amountCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Amount (ERG)',
-                        hintText: '0.01',
+                      decoration: InputDecoration(
+                        labelText: token == null ? 'Amount (ERG)' : 'ERG for the output box',
+                        hintText: '0.001',
                       ),
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                       validator: (v) {
@@ -142,17 +182,23 @@ class _SendScreenState extends State<SendScreen> {
                         return null;
                       },
                     ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _tokenIdCtrl,
-                      decoration: const InputDecoration(labelText: 'Token ID (optional)'),
-                    ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _tokenAmtCtrl,
-                      decoration: const InputDecoration(labelText: 'Token amount (optional)'),
-                      keyboardType: TextInputType.number,
-                    ),
+                    if (token != null && !token.isNft) ...[
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: _tokenAmtCtrl,
+                        decoration: InputDecoration(labelText: '${token.label} amount'),
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        validator: (v) {
+                          final n = parseDecimalToBase(v ?? '', token.decimals);
+                          if (n == null || n <= 0) return 'Enter an amount';
+                          return null;
+                        },
+                      ),
+                    ],
+                    if (token != null && token.isNft) ...[
+                      const SizedBox(height: 12),
+                      Text('Sends 1 ${token.label}', style: theme.textTheme.bodySmall),
+                    ],
                     const SizedBox(height: 24),
                     FilledButton(
                       onPressed: _sending ? null : _send,

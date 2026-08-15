@@ -72,4 +72,26 @@ void main() {
       expect(parseErgToNano('0.0000000001'), isNull);
     });
   });
+
+  group('parseDecimalToBase', () {
+    test('respects token decimals', () {
+      expect(parseDecimalToBase('1', 0), 1);
+      expect(parseDecimalToBase('1.50', 2), 150);
+      expect(parseDecimalToBase('0.001', 3), 1);
+    });
+
+    test('rejects extra fractional digits', () {
+      expect(parseDecimalToBase('1.001', 2), isNull);
+      expect(parseDecimalToBase('x', 2), isNull);
+    });
+  });
+
+  group('validatePin', () {
+    test('enforces length', () {
+      expect(validatePin('12345'), isNotNull);
+      expect(validatePin('123456'), isNull);
+      expect(validatePin('a' * 32), isNull);
+      expect(validatePin('a' * 33), isNotNull);
+    });
+  });
 }

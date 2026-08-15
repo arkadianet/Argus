@@ -4,6 +4,7 @@ import '../bridge/argus_error.dart';
 import '../services/secure_storage.dart';
 import '../services/wallet_service.dart';
 import 'create_wallet_screen.dart';
+import 'pin_fields.dart';
 
 class RestoreWalletScreen extends StatefulWidget {
   const RestoreWalletScreen({super.key});
@@ -15,20 +16,38 @@ class RestoreWalletScreen extends StatefulWidget {
 class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
   final _phraseCtrl = TextEditingController();
   final _passCtrl = TextEditingController();
+  final _pinCtrl = TextEditingController();
+  final _pinConfirmCtrl = TextEditingController();
   bool _busy = false;
 
   @override
+  void initState() {
+    super.initState();
+    SecureStorageService.setSecureFlag(true);
+  }
+
+  @override
   void dispose() {
+    SecureStorageService.setSecureFlag(false);
     _phraseCtrl.clear();
     _passCtrl.clear();
+    _pinCtrl.clear();
+    _pinConfirmCtrl.clear();
     _phraseCtrl.dispose();
     _passCtrl.dispose();
+    _pinCtrl.dispose();
+    _pinConfirmCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _restore() async {
     final phrase = _phraseCtrl.text.trim();
     if (phrase.isEmpty) return;
+    final pinErr = pinError(_pinCtrl.text, _pinConfirmCtrl.text);
+    if (pinErr != null) {
+      _snack(pinErr);
+      return;
+    }
     setState(() => _busy = true);
     try {
       if (!await confirmReplaceExistingWallet(context)) return;
@@ -36,9 +55,10 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
         phrase,
         passphrase: _passCtrl.text,
       );
-      await SecureStorageService.saveWalletSecrets(
+      final pinWrap = await walletService.wrapKeyWithPin(session.wrapKey, _pinCtrl.text);
+      await SecureStorageService.saveWalletWithPin(
         encryptedSeedJson: session.encryptedSeedJson,
-        wrapKey: session.wrapKey,
+        pinWrapJson: pinWrap,
       );
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -82,6 +102,8 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
             ),
             obscureText: true,
           ),
+          const SizedBox(height: 16),
+          PinFields(pin: _pinCtrl, confirm: _pinConfirmCtrl),
           const SizedBox(height: 24),
           FilledButton(
             onPressed: _busy ? null : _restore,

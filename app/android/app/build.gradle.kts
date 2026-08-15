@@ -40,9 +40,26 @@ android {
         }
     }
 
+    val releaseStore = System.getenv("ARGUS_KEYSTORE")
+    signingConfigs {
+        create("release") {
+            if (!releaseStore.isNullOrBlank()) {
+                storeFile = file(releaseStore)
+                storePassword = System.getenv("ARGUS_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ARGUS_KEY_ALIAS")
+                keyPassword = System.getenv("ARGUS_KEY_PASSWORD")
+                    ?: System.getenv("ARGUS_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (!releaseStore.isNullOrBlank()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -58,4 +75,5 @@ flutter {
 
 dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.biometric:biometric:1.1.0")
 }

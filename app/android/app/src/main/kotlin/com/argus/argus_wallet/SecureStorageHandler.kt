@@ -1,7 +1,13 @@
 package com.argus.argus_wallet
 
+import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
+import android.view.WindowManager
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import io.flutter.embedding.engine.FlutterEngine
@@ -16,6 +22,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
         private const val PREFS_NAME = "argus_secure_prefs"
         private const val SEED_KEY = "encrypted_seed"
         private const val WRAP_KEY = "wrap_key"
+        private const val PIN_WRAP_KEY = "pin_wrap"
 
         fun registerWith(engine: FlutterEngine, context: Context) {
             val channel = MethodChannel(
@@ -99,10 +106,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     }
                     result.success(true)
                 }
-                "loadEncryptedSeed" -> {
-                    val stored = getPrefs().getString(SEED_KEY, null)
-                    result.success(stored)
-                }
+                "loadEncryptedSeed" -> result.success(getPrefs().getString(SEED_KEY, null))
                 "saveWrapKey" -> {
                     val key = call.argument<String>("wrapKey")
                     if (key.isNullOrEmpty()) {
@@ -115,15 +119,57 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     }
                     result.success(true)
                 }
-                "loadWrapKey" -> {
-                    result.success(getPrefs().getString(WRAP_KEY, null))
+                "loadWrapKey" -> result.success(getPrefs().getString(WRAP_KEY, null))
+                "savePinWrap" -> {
+                    val json = call.argument<String>("pinWrapJson")
+                    if (json.isNullOrEmpty()) {
+                        result.error("INVALID_ARGS", "Missing pinWrapJson", null)
+                        return
+                    }
+                    if (!getPrefs().edit().putString(PIN_WRAP_KEY, json).commit()) {
+                        result.error("STORAGE_ERROR", "Failed to persist PIN wrap", null)
+                        return
+                    }
+                    result.success(true)
                 }
-                "deleteEncryptedSeed" -> {
-                    getPrefs().edit().remove(SEED_KEY).remove(WRAP_KEY).commit()
+                "loadPinWrap" -> result.success(getPrefs().getString(PIN_WRAP_KEY, null))
+                "deleteWrapKey" -> {
+                    getPrefs().edit().remove(WRAP_KEY).commit()
                     result.success(null)
                 }
-                "hasEncryptedSeed" -> {
-                    result.success(getPrefs().contains(SEED_KEY))
+                "deleteEncryptedSeed" -> {
+                    getPrefs().edit()
+                        .remove(SEED_KEY)
+                        .remove(WRAP_KEY)
+                        .remove(PIN_WRAP_KEY)
+                        .commit()
+                    result.success(null)
+                }
+                "hasEncryptedSeed" -> result.success(getPrefs().contains(SEED_KEY))
+                "hasPinWrap" -> result.success(getPrefs().contains(PIN_WRAP_KEY))
+                "hasWrapKey" -> result.success(getPrefs().contains(WRAP_KEY))
+                "hasBiometric" -> {
+                    val can = BiometricManager.from(context).canAuthenticate(
+                        BiometricManager.Authenticators.BIOMETRIC_STRONG or
+                            BiometricManager.Authenticators.BIOMETRIC_WEAK
+                    )
+                    result.success(can == BiometricManager.BIOMETRIC_SUCCESS)
+                }
+                "authenticateBiometric" -> authenticate(result)
+                "setSecureFlag" -> {
+                    val enable = call.argument<Boolean>("enable") ?: true
+                    val activity = context as? Activity
+                    activity?.runOnUiThread {
+                        if (enable) {
+                            activity.window.setFlags(
+                                WindowManager.LayoutParams.FLAG_SECURE,
+                                WindowManager.LayoutParams.FLAG_SECURE
+                            )
+                        } else {
+                            activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+                        }
+                    }
+                    result.success(null)
                 }
                 else -> result.notImplemented()
             }
@@ -135,5 +181,39 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                 result.error("STORAGE_ERROR", e.message, null)
             }
         }
+    }
+
+    private fun authenticate(result: MethodChannel.Result) {
+        val activity = context as? FragmentActivity
+        if (activity == null) {
+            result.error("NO_ACTIVITY", "Biometric requires an activity", null)
+            return
+        }
+        val executor = ContextCompat.getMainExecutor(activity)
+        val prompt = BiometricPrompt(
+            activity,
+            executor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(res: BiometricPrompt.AuthenticationResult) {
+                    result.success(true)
+                }
+
+                override fun onAuthenticationError(code: Int, errString: CharSequence) {
+                    if (code == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                        code == BiometricPrompt.ERROR_USER_CANCELED ||
+                        code == BiometricPrompt.ERROR_CANCELED
+                    ) {
+                        result.success(false)
+                    } else {
+                        result.error("BIOMETRIC", errString.toString(), null)
+                    }
+                }
+            }
+        )
+        val info = BiometricPrompt.PromptInfo.Builder()
+            .setTitle("Unlock Argus")
+            .setNegativeButtonText("Use PIN")
+            .build()
+        activity.runOnUiThread { prompt.authenticate(info) }
     }
 }

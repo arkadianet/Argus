@@ -1,6 +1,8 @@
 import Foundation
 import Flutter
+import LocalAuthentication
 import Security
+import UIKit
 
 /// Secure storage method channel handler for iOS Keychain.
 public class SecureStorageHandler: NSObject, FlutterPlugin {
@@ -17,6 +19,9 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
   private let serviceName = "com.argus.wallet.seed"
   private let seedAccount = "encrypted_seed"
   private let wrapAccount = "wrap_key"
+  private let pinAccount = "pin_wrap"
+  private var secure = false
+  private var cover: UIView?
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
@@ -42,16 +47,74 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     case "loadWrapKey":
       load(account: wrapAccount, result: result)
 
+    case "savePinWrap":
+      guard let args = call.arguments as? [String: Any],
+            let json = args["pinWrapJson"] as? String else {
+        result(FlutterError(code: "INVALID_ARGS", message: "Missing pinWrapJson", details: nil))
+        return
+      }
+      save(json, account: pinAccount, result: result)
+
+    case "loadPinWrap":
+      load(account: pinAccount, result: result)
+
+    case "deleteWrapKey":
+      delete(account: wrapAccount)
+      result(nil)
+
     case "deleteEncryptedSeed":
       delete(account: seedAccount)
       delete(account: wrapAccount)
+      delete(account: pinAccount)
       result(nil)
 
     case "hasEncryptedSeed":
       result(hasItem(account: seedAccount))
 
+    case "hasPinWrap":
+      result(hasItem(account: pinAccount))
+
+    case "hasWrapKey":
+      result(hasItem(account: wrapAccount))
+
+    case "hasBiometric":
+      let ctx = LAContext()
+      var error: NSError?
+      result(ctx.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error))
+
+    case "authenticateBiometric":
+      let ctx = LAContext()
+      ctx.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: "Unlock Argus") { ok, _ in
+        DispatchQueue.main.async { result(ok) }
+      }
+
+    case "setSecureFlag":
+      let args = call.arguments as? [String: Any]
+      secure = args?["enable"] as? Bool ?? true
+      DispatchQueue.main.async { self.updateCover() }
+      result(nil)
+
     default:
       result(FlutterMethodNotImplemented)
+    }
+  }
+
+  private func updateCover() {
+    let hide = secure && UIScreen.main.isCaptured
+    if hide {
+      if cover == nil, let window = UIApplication.shared.connectedScenes
+        .compactMap({ $0 as? UIWindowScene })
+        .flatMap({ $0.windows })
+        .first(where: { $0.isKeyWindow }) {
+        let view = UIView(frame: window.bounds)
+        view.backgroundColor = .black
+        view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        window.addSubview(view)
+        cover = view
+      }
+    } else {
+      cover?.removeFromSuperview()
+      cover = nil
     }
   }
 

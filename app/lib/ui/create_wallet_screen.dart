@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../bridge/argus_error.dart';
 import '../services/secure_storage.dart';
 import '../services/wallet_service.dart';
+import 'pin_fields.dart';
 
 class CreateWalletScreen extends StatefulWidget {
   const CreateWalletScreen({super.key});
@@ -15,13 +15,26 @@ class CreateWalletScreen extends StatefulWidget {
 class _CreateWalletScreenState extends State<CreateWalletScreen> {
   String? _mnemonic;
   final _confirmCtrl = TextEditingController();
+  final _pinCtrl = TextEditingController();
+  final _pinConfirmCtrl = TextEditingController();
   bool _busy = false;
   bool _revealed = false;
 
   @override
+  void initState() {
+    super.initState();
+    SecureStorageService.setSecureFlag(true);
+  }
+
+  @override
   void dispose() {
+    SecureStorageService.setSecureFlag(false);
     _confirmCtrl.clear();
+    _pinCtrl.clear();
+    _pinConfirmCtrl.clear();
     _confirmCtrl.dispose();
+    _pinCtrl.dispose();
+    _pinConfirmCtrl.dispose();
     super.dispose();
   }
 
@@ -48,13 +61,19 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
       _snack('Confirmation does not match the recovery phrase');
       return;
     }
+    final pinErr = pinError(_pinCtrl.text, _pinConfirmCtrl.text);
+    if (pinErr != null) {
+      _snack(pinErr);
+      return;
+    }
     setState(() => _busy = true);
     try {
       if (!await confirmReplaceExistingWallet(context)) return;
       final session = await walletService.createWallet(phrase);
-      await SecureStorageService.saveWalletSecrets(
+      final pinWrap = await walletService.wrapKeyWithPin(session.wrapKey, _pinCtrl.text);
+      await SecureStorageService.saveWalletWithPin(
         encryptedSeedJson: session.encryptedSeedJson,
-        wrapKey: session.wrapKey,
+        pinWrapJson: pinWrap,
       );
       if (!mounted) return;
       Navigator.pop(context, true);
@@ -80,7 +99,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           const Text(
-            'Write down these 24 words offline. They are the only way to recover this wallet. Argus never stores the phrase.',
+            'Write these 24 words on paper. They are the only way to recover this wallet. Screenshots are blocked on this screen.',
           ),
           const SizedBox(height: 16),
           if (_mnemonic == null)
@@ -98,20 +117,12 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
                 ),
               ),
             ),
-            Row(
-              children: [
-                TextButton(
-                  onPressed: () => setState(() => _revealed = !_revealed),
-                  child: Text(_revealed ? 'Hide' : 'Reveal'),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Clipboard.setData(ClipboardData(text: _mnemonic!));
-                    _snack('Copied — clear the clipboard when done');
-                  },
-                  child: const Text('Copy'),
-                ),
-              ],
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: () => setState(() => _revealed = !_revealed),
+                child: Text(_revealed ? 'Hide' : 'Reveal'),
+              ),
             ),
             TextField(
               controller: _confirmCtrl,
@@ -123,6 +134,8 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
               enableSuggestions: false,
               autocorrect: false,
             ),
+            const SizedBox(height: 16),
+            PinFields(pin: _pinCtrl, confirm: _pinConfirmCtrl),
             const SizedBox(height: 16),
             FilledButton(
               onPressed: _busy ? null : _finish,

@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1844824248;
+  int get rustContentHash => 879059365;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -97,6 +97,11 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiGetBalance({required String address, String? nodeUrl});
 
+  Future<String> crateApiGetTokenInfo({
+    required String tokenId,
+    String? explorerUrl,
+  });
+
   Future<String> crateApiGetTransactionHistory({
     required String address,
     String? nodeUrl,
@@ -108,6 +113,7 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiPrepareSend({
     required BigInt handleId,
     required String senderAddress,
+    required String changeAddress,
     required String recipientAddress,
     required PlatformInt64 amountNanoErg,
     String? tokenId,
@@ -125,6 +131,11 @@ abstract class RustLibApi extends BaseApi {
     required List<int> reducedTxBytes,
   });
 
+  Future<String> crateApiUnwrapKeyWithPin({
+    required String pinWrapJson,
+    required String pin,
+  });
+
   Future<String> crateApiWalletCreate({
     required String mnemonicPhrase,
     required String passphrase,
@@ -137,6 +148,11 @@ abstract class RustLibApi extends BaseApi {
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
     String? wrapKey,
+  });
+
+  Future<String> crateApiWrapKeyWithPin({
+    required String wrapKeyHex,
+    required String pin,
   });
 }
 
@@ -318,6 +334,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<String> crateApiGetTokenInfo({
+    required String tokenId,
+    String? explorerUrl,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(tokenId, serializer);
+          sse_encode_opt_String(explorerUrl, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 6,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiGetTokenInfoConstMeta,
+        argValues: [tokenId, explorerUrl],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiGetTokenInfoConstMeta => const TaskConstMeta(
+    debugName: "get_token_info",
+    argNames: ["tokenId", "explorerUrl"],
+  );
+
+  @override
   Future<String> crateApiGetTransactionHistory({
     required String address,
     String? nodeUrl,
@@ -333,7 +383,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 6,
+            funcId: 7,
             port: port_,
           );
         },
@@ -363,7 +413,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 7,
+            funcId: 8,
             port: port_,
           );
         },
@@ -385,6 +435,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<String> crateApiPrepareSend({
     required BigInt handleId,
     required String senderAddress,
+    required String changeAddress,
     required String recipientAddress,
     required PlatformInt64 amountNanoErg,
     String? tokenId,
@@ -397,6 +448,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_u_64(handleId, serializer);
           sse_encode_String(senderAddress, serializer);
+          sse_encode_String(changeAddress, serializer);
           sse_encode_String(recipientAddress, serializer);
           sse_encode_i_64(amountNanoErg, serializer);
           sse_encode_opt_String(tokenId, serializer);
@@ -405,7 +457,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 8,
+            funcId: 9,
             port: port_,
           );
         },
@@ -417,6 +469,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         argValues: [
           handleId,
           senderAddress,
+          changeAddress,
           recipientAddress,
           amountNanoErg,
           tokenId,
@@ -433,6 +486,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     argNames: [
       "handleId",
       "senderAddress",
+      "changeAddress",
       "recipientAddress",
       "amountNanoErg",
       "tokenId",
@@ -455,7 +509,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 9,
+            funcId: 10,
             port: port_,
           );
         },
@@ -489,7 +543,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 10,
+            funcId: 11,
             port: port_,
           );
         },
@@ -511,6 +565,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiUnwrapKeyWithPin({
+    required String pinWrapJson,
+    required String pin,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(pinWrapJson, serializer);
+          sse_encode_String(pin, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiUnwrapKeyWithPinConstMeta,
+        argValues: [pinWrapJson, pin],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiUnwrapKeyWithPinConstMeta => const TaskConstMeta(
+    debugName: "unwrap_key_with_pin",
+    argNames: ["pinWrapJson", "pin"],
+  );
+
+  @override
   Future<String> crateApiWalletCreate({
     required String mnemonicPhrase,
     required String passphrase,
@@ -524,7 +612,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 13,
             port: port_,
           );
         },
@@ -554,7 +642,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 14,
             port: port_,
           );
         },
@@ -584,7 +672,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 15,
             port: port_,
           );
         },
@@ -616,7 +704,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 16,
             port: port_,
           );
         },
@@ -634,6 +722,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiWalletRestoreConstMeta => const TaskConstMeta(
     debugName: "wallet_restore",
     argNames: ["encryptedSeedJson", "wrapKey"],
+  );
+
+  @override
+  Future<String> crateApiWrapKeyWithPin({
+    required String wrapKeyHex,
+    required String pin,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(wrapKeyHex, serializer);
+          sse_encode_String(pin, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 17,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiWrapKeyWithPinConstMeta,
+        argValues: [wrapKeyHex, pin],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiWrapKeyWithPinConstMeta => const TaskConstMeta(
+    debugName: "wrap_key_with_pin",
+    argNames: ["wrapKeyHex", "pin"],
   );
 
   @protected

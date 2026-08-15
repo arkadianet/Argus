@@ -22,17 +22,35 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   Future<void> _load() async {
-    final address = ModalRoute.of(context)?.settings.arguments as String?;
-    if (address == null) {
+    final args = WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+    final addresses = args.historyAddresses.isNotEmpty
+        ? args.historyAddresses
+        : [if (args.senderAddress.isNotEmpty) args.senderAddress];
+    if (addresses.isEmpty) {
       setState(() => _loading = false);
       return;
     }
     try {
-      final json = await walletService.getTransactionHistory(address, limit: 50);
-      final decoded = jsonDecode(json) as List;
+      final all = <Map<String, dynamic>>[];
+      final seen = <String>{};
+      for (final address in addresses.take(8)) {
+        final json = await walletService.getTransactionHistory(address, limit: 50);
+        for (final tx in jsonDecode(json) as List) {
+          if (tx is! Map) continue;
+          final map = Map<String, dynamic>.from(tx);
+          final id = map['tx_id']?.toString() ?? '';
+          if (id.isEmpty || !seen.add(id)) continue;
+          all.add(map);
+        }
+      }
+      all.sort((a, b) {
+        final tb = (b['timestamp'] as num?)?.toInt() ?? 0;
+        final ta = (a['timestamp'] as num?)?.toInt() ?? 0;
+        return tb.compareTo(ta);
+      });
       if (!mounted) return;
       setState(() {
-        _txs = decoded.cast<Map<String, dynamic>>();
+        _txs = all;
         _loading = false;
       });
     } catch (_) {

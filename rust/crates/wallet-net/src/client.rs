@@ -16,12 +16,63 @@ const UNSPENT_MAX_BOXES: usize = 10_000;
 /// Default public Ergo node URL (mainnet).
 pub const DEFAULT_NODE_URL: &str = "https://ergo-explorer-01.ergonode.net";
 
+/// Public nodes tried after the preferred URL.
+pub const NODE_CANDIDATES: &[&str] = &[
+    DEFAULT_NODE_URL,
+    "https://node.ergo.watch",
+];
+
+pub const DEFAULT_EXPLORER_URL: &str = "https://api.ergoplatform.com";
+
+/// Preferred URL first, then public fallbacks (no duplicates).
+pub fn node_urls(preferred: Option<String>) -> Vec<String> {
+    let mut urls = Vec::new();
+    if let Some(url) = preferred.filter(|s| !s.is_empty()) {
+        urls.push(url);
+    }
+    for candidate in NODE_CANDIDATES {
+        if !urls.iter().any(|u| u == candidate) {
+            urls.push((*candidate).to_string());
+        }
+    }
+    urls
+}
+
+fn join_url(base: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
 /// Create a default mainnet NodeConfig.
 pub fn default_node_config() -> NodeConfig {
     NodeConfig {
         url: DEFAULT_NODE_URL.to_string(),
         api_key: String::new(),
     }
+}
+
+pub fn parse_parameters(value: &serde_json::Value) -> Result<Parameters, String> {
+    let req = |key: &str| -> Result<i32, String> {
+        value
+            .get(key)
+            .and_then(|v| v.as_i64())
+            .map(|n| n as i32)
+            .ok_or_else(|| format!("missing parameter {key}"))
+    };
+    Ok(Parameters::new(
+        req("blockVersion")?,
+        req("storageFeeFactor")?,
+        req("minValuePerByte")?,
+        req("maxBlockSize")?,
+        req("maxBlockCost")?,
+        req("tokenAccessCost")?,
+        req("inputCost")?,
+        req("dataInputCost")?,
+        req("outputCost")?,
+    ))
 }
 
 /// Convert an Ergo base58 address to an ErgoTree hex string.
@@ -39,6 +90,7 @@ pub fn address_to_ergo_tree(address: &str) -> Result<String, String> {
 #[derive(Clone)]
 pub struct ErgoNodeClient {
     inner: Arc<NodeInterface>,
+    url: String,
 }
 
 /// A parsed transaction summary from the explorer API.
@@ -61,7 +113,30 @@ impl ErgoNodeClient {
             .map_err(|e| format!("Failed to connect to node: {}", e))?;
         Ok(ErgoNodeClient {
             inner: Arc::new(node),
+            url: config.url,
         })
+    }
+
+    /// Connect to the preferred node, then public fallbacks.
+    pub async fn connect(preferred: Option<String>) -> Result<Self, String> {
+        let mut last = "no node candidates".to_string();
+        for url in node_urls(preferred) {
+            match Self::new(NodeConfig {
+                url: url.clone(),
+                api_key: String::new(),
+            })
+            .await
+            {
+                Ok(client) => {
+                    if client.current_height().await.is_ok() {
+                        return Ok(client);
+                    }
+                    last = format!("node {url} did not return height");
+                }
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
     }
 
     pub async fn current_height(&self) -> Result<u64, String> {
@@ -139,7 +214,26 @@ impl ErgoNodeClient {
             arr[i] = h.clone();
         }
 
-        Ok(ErgoStateContext::new(pre_header, arr, Parameters::default()))
+        let params = self.parameters().await.unwrap_or_else(|_| Parameters::default());
+        Ok(ErgoStateContext::new(pre_header, arr, params))
+    }
+
+    pub async fn parameters(&self) -> Result<Parameters, String> {
+        let url = join_url(&self.url, "info");
+        let text = reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Node /info: {e}"))?
+            .error_for_status()
+            .map_err(|e| format!("Node /info: {e}"))?
+            .text()
+            .await
+            .map_err(|e| format!("Node /info: {e}"))?;
+        let info: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("Parse /info: {e}"))?;
+        let params = info.get("parameters").unwrap_or(&info);
+        parse_parameters(params)
     }
 
     async fn all_unspent_boxes(&self, address: &str) -> Result<Vec<ErgoBox>, String> {
@@ -189,20 +283,24 @@ impl ErgoNodeClient {
         Ok(!self.get_transaction_history(address, 1).await?.is_empty())
     }
 
-    /// Fetch total nanoERG balance for an address.
-    pub async fn get_address_balances(&self, address: &str) -> Result<(u64, Vec<String>), String> {
-        use std::collections::HashSet;
+    /// Fetch total nanoERG and per-token amounts for an address.
+    pub async fn get_address_balances(
+        &self,
+        address: &str,
+    ) -> Result<(u64, Vec<(String, u64)>), String> {
+        use std::collections::HashMap;
         let boxes = self.all_unspent_boxes(address).await?;
         let erg_total: u64 = boxes.iter().map(|b| *b.value.as_u64()).sum();
-        let mut token_ids = HashSet::new();
+        let mut tokens: HashMap<String, u64> = HashMap::new();
         for b in &boxes {
-            if let Some(tokens) = b.tokens.as_ref() {
-                for t in tokens.iter() {
-                    token_ids.insert(t.token_id.clone().into());
+            if let Some(held) = b.tokens.as_ref() {
+                for t in held.iter() {
+                    let id: String = t.token_id.clone().into();
+                    *tokens.entry(id).or_insert(0) += *t.amount.as_u64();
                 }
             }
         }
-        Ok((erg_total, token_ids.into_iter().collect()))
+        Ok((erg_total, tokens.into_iter().collect()))
     }
 
     /// Fetch transaction history for an address (paginated, max 50).
@@ -334,6 +432,31 @@ pub fn make_state_context(height: u32) -> ErgoStateContext {
     ErgoStateContext::new(pre_header, headers, Parameters::default())
 }
 
+pub async fn get_token_info(
+    token_id: &str,
+    explorer_url: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    if token_id.len() != 64 || !token_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("invalid token id".into());
+    }
+    let url = format!(
+        "{}/api/v1/tokens/{}",
+        explorer_url.unwrap_or(DEFAULT_EXPLORER_URL).trim_end_matches('/'),
+        token_id
+    );
+    let text = reqwest::Client::new()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Explorer token: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Explorer token: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("Explorer token: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("Parse token: {e}"))
+}
+
 fn net_value_for_address(tx: &serde_json::Value, address: &str) -> i64 {
     let outs = tx["outputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
     let ins = tx["inputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
@@ -348,4 +471,46 @@ fn net_value_for_address(tx: &serde_json::Value, address: &str) -> i64 {
         .map(|i| i["value"].as_i64().unwrap_or(0))
         .sum();
     to_self - from_self
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preferred_node_is_first() {
+        let urls = node_urls(Some("https://custom.node".into()));
+        assert_eq!(urls[0], "https://custom.node");
+        assert!(urls.contains(&DEFAULT_NODE_URL.to_string()));
+    }
+
+    #[test]
+    fn default_list_has_no_duplicates() {
+        let urls = node_urls(Some(DEFAULT_NODE_URL.into()));
+        assert_eq!(urls.iter().filter(|u| *u == DEFAULT_NODE_URL).count(), 1);
+    }
+
+    #[test]
+    fn parses_node_parameters() {
+        let json = serde_json::json!({
+            "outputCost": 194,
+            "tokenAccessCost": 100,
+            "maxBlockCost": 8001091,
+            "maxBlockSize": 1271009,
+            "dataInputCost": 100,
+            "blockVersion": 3,
+            "inputCost": 2407,
+            "storageFeeFactor": 1250000,
+            "minValuePerByte": 360
+        });
+        let params = parse_parameters(&json).unwrap();
+        assert_eq!(params.block_version(), 3);
+        assert_eq!(params.min_value_per_byte(), 360);
+        assert_eq!(params.max_block_cost(), 8001091);
+    }
+
+    #[test]
+    fn rejects_incomplete_parameters() {
+        assert!(parse_parameters(&serde_json::json!({"blockVersion": 3})).is_err());
+    }
 }

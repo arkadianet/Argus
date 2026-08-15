@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
 
@@ -14,9 +16,70 @@ class WalletSession {
   });
 }
 
+class TokenBalance {
+  final String id;
+  final int amount;
+  final String? name;
+  final int decimals;
+  final int? emissionAmount;
+  final String? iconUrl;
+
+  TokenBalance({
+    required this.id,
+    required this.amount,
+    this.name,
+    this.decimals = 0,
+    this.emissionAmount,
+    this.iconUrl,
+  });
+
+  bool get isNft =>
+      amount == 1 && decimals == 0 && (emissionAmount == null || emissionAmount == 1);
+
+  String get label {
+    final n = name?.trim();
+    if (n != null && n.isNotEmpty) return n;
+    return id.length > 8 ? '${id.substring(0, 8)}…' : id;
+  }
+}
+
+class WalletRouteArgs {
+  final String senderAddress;
+  final String receiveAddress;
+  final String changeAddress;
+  final List<String> historyAddresses;
+  final List<TokenBalance> tokens;
+
+  const WalletRouteArgs({
+    required this.senderAddress,
+    required this.receiveAddress,
+    required this.changeAddress,
+    this.historyAddresses = const [],
+    this.tokens = const [],
+  });
+
+  static WalletRouteArgs from(Object? args) {
+    if (args is WalletRouteArgs) return args;
+    if (args is String && args.isNotEmpty) {
+      return WalletRouteArgs(
+        senderAddress: args,
+        receiveAddress: args,
+        changeAddress: args,
+        historyAddresses: [args],
+      );
+    }
+    return const WalletRouteArgs(
+      senderAddress: '',
+      receiveAddress: '',
+      changeAddress: '',
+    );
+  }
+}
+
 class SendPreview {
   final int preparationId;
   final String recipient;
+  final String? changeAddress;
   final int amountNanoErg;
   final int minerFee;
   final int changeNanoErg;
@@ -31,6 +94,7 @@ class SendPreview {
     required this.minerFee,
     required this.changeNanoErg,
     required this.inputCount,
+    this.changeAddress,
     this.tokenId,
     this.tokenAmount,
   });
@@ -43,6 +107,7 @@ class SendPreview {
     return SendPreview(
       preparationId: _requireInt(json, 'preparation_id'),
       recipient: recipient,
+      changeAddress: json['change_address'] as String?,
       amountNanoErg: _requireInt(json, 'amount_nano_erg'),
       minerFee: _requireInt(json, 'miner_fee'),
       changeNanoErg: _requireInt(json, 'change_nano_erg'),
@@ -62,7 +127,11 @@ int _requireInt(Map<String, dynamic> json, String key) {
 }
 
 /// Parse decimal ERG text into nanoERG without using [double].
-int? parseErgToNano(String raw) {
+int? parseErgToNano(String raw) => parseDecimalToBase(raw, 9);
+
+/// Parse a decimal token amount into the on-chain integer.
+int? parseDecimalToBase(String raw, int decimals) {
+  if (decimals < 0 || decimals > 18) return null;
   final text = raw.trim();
   if (text.isEmpty) return null;
   final parts = text.split('.');
@@ -72,15 +141,26 @@ int? parseErgToNano(String raw) {
   if (wholeStr.isEmpty && fracStr.isEmpty) return null;
   if (wholeStr.isNotEmpty && !RegExp(r'^\d+$').hasMatch(wholeStr)) return null;
   if (fracStr.isNotEmpty && !RegExp(r'^\d+$').hasMatch(fracStr)) return null;
-  if (fracStr.length > 9) return null;
+  if (fracStr.length > decimals) return null;
   final whole = wholeStr.isEmpty ? 0 : int.parse(wholeStr);
-  final frac = fracStr.isEmpty ? 0 : int.parse(fracStr.padRight(9, '0'));
-  return whole * 1000000000 + frac;
+  final frac = fracStr.isEmpty ? 0 : int.parse(fracStr.padRight(decimals, '0'));
+  var scale = 1;
+  for (var i = 0; i < decimals; i++) {
+    scale *= 10;
+  }
+  return whole * scale + frac;
+}
+
+String? validatePin(String pin) {
+  if (pin.length < 6 || pin.length > 32) return 'PIN must be 6-32 characters';
+  return null;
 }
 
 class WalletService {
   int? _handleId;
   bool _initialized = false;
+  final ValueNotifier<bool> unlocked = ValueNotifier(false);
+  final Map<String, TokenBalance> _tokenMeta = {};
 
   Future<void> init() async {
     if (_initialized) return;
@@ -104,8 +184,16 @@ class WalletService {
       encryptedSeedJson: map['encrypted_seed_json'] as String,
       wrapKey: map['wrap_key'] as String,
     );
-    _handleId = session.handleId;
+    _setHandle(session.handleId);
     return session;
+  }
+
+  Future<String> wrapKeyWithPin(String wrapKey, String pin) {
+    return RustLib.instance.api.crateApiWrapKeyWithPin(wrapKeyHex: wrapKey, pin: pin);
+  }
+
+  Future<String> unwrapKeyWithPin(String pinWrapJson, String pin) {
+    return RustLib.instance.api.crateApiUnwrapKeyWithPin(pinWrapJson: pinWrapJson, pin: pin);
   }
 
   Future<void> restoreWallet(String encryptedSeedJson, {String? wrapKey}) async {
@@ -113,15 +201,19 @@ class WalletService {
       encryptedSeedJson: encryptedSeedJson,
       wrapKey: wrapKey,
     );
-    _handleId = raw.toInt();
+    _setHandle(raw.toInt());
   }
 
   Future<void> lock() async {
-    if (_handleId == null) return;
+    if (_handleId == null) {
+      unlocked.value = false;
+      return;
+    }
     try {
       await RustLib.instance.api.crateApiWalletLock(handleId: BigInt.from(_handleId!));
     } finally {
       _handleId = null;
+      unlocked.value = false;
     }
   }
 
@@ -142,6 +234,7 @@ class WalletService {
 
   Future<SendPreview> prepareSend({
     required String senderAddress,
+    required String changeAddress,
     required String recipientAddress,
     required int amountNanoErg,
     String? tokenId,
@@ -152,6 +245,7 @@ class WalletService {
     final raw = await RustLib.instance.api.crateApiPrepareSend(
       handleId: BigInt.from(_handleId!),
       senderAddress: senderAddress,
+      changeAddress: changeAddress,
       recipientAddress: recipientAddress,
       amountNanoErg: amountNanoErg,
       tokenId: tokenId,
@@ -172,10 +266,62 @@ class WalletService {
   }
 
   Future<int> getBalanceNano(String address, {String? nodeUrl}) async {
+    final map = await getBalance(address, nodeUrl: nodeUrl);
+    return (map['balance_nano_erg'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<Map<String, dynamic>> getBalance(String address, {String? nodeUrl}) async {
     final raw = await RustLib.instance.api
         .crateApiGetBalance(address: address, nodeUrl: nodeUrl);
-    final map = jsonDecode(raw) as Map<String, dynamic>;
-    return (map['balance_nano_erg'] as num?)?.toInt() ?? 0;
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  Future<List<TokenBalance>> tokensFor(String address, {String? nodeUrl}) async {
+    final map = await getBalance(address, nodeUrl: nodeUrl);
+    return hydrateTokens(map['tokens']);
+  }
+
+  Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
+    final items = raw is List ? raw : const [];
+    final out = <TokenBalance>[];
+    for (final item in items) {
+      if (item is! Map) continue;
+      final id = item['id']?.toString() ?? '';
+      final amount = (item['amount'] as num?)?.toInt() ?? 0;
+      if (id.isEmpty || amount <= 0) continue;
+      out.add(await tokenMeta(id, amount));
+    }
+    return out;
+  }
+
+  Future<TokenBalance> tokenMeta(String id, int amount) async {
+    final cached = _tokenMeta[id];
+    if (cached != null) {
+      return TokenBalance(
+        id: id,
+        amount: amount,
+        name: cached.name,
+        decimals: cached.decimals,
+        emissionAmount: cached.emissionAmount,
+        iconUrl: cached.iconUrl,
+      );
+    }
+    try {
+      final raw = await RustLib.instance.api.crateApiGetTokenInfo(tokenId: id);
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final info = TokenBalance(
+        id: id,
+        amount: amount,
+        name: map['name'] as String?,
+        decimals: (map['decimals'] as num?)?.toInt() ?? 0,
+        emissionAmount: (map['emissionAmount'] as num?)?.toInt(),
+        iconUrl: map['iconUrl'] as String? ?? map['icon_url'] as String?,
+      );
+      _tokenMeta[id] = info;
+      return info;
+    } catch (_) {
+      return TokenBalance(id: id, amount: amount);
+    }
   }
 
   Future<String> getTransactionHistory(String address, {int limit = 20, String? nodeUrl}) {
@@ -184,6 +330,11 @@ class WalletService {
       nodeUrl: nodeUrl,
       limit: BigInt.from(limit),
     );
+  }
+
+  void _setHandle(int id) {
+    _handleId = id;
+    unlocked.value = true;
   }
 
   void _requireUnlocked() {
