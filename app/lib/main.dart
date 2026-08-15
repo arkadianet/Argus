@@ -40,7 +40,9 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
-      walletService.lock();
+      walletService.lock().catchError((Object e, StackTrace st) {
+        FlutterError.reportError(FlutterErrorDetails(exception: e, stack: st));
+      });
     }
   }
 

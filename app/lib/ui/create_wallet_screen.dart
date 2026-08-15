@@ -23,7 +23,13 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
   @override
   void initState() {
     super.initState();
-    SecureStorageService.setSecureFlag(true);
+    SecureStorageService.setSecureFlag(true).then((ok) {
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Screenshot blocking is unavailable on this device')),
+        );
+      }
+    });
   }
 
   @override
@@ -99,7 +105,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           const Text(
-            'Write these 24 words on paper. They are the only way to recover this wallet. Screenshots are blocked on this screen.',
+            'Write these 24 words on paper. They are the only way to recover this wallet. Android blocks screenshots here; iOS hides the app in the switcher and during screen recording.',
           ),
           const SizedBox(height: 16),
           if (_mnemonic == null)

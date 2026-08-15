@@ -23,6 +23,8 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
         private const val SEED_KEY = "encrypted_seed"
         private const val WRAP_KEY = "wrap_key"
         private const val PIN_WRAP_KEY = "pin_wrap"
+        private const val PIN_FAIL_KEY = "pin_fail_count"
+        private const val PIN_LOCK_KEY = "pin_lock_until"
 
         fun registerWith(engine: FlutterEngine, context: Context) {
             val channel = MethodChannel(
@@ -134,15 +136,44 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                 }
                 "loadPinWrap" -> result.success(getPrefs().getString(PIN_WRAP_KEY, null))
                 "deleteWrapKey" -> {
-                    getPrefs().edit().remove(WRAP_KEY).commit()
+                    if (!getPrefs().edit().remove(WRAP_KEY).commit()) {
+                        result.error("STORAGE_ERROR", "Failed to delete wrap key", null)
+                        return
+                    }
                     result.success(null)
                 }
                 "deleteEncryptedSeed" -> {
-                    getPrefs().edit()
+                    if (!getPrefs().edit()
                         .remove(SEED_KEY)
                         .remove(WRAP_KEY)
                         .remove(PIN_WRAP_KEY)
                         .commit()
+                    ) {
+                        result.error("STORAGE_ERROR", "Failed to delete wallet secrets", null)
+                        return
+                    }
+                    result.success(null)
+                }
+                "loadPinGate" -> {
+                    val prefs = getPrefs()
+                    result.success(
+                        mapOf(
+                            "count" to prefs.getInt(PIN_FAIL_KEY, 0),
+                            "until" to prefs.getLong(PIN_LOCK_KEY, 0L),
+                        )
+                    )
+                }
+                "savePinGate" -> {
+                    val count = call.argument<Int>("count") ?: 0
+                    val until = (call.argument<Number>("until") ?: 0).toLong()
+                    if (!getPrefs().edit()
+                        .putInt(PIN_FAIL_KEY, count)
+                        .putLong(PIN_LOCK_KEY, until)
+                        .commit()
+                    ) {
+                        result.error("STORAGE_ERROR", "Failed to persist PIN gate", null)
+                        return
+                    }
                     result.success(null)
                 }
                 "hasEncryptedSeed" -> result.success(getPrefs().contains(SEED_KEY))
@@ -159,7 +190,11 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                 "setSecureFlag" -> {
                     val enable = call.argument<Boolean>("enable") ?: true
                     val activity = context as? Activity
-                    activity?.runOnUiThread {
+                    if (activity == null) {
+                        result.success(false)
+                        return
+                    }
+                    activity.runOnUiThread {
                         if (enable) {
                             activity.window.setFlags(
                                 WindowManager.LayoutParams.FLAG_SECURE,
@@ -169,7 +204,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                             activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                         }
                     }
-                    result.success(null)
+                    result.success(true)
                 }
                 else -> result.notImplemented()
             }
@@ -195,7 +230,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
             executor,
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(res: BiometricPrompt.AuthenticationResult) {
-                    result.success(true)
+                    result.success(getPrefs().getString(WRAP_KEY, null))
                 }
 
                 override fun onAuthenticationError(code: Int, errString: CharSequence) {

@@ -56,11 +56,11 @@ pub fn default_node_config() -> NodeConfig {
 
 pub fn parse_parameters(value: &serde_json::Value) -> Result<Parameters, String> {
     let req = |key: &str| -> Result<i32, String> {
-        value
+        let raw = value
             .get(key)
             .and_then(|v| v.as_i64())
-            .map(|n| n as i32)
-            .ok_or_else(|| format!("missing parameter {key}"))
+            .ok_or_else(|| format!("missing parameter {key}"))?;
+        i32::try_from(raw).map_err(|_| format!("parameter {key} out of range"))
     };
     Ok(Parameters::new(
         req("blockVersion")?,
@@ -512,5 +512,22 @@ mod tests {
     #[test]
     fn rejects_incomplete_parameters() {
         assert!(parse_parameters(&serde_json::json!({"blockVersion": 3})).is_err());
+    }
+
+    #[test]
+    fn rejects_parameter_outside_i32() {
+        let mut json = serde_json::json!({
+            "outputCost": 194,
+            "tokenAccessCost": 100,
+            "maxBlockCost": 8001091,
+            "maxBlockSize": 1271009,
+            "dataInputCost": 100,
+            "blockVersion": 3,
+            "inputCost": 2407,
+            "storageFeeFactor": 1250000,
+            "minValuePerByte": 360
+        });
+        json["maxBlockCost"] = serde_json::json!(i64::MAX);
+        assert!(parse_parameters(&json).is_err());
     }
 }

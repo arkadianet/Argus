@@ -142,17 +142,21 @@ int? parseDecimalToBase(String raw, int decimals) {
   if (wholeStr.isNotEmpty && !RegExp(r'^\d+$').hasMatch(wholeStr)) return null;
   if (fracStr.isNotEmpty && !RegExp(r'^\d+$').hasMatch(fracStr)) return null;
   if (fracStr.length > decimals) return null;
-  final whole = wholeStr.isEmpty ? 0 : int.parse(wholeStr);
-  final frac = fracStr.isEmpty ? 0 : int.parse(fracStr.padRight(decimals, '0'));
-  var scale = 1;
+  final whole = wholeStr.isEmpty ? BigInt.zero : BigInt.parse(wholeStr);
+  final frac = fracStr.isEmpty ? BigInt.zero : BigInt.parse(fracStr.padRight(decimals, '0'));
+  var scale = BigInt.one;
   for (var i = 0; i < decimals; i++) {
-    scale *= 10;
+    scale *= BigInt.from(10);
   }
-  return whole * scale + frac;
+  final total = whole * scale + frac;
+  final max = BigInt.parse('9223372036854775807');
+  if (total > max) return null;
+  return total.toInt();
 }
 
 String? validatePin(String pin) {
-  if (pin.length < 6 || pin.length > 32) return 'PIN must be 6-32 characters';
+  final n = pin.runes.length;
+  if (n < 6 || n > 32) return 'PIN must be 6-32 characters';
   return null;
 }
 
@@ -283,15 +287,48 @@ class WalletService {
 
   Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
     final items = raw is List ? raw : const [];
-    final out = <TokenBalance>[];
+    final jobs = <Future<TokenBalance>>[];
     for (final item in items) {
       if (item is! Map) continue;
       final id = item['id']?.toString() ?? '';
       final amount = (item['amount'] as num?)?.toInt() ?? 0;
       if (id.isEmpty || amount <= 0) continue;
-      out.add(await tokenMeta(id, amount));
+      jobs.add(tokenMeta(id, amount));
     }
-    return out;
+    return Future.wait(jobs);
+  }
+
+  Future<List<Map<String, dynamic>>> loadHistory(
+    List<String> addresses, {
+    int limit = 20,
+  }) async {
+    final results = await Future.wait(
+      addresses.take(8).map((address) async {
+        try {
+          final raw = await getTransactionHistory(address, limit: limit);
+          return jsonDecode(raw) as List;
+        } catch (_) {
+          return const [];
+        }
+      }),
+    );
+    final all = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final txs in results) {
+      for (final tx in txs) {
+        if (tx is! Map) continue;
+        final map = Map<String, dynamic>.from(tx);
+        final id = map['tx_id']?.toString() ?? '';
+        if (id.isEmpty || !seen.add(id)) continue;
+        all.add(map);
+      }
+    }
+    all.sort((a, b) {
+      final tb = (b['timestamp'] as num?)?.toInt() ?? 0;
+      final ta = (a['timestamp'] as num?)?.toInt() ?? 0;
+      return tb.compareTo(ta);
+    });
+    return all;
   }
 
   Future<TokenBalance> tokenMeta(String id, int amount) async {

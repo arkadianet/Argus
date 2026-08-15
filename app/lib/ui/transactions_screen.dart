@@ -1,5 +1,3 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 
 import '../services/wallet_service.dart';
@@ -31,23 +29,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       return;
     }
     try {
-      final all = <Map<String, dynamic>>[];
-      final seen = <String>{};
-      for (final address in addresses.take(8)) {
-        final json = await walletService.getTransactionHistory(address, limit: 50);
-        for (final tx in jsonDecode(json) as List) {
-          if (tx is! Map) continue;
-          final map = Map<String, dynamic>.from(tx);
-          final id = map['tx_id']?.toString() ?? '';
-          if (id.isEmpty || !seen.add(id)) continue;
-          all.add(map);
-        }
-      }
-      all.sort((a, b) {
-        final tb = (b['timestamp'] as num?)?.toInt() ?? 0;
-        final ta = (a['timestamp'] as num?)?.toInt() ?? 0;
-        return tb.compareTo(ta);
-      });
+      final all = await walletService.loadHistory(addresses, limit: 50);
       if (!mounted) return;
       setState(() {
         _txs = all;

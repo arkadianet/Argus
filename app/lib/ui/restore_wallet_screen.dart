@@ -23,7 +23,13 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
   @override
   void initState() {
     super.initState();
-    SecureStorageService.setSecureFlag(true);
+    SecureStorageService.setSecureFlag(true).then((ok) {
+      if (!ok && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Screenshot blocking is unavailable on this device')),
+        );
+      }
+    });
   }
 
   @override
@@ -42,7 +48,10 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
 
   Future<void> _restore() async {
     final phrase = _phraseCtrl.text.trim();
-    if (phrase.isEmpty) return;
+    if (phrase.isEmpty) {
+      _snack('Enter a recovery phrase');
+      return;
+    }
     final pinErr = pinError(_pinCtrl.text, _pinConfirmCtrl.text);
     if (pinErr != null) {
       _snack(pinErr);

@@ -84,6 +84,15 @@ void main() {
       expect(parseDecimalToBase('1.001', 2), isNull);
       expect(parseDecimalToBase('x', 2), isNull);
     });
+
+    test('rejects decimals outside 0-18', () {
+      expect(parseDecimalToBase('1', -1), isNull);
+      expect(parseDecimalToBase('1', 19), isNull);
+    });
+
+    test('rejects values that overflow signed 64-bit', () {
+      expect(parseDecimalToBase('99999999999', 18), isNull);
+    });
   });
 
   group('validatePin', () {

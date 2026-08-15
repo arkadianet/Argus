@@ -23,6 +23,8 @@ class PinFields extends StatelessWidget {
           obscureText: true,
           enableSuggestions: false,
           autocorrect: false,
+          enableIMEPersonalizedLearning: false,
+          maxLength: 32,
           decoration: InputDecoration(
             labelText: label,
             helperText: '6-32 characters. This unlocks the wallet on this device.',
@@ -35,6 +37,8 @@ class PinFields extends StatelessWidget {
             obscureText: true,
             enableSuggestions: false,
             autocorrect: false,
+            enableIMEPersonalizedLearning: false,
+            maxLength: 32,
             decoration: const InputDecoration(labelText: 'Confirm PIN'),
           ),
         ],

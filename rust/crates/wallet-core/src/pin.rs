@@ -11,10 +11,14 @@ use crate::CoreError;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
-/// OWASP Argon2id minimum (19 MiB).
+/// OWASP Argon2id minimum (19 MiB). Upper bounds keep a hostile blob from OOM.
 const M_COST: u32 = 19_456;
+const M_COST_MAX: u32 = 65_536;
 const T_COST: u32 = 2;
+const T_COST_MAX: u32 = 8;
 const P_COST: u32 = 1;
+const P_COST_MAX: u32 = 4;
+const PIN_WRAP_VERSION: u64 = 1;
 
 pub struct PinWrappedKey {
     salt: [u8; SALT_LEN],
@@ -34,7 +38,8 @@ impl Drop for PinWrappedKey {
 }
 
 fn validate_pin(pin: &str) -> Result<(), CoreError> {
-    if pin.len() < 6 || pin.len() > 32 {
+    let n = pin.chars().count();
+    if n < 6 || n > 32 {
         return Err(CoreError::Encryption("PIN must be 6-32 characters".into()));
     }
     Ok(())
@@ -83,14 +88,14 @@ impl PinWrappedKey {
         let cipher = Aes256Gcm::new_from_slice(&kek)
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
         kek.zeroize();
-        let plain = cipher
+        let mut plain = cipher
             .decrypt(Nonce::from_slice(&self.nonce), self.ciphertext.as_ref())
             .map_err(|_| CoreError::Encryption("incorrect PIN".into()))?;
-        let key: [u8; KEY_LEN] = plain
-            .as_slice()
-            .try_into()
-            .map_err(|_| CoreError::Encryption("unwrap produced invalid key".into()))?;
-        Ok(key)
+        let key = plain.as_slice().try_into().map_err(|_| {
+            CoreError::Encryption("unwrap produced invalid key".into())
+        });
+        plain.zeroize();
+        key
     }
 
     pub fn to_json(&self) -> serde_json::Value {
@@ -106,6 +111,18 @@ impl PinWrappedKey {
     }
 
     pub fn from_json(json: &serde_json::Value) -> Result<Self, CoreError> {
+        let version = json
+            .get("v")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| CoreError::Serialization("missing pin wrap version".into()))?;
+        if version != PIN_WRAP_VERSION {
+            return Err(CoreError::Serialization(format!(
+                "unsupported pin wrap version {version}"
+            )));
+        }
+        let m_cost = bounded_u32(json, "m", M_COST, M_COST_MAX)?;
+        let t_cost = bounded_u32(json, "t", T_COST, T_COST_MAX)?;
+        let p_cost = bounded_u32(json, "p", P_COST, P_COST_MAX)?;
         let salt = decode_fixed::<SALT_LEN>(json, "salt")?;
         let nonce = decode_fixed::<NONCE_LEN>(json, "nonce")?;
         let ciphertext = decode_vec(json, "ct")?;
@@ -116,11 +133,31 @@ impl PinWrappedKey {
             salt,
             nonce,
             ciphertext,
-            m_cost: json.get("m").and_then(|v| v.as_u64()).unwrap_or(M_COST as u64) as u32,
-            t_cost: json.get("t").and_then(|v| v.as_u64()).unwrap_or(T_COST as u64) as u32,
-            p_cost: json.get("p").and_then(|v| v.as_u64()).unwrap_or(P_COST as u64) as u32,
+            m_cost,
+            t_cost,
+            p_cost,
         })
     }
+}
+
+fn bounded_u32(
+    json: &serde_json::Value,
+    field: &str,
+    min: u32,
+    max: u32,
+) -> Result<u32, CoreError> {
+    let raw = json
+        .get(field)
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| CoreError::Serialization(format!("missing {field}")))?;
+    let value = u32::try_from(raw)
+        .map_err(|_| CoreError::Serialization(format!("{field} out of range")))?;
+    if value < min || value > max {
+        return Err(CoreError::Serialization(format!(
+            "{field} must be {min}..={max}"
+        )));
+    }
+    Ok(value)
 }
 
 fn decode_vec(json: &serde_json::Value, field: &str) -> Result<Vec<u8>, CoreError> {
@@ -170,5 +207,26 @@ mod tests {
         let wrapped = PinWrappedKey::wrap(&key, "abcdef").unwrap();
         let restored = PinWrappedKey::from_json(&wrapped.to_json()).unwrap();
         assert_eq!(restored.unwrap("abcdef").unwrap(), key);
+    }
+
+    #[test]
+    fn from_json_rejects_bad_params() {
+        let key = [1u8; 32];
+        let good = PinWrappedKey::wrap(&key, "123456").unwrap().to_json();
+        let mut missing_v = good.clone();
+        missing_v.as_object_mut().unwrap().remove("v");
+        assert!(PinWrappedKey::from_json(&missing_v).is_err());
+
+        let mut bad_v = good.clone();
+        bad_v["v"] = serde_json::json!(2);
+        assert!(PinWrappedKey::from_json(&bad_v).is_err());
+
+        let mut huge_m = good.clone();
+        huge_m["m"] = serde_json::json!(u64::MAX);
+        assert!(PinWrappedKey::from_json(&huge_m).is_err());
+
+        let mut low_m = good;
+        low_m["m"] = serde_json::json!(1);
+        assert!(PinWrappedKey::from_json(&low_m).is_err());
     }
 }

@@ -37,7 +37,12 @@ class SecureStorageService {
     required String pinWrapJson,
   }) async {
     await saveEncryptedSeed(encryptedSeedJson);
-    await savePinWrap(pinWrapJson);
+    try {
+      await savePinWrap(pinWrapJson);
+    } catch (_) {
+      await deleteEncryptedSeed();
+      rethrow;
+    }
     await deleteWrapKey();
   }
 
@@ -92,39 +97,73 @@ class SecureStorageService {
   static Future<bool> hasPinWrap() async {
     try {
       return await _channel.invokeMethod<bool>('hasPinWrap') ?? false;
-    } on PlatformException catch (_) {
-      return false;
+    } on PlatformException catch (e) {
+      throw _map(e, 'Failed to check PIN wrap');
     }
   }
 
   static Future<bool> hasWrapKey() async {
     try {
       return await _channel.invokeMethod<bool>('hasWrapKey') ?? false;
-    } on PlatformException catch (_) {
-      return false;
+    } on PlatformException catch (e) {
+      throw _map(e, 'Failed to check wrap key');
     }
   }
 
   static Future<bool> hasBiometric() async {
     try {
       return await _channel.invokeMethod<bool>('hasBiometric') ?? false;
+    } on PlatformException catch (e) {
+      if (e.code == 'BIOMETRIC') return false;
+      throw _map(e, 'Failed to check biometrics');
+    }
+  }
+
+  /// Returns the wrap key after a biometric prompt, or null if the user cancelled.
+  static Future<String?> authenticateBiometric() async {
+    try {
+      final raw = await _channel.invokeMethod('authenticateBiometric');
+      if (raw is String && raw.isNotEmpty) return raw;
+      return null;
+    } on PlatformException catch (e) {
+      if (_isCancel(e)) return null;
+      throw _map(e, 'Biometric');
+    }
+  }
+
+  static Future<bool> setSecureFlag(bool enable) async {
+    try {
+      return await _channel.invokeMethod<bool>('setSecureFlag', {'enable': enable}) ?? false;
     } on PlatformException catch (_) {
       return false;
     }
   }
 
-  static Future<bool> authenticateBiometric() async {
+  static Future<({int count, int until})> loadPinGate() async {
     try {
-      return await _channel.invokeMethod<bool>('authenticateBiometric') ?? false;
-    } on PlatformException catch (_) {
-      return false;
-    }
-  }
-
-  static Future<void> setSecureFlag(bool enable) async {
-    try {
-      await _channel.invokeMethod('setSecureFlag', {'enable': enable});
+      final raw = await _channel.invokeMethod('loadPinGate');
+      if (raw is Map) {
+        return (
+          count: (raw['count'] as num?)?.toInt() ?? 0,
+          until: (raw['until'] as num?)?.toInt() ?? 0,
+        );
+      }
     } on PlatformException catch (_) {}
+    return (count: 0, until: 0);
+  }
+
+  static Future<void> savePinGate({required int count, required int until}) async {
+    try {
+      await _channel.invokeMethod('savePinGate', {'count': count, 'until': until});
+    } on PlatformException catch (e) {
+      throw SecureStorageException('Failed to persist PIN gate: ${e.message}');
+    }
+  }
+
+  static bool _isCancel(PlatformException e) {
+    final msg = e.message?.toLowerCase() ?? '';
+    return e.code == 'BIOMETRIC' &&
+        (msg.contains('cancel') || msg.contains('negative'));
   }
 
   static SecureStorageException _map(PlatformException e, String prefix) {

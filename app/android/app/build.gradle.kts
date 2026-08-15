@@ -44,11 +44,17 @@ android {
     signingConfigs {
         create("release") {
             if (!releaseStore.isNullOrBlank()) {
+                val storePassword = System.getenv("ARGUS_KEYSTORE_PASSWORD")
+                val keyAlias = System.getenv("ARGUS_KEY_ALIAS")
+                val keyPassword = System.getenv("ARGUS_KEY_PASSWORD")
+                    ?: storePassword
+                require(!storePassword.isNullOrBlank()) { "ARGUS_KEYSTORE_PASSWORD is required" }
+                require(!keyAlias.isNullOrBlank()) { "ARGUS_KEY_ALIAS is required" }
+                require(!keyPassword.isNullOrBlank()) { "ARGUS_KEY_PASSWORD is required" }
                 storeFile = file(releaseStore)
-                storePassword = System.getenv("ARGUS_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("ARGUS_KEY_ALIAS")
-                keyPassword = System.getenv("ARGUS_KEY_PASSWORD")
-                    ?: System.getenv("ARGUS_KEYSTORE_PASSWORD")
+                this.storePassword = storePassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
             }
         }
     }

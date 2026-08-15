@@ -31,6 +31,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _hasSeed = false;
   bool _hasPin = false;
   bool _canBiometric = false;
+  bool _unlockBusy = false;
   final _pinCtrl = TextEditingController();
 
   @override
@@ -82,6 +83,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _afterUnlock() async {
+    if (!mounted) return;
     setState(() {
       _walletUnlocked = true;
       _status = 'Discovering addresses…';
@@ -95,26 +97,85 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .toList();
       final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
       final receive = await walletService.deriveAddress(next);
-      final sender = used.isNotEmpty
-          ? used.last['address']?.toString() ?? receive
-          : receive;
+      if (!mounted) return;
       setState(() {
         _usedAddresses = used;
         _receiveAddress = receive;
         _changeAddress = receive;
-        _senderAddress = sender;
+        _senderAddress = _bestSender(receive);
         _status = 'Unlocked';
       });
       await _refresh();
-    } catch (e) {
-      final fallback = await walletService.deriveAddress(0);
-      setState(() {
-        _receiveAddress = fallback;
-        _changeAddress = fallback;
-        _senderAddress = fallback;
-        _status = 'Unlocked (discovery unavailable)';
-      });
-      await _refresh();
+    } catch (_) {
+      try {
+        final fallback = await walletService.deriveAddress(0);
+        if (!mounted) return;
+        setState(() {
+          _receiveAddress = fallback;
+          _changeAddress = fallback;
+          _senderAddress = fallback;
+          _status = 'Unlocked (discovery unavailable)';
+        });
+        await _refresh();
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _walletUnlocked = walletService.isUnlocked;
+          _receiveAddress = null;
+          _changeAddress = null;
+          _senderAddress = null;
+          _status = 'Unlocked, but no address could be derived';
+        });
+      }
+    }
+  }
+
+  String _bestSender(String receive) {
+    var best = receive;
+    var bestNano = -1;
+    for (final used in _usedAddresses) {
+      final addr = used['address']?.toString();
+      final nano = (used['balance_nano_erg'] as num?)?.toInt() ?? 0;
+      if (addr != null && addr.isNotEmpty && nano >= bestNano) {
+        best = addr;
+        bestNano = nano;
+      }
+    }
+    return best;
+  }
+
+  Future<bool> _pinAllowed() async {
+    final gate = await SecureStorageService.loadPinGate();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (gate.until > now) {
+      final wait = ((gate.until - now) / 1000).ceil();
+      _snack('Too many attempts. Try again in ${wait}s');
+      return false;
+    }
+    return true;
+  }
+
+  Future<void> _pinFailed() async {
+    final gate = await SecureStorageService.loadPinGate();
+    final count = gate.count + 1;
+    final delaySec = 1 << (count > 6 ? 5 : count - 1);
+    await SecureStorageService.savePinGate(
+      count: count,
+      until: DateTime.now().millisecondsSinceEpoch + delaySec * 1000,
+    );
+  }
+
+  Future<void> _pinSucceeded() async {
+    await SecureStorageService.savePinGate(count: 0, until: 0);
+  }
+
+  Future<void> _runUnlock(Future<void> Function() work) async {
+    if (_unlockBusy) return;
+    setState(() => _unlockBusy = true);
+    try {
+      await work();
+    } finally {
+      if (mounted) setState(() => _unlockBusy = false);
     }
   }
 
@@ -124,65 +185,75 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _snack(err);
       return;
     }
-    try {
-      final json = await SecureStorageService.loadEncryptedSeed();
-      final pinWrap = await SecureStorageService.loadPinWrap();
-      if (json == null || pinWrap == null) {
-        setState(() => _status = 'No PIN-protected wallet found.');
-        return;
+    await _runUnlock(() async {
+      if (!await _pinAllowed()) return;
+      try {
+        final json = await SecureStorageService.loadEncryptedSeed();
+        final pinWrap = await SecureStorageService.loadPinWrap();
+        if (json == null || pinWrap == null) {
+          if (mounted) setState(() => _status = 'No PIN-protected wallet found.');
+          return;
+        }
+        final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, _pinCtrl.text);
+        await walletService.restoreWallet(json, wrapKey: wrapKey);
+        await _pinSucceeded();
+        _pinCtrl.clear();
+        await _afterUnlock();
+      } on ArgusException catch (e) {
+        await _pinFailed();
+        _snack('${e.code}: ${e.message}');
+      } on SecureStorageException catch (e) {
+        _snack(e.message);
       }
-      final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, _pinCtrl.text);
-      await walletService.restoreWallet(json, wrapKey: wrapKey);
-      _pinCtrl.clear();
-      await _afterUnlock();
-    } on ArgusException catch (e) {
-      _snack('${e.code}: ${e.message}');
-    } on SecureStorageException catch (e) {
-      _snack(e.message);
-    }
+    });
   }
 
   Future<void> _unlockBiometric() async {
-    try {
-      if (!await SecureStorageService.authenticateBiometric()) return;
-      final json = await SecureStorageService.loadEncryptedSeed();
-      final wrapKey = await SecureStorageService.loadWrapKey();
-      if (json == null || wrapKey == null) {
-        _snack('Biometric unlock is not set up');
-        return;
+    await _runUnlock(() async {
+      try {
+        final wrapKey = await SecureStorageService.authenticateBiometric();
+        if (wrapKey == null) return;
+        final json = await SecureStorageService.loadEncryptedSeed();
+        if (json == null) {
+          _snack('Biometric unlock is not set up');
+          return;
+        }
+        await walletService.restoreWallet(json, wrapKey: wrapKey);
+        await _afterUnlock();
+      } on ArgusException catch (e) {
+        _snack('${e.code}: ${e.message}');
+      } on SecureStorageException catch (e) {
+        _snack(e.message);
       }
-      await walletService.restoreWallet(json, wrapKey: wrapKey);
-      await _afterUnlock();
-    } on ArgusException catch (e) {
-      _snack('${e.code}: ${e.message}');
-    } on SecureStorageException catch (e) {
-      _snack(e.message);
-    }
+    });
   }
 
   Future<void> _unlockLegacyThenPin() async {
-    try {
-      final json = await SecureStorageService.loadEncryptedSeed();
-      final wrapKey = await SecureStorageService.loadWrapKey();
-      if (json == null || wrapKey == null) {
-        setState(() => _status = 'No wallet found. Create or restore.');
-        return;
+    await _runUnlock(() async {
+      try {
+        final json = await SecureStorageService.loadEncryptedSeed();
+        final wrapKey = await SecureStorageService.loadWrapKey();
+        if (json == null || wrapKey == null) {
+          if (mounted) setState(() => _status = 'No wallet found. Create or restore.');
+          return;
+        }
+        await walletService.restoreWallet(json, wrapKey: wrapKey);
+        if (!mounted) return;
+        final pin = await _askNewPin();
+        if (pin != null) {
+          final pinWrap = await walletService.wrapKeyWithPin(wrapKey, pin);
+          await SecureStorageService.savePinWrap(pinWrap);
+          await SecureStorageService.deleteWrapKey();
+          _hasPin = true;
+          _canBiometric = false;
+        }
+        await _afterUnlock();
+      } on ArgusException catch (e) {
+        _snack('${e.code}: ${e.message}');
+      } on SecureStorageException catch (e) {
+        _snack(e.message);
       }
-      await walletService.restoreWallet(json, wrapKey: wrapKey);
-      if (!mounted) return;
-      final pin = await _askNewPin();
-      if (pin != null) {
-        final pinWrap = await walletService.wrapKeyWithPin(wrapKey, pin);
-        await SecureStorageService.savePinWrap(pinWrap);
-        await SecureStorageService.deleteWrapKey();
-        _hasPin = true;
-      }
-      await _afterUnlock();
-    } on ArgusException catch (e) {
-      _snack('${e.code}: ${e.message}');
-    } on SecureStorageException catch (e) {
-      _snack(e.message);
-    }
+    });
   }
 
   Future<String?> _askNewPin() async {
@@ -236,7 +307,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     try {
       final pinWrap = await SecureStorageService.loadPinWrap();
       if (pinWrap == null) return;
-      if (!await SecureStorageService.authenticateBiometric()) return;
       final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, entered);
       await SecureStorageService.saveWrapKey(wrapKey);
       setState(() => _canBiometric = true);
@@ -274,10 +344,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final addresses = _historyAddresses();
     if (addresses.isEmpty) return;
     try {
+      final maps = await Future.wait(
+        addresses.map((address) async {
+          try {
+            return await walletService.getBalance(address);
+          } catch (_) {
+            return null;
+          }
+        }),
+      );
       var erg = 0;
+      var failed = 0;
       final tokens = <String, TokenBalance>{};
-      for (final address in addresses) {
-        final map = await walletService.getBalance(address);
+      for (final map in maps) {
+        if (map == null) {
+          failed++;
+          continue;
+        }
         erg += (map['balance_nano_erg'] as num?)?.toInt() ?? 0;
         for (final t in await walletService.hydrateTokens(map['tokens'])) {
           final prev = tokens[t.id];
@@ -291,14 +374,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
           );
         }
       }
-      final txs = await _loadHistory(addresses);
+      final txs = await walletService.loadHistory(addresses, limit: 20);
       if (!mounted) return;
       setState(() {
         _balanceNano = erg;
         _tokens = tokens.values.toList();
         _recentTxs = txs.take(5).toList();
+        if (failed == addresses.length) {
+          _status = 'Could not refresh balances';
+        } else if (failed > 0) {
+          _status = 'Unlocked (balances may be stale)';
+        }
       });
-    } catch (_) {}
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _status = 'Could not refresh balances');
+    }
   }
 
   List<String> _historyAddresses() {
@@ -311,27 +402,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       out.add(_receiveAddress!);
     }
     return out;
-  }
-
-  Future<List<Map<String, dynamic>>> _loadHistory(List<String> addresses) async {
-    final all = <Map<String, dynamic>>[];
-    final seen = <String>{};
-    for (final address in addresses.take(8)) {
-      final raw = await walletService.getTransactionHistory(address, limit: 20);
-      for (final tx in jsonDecode(raw) as List) {
-        if (tx is! Map) continue;
-        final map = Map<String, dynamic>.from(tx);
-        final id = map['tx_id']?.toString() ?? '';
-        if (id.isEmpty || !seen.add(id)) continue;
-        all.add(map);
-      }
-    }
-    all.sort((a, b) {
-      final tb = (b['timestamp'] as num?)?.toInt() ?? 0;
-      final ta = (a['timestamp'] as num?)?.toInt() ?? 0;
-      return tb.compareTo(ta);
-    });
-    return all;
   }
 
   Future<void> _lock() async {
@@ -368,13 +438,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   String _tokenAmt(TokenBalance t) {
-    if (t.decimals <= 0) return '${t.amount}';
+    final decimals = t.decimals.clamp(0, 18);
+    if (decimals <= 0) return '${t.amount}';
     var scale = 1;
-    for (var i = 0; i < t.decimals; i++) {
+    for (var i = 0; i < decimals; i++) {
       scale *= 10;
     }
     final whole = t.amount ~/ scale;
-    final frac = (t.amount % scale).toString().padLeft(t.decimals, '0');
+    final frac = (t.amount % scale).toString().padLeft(decimals, '0');
     return '$whole.$frac';
   }
 
@@ -456,16 +527,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       if (_hasSeed && _hasPin) ...[
                         PinFields(pin: _pinCtrl, label: 'Unlock PIN'),
                         const SizedBox(height: 8),
-                        FilledButton(onPressed: _unlockWithPin, child: const Text('Unlock')),
+                        FilledButton(
+                          onPressed: _unlockBusy ? null : _unlockWithPin,
+                          child: _unlockBusy
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('Unlock'),
+                        ),
                         if (_canBiometric)
                           TextButton(
-                            onPressed: _unlockBiometric,
+                            onPressed: _unlockBusy ? null : _unlockBiometric,
                             child: const Text('Unlock with biometrics'),
                           ),
                       ] else if (_hasSeed)
                         FilledButton(
-                          onPressed: _unlockLegacyThenPin,
-                          child: const Text('Unlock and set PIN'),
+                          onPressed: _unlockBusy ? null : _unlockLegacyThenPin,
+                          child: _unlockBusy
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : const Text('Unlock and set PIN'),
                         ),
                       const SizedBox(height: 8),
                       Row(

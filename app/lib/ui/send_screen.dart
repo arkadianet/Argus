@@ -166,7 +166,10 @@ class _SendScreenState extends State<SendScreen> {
                           (t) => DropdownMenuItem(value: t.id, child: Text(t.label)),
                         ),
                       ],
-                      onChanged: (v) => setState(() => _assetId = v),
+                      onChanged: (v) => setState(() {
+                        _assetId = v;
+                        _tokenAmtCtrl.clear();
+                      }),
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
