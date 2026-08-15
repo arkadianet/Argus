@@ -31,6 +31,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
