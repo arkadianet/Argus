@@ -1,5 +1,7 @@
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
+
 import '../services/wallet_service.dart';
 
 class TransactionsScreen extends StatefulWidget {
@@ -16,22 +18,32 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   @override
   void initState() {
     super.initState();
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   Future<void> _load() async {
     final address = ModalRoute.of(context)?.settings.arguments as String?;
-    if (address == null) return;
+    if (address == null) {
+      setState(() => _loading = false);
+      return;
+    }
     try {
       final json = await walletService.getTransactionHistory(address, limit: 50);
       final decoded = jsonDecode(json) as List;
+      if (!mounted) return;
       setState(() {
         _txs = decoded.cast<Map<String, dynamic>>();
         _loading = false;
       });
-    } catch (e) {
-      setState(() => _loading = false);
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  String _erg(dynamic nano) {
+    final n = (nano as num?)?.toInt();
+    if (n == null) return '?';
+    return '${(n / 1e9).toStringAsFixed(4)} ERG';
   }
 
   @override
@@ -49,17 +61,16 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     itemBuilder: (context, i) {
                       final tx = _txs[i];
                       final txId = tx['tx_id']?.toString() ?? '';
-                      final value = tx['value_nano_erg']?.toString() ?? '?';
-                      final height = tx['height']?.toString() ?? '?';
                       return Card(
                         child: ListTile(
                           leading: const Icon(Icons.swap_horiz),
-                          title: Text('$value nanoERG',
-                            style: const TextStyle(fontFamily: 'monospace')),
-                          subtitle: Text(txId.length > 20 ? '${txId.substring(0, 20)}...' : txId,
-                            style: const TextStyle(fontSize: 11)),
-                          trailing: Text('#$height'),
-                          isThreeLine: false,
+                          title: Text(_erg(tx['value_nano_erg']),
+                              style: const TextStyle(fontFamily: 'monospace')),
+                          subtitle: Text(
+                            txId.length > 20 ? '${txId.substring(0, 20)}...' : txId,
+                            style: const TextStyle(fontSize: 11),
+                          ),
+                          trailing: Text('#${tx['height'] ?? '?'}'),
                         ),
                       );
                     },

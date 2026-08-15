@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::dev_fee::{append_dev_fee_output, resolved_config};
+use crate::dev_fee::{append_dev_fee_output, resolved_config, DevFeeConfig};
 use crate::eip12::{Eip12Asset, Eip12InputBox, Eip12Output, Eip12UnsignedTx};
 
 use citadel_core::constants::{MIN_BOX_VALUE_NANO as MIN_BOX_VALUE, TX_FEE_NANO as TX_FEE};
@@ -74,6 +74,26 @@ pub fn build_send_tx(
     send_token: Option<(&str, u64)>,
     current_height: i32,
 ) -> Result<SendBuildResult, SendError> {
+    build_send_tx_with_fee(
+        user_inputs,
+        recipient_ergo_tree,
+        change_ergo_tree,
+        send_erg,
+        send_token,
+        current_height,
+        &resolved_config(),
+    )
+}
+
+pub fn build_send_tx_with_fee(
+    user_inputs: &[Eip12InputBox],
+    recipient_ergo_tree: &str,
+    change_ergo_tree: &str,
+    send_erg: i64,
+    send_token: Option<(&str, u64)>,
+    current_height: i32,
+    fee_cfg: &DevFeeConfig,
+) -> Result<SendBuildResult, SendError> {
     if user_inputs.is_empty() {
         return Err(SendError::NoInputs);
     }
@@ -117,7 +137,6 @@ pub fn build_send_tx(
         }
     }
 
-    let fee_cfg = resolved_config();
     let citadel_fee = fee_cfg.budget();
 
     let min_needed = send_erg + TX_FEE + citadel_fee;
@@ -194,7 +213,7 @@ pub fn build_send_tx(
         0
     };
 
-    append_dev_fee_output(&mut outputs, &fee_cfg, current_height)
+    append_dev_fee_output(&mut outputs, fee_cfg, current_height)
         .map_err(|e| SendError::DevFee(e.to_string()))?;
     outputs.push(Eip12Output::fee(TX_FEE, current_height));
 

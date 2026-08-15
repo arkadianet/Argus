@@ -1,5 +1,5 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
+
 import '../services/wallet_service.dart';
 
 class SendScreen extends StatefulWidget {
@@ -18,6 +18,8 @@ class _SendScreenState extends State<SendScreen> {
   bool _sending = false;
   String? _resultTxId;
 
+  static const _nano = 1000000000;
+
   @override
   void dispose() {
     _recipientCtrl.dispose();
@@ -27,43 +29,74 @@ class _SendScreenState extends State<SendScreen> {
     super.dispose();
   }
 
+  int? _amountNano() => parseErgToNano(_amountCtrl.text);
+
+  String _erg(int nano) => '${(nano / _nano).toStringAsFixed(4)} ERG';
+
   Future<void> _send() async {
     if (!_formKey.currentState!.validate()) return;
+    final sender = ModalRoute.of(context)?.settings.arguments as String? ?? '';
+    if (sender.isEmpty) {
+      _snack('No sender address');
+      return;
+    }
+    final amount = _amountNano();
+    if (amount == null) return;
+
     setState(() => _sending = true);
-
     try {
-      final sender = ModalRoute.of(context)?.settings.arguments as String? ?? '';
-      final amount = int.tryParse(_amountCtrl.text) ?? 0;
-      final tokenId = _tokenIdCtrl.text.isNotEmpty ? _tokenIdCtrl.text : null;
-      final tokenAmt = _tokenAmtCtrl.text.isNotEmpty ? int.tryParse(_tokenAmtCtrl.text) : null;
-
-      final resultJson = await walletService.sendErg(
+      final preview = await walletService.prepareSend(
         senderAddress: sender,
-        recipientAddress: _recipientCtrl.text,
+        recipientAddress: _recipientCtrl.text.trim(),
         amountNanoErg: amount,
-        tokenId: tokenId,
-        tokenAmount: tokenAmt,
+        tokenId: _tokenIdCtrl.text.isNotEmpty ? _tokenIdCtrl.text.trim() : null,
+        tokenAmount: _tokenAmtCtrl.text.isNotEmpty ? int.tryParse(_tokenAmtCtrl.text) : null,
       );
-
-      final tx = jsonDecode(resultJson) as Map<String, dynamic>;
+      if (!mounted) return;
+      final tokenLines = preview.tokenId != null && preview.tokenId!.isNotEmpty
+          ? '\nToken: ${preview.tokenId}\nToken amount: ${preview.tokenAmount}'
+          : '';
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Confirm send'),
+          content: Text(
+            'To: ${preview.recipient}\n'
+            'Amount: ${_erg(preview.amountNanoErg)}\n'
+            'Miner fee: ${_erg(preview.minerFee)}\n'
+            'Change: ${_erg(preview.changeNanoErg)}\n'
+            'Inputs: ${preview.inputCount}'
+            '$tokenLines',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign & broadcast')),
+          ],
+        ),
+      );
+      if (ok != true) {
+        setState(() => _sending = false);
+        return;
+      }
+      final txId = await walletService.sendErg(preparationId: preview.preparationId);
       setState(() {
-        _resultTxId = tx['id']?.toString() ?? 'unknown';
+        _resultTxId = txId;
         _sending = false;
       });
     } catch (e) {
       setState(() => _sending = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed: $e')),
-        );
-      }
+      _snack('Failed: $e');
     }
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
     return Scaffold(
       appBar: AppBar(title: const Text('Send ERG')),
       body: _resultTxId != null
@@ -75,14 +108,11 @@ class _SendScreenState extends State<SendScreen> {
                   children: [
                     const Icon(Icons.check_circle, size: 64, color: Colors.green),
                     const SizedBox(height: 16),
-                    Text('Transaction submitted', style: theme.textTheme.titleLarge),
+                    Text('Broadcast', style: theme.textTheme.titleLarge),
                     const SizedBox(height: 8),
                     SelectableText(_resultTxId!, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
                     const SizedBox(height: 24),
-                    FilledButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Done'),
-                    ),
+                    FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
                   ],
                 ),
               ),
@@ -95,42 +125,32 @@ class _SendScreenState extends State<SendScreen> {
                   children: [
                     TextFormField(
                       controller: _recipientCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Recipient address',
-                        hintText: '9f...',
-                      ),
+                      decoration: const InputDecoration(labelText: 'Recipient address'),
                       validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _amountCtrl,
                       decoration: const InputDecoration(
-                        labelText: 'Amount (nanoERG)',
-                        hintText: '1000000000 = 1 ERG',
+                        labelText: 'Amount (ERG)',
+                        hintText: '0.01',
                       ),
-                      keyboardType: TextInputType.number,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
                       validator: (v) {
-                        if (v == null || v.isEmpty) return 'Required';
-                        final n = int.tryParse(v);
-                        if (n == null || n < 1000000) return 'Min 1000000 (0.001 ERG)';
+                        final n = parseErgToNano(v ?? '');
+                        if (n == null || n < 1000000) return 'Minimum 0.001 ERG';
                         return null;
                       },
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _tokenIdCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Token ID (optional)',
-                        hintText: 'Hex token ID',
-                      ),
+                      decoration: const InputDecoration(labelText: 'Token ID (optional)'),
                     ),
                     const SizedBox(height: 12),
                     TextFormField(
                       controller: _tokenAmtCtrl,
-                      decoration: const InputDecoration(
-                        labelText: 'Token amount (optional)',
-                        hintText: 'Required if token ID set',
-                      ),
+                      decoration: const InputDecoration(labelText: 'Token amount (optional)'),
                       keyboardType: TextInputType.number,
                     ),
                     const SizedBox(height: 24),
@@ -138,7 +158,7 @@ class _SendScreenState extends State<SendScreen> {
                       onPressed: _sending ? null : _send,
                       child: _sending
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Text('Send'),
+                          : const Text('Review'),
                     ),
                   ],
                 ),

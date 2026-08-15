@@ -15,7 +15,8 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
   }
 
   private let serviceName = "com.argus.wallet.seed"
-  private let accountName = "encrypted_seed"
+  private let seedAccount = "encrypted_seed"
+  private let wrapAccount = "wrap_key"
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
     switch call.method {
@@ -25,36 +26,48 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
         result(FlutterError(code: "INVALID_ARGS", message: "Missing encryptedSeedJson", details: nil))
         return
       }
-      save(json, result: result)
+      save(json, account: seedAccount, result: result)
 
     case "loadEncryptedSeed":
-      load(result: result)
+      load(account: seedAccount, result: result)
+
+    case "saveWrapKey":
+      guard let args = call.arguments as? [String: Any],
+            let key = args["wrapKey"] as? String else {
+        result(FlutterError(code: "INVALID_ARGS", message: "Missing wrapKey", details: nil))
+        return
+      }
+      save(key, account: wrapAccount, result: result)
+
+    case "loadWrapKey":
+      load(account: wrapAccount, result: result)
 
     case "deleteEncryptedSeed":
-      delete(result: result)
+      delete(account: seedAccount)
+      delete(account: wrapAccount)
+      result(nil)
 
     case "hasEncryptedSeed":
-      result(hasSeed())
+      result(hasItem(account: seedAccount))
 
     default:
       result(FlutterMethodNotImplemented)
     }
   }
 
-  private func save(_ value: String, result: @escaping FlutterResult) {
+  private func save(_ value: String, account: String, result: @escaping FlutterResult) {
     guard let data = value.data(using: .utf8) else {
       result(FlutterError(code: "ENCODE_ERROR", message: "Failed to encode data", details: nil))
       return
     }
 
-    // Delete existing item first
-    SecItemDelete(query())
+    SecItemDelete(query(account) as CFDictionary)
 
-    var query = query()
-    query[kSecValueData as String] = data
-    query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+    var item = query(account)
+    item[kSecValueData as String] = data
+    item[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
 
-    let status = SecItemAdd(query as CFDictionary, nil)
+    let status = SecItemAdd(item as CFDictionary, nil)
     if status == errSecSuccess {
       result(true)
     } else {
@@ -62,15 +75,15 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     }
   }
 
-  private func load(result: @escaping FlutterResult) {
-    var query = query()
-    query[kSecReturnData as String] = true
-    query[kSecMatchLimit as String] = kSecMatchLimitOne
+  private func load(account: String, result: @escaping FlutterResult) {
+    var item = query(account)
+    item[kSecReturnData as String] = true
+    item[kSecMatchLimit as String] = kSecMatchLimitOne
 
-    var item: CFTypeRef?
-    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    var found: CFTypeRef?
+    let status = SecItemCopyMatching(item as CFDictionary, &found)
 
-    if status == errSecSuccess, let data = item as? Data {
+    if status == errSecSuccess, let data = found as? Data {
       result(String(data: data, encoding: .utf8))
     } else if status == errSecItemNotFound {
       result(nil)
@@ -79,30 +92,25 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     }
   }
 
-  private func delete(result: @escaping FlutterResult) {
-    let status = SecItemDelete(query())
-    if status == errSecSuccess || status == errSecItemNotFound {
-      result(nil)
-    } else {
-      result(FlutterError(code: "KEYCHAIN_ERROR", message: "Failed to delete: \(status)", details: nil))
-    }
+  private func delete(account: String) {
+    SecItemDelete(query(account) as CFDictionary)
   }
 
-  private func hasSeed() -> Bool {
-    var query = query()
-    query[kSecReturnData as String] = false
-    query[kSecMatchLimit as String] = kSecMatchLimitOne
+  private func hasItem(account: String) -> Bool {
+    var item = query(account)
+    item[kSecReturnData as String] = false
+    item[kSecMatchLimit as String] = kSecMatchLimitOne
 
-    var item: CFTypeRef?
-    let status = SecItemCopyMatching(query as CFDictionary, &item)
+    var found: CFTypeRef?
+    let status = SecItemCopyMatching(item as CFDictionary, &found)
     return status == errSecSuccess
   }
 
-  private func query() -> [String: Any] {
+  private func query(_ account: String) -> [String: Any] {
     return [
       kSecClass as String: kSecClassGenericPassword,
       kSecAttrService as String: serviceName,
-      kSecAttrAccount as String: accountName,
+      kSecAttrAccount as String: account,
     ]
   }
 }

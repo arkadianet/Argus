@@ -16,11 +16,41 @@ class SecureStorageService {
       });
       return true;
     } on PlatformException catch (e) {
-      // Handle biometric enrollment change
       if (e.code == 'KEY_INVALIDATED') {
         throw SecureStorageException.biometricChanged();
       }
       throw SecureStorageException('Failed to save: ${e.message}');
+    }
+  }
+
+  static Future<bool> saveWrapKey(String wrapKey) async {
+    try {
+      await _channel.invokeMethod('saveWrapKey', {'wrapKey': wrapKey});
+      return true;
+    } on PlatformException catch (e) {
+      if (e.code == 'KEY_INVALIDATED') {
+        throw SecureStorageException.biometricChanged();
+      }
+      throw SecureStorageException('Failed to save wrap key: ${e.message}');
+    }
+  }
+
+  static Future<void> saveWalletSecrets({
+    required String encryptedSeedJson,
+    required String wrapKey,
+  }) async {
+    await saveEncryptedSeed(encryptedSeedJson);
+    await saveWrapKey(wrapKey);
+  }
+
+  static Future<String?> loadWrapKey() async {
+    try {
+      return await _channel.invokeMethod<String>('loadWrapKey');
+    } on PlatformException catch (e) {
+      if (e.code == 'KEY_INVALIDATED') {
+        throw SecureStorageException.biometricChanged();
+      }
+      throw SecureStorageException('Failed to load wrap key: ${e.message}');
     }
   }
 
@@ -38,7 +68,7 @@ class SecureStorageService {
     }
   }
 
-  /// Delete the stored encrypted seed.
+  /// Delete the stored encrypted seed and wrap key.
   static Future<void> deleteEncryptedSeed() async {
     try {
       await _channel.invokeMethod('deleteEncryptedSeed');

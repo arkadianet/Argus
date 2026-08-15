@@ -32,7 +32,7 @@ ergo-nipopow = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f92
 ergo-rest = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
 
 # ─── Node interface (via ergo-node-interface-rust) ───────────────────────
-ergo-node-interface = { git = "https://github.com/arkadianet/ergo-node-interface-rust" }
+ergo-node-interface = { git = "https://github.com/arkadianet/ergo-node-interface-rust", rev = "0264f6ffcb954da135960460d942f4c804ed65c9" }
 
 # ─── Async ───────────────────────────────────────────────────────────────
 tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "sync"] }

@@ -38,7 +38,7 @@ pub use dev_fee::{
     DEFAULT_DEV_FEE_ADDRESS, DEFAULT_DEV_FEE_ERGO_TREE,
 };
 pub use eip12::*;
-pub use send::{build_send_tx, SendBuildResult, SendError, SendSummary};
+pub use send::{build_send_tx, build_send_tx_with_fee, SendBuildResult, SendError, SendSummary};
 pub use sigma::*;
 pub use tx_helpers::{
     append_change_output, select_inputs_for_multi_spend, select_inputs_for_spend, ChangeOutputError,
