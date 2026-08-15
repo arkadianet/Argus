@@ -78,6 +78,18 @@ class WalletRouteArgs {
       changeAddress: '',
     );
   }
+
+  WalletRouteArgs copyWith({Map<String, dynamic>? transaction}) {
+    return WalletRouteArgs(
+      senderAddress: senderAddress,
+      receiveAddress: receiveAddress,
+      changeAddress: changeAddress,
+      historyAddresses: historyAddresses,
+      tokens: tokens,
+      spendableNano: spendableNano,
+      transaction: transaction ?? this.transaction,
+    );
+  }
 }
 
 class SendPreview {
@@ -158,10 +170,37 @@ int? parseDecimalToBase(String raw, int decimals) {
   return total.toInt();
 }
 
+const minerFeeNano = 1100000;
+const minBoxNano = 1000000;
+
 String? validatePin(String pin) {
   final n = pin.runes.length;
   if (n < 6 || n > 32) return 'PIN must be 6-32 characters';
   return null;
+}
+
+List<String> mnemonicWords(String raw) {
+  return raw
+      .trim()
+      .toLowerCase()
+      .split(RegExp(r'\s+'))
+      .where((w) => w.isNotEmpty)
+      .toList();
+}
+
+bool mnemonicWordsEqual(String a, String b) {
+  final left = mnemonicWords(a);
+  final right = mnemonicWords(b);
+  if (left.length != right.length) return false;
+  for (var i = 0; i < left.length; i++) {
+    if (left[i] != right[i]) return false;
+  }
+  return true;
+}
+
+bool isIncorrectPin(Object error) {
+  final msg = error is ArgusException ? error.message : error.toString();
+  return msg.toLowerCase().contains('incorrect pin');
 }
 
 class WalletService {

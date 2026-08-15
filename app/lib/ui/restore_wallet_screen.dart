@@ -25,13 +25,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
   @override
   void initState() {
     super.initState();
-    SecureStorageService.setSecureFlag(true).then((ok) {
-      if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Screenshot blocking is unavailable on this device')),
-        );
-      }
-    });
+    armSecureFlag(context);
   }
 
   @override
@@ -49,8 +43,13 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
   }
 
   void _toPin() {
-    if (_phraseCtrl.text.trim().isEmpty) {
+    final words = mnemonicWords(_phraseCtrl.text);
+    if (words.isEmpty) {
       _snack('Enter a recovery phrase');
+      return;
+    }
+    if (words.length != 12 && words.length != 24) {
+      _snack('Recovery phrase must be 12 or 24 words');
       return;
     }
     setState(() => _step = 1);
@@ -85,6 +84,8 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
       _snack('${e.code}: ${e.message}');
     } on SecureStorageException catch (e) {
       _snack(e.message);
+    } catch (_) {
+      _snack('Could not restore the wallet');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -97,7 +98,13 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: _step == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_step > 0) setState(() => _step -= 1);
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: const Text('Restore wallet'),
         leading: IconButton(
@@ -124,6 +131,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 
@@ -146,6 +154,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
           maxLines: 6,
           enableSuggestions: false,
           autocorrect: false,
+          enableIMEPersonalizedLearning: false,
         ),
         const SizedBox(height: 12),
         TextField(
@@ -154,6 +163,9 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
             labelText: 'BIP-39 passphrase (optional)',
           ),
           obscureText: true,
+          enableSuggestions: false,
+          autocorrect: false,
+          enableIMEPersonalizedLearning: false,
         ),
         const SizedBox(height: 20),
         FilledButton(onPressed: _toPin, child: const Text('Continue')),

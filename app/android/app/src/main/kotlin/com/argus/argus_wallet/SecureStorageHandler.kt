@@ -230,7 +230,16 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
             executor,
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(res: BiometricPrompt.AuthenticationResult) {
-                    result.success(getPrefs().getString(WRAP_KEY, null))
+                    try {
+                        result.success(getPrefs().getString(WRAP_KEY, null))
+                    } catch (e: Exception) {
+                        if (isKeyInvalidated(e)) {
+                            resetInvalidatedStorage()
+                            result.error("KEY_INVALIDATED", e.message, null)
+                        } else {
+                            result.error("STORAGE_ERROR", e.message, null)
+                        }
+                    }
                 }
 
                 override fun onAuthenticationError(code: Int, errString: CharSequence) {

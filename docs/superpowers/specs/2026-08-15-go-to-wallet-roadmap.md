@@ -27,9 +27,9 @@ Hardcoded in `wallet-net`:
 
 | Role | URL | Used for |
 |---|---|---|
-| Default node | `https://ergo-explorer-01.ergonode.net` | UTXOs, height, `/info` parameters, history, broadcast |
-| Fallback node | `https://node.ergo.watch` | Same, if the default does not return a height |
-| Explorer | `https://api.ergoplatform.com` | Token name / decimals / icon only |
+| Default nodes | `https://ergo-node.eutxo.de`, `https://ergo-node.zoomout.io`, `https://ergo1.oette.info`, `https://node.sigmaspace.io` | UTXOs, height, history, broadcast (HTTPS + extraIndex) |
+| User-added | `https://host` or `http://ip:port` | Same, if the operator adds one in Settings |
+| Explorer | `https://api.sigmaspace.io` | Token name / decimals, and Open in explorer |
 
 `ErgoNodeClient::connect(preferred)` tries preferred (if any), then the two candidates, and keeps the first that answers `current_height()`. The Flutter UI never passes a preferred URL, so every call is `connect(None)`.
 
@@ -59,7 +59,7 @@ Goal: a careful person can hold and move ERG/tokens without fighting the app or 
 - Persist a node list. Ship the two current public hosts as defaults. User can add, disable, reorder, or remove (cannot remove the last enabled host).
 - On launch and on pull-to-refresh, probe enabled hosts (`/info` height). Use the first healthy one. Remember last-good for the next cold start.
 - Show the active host and height in Settings, and a small status on the ledger (height or "offline").
-- Optional custom explorer URL for token metadata (default stays `api.ergoplatform.com`).
+- Optional custom explorer URL for token metadata (default is `api.sigmaspace.io`).
 - Mainnet only in this layer. Testnet is a later toggle, not a second product.
 
 Out of scope: running a local node, DNS seeder, automatic scrape of random IPs.

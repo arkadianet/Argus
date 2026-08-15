@@ -18,7 +18,8 @@ class TransactionDetailScreen extends StatelessWidget {
     final height = (tx['height'] as num?)?.toInt();
     final ts = (tx['timestamp'] as num?)?.toInt();
     final nano = (tx['value_nano_erg'] as num?)?.toInt();
-    final tokens = (tx['token_ids'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+    final rawTokens = tx['token_ids'];
+    final tokens = rawTokens is List ? rawTokens.map((e) => e.toString()).toList() : const <String>[];
     final confirmed = height != null && height > 0;
 
     return Scaffold(
@@ -53,17 +54,35 @@ class TransactionDetailScreen extends StatelessWidget {
           FilledButton(
             onPressed: txId.isEmpty
                 ? null
-                : () => Clipboard.setData(ClipboardData(text: txId)),
+                : () {
+                    Clipboard.setData(ClipboardData(text: txId));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Transaction id copied')),
+                    );
+                  },
             child: const Text('Copy id'),
           ),
           const SizedBox(height: 12),
           OutlinedButton(
             onPressed: txId.isEmpty
                 ? null
-                : () => launchUrl(
-                      Uri.parse(networkController.explorerTx(txId)),
-                      mode: LaunchMode.externalApplication,
-                    ),
+                : () async {
+                    try {
+                      final uri = Uri.parse(networkController.explorerTx(txId));
+                      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+                      if (!ok && context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Could not open explorer')),
+                        );
+                      }
+                    } catch (_) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Could not open explorer')),
+                        );
+                      }
+                    }
+                  },
             child: const Text('Open in explorer'),
           ),
         ],

@@ -1,6 +1,6 @@
 # Alpha 1 Daily Driver Implementation Plan
 
-> **For agentic workers:** Execute inline in this session. User already ordered: implement, commit, publish.
+> Execute only what the user asks in the current session. Commit or publish only after fresh user approval.
 
 **Goal:** Ship `v1.0.0-alpha.1` — a wallet that can spend across all owned addresses, shows and edits its nodes, scan-to-send, real tx detail, and a polished ledger. Still alpha. Not ErgoPay. Not DeFi.
 

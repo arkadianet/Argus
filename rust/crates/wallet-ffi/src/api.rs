@@ -363,6 +363,20 @@ pub async fn discover_addresses(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+fn resolve_send_token(
+    token_id: Option<String>,
+    token_amount: Option<u64>,
+) -> Result<Option<(String, u64)>, String> {
+    match (token_id, token_amount) {
+        (None, None) => Ok(None),
+        (Some(id), Some(amt)) if !id.is_empty() && amt > 0 => Ok(Some((id, amt))),
+        _ => Err(ArgusError::TxBuildFailed(
+            "token_id and token_amount must both be a non-empty id and amount > 0".into(),
+        )
+        .to_json_string()),
+    }
+}
+
 fn resolve_spend_addresses(sender: &str, extra: &[String]) -> Vec<String> {
     let mut spend = extra
         .iter()
@@ -441,10 +455,7 @@ async fn prepare(
 
     let spend = resolve_spend_addresses(sender_address, spend_addresses);
 
-    let send_token: Option<(String, u64)> = token_id
-        .filter(|s| !s.is_empty())
-        .zip(token_amount)
-        .filter(|(_, amt)| *amt > 0);
+    let send_token = resolve_send_token(token_id, token_amount)?;
     let client = node_client(node_url).await?;
     let (boxes, eip12) = gather_unspent(handle_id, &client, &spend).await?;
     if eip12.is_empty() {
@@ -672,6 +683,19 @@ mod tests {
             resolve_spend_addresses("9aaa", &[]),
             vec!["9aaa"]
         );
+    }
+
+    #[test]
+    fn send_token_pair_must_be_complete() {
+        assert!(resolve_send_token(None, None).unwrap().is_none());
+        assert_eq!(
+            resolve_send_token(Some("abc".into()), Some(2)).unwrap(),
+            Some(("abc".into(), 2))
+        );
+        assert!(resolve_send_token(Some("abc".into()), None).is_err());
+        assert!(resolve_send_token(None, Some(2)).is_err());
+        assert!(resolve_send_token(Some("".into()), Some(2)).is_err());
+        assert!(resolve_send_token(Some("abc".into()), Some(0)).is_err());
     }
 
     #[test]

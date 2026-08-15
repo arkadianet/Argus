@@ -16,7 +16,9 @@ final navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await themeController.load();
+  try {
+    await themeController.load();
+  } catch (_) {}
   runApp(const ArgusApp());
 }
 
@@ -71,6 +73,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
           themeMode: themeController.themeMode,
           onGenerateRoute: (settings) {
             final page = switch (settings.name) {
+              '/' || null => const DashboardScreen(),
               '/receive' => const ReceiveScreen(),
               '/send' => const SendScreen(),
               '/transactions' => const TransactionsScreen(),
@@ -78,10 +81,13 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/restore' => const RestoreWalletScreen(),
               '/settings' => const SettingsScreen(),
               '/tx' => const TransactionDetailScreen(),
-              _ => const DashboardScreen(),
+              _ => null,
             };
+            if (page == null) return null;
             return fadeRoute(page, settings: settings);
           },
+          onUnknownRoute: (settings) =>
+              fadeRoute(const DashboardScreen(), settings: settings),
         );
       },
     );

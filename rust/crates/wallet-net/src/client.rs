@@ -15,15 +15,17 @@ const UNSPENT_PAGE_SIZE: u64 = 500;
 const UNSPENT_MAX_BOXES: usize = 10_000;
 
 /// Default public Ergo node URL (mainnet).
-pub const DEFAULT_NODE_URL: &str = "https://ergo-explorer-01.ergonode.net";
+pub const DEFAULT_NODE_URL: &str = "https://ergo-node.eutxo.de";
 
-/// Public nodes tried after the preferred URL.
+/// Public HTTPS nodes with extraIndex, tried after the preferred URL.
 pub const NODE_CANDIDATES: &[&str] = &[
     DEFAULT_NODE_URL,
-    "https://node.ergo.watch",
+    "https://ergo-node.zoomout.io",
+    "https://ergo1.oette.info",
+    "https://node.sigmaspace.io",
 ];
 
-pub const DEFAULT_EXPLORER_URL: &str = "https://api.ergoplatform.com";
+pub const DEFAULT_EXPLORER_URL: &str = "https://api.sigmaspace.io";
 
 #[derive(Clone)]
 struct NetworkConfig {
@@ -563,42 +565,63 @@ mod tests {
         );
     }
 
+    fn with_network<F: FnOnce()>(f: F) {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                reset_network();
+            }
+        }
+        let _reset = Reset;
+        reset_network();
+        f();
+    }
+
     #[test]
     fn preferred_node_is_first() {
-        reset_network();
-        let urls = node_urls(Some("https://custom.node".into()));
-        assert_eq!(urls[0], "https://custom.node");
-        assert!(urls.contains(&DEFAULT_NODE_URL.to_string()));
+        with_network(|| {
+            let urls = node_urls(Some("https://custom.node".into()));
+            assert_eq!(urls[0], "https://custom.node");
+            assert!(urls.contains(&DEFAULT_NODE_URL.to_string()));
+        });
     }
 
     #[test]
     fn default_list_has_no_duplicates() {
-        reset_network();
-        let urls = node_urls(Some(DEFAULT_NODE_URL.into()));
-        assert_eq!(urls.iter().filter(|u| *u == DEFAULT_NODE_URL).count(), 1);
+        with_network(|| {
+            let urls = node_urls(Some(DEFAULT_NODE_URL.into()));
+            assert_eq!(urls.iter().filter(|u| *u == DEFAULT_NODE_URL).count(), 1);
+        });
     }
 
     #[test]
     fn custom_list_replaces_defaults() {
-        set_network(
-            vec!["https://a.example".into(), "https://b.example".into()],
-            Some("https://exp.example".into()),
-        );
-        let urls = node_urls(None);
-        assert_eq!(urls, vec!["https://a.example", "https://b.example"]);
-        assert_eq!(configured_explorer(), "https://exp.example");
-        reset_network();
+        with_network(|| {
+            set_network(
+                vec!["https://a.example".into(), "https://b.example".into()],
+                Some("https://exp.example".into()),
+            );
+            let urls = node_urls(None);
+            assert_eq!(urls, vec!["https://a.example", "https://b.example"]);
+            assert_eq!(configured_explorer(), "https://exp.example");
+        });
     }
 
     #[test]
     fn empty_set_network_keeps_list() {
-        set_network(
-            vec!["https://only.example".into()],
-            None,
-        );
-        set_network(vec![], None);
-        assert_eq!(configured_nodes(), vec!["https://only.example"]);
-        reset_network();
+        with_network(|| {
+            set_network(
+                vec!["https://only.example".into()],
+                None,
+            );
+            set_network(vec![], None);
+            assert_eq!(configured_nodes(), vec!["https://only.example"]);
+        });
     }
 
     #[test]

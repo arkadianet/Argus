@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../bridge/argus_error.dart';
 import '../services/network_controller.dart';
 import '../services/secure_storage.dart';
 import '../services/wallet_service.dart';
@@ -36,15 +37,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _load() async {
-    final hasPin = await SecureStorageService.hasPinWrap();
-    final bio = hasPin &&
-        await SecureStorageService.hasBiometric() &&
-        await SecureStorageService.hasWrapKey();
-    if (!mounted) return;
-    setState(() {
-      _hasPin = hasPin;
-      _canBiometric = bio;
-    });
+    try {
+      final hasPin = await SecureStorageService.hasPinWrap();
+      final bio = hasPin &&
+          await SecureStorageService.hasBiometric() &&
+          await SecureStorageService.hasWrapKey();
+      if (!mounted) return;
+      setState(() {
+        _hasPin = hasPin;
+        _canBiometric = bio;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      _snack('Could not load unlock settings');
+    }
+  }
+
+  Future<void> _disableBiometric() async {
+    setState(() => _busy = true);
+    try {
+      await SecureStorageService.deleteWrapKey();
+      await _load();
+    } catch (_) {
+      _snack('Could not disable biometrics');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _addNode() async {
+    final err = await networkController.addNode(_nodeCtrl.text);
+    if (err != null) {
+      _snack(err);
+      return;
+    }
+    _nodeCtrl.clear();
   }
 
   Future<void> _enableBiometric() async {
@@ -68,17 +95,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _snack(pinErr);
       return;
     }
+    try {
+      final blocked = await SecureStorageService.pinBlockedMessage();
+      if (blocked != null) {
+        _snack(blocked);
+        return;
+      }
+    } on SecureStorageException {
+      _snack('Could not check PIN lockout');
+      return;
+    }
     setState(() => _busy = true);
     try {
       final pinWrap = await SecureStorageService.loadPinWrap();
       if (pinWrap == null) return;
       final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, entered);
       await SecureStorageService.saveWrapKey(wrapKey);
+      await SecureStorageService.clearPinGate();
       if (!mounted) return;
       setState(() => _canBiometric = true);
       _snack('Biometric unlock enabled');
-    } catch (e) {
-      _snack('Could not enable biometrics: $e');
+    } on ArgusException catch (e) {
+      if (isIncorrectPin(e)) {
+        try {
+          await SecureStorageService.recordPinFailure();
+        } catch (_) {}
+        _snack('Incorrect PIN');
+      } else {
+        _snack('Could not enable biometrics');
+      }
+    } catch (_) {
+      _snack('Could not enable biometrics');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -94,7 +141,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListenableBuilder(
-        listenable: Listenable.merge([themeController, networkController]),
+        listenable: Listenable.merge([
+          themeController,
+          networkController,
+          walletService.unlocked,
+        ]),
         builder: (context, _) {
           return ListView(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
@@ -115,6 +166,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ...List.generate(networkController.nodes.length, (i) {
                 final n = networkController.nodes[i];
                 final active = n.url == networkController.activeUrl;
+                final last = i == networkController.nodes.length - 1;
+                final isLastEnabled = n.enabled && networkController.enabledUrls.length <= 1;
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Row(
@@ -134,22 +187,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       IconButton(
                         tooltip: 'Up',
-                        onPressed: () => networkController.moveNode(i, -1),
+                        onPressed: i == 0 ? null : () => networkController.moveNode(i, -1),
                         icon: const Icon(Icons.keyboard_arrow_up, size: 20),
                       ),
                       IconButton(
                         tooltip: 'Down',
-                        onPressed: () => networkController.moveNode(i, 1),
+                        onPressed: last ? null : () => networkController.moveNode(i, 1),
                         icon: const Icon(Icons.keyboard_arrow_down, size: 20),
                       ),
                       IconButton(
                         tooltip: n.enabled ? 'Disable' : 'Enable',
-                        onPressed: () => networkController.toggleNode(i),
+                        onPressed: isLastEnabled ? null : () => networkController.toggleNode(i),
                         icon: Icon(n.enabled ? Icons.visibility : Icons.visibility_off, size: 20),
                       ),
                       IconButton(
                         tooltip: 'Remove',
-                        onPressed: () => networkController.removeNode(i),
+                        onPressed: isLastEnabled ? null : () => networkController.removeNode(i),
                         icon: const Icon(Icons.close, size: 20),
                       ),
                     ],
@@ -158,16 +211,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
               }),
               TextField(
                 controller: _nodeCtrl,
-                decoration: const InputDecoration(labelText: 'Add node URL'),
-                onSubmitted: (v) async {
-                  await networkController.addNode(v);
-                  _nodeCtrl.clear();
-                },
+                decoration: InputDecoration(
+                  labelText: 'Add node URL',
+                  hintText: 'https://host  or  1.2.3.4:9053',
+                  suffixIcon: IconButton(
+                    tooltip: 'Add',
+                    onPressed: _addNode,
+                    icon: const Icon(Icons.add),
+                  ),
+                ),
+                onSubmitted: (_) => _addNode(),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Built-in nodes are HTTPS. You can add http://ip:port for a node you run or trust. That traffic is not encrypted.',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 12),
               TextField(
                 controller: _explorerCtrl,
-                decoration: const InputDecoration(labelText: 'Token metadata URL'),
+                decoration: InputDecoration(
+                  labelText: 'Token metadata and explorer URL',
+                  hintText: 'https://api.sigmaspace.io',
+                  suffixIcon: IconButton(
+                    tooltip: 'Save',
+                    onPressed: () => networkController.setExplorer(_explorerCtrl.text),
+                    icon: const Icon(Icons.check),
+                  ),
+                ),
                 onSubmitted: networkController.setExplorer,
               ),
               const SizedBox(height: 28),
@@ -185,7 +256,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ArgusPalette.ledger => 'Warm paper, dark ink',
                 };
                 final selected = themeController.palette == p;
-                return InkWell(
+                return Semantics(
+                  selected: selected,
+                  button: true,
+                  label: label,
+                  child: InkWell(
                   onTap: () => themeController.setPalette(p),
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 14),
@@ -215,6 +290,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ],
                     ),
                   ),
+                ),
                 );
               }),
               const SizedBox(height: 28),
@@ -225,11 +301,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'Unlock the wallet to change biometric settings.',
                   style: Theme.of(context).textTheme.bodySmall,
                 )
-              else if (_canBiometric)
+              else if (_canBiometric) ...[
                 Text(
                   'Biometric unlock is on. The PIN still unwraps the key.',
                   style: Theme.of(context).textTheme.bodyMedium,
-                )
+                ),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: _busy ? null : _disableBiometric,
+                    child: const Text('Disable biometric unlock'),
+                  ),
+                ),
+              ]
               else if (_hasPin)
                 Align(
                   alignment: Alignment.centerLeft,

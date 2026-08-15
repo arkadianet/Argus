@@ -23,8 +23,6 @@ class _SendScreenState extends State<SendScreen> {
   String? _resultTxId;
   String? _assetId;
 
-  static const _fee = 1100000;
-  static const _minBox = 1000000;
 
   @override
   void dispose() {
@@ -46,23 +44,34 @@ class _SendScreenState extends State<SendScreen> {
 
   int? _amountNano() => parseErgToNano(_amountCtrl.text);
 
-  void _applyMax() {
-    final token = _selectedToken;
-    if (token != null && !token.isNft) {
-      _tokenAmtCtrl.text = formatTokenAmount(token.amount, token.decimals);
-      setState(() {});
+  void _applyMaxErg() {
+    final spendable = _args.spendableNano;
+    if (spendable == null) {
+      _snack('Spendable balance is unknown');
       return;
     }
-    final spendable = _args.spendableNano;
-    if (spendable == null) return;
-    final max = spendable - _fee - _minBox;
-    if (max < _minBox) return;
+    final max = spendable - minerFeeNano - minBoxNano;
+    if (max < minBoxNano) {
+      _snack('Not enough ERG for fee and change');
+      return;
+    }
     _amountCtrl.text = formatErg(max, unit: false);
+    setState(() {});
+  }
+
+  void _applyMaxToken() {
+    final token = _selectedToken;
+    if (token == null || token.isNft) {
+      _snack('No token selected');
+      return;
+    }
+    _tokenAmtCtrl.text = formatTokenAmount(token.amount, token.decimals);
     setState(() {});
   }
 
   Future<void> _scan() async {
     final raw = await Navigator.push<String>(context, fadeRoute(const ScanScreen()));
+    if (!mounted) return;
     if (raw == null) return;
     final pay = parseErgoUri(raw);
     if (pay == null) {
@@ -145,17 +154,26 @@ class _SendScreenState extends State<SendScreen> {
           ],
         ),
       );
+      if (!mounted) return;
       if (ok != true) {
         setState(() => _sending = false);
         return;
       }
-      final txId = await walletService.sendErg(preparationId: preview.preparationId);
-      HapticFeedback.mediumImpact();
-      setState(() {
-        _resultTxId = txId;
-        _sending = false;
-      });
+      try {
+        final txId = await walletService.sendErg(preparationId: preview.preparationId);
+        if (!mounted) return;
+        HapticFeedback.mediumImpact();
+        setState(() {
+          _resultTxId = txId;
+          _sending = false;
+        });
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _sending = false);
+        _snack('Broadcast may have failed. Check activity before sending again.');
+      }
     } catch (e) {
+      if (!mounted) return;
       setState(() => _sending = false);
       _snack('Failed: $e');
     }
@@ -241,12 +259,12 @@ class _SendScreenState extends State<SendScreen> {
                       decoration: InputDecoration(
                         labelText: token == null ? 'Amount (ERG)' : 'ERG for the output box',
                         hintText: '0.001',
-                        suffixIcon: TextButton(onPressed: _applyMax, child: const Text('MAX')),
+                        suffixIcon: TextButton(onPressed: _applyMaxErg, child: const Text('MAX')),
                       ),
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                       validator: (v) {
                         final n = parseErgToNano(v ?? '');
-                        if (n == null || n < 1000000) return 'Minimum 0.001 ERG';
+                        if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
                         return null;
                       },
                     ),
@@ -256,7 +274,7 @@ class _SendScreenState extends State<SendScreen> {
                         controller: _tokenAmtCtrl,
                         decoration: InputDecoration(
                           labelText: '${token.label} amount',
-                          suffixIcon: TextButton(onPressed: _applyMax, child: const Text('MAX')),
+                          suffixIcon: TextButton(onPressed: _applyMaxToken, child: const Text('MAX')),
                         ),
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
                         validator: (v) {

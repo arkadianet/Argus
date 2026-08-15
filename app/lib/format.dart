@@ -8,7 +8,7 @@ String formatScaled(int amount, int decimals, {int? maxFrac}) {
   }
   final whole = abs ~/ scale;
   var frac = (abs % scale).toString().padLeft(decimals, '0');
-  final keep = (maxFrac ?? decimals).clamp(0, decimals);
+  final keep = (maxFrac ?? decimals).clamp(0, decimals).toInt();
   if (keep < decimals) frac = frac.substring(0, keep);
   frac = frac.replaceFirst(RegExp(r'0+$'), '');
   if (frac.isEmpty) return '$sign$whole';
@@ -49,7 +49,11 @@ PaymentRequest? parseErgoUri(String raw) {
   if (!looksLikeErgoAddress(address)) return null;
   String? amount;
   if (parts.length > 1) {
-    amount = Uri.splitQueryString(parts[1])['amount'];
+    try {
+      amount = Uri.splitQueryString(parts[1])['amount'];
+    } catch (_) {
+      return null;
+    }
   }
   return PaymentRequest(address: address, amountErg: amount);
 }

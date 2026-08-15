@@ -14,6 +14,7 @@ class TransactionsScreen extends StatefulWidget {
 
 class _TransactionsScreenState extends State<TransactionsScreen> {
   bool _loading = true;
+  String? _error;
   List<Map<String, dynamic>> _txs = [];
 
   @override
@@ -30,7 +31,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ? args.historyAddresses
         : [if (args.senderAddress.isNotEmpty) args.senderAddress];
     if (addresses.isEmpty) {
-      setState(() => _loading = false);
+      setState(() {
+        _loading = false;
+        _error = null;
+      });
       return;
     }
     try {
@@ -39,9 +43,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       setState(() {
         _txs = all;
         _loading = false;
+        _error = null;
       });
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = 'Could not load activity';
+        });
+      }
     }
   }
 
@@ -50,15 +60,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       context,
       fadeRoute(
         const TransactionDetailScreen(),
-        settings: RouteSettings(
-          arguments: WalletRouteArgs(
-            senderAddress: _args.senderAddress,
-            receiveAddress: _args.receiveAddress,
-            changeAddress: _args.changeAddress,
-            historyAddresses: _args.historyAddresses,
-            transaction: tx,
-          ),
-        ),
+        settings: RouteSettings(arguments: _args.copyWith(transaction: tx)),
       ),
     );
   }
@@ -67,8 +69,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Activity')),
-      body: _loading
+      body: _loading && _txs.isEmpty
           ? const Center(child: CircularProgressIndicator())
+          : _error != null && _txs.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(28),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          _error!,
+                          style: Theme.of(context).textTheme.bodyMedium,
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton(onPressed: _load, child: const Text('Retry')),
+                      ],
+                    ),
+                  ),
+                )
           : _txs.isEmpty
               ? Center(
                   child: Text(

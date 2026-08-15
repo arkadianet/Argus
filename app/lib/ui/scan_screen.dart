@@ -12,7 +12,7 @@ class _ScanScreenState extends State<ScanScreen> {
   bool _done = false;
 
   void _onDetect(BarcodeCapture capture) {
-    if (_done) return;
+    if (_done || !mounted) return;
     for (final code in capture.barcodes) {
       final raw = code.rawValue?.trim();
       if (raw == null || raw.isEmpty) continue;
@@ -26,7 +26,30 @@ class _ScanScreenState extends State<ScanScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Scan')),
-      body: MobileScanner(onDetect: _onDetect),
+      body: MobileScanner(
+        onDetect: _onDetect,
+        errorBuilder: (context, error) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.all(28),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text(
+                    'Camera is unavailable. Allow camera access and try again.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 20),
+                  FilledButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Back'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
     );
   }
 }

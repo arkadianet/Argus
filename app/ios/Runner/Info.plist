@@ -30,6 +30,11 @@
 	<string>Unlock Argus without typing your PIN.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Scan an Ergo address or payment QR.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

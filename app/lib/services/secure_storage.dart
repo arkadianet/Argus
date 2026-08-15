@@ -148,8 +148,34 @@ class SecureStorageService {
           until: (raw['until'] as num?)?.toInt() ?? 0,
         );
       }
-    } on PlatformException catch (_) {}
-    return (count: 0, until: 0);
+      return (count: 0, until: 0);
+    } on PlatformException catch (e) {
+      throw _map(e, 'Failed to load PIN gate');
+    }
+  }
+
+  static Future<String?> pinBlockedMessage() async {
+    final gate = await loadPinGate();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (gate.until > now) {
+      final wait = ((gate.until - now) / 1000).ceil();
+      return 'Too many attempts. Try again in ${wait}s';
+    }
+    return null;
+  }
+
+  static Future<void> recordPinFailure() async {
+    final gate = await loadPinGate();
+    final count = gate.count + 1;
+    final delaySec = 1 << (count > 6 ? 5 : count - 1);
+    await savePinGate(
+      count: count,
+      until: DateTime.now().millisecondsSinceEpoch + delaySec * 1000,
+    );
+  }
+
+  static Future<void> clearPinGate() async {
+    await savePinGate(count: 0, until: 0);
   }
 
   static Future<void> savePinGate({required int count, required int until}) async {

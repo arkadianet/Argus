@@ -152,28 +152,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<bool> _pinAllowed() async {
-    final gate = await SecureStorageService.loadPinGate();
-    final now = DateTime.now().millisecondsSinceEpoch;
-    if (gate.until > now) {
-      final wait = ((gate.until - now) / 1000).ceil();
-      _snack('Too many attempts. Try again in ${wait}s');
+    try {
+      final blocked = await SecureStorageService.pinBlockedMessage();
+      if (blocked != null) {
+        _snack(blocked);
+        return false;
+      }
+      return true;
+    } on SecureStorageException {
+      _snack('Could not check PIN lockout');
       return false;
     }
-    return true;
   }
 
   Future<void> _pinFailed() async {
-    final gate = await SecureStorageService.loadPinGate();
-    final count = gate.count + 1;
-    final delaySec = 1 << (count > 6 ? 5 : count - 1);
-    await SecureStorageService.savePinGate(
-      count: count,
-      until: DateTime.now().millisecondsSinceEpoch + delaySec * 1000,
-    );
+    await SecureStorageService.recordPinFailure();
   }
 
   Future<void> _pinSucceeded() async {
-    await SecureStorageService.savePinGate(count: 0, until: 0);
+    await SecureStorageService.clearPinGate();
   }
 
   Future<void> _runUnlock(Future<void> Function() work) async {
@@ -203,12 +200,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
         }
         final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, _pinCtrl.text);
         await walletService.restoreWallet(json, wrapKey: wrapKey);
-        await _pinSucceeded();
+        try {
+          await _pinSucceeded();
+        } catch (_) {}
         _pinCtrl.clear();
         HapticFeedback.lightImpact();
         await _afterUnlock();
       } on ArgusException catch (e) {
-        await _pinFailed();
+        try {
+          await _pinFailed();
+        } catch (_) {}
         _snack('${e.code}: ${e.message}');
       } on SecureStorageException catch (e) {
         _snack(e.message);

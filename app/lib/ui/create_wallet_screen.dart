@@ -25,13 +25,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
   @override
   void initState() {
     super.initState();
-    SecureStorageService.setSecureFlag(true).then((ok) {
-      if (!ok && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Screenshot blocking is unavailable on this device')),
-        );
-      }
-    });
+    armSecureFlag(context);
   }
 
   @override
@@ -68,7 +62,8 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
   }
 
   void _toPin() {
-    if (_confirmCtrl.text.trim() != _mnemonic) {
+    final phrase = _mnemonic;
+    if (phrase == null || !mnemonicWordsEqual(_confirmCtrl.text, phrase)) {
       _snack('Confirmation does not match the recovery phrase');
       return;
     }
@@ -98,6 +93,8 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
       _snack('${e.code}: ${e.message}');
     } on SecureStorageException catch (e) {
       _snack(e.message);
+    } catch (_) {
+      _snack('Could not create the wallet');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -110,7 +107,13 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: _step == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_step > 0) setState(() => _step -= 1);
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: const Text('Create wallet'),
         leading: IconButton(
@@ -141,6 +144,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
           ),
         ],
       ),
+    ),
     );
   }
 
@@ -221,6 +225,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
           maxLines: 6,
           enableSuggestions: false,
           autocorrect: false,
+          enableIMEPersonalizedLearning: false,
         ),
         const SizedBox(height: 20),
         FilledButton(onPressed: _toPin, child: const Text('Continue')),
@@ -271,4 +276,21 @@ Future<bool> confirmReplaceExistingWallet(BuildContext context) async {
     ),
   );
   return ok == true;
+}
+
+Future<void> armSecureFlag(BuildContext context) async {
+  try {
+    final ok = await SecureStorageService.setSecureFlag(true);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Screenshot blocking is unavailable on this device')),
+      );
+    }
+  } catch (_) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Screenshot blocking is unavailable on this device')),
+      );
+    }
+  }
 }

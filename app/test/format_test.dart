@@ -52,6 +52,10 @@ void main() {
       expect(parseErgoUri('bitcoin:abc'), isNull);
       expect(parseErgoUri(''), isNull);
     });
+
+    test('rejects a malformed query string', () {
+      expect(parseErgoUri('$addr?amount=%'), isNull);
+    });
   });
 
   group('formatHeight', () {
