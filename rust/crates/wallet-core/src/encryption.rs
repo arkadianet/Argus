@@ -7,12 +7,13 @@ use zeroize::Zeroize;
 
 use crate::CoreError;
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+const VERSION_LEGACY: u32 = 1;
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
 
-/// AES-256-GCM sealed seed. The wrap key lives in this blob; confidentiality
-/// comes from Android Keystore / iOS Keychain, not from this layer.
+/// AES-256-GCM sealed seed. The wrap key is stored separately in
+/// Keystore/Keychain. v1 blobs that still embed `k` are accepted for migration.
 pub struct EncryptedSeed {
     nonce: [u8; NONCE_LEN],
     ciphertext: Vec<u8>,
@@ -53,18 +54,35 @@ impl EncryptedSeed {
             .map_err(|e| CoreError::Encryption(format!("Decryption failed: {e:?}")))
     }
 
+    pub fn wrap_key_hex(&self) -> String {
+        hex::encode(self.key)
+    }
+
     pub fn to_json(&self) -> Result<serde_json::Value, CoreError> {
         Ok(serde_json::json!({
             "v": VERSION,
             "nonce": hex::encode(self.nonce),
             "ct": hex::encode(&self.ciphertext),
-            "k": hex::encode(self.key),
         }))
     }
 
-    pub fn from_json(json: &serde_json::Value) -> Result<Self, CoreError> {
+    pub fn from_json(json: &serde_json::Value, wrap_key: Option<&str>) -> Result<Self, CoreError> {
+        let version = json
+            .get("v")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| CoreError::Serialization("missing schema version".into()))?;
+        let key = match version {
+            v if v == VERSION as u64 => decode_key_hex(wrap_key.ok_or_else(|| {
+                CoreError::Serialization("missing wrap key for schema v2".into())
+            })?)?,
+            v if v == VERSION_LEGACY as u64 => decode_fixed::<KEY_LEN>(json, "k")?,
+            v => {
+                return Err(CoreError::Serialization(format!(
+                    "unsupported schema version {v}"
+                )));
+            }
+        };
         let nonce = decode_fixed::<NONCE_LEN>(json, "nonce")?;
-        let key = decode_fixed::<KEY_LEN>(json, "k")?;
         let ciphertext = decode_vec(json, "ct")?;
         if ciphertext.is_empty() {
             return Err(CoreError::Serialization("empty ciphertext".into()));
@@ -75,6 +93,13 @@ impl EncryptedSeed {
             key,
         })
     }
+}
+
+fn decode_key_hex(hex_str: &str) -> Result<[u8; KEY_LEN], CoreError> {
+    let bytes = hex::decode(hex_str).map_err(|e| CoreError::Serialization(e.to_string()))?;
+    bytes
+        .try_into()
+        .map_err(|_| CoreError::Serialization(format!("wrap key must be {KEY_LEN} bytes")))
 }
 
 fn decode_vec(json: &serde_json::Value, field: &str) -> Result<Vec<u8>, CoreError> {
@@ -110,7 +135,37 @@ mod tests {
     fn json_roundtrip() {
         let seed = b"test-seed-for-json-roundtrip-000000";
         let encrypted = EncryptedSeed::encrypt(seed).unwrap();
-        let restored = EncryptedSeed::from_json(&encrypted.to_json().unwrap()).unwrap();
+        let restored =
+            EncryptedSeed::from_json(&encrypted.to_json().unwrap(), Some(&encrypted.wrap_key_hex()))
+                .unwrap();
+        assert_eq!(restored.decrypt().unwrap().as_slice(), seed);
+    }
+
+    #[test]
+    fn to_json_omits_wrap_key() {
+        let seed = b"test-seed-for-json-roundtrip-000000";
+        let encrypted = EncryptedSeed::encrypt(seed).unwrap();
+        assert!(encrypted.to_json().unwrap().get("k").is_none());
+    }
+
+    #[test]
+    fn v2_requires_wrap_key() {
+        let seed = b"test-seed-for-json-roundtrip-000000";
+        let encrypted = EncryptedSeed::encrypt(seed).unwrap();
+        assert!(EncryptedSeed::from_json(&encrypted.to_json().unwrap(), None).is_err());
+    }
+
+    #[test]
+    fn v1_blob_still_decrypts_with_embedded_key() {
+        let seed = b"legacy-self-decrypting-seed-000000";
+        let encrypted = EncryptedSeed::encrypt(seed).unwrap();
+        let legacy = serde_json::json!({
+            "v": 1,
+            "nonce": hex::encode(encrypted.nonce),
+            "ct": hex::encode(&encrypted.ciphertext),
+            "k": encrypted.wrap_key_hex(),
+        });
+        let restored = EncryptedSeed::from_json(&legacy, None).unwrap();
         assert_eq!(restored.decrypt().unwrap().as_slice(), seed);
     }
 
@@ -122,6 +177,30 @@ mod tests {
             "ct": "bb",
             "k": hex::encode([0u8; 32]),
         });
-        assert!(EncryptedSeed::from_json(&json).is_err());
+        assert!(EncryptedSeed::from_json(&json, None).is_err());
+    }
+
+    #[test]
+    fn from_json_rejects_unsupported_version() {
+        let json = serde_json::json!({
+            "v": 99,
+            "nonce": hex::encode([0u8; 12]),
+            "ct": "aa",
+            "k": hex::encode([0u8; 32]),
+        });
+        let err = EncryptedSeed::from_json(&json, None)
+            .err()
+            .expect("unsupported version");
+        assert!(matches!(err, CoreError::Serialization(_)));
+    }
+
+    #[test]
+    fn from_json_rejects_missing_version() {
+        let json = serde_json::json!({
+            "nonce": hex::encode([0u8; 12]),
+            "ct": "aa",
+            "k": hex::encode([0u8; 32]),
+        });
+        assert!(EncryptedSeed::from_json(&json, None).is_err());
     }
 }

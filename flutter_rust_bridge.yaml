@@ -1,0 +1,3 @@
+rust_input: crate::api
+rust_root: rust/crates/wallet-ffi
+dart_output: app/lib/bridge

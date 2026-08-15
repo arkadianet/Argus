@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ergo_lib::wallet::ext_secret_key::ExtSecretKey;
 use ergo_lib::wallet::Wallet;
 use zeroize::Zeroize;
@@ -13,6 +15,18 @@ pub struct UnlockedWallet {
     pub(crate) wallet: Wallet,
     pub(crate) ext_secret_key: ExtSecretKey,
     pub(crate) max_index: u32,
+    addresses_by_index: HashMap<u32, String>,
+    index_by_address: HashMap<String, u32>,
+}
+
+fn cache_address(unlocked: &mut UnlockedWallet, index: u32) -> Result<String, CoreError> {
+    if let Some(addr) = unlocked.addresses_by_index.get(&index) {
+        return Ok(addr.clone());
+    }
+    let addr = derivation::derive_address_from_ext_secret_key(&unlocked.ext_secret_key, index)?;
+    unlocked.addresses_by_index.insert(index, addr.clone());
+    unlocked.index_by_address.insert(addr.clone(), index);
+    Ok(addr)
 }
 
 pub struct WalletHandle {
@@ -45,17 +59,20 @@ impl WalletHandle {
     fn from_seed(seed: &[u8; 64]) -> Result<Self, CoreError> {
         let ext_secret_key = ExtSecretKey::derive_master(*seed)
             .map_err(|e| CoreError::Derivation(e.to_string()))?;
-        let mut wallet = Wallet::from_secrets(Vec::new());
+        let mut unlocked = UnlockedWallet {
+            wallet: Wallet::from_secrets(Vec::new()),
+            ext_secret_key,
+            max_index: PRELOAD_INDICES,
+            addresses_by_index: HashMap::new(),
+            index_by_address: HashMap::new(),
+        };
         for i in 0..=PRELOAD_INDICES {
-            let child = derivation::derive_child(&ext_secret_key, i)?;
-            wallet.add_secret(child.secret_key());
+            let child = derivation::derive_child(&unlocked.ext_secret_key, i)?;
+            unlocked.wallet.add_secret(child.secret_key());
+            cache_address(&mut unlocked, i)?;
         }
         Ok(WalletHandle {
-            inner: std::sync::Mutex::new(Some(UnlockedWallet {
-                wallet,
-                ext_secret_key,
-                max_index: PRELOAD_INDICES,
-            })),
+            inner: std::sync::Mutex::new(Some(unlocked)),
         })
     }
 
@@ -69,12 +86,17 @@ impl WalletHandle {
 
     pub fn derive_address(&self, index: u32) -> Result<String, CoreError> {
         self.ensure_index(index)?;
-        let guard = recover(self.inner.lock());
-        let unlocked = guard.as_ref().ok_or(CoreError::WalletLocked)?;
-        derivation::derive_address_from_ext_secret_key(&unlocked.ext_secret_key, index)
+        let mut guard = recover(self.inner.lock());
+        let unlocked = guard.as_mut().ok_or(CoreError::WalletLocked)?;
+        cache_address(unlocked, index)
     }
 
     pub fn ensure_index(&self, index: u32) -> Result<(), CoreError> {
+        if index > MAX_OWN_SCAN {
+            return Err(CoreError::Derivation(format!(
+                "address index {index} exceeds maximum {MAX_OWN_SCAN}"
+            )));
+        }
         let mut guard = recover(self.inner.lock());
         let unlocked = guard.as_mut().ok_or(CoreError::WalletLocked)?;
         while unlocked.max_index < index {
@@ -98,11 +120,16 @@ impl WalletHandle {
     }
 
     pub fn index_of_address(&self, address: &str) -> Result<Option<u32>, CoreError> {
-        let guard = recover(self.inner.lock());
-        let unlocked = guard.as_ref().ok_or(CoreError::WalletLocked)?;
+        let mut guard = recover(self.inner.lock());
+        let unlocked = guard.as_mut().ok_or(CoreError::WalletLocked)?;
+        if let Some(&index) = unlocked.index_by_address.get(address) {
+            return Ok(Some(index));
+        }
         for i in 0..=MAX_OWN_SCAN {
-            let derived =
-                derivation::derive_address_from_ext_secret_key(&unlocked.ext_secret_key, i)?;
+            if unlocked.addresses_by_index.contains_key(&i) {
+                continue;
+            }
+            let derived = cache_address(unlocked, i)?;
             if derived == address {
                 return Ok(Some(i));
             }
@@ -141,5 +168,15 @@ mod tests {
             .owns_address("9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8")
             .unwrap());
         assert!(!handle.owns_address("not-a-wallet-address").unwrap());
+    }
+
+    #[test]
+    fn derive_address_rejects_out_of_range_index() {
+        let phrase = MnemonicPhrase::parse(APPKIT).unwrap();
+        let handle = WalletHandle::create(phrase, "").unwrap();
+        let err = handle.derive_address(MAX_OWN_SCAN + 1).unwrap_err();
+        assert!(matches!(err, CoreError::Derivation(_)));
+        assert!(handle.ensure_index(MAX_OWN_SCAN + 1).is_err());
+        assert!(handle.derive_address(MAX_OWN_SCAN).is_ok());
     }
 }

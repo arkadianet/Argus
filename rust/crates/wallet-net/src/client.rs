@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 const HEADERS_COUNT: usize = 10;
+const UNSPENT_PAGE_SIZE: u64 = 500;
+const UNSPENT_MAX_BOXES: usize = 10_000;
 
 /// Default public Ergo node URL (mainnet).
 pub const DEFAULT_NODE_URL: &str = "https://ergo-explorer-01.ergonode.net";
@@ -140,12 +142,33 @@ impl ErgoNodeClient {
         Ok(ErgoStateContext::new(pre_header, arr, Parameters::default()))
     }
 
+    async fn all_unspent_boxes(&self, address: &str) -> Result<Vec<ErgoBox>, String> {
+        let mut all = Vec::new();
+        let mut offset = 0u64;
+        loop {
+            let page = self
+                .unspent_boxes_by_address(address, offset, UNSPENT_PAGE_SIZE)
+                .await?;
+            let n = page.len();
+            all.extend(page);
+            if all.len() >= UNSPENT_MAX_BOXES {
+                all.truncate(UNSPENT_MAX_BOXES);
+                break;
+            }
+            if n < UNSPENT_PAGE_SIZE as usize {
+                break;
+            }
+            offset += UNSPENT_PAGE_SIZE;
+        }
+        Ok(all)
+    }
+
     /// Unspent boxes plus EIP-12 views (real txId, index, registers).
     pub async fn get_unspent(
         &self,
         address: &str,
     ) -> Result<(Vec<ErgoBox>, Vec<ergo_tx::Eip12InputBox>), String> {
-        let boxes = self.unspent_boxes_by_address(address, 0, 500).await?;
+        let boxes = self.all_unspent_boxes(address).await?;
         let eip12 = boxes
             .iter()
             .map(|b| {
@@ -169,7 +192,7 @@ impl ErgoNodeClient {
     /// Fetch total nanoERG balance for an address.
     pub async fn get_address_balances(&self, address: &str) -> Result<(u64, Vec<String>), String> {
         use std::collections::HashSet;
-        let boxes = self.unspent_boxes_by_address(address, 0, 500).await?;
+        let boxes = self.all_unspent_boxes(address).await?;
         let erg_total: u64 = boxes.iter().map(|b| *b.value.as_u64()).sum();
         let mut token_ids = HashSet::new();
         for b in &boxes {

@@ -18,6 +18,9 @@ use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
 
 use crate::error::ArgusError;
 
+#[flutter_rust_bridge::frb(init)]
+pub fn init_app() {}
+
 fn err_str<E: Into<ArgusError>>(e: E) -> String {
     e.into().to_json_string()
 }
@@ -27,6 +30,45 @@ fn recover<T>(r: std::sync::LockResult<T>) -> T {
 }
 
 static HANDLES: Lazy<Mutex<HashMap<u64, WalletHandle>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+struct CachedPreparation {
+    handle_id: u64,
+    ergo_boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+    built: ergo_tx::SendBuildResult,
+    node_url: Option<String>,
+}
+
+static PREPARATIONS: Lazy<Mutex<HashMap<u64, CachedPreparation>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn store_preparation(prep: CachedPreparation) -> u64 {
+    let mut cache = recover(PREPARATIONS.lock());
+    cache.retain(|_, p| p.handle_id != prep.handle_id);
+    loop {
+        let id = rand::rngs::OsRng.next_u64();
+        if id != 0 && !cache.contains_key(&id) {
+            cache.insert(id, prep);
+            return id;
+        }
+    }
+}
+
+fn take_preparation(handle_id: u64, preparation_id: u64) -> Result<CachedPreparation, String> {
+    let mut cache = recover(PREPARATIONS.lock());
+    match cache.get(&preparation_id).map(|p| p.handle_id) {
+        None => Err(ArgusError::TxBuildFailed("unknown or stale send preparation".into())
+            .to_json_string()),
+        Some(owner) if owner != handle_id => Err(ArgusError::TxBuildFailed(
+            "send preparation does not match wallet".into(),
+        )
+        .to_json_string()),
+        Some(_) => Ok(cache.remove(&preparation_id).expect("preparation present")),
+    }
+}
+
+fn drop_preparations_for(handle_id: u64) {
+    recover(PREPARATIONS.lock()).retain(|_, p| p.handle_id != handle_id);
+}
 
 fn register_handle(handle: WalletHandle) -> u64 {
     let mut handles = recover(HANDLES.lock());
@@ -54,15 +96,20 @@ fn node_config(node_url: Option<String>) -> NodeConfig {
     }
 }
 
-fn session_json(handle_id: u64, encrypted_seed_json: String) -> Result<String, String> {
+fn session_json(
+    handle_id: u64,
+    encrypted_seed_json: String,
+    wrap_key: String,
+) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({
         "handle_id": handle_id,
         "encrypted_seed_json": encrypted_seed_json,
+        "wrap_key": wrap_key,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
-fn open_wallet(mnemonic_phrase: String, passphrase: &str) -> Result<(u64, String), String> {
+fn open_wallet(mnemonic_phrase: String, passphrase: &str) -> Result<(u64, String, String), String> {
     let phrase = MnemonicPhrase::parse(mnemonic_phrase).map_err(err_str)?;
     let encrypted = wallet_core::EncryptedSeed::encrypt(
         &phrase
@@ -72,24 +119,25 @@ fn open_wallet(mnemonic_phrase: String, passphrase: &str) -> Result<(u64, String
     .map_err(err_str)?;
     let json = serde_json::to_string(&encrypted.to_json().map_err(err_str)?)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let wrap_key = encrypted.wrap_key_hex();
     let handle = WalletHandle::create(phrase, passphrase).map_err(err_str)?;
-    Ok((register_handle(handle), json))
+    Ok((register_handle(handle), json, wrap_key))
 }
 
-/// Create a wallet from a BIP-39 mnemonic. Returns `{handle_id, encrypted_seed_json}`.
+/// Create a wallet from a BIP-39 mnemonic. Returns `{handle_id, encrypted_seed_json, wrap_key}`.
 #[flutter_rust_bridge::frb]
 pub fn wallet_create(mnemonic_phrase: String, passphrase: String) -> Result<String, String> {
-    let (id, json) = open_wallet(mnemonic_phrase, &passphrase)?;
-    session_json(id, json)
+    let (id, json, wrap_key) = open_wallet(mnemonic_phrase, &passphrase)?;
+    session_json(id, json, wrap_key)
 }
 
-/// Restore from a Keystore blob. The blob is decryptable without extra key material;
-/// the platform store is the wrap.
+/// Restore from a Keystore blob plus the separately stored wrap key.
+/// v1 blobs that still embed `k` accept a null wrap key.
 #[flutter_rust_bridge::frb]
-pub fn wallet_restore(encrypted_seed_json: String) -> Result<u64, String> {
+pub fn wallet_restore(encrypted_seed_json: String, wrap_key: Option<String>) -> Result<u64, String> {
     let json: serde_json::Value = serde_json::from_str(&encrypted_seed_json)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-    let encrypted = wallet_core::EncryptedSeed::from_json(&json).map_err(err_str)?;
+    let encrypted = wallet_core::EncryptedSeed::from_json(&json, wrap_key.as_deref()).map_err(err_str)?;
     let mut seed_bytes = encrypted.decrypt().map_err(err_str)?;
     let handle = WalletHandle::restore_from_seed(&seed_bytes).map_err(err_str)?;
     use zeroize::Zeroize;
@@ -104,6 +152,7 @@ pub fn wallet_lock(handle_id: u64) -> Result<(), String> {
         .remove(&handle_id)
         .ok_or_else(|| ArgusError::HandleNotFound("wallet_lock", handle_id).to_json_string())?;
     handle.lock();
+    drop_preparations_for(handle_id);
     Ok(())
 }
 
@@ -125,8 +174,11 @@ pub fn create_encrypted_seed(mnemonic_phrase: String, passphrase: String) -> Res
     use zeroize::Zeroize;
     seed.zeroize();
     let json = encrypted.to_json().map_err(err_str)?;
-    serde_json::to_string(&json)
-        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+    serde_json::to_string(&serde_json::json!({
+        "encrypted_seed_json": json,
+        "wrap_key": encrypted.wrap_key_hex(),
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
 #[flutter_rust_bridge::frb]
@@ -255,16 +307,6 @@ pub async fn discover_addresses(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
-struct PreparedSend {
-    eip12: Vec<ergo_tx::Eip12InputBox>,
-    ergo_boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
-    recipient_tree: String,
-    sender_tree: String,
-    height: i32,
-    amount: i64,
-    token: Option<(String, u64)>,
-}
-
 async fn prepare(
     handle_id: u64,
     sender_address: &str,
@@ -273,7 +315,7 @@ async fn prepare(
     token_id: Option<String>,
     token_amount: Option<u64>,
     node_url: Option<String>,
-) -> Result<(PreparedSend, ergo_tx::SendBuildResult, ErgoNodeClient), String> {
+) -> Result<(Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>, ergo_tx::SendBuildResult), String> {
     if amount_nano_erg < MIN_BOX_VALUE_NANO {
         return Err(ArgusError::TxBuildFailed(format!(
             "amount must be at least {MIN_BOX_VALUE_NANO} nanoERG"
@@ -345,19 +387,7 @@ async fn prepare(
         return Err(ArgusError::TxBuildFailed("UTXO set mismatch".into()).to_json_string());
     }
 
-    Ok((
-        PreparedSend {
-            eip12: selected.boxes,
-            ergo_boxes,
-            recipient_tree,
-            sender_tree,
-            height,
-            amount: amount_nano_erg,
-            token: send_token,
-        },
-        built,
-        client,
-    ))
+    Ok((ergo_boxes, built))
 }
 
 #[flutter_rust_bridge::frb]
@@ -370,55 +400,56 @@ pub async fn prepare_send(
     token_amount: Option<u64>,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    let (_prep, built, _client) = prepare(
+    let (ergo_boxes, built) = prepare(
         handle_id,
         &sender_address,
         &recipient_address,
         amount_nano_erg,
         token_id,
         token_amount,
-        node_url,
+        node_url.clone(),
     )
     .await?;
+    let recipient_erg = built.summary.recipient_erg;
+    let miner_fee = built.summary.miner_fee;
+    let change_erg = built.summary.change_erg;
+    let input_count = built.summary.input_count;
+    let citadel_fee_nano = built.summary.citadel_fee_nano;
+    let preview_token_id = built.summary.token_id.clone();
+    let preview_token_amount = built.summary.token_amount;
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        built,
+        node_url,
+    });
     serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
         "recipient": recipient_address,
-        "amount_nano_erg": built.summary.recipient_erg,
-        "miner_fee": built.summary.miner_fee,
-        "change_nano_erg": built.summary.change_erg,
-        "input_count": built.summary.input_count,
-        "citadel_fee_nano": built.summary.citadel_fee_nano,
+        "amount_nano_erg": recipient_erg,
+        "miner_fee": miner_fee,
+        "change_nano_erg": change_erg,
+        "input_count": input_count,
+        "citadel_fee_nano": citadel_fee_nano,
+        "token_id": preview_token_id,
+        "token_amount": preview_token_amount,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
 #[flutter_rust_bridge::frb]
-pub async fn send_erg(
-    handle_id: u64,
-    sender_address: String,
-    recipient_address: String,
-    amount_nano_erg: i64,
-    token_id: Option<String>,
-    token_amount: Option<u64>,
-    node_url: Option<String>,
-) -> Result<String, String> {
-    let (prep, built, client) = prepare(
-        handle_id,
-        &sender_address,
-        &recipient_address,
-        amount_nano_erg,
-        token_id,
-        token_amount,
-        node_url,
-    )
-    .await?;
-    let _ = (prep.recipient_tree, prep.sender_tree, prep.height, prep.amount, prep.token, prep.eip12);
+pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, String> {
+    let prep = take_preparation(handle_id, preparation_id)?;
+    let client = ErgoNodeClient::new(node_config(prep.node_url))
+        .await
+        .map_err(|e| ArgusError::NodeUnreachable(e).to_json_string())?;
 
     let state_context = client
         .get_state_context()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
     let reduced_bytes = reduce_transaction_with_context(
-        &built.unsigned_tx,
+        &prep.built.unsigned_tx,
         prep.ergo_boxes,
         Vec::new(),
         &state_context,
@@ -440,9 +471,10 @@ pub async fn send_erg(
 
     serde_json::to_string(&serde_json::json!({
         "tx_id": tx_id,
-        "miner_fee": built.summary.miner_fee,
-        "change_nano_erg": built.summary.change_erg,
-        "amount_nano_erg": built.summary.recipient_erg,
+        "preparation_id": preparation_id,
+        "miner_fee": prep.built.summary.miner_fee,
+        "change_nano_erg": prep.built.summary.change_erg,
+        "amount_nano_erg": prep.built.summary.recipient_erg,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -463,10 +495,12 @@ mod tests {
         assert_eq!(addr, "9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8");
 
         let blob = session["encrypted_seed_json"].as_str().unwrap().to_string();
+        let wrap_key = session["wrap_key"].as_str().unwrap().to_string();
+        assert!(serde_json::from_str::<serde_json::Value>(&blob).unwrap().get("k").is_none());
         wallet_lock(handle_id).unwrap();
         assert!(wallet_is_unlocked(handle_id).is_err());
 
-        let restored = wallet_restore(blob).unwrap();
+        let restored = wallet_restore(blob, Some(wrap_key)).unwrap();
         assert_eq!(
             derive_address(restored, 0).unwrap(),
             "9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8"
@@ -485,5 +519,38 @@ mod tests {
         assert!(MnemonicPhrase::parse(phrase).is_ok());
         let phrase24 = generate_mnemonic(256).unwrap();
         assert_eq!(phrase24.split_whitespace().count(), 24);
+    }
+
+    fn dummy_build() -> ergo_tx::SendBuildResult {
+        ergo_tx::SendBuildResult {
+            unsigned_tx: ergo_tx::Eip12UnsignedTx {
+                inputs: vec![],
+                data_inputs: vec![],
+                outputs: vec![],
+            },
+            summary: ergo_tx::SendSummary {
+                recipient_erg: 0,
+                token_id: None,
+                token_amount: None,
+                change_erg: 0,
+                miner_fee: 0,
+                citadel_fee_nano: 0,
+                input_count: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn take_preparation_rejects_unknown_stale_and_repeat() {
+        assert!(take_preparation(1, 99).is_err());
+        let id = store_preparation(CachedPreparation {
+            handle_id: 7,
+            ergo_boxes: Vec::new(),
+            built: dummy_build(),
+            node_url: None,
+        });
+        assert!(take_preparation(8, id).is_err());
+        assert!(take_preparation(7, id).is_ok());
+        assert!(take_preparation(7, id).is_err());
     }
 }

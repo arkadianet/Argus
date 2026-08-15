@@ -50,8 +50,12 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
     }
     setState(() => _busy = true);
     try {
+      if (!await confirmReplaceExistingWallet(context)) return;
       final session = await walletService.createWallet(phrase);
-      await SecureStorageService.saveEncryptedSeed(session.encryptedSeedJson);
+      await SecureStorageService.saveWalletSecrets(
+        encryptedSeedJson: session.encryptedSeedJson,
+        wrapKey: session.wrapKey,
+      );
       if (!mounted) return;
       Navigator.pop(context, true);
     } on ArgusException catch (e) {
@@ -129,4 +133,23 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
       ),
     );
   }
+}
+
+Future<bool> confirmReplaceExistingWallet(BuildContext context) async {
+  if (!await SecureStorageService.hasEncryptedSeed()) return true;
+  if (!context.mounted) return false;
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Replace existing wallet?'),
+      content: const Text(
+        'A wallet is already stored on this device. Replacing it overwrites the encrypted seed. The recovery phrase is the only way to recover the old wallet.',
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Replace')),
+      ],
+    ),
+  );
+  return ok == true;
 }

@@ -31,7 +31,8 @@ pub fn deserialize_reduced(bytes: &[u8]) -> Result<ReducedTransaction, CoreError
 }
 
 /// Dummy headers sufficient for P2PK proof generation in tests.
-pub fn dummy_state_context(height: u32) -> ErgoStateContext {
+#[cfg(test)]
+pub(crate) fn dummy_state_context(height: u32) -> ErgoStateContext {
     use ergo_lib::chain::parameters::Parameters;
     use ergo_lib::ergo_chain_types::EcPoint;
     use ergo_lib::ergo_chain_types::{

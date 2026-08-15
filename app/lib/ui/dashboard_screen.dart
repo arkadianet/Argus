@@ -61,7 +61,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         setState(() => _status = 'No wallet found. Create or restore.');
         return;
       }
-      await walletService.restoreWallet(json);
+      final wrapKey = await SecureStorageService.loadWrapKey();
+      await walletService.restoreWallet(json, wrapKey: wrapKey);
       await _afterUnlock();
     } on ArgusException catch (e) {
       _snack('${e.code}: ${e.message}');

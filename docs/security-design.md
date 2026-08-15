@@ -6,9 +6,9 @@ Argus keeps signing keys in Rust. The Flutter shell stores an AES-GCM sealed
 seed blob in Android Keystore (`EncryptedSharedPreferences`) or iOS Keychain.
 That platform store is the confidentiality boundary.
 
-The sealed blob includes a random AES-256-GCM wrap key next to the ciphertext.
-Anyone who can read the JSON can decrypt the seed. Do not log or export the
-blob. A later version can wrap that key with a user PIN.
+The sealed blob is AES-256-GCM ciphertext plus nonce (`v: 2`). The wrap key is
+stored in a separate Keystore/Keychain entry. v1 blobs that still embed `k`
+are accepted on restore for migration. Do not log or export either value.
 
 No mnemonic is persisted. Create/restore require the user to enter or confirm
 the BIP-39 phrase in the UI (Dart treats that string as secret: no logging,
@@ -17,10 +17,11 @@ controllers cleared on dispose).
 ## Lifecycle
 
 1. **Create**: BIP-39 checksum is validated. PBKDF2 produces a 64-byte seed.
-   The seed is sealed with a random AES key and returned as JSON for Keystore.
-   EIP-3 children `m/44'/429'/0'/0/0..32` are loaded into the prover.
-2. **Unlock**: Flutter loads the JSON from Keystore and calls `wallet_restore`.
-   Rust decrypts with the key inside the blob and reloads EIP-3 children.
+   The seed is sealed with a random AES key. Ciphertext goes to one Keystore
+   entry; the wrap key goes to another. EIP-3 children `m/44'/429'/0'/0/0..32`
+   are loaded into the prover.
+2. **Unlock**: Flutter loads the JSON and wrap key from Keystore and calls
+   `wallet_restore`. Rust decrypts and reloads EIP-3 children.
 3. **Lock**: The handle is removed from the process map and secret keys are dropped.
 
 ## Signing

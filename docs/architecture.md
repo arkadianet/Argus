@@ -71,8 +71,13 @@ wallet/
 - FRB-annotated functions (`#[flutter_rust_bridge::frb]`)
 - Opaque handle store (`static HANDLES: Lazy<Mutex<HashMap<u64, WalletHandle>>>`)
 - All functions return `Result<T, String>` for Dart consumption
-- Handles are u64; signed tx data is JSON. Create/restore still take a mnemonic
-  String for the backup UI (Dart must treat it as secret).
+- Handles are u64; signed tx data is JSON.
+- Create takes a mnemonic String for the backup UI. Dart must treat that phrase
+  as secret (no logging; controllers cleared on dispose).
+- Restore (`WalletService.restoreWallet` / `crateApiWalletRestore`) takes
+  `encryptedSeedJson` plus the separately stored wrap key. Treat both as
+  secret: do not log, copy, or export them. v1 self-decrypting blobs still
+  restore without a wrap key.
 
 ### Vendored Citadel Crates
 
@@ -84,14 +89,11 @@ wallet/
 
 ## FRB Codegen Placement
 
-FRB generated code lives in `app/lib/bridge/generated_bridge.dart`.
-It is NOT committed to git (generated at build time). The codegen command:
+FRB generated code lives in `app/lib/bridge/` and
+`rust/crates/wallet-ffi/src/frb_generated.rs`. Regenerate from the repo root:
 
 ```bash
-cd app
-flutter_rust_bridge_codegen generate \
-    --rust-input ../rust/crates/wallet-ffi/src/lib.rs \
-    --dart-output lib/bridge/generated_bridge.dart
+flutter_rust_bridge_codegen generate
 ```
 
 ## Connection between wallet-core and wallet-net

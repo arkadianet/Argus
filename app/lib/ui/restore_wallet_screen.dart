@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../bridge/argus_error.dart';
 import '../services/secure_storage.dart';
 import '../services/wallet_service.dart';
+import 'create_wallet_screen.dart';
 
 class RestoreWalletScreen extends StatefulWidget {
   const RestoreWalletScreen({super.key});
@@ -30,11 +31,15 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
     if (phrase.isEmpty) return;
     setState(() => _busy = true);
     try {
+      if (!await confirmReplaceExistingWallet(context)) return;
       final session = await walletService.createWallet(
         phrase,
         passphrase: _passCtrl.text,
       );
-      await SecureStorageService.saveEncryptedSeed(session.encryptedSeedJson);
+      await SecureStorageService.saveWalletSecrets(
+        encryptedSeedJson: session.encryptedSeedJson,
+        wrapKey: session.wrapKey,
+      );
       if (!mounted) return;
       Navigator.pop(context, true);
     } on ArgusException catch (e) {

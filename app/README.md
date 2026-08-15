@@ -16,17 +16,13 @@ flutter pub get
 
 ## Regenerate FRB Bindings
 
-After making changes to `rust/crates/wallet-ffi/src/lib.rs`, regenerate the
-Dart bindings:
+After changing `rust/crates/wallet-ffi/src/api.rs`, from the repo root:
 
 ```bash
-cd app
-flutter_rust_bridge_codegen generate \
-    --rust-input ../rust/crates/wallet-ffi/src/lib.rs \
-    --dart-output lib/bridge/generated_bridge.dart
+flutter_rust_bridge_codegen generate
 ```
 
-The generated file is gitignored and rebuilt on demand.
+This updates `app/lib/bridge/` and `rust/crates/wallet-ffi/src/frb_generated.rs`.
 
 ## Build Rust native library
 

@@ -13,8 +13,8 @@ app/ios/.symlinks/
 app/ios/Flutter/Flutter.framework
 app/ios/Flutter/Flutter.podspec
 
-# FRB dart output is generated at build time if missing.
-# rust/crates/wallet-ffi/src/frb_generated.rs is a committed stub.
+# FRB output is generated into app/lib/bridge and
+# rust/crates/wallet-ffi/src/frb_generated.rs and committed.
 
 # IDE
 .idea/

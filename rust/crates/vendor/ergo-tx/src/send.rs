@@ -213,7 +213,7 @@ pub fn build_send_tx_with_fee(
         0
     };
 
-    append_dev_fee_output(&mut outputs, &fee_cfg, current_height)
+    append_dev_fee_output(&mut outputs, fee_cfg, current_height)
         .map_err(|e| SendError::DevFee(e.to_string()))?;
     outputs.push(Eip12Output::fee(TX_FEE, current_height));
 

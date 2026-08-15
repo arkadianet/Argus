@@ -29,11 +29,7 @@ class _SendScreenState extends State<SendScreen> {
     super.dispose();
   }
 
-  int? _amountNano() {
-    final erg = double.tryParse(_amountCtrl.text.trim());
-    if (erg == null) return null;
-    return (erg * _nano).round();
-  }
+  int? _amountNano() => parseErgToNano(_amountCtrl.text);
 
   String _erg(int nano) => '${(nano / _nano).toStringAsFixed(4)} ERG';
 
@@ -57,6 +53,9 @@ class _SendScreenState extends State<SendScreen> {
         tokenAmount: _tokenAmtCtrl.text.isNotEmpty ? int.tryParse(_tokenAmtCtrl.text) : null,
       );
       if (!mounted) return;
+      final tokenLines = preview.tokenId != null && preview.tokenId!.isNotEmpty
+          ? '\nToken: ${preview.tokenId}\nToken amount: ${preview.tokenAmount}'
+          : '';
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -66,7 +65,8 @@ class _SendScreenState extends State<SendScreen> {
             'Amount: ${_erg(preview.amountNanoErg)}\n'
             'Miner fee: ${_erg(preview.minerFee)}\n'
             'Change: ${_erg(preview.changeNanoErg)}\n'
-            'Inputs: ${preview.inputCount}',
+            'Inputs: ${preview.inputCount}'
+            '$tokenLines',
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -78,13 +78,7 @@ class _SendScreenState extends State<SendScreen> {
         setState(() => _sending = false);
         return;
       }
-      final txId = await walletService.sendErg(
-        senderAddress: sender,
-        recipientAddress: _recipientCtrl.text.trim(),
-        amountNanoErg: amount,
-        tokenId: _tokenIdCtrl.text.isNotEmpty ? _tokenIdCtrl.text.trim() : null,
-        tokenAmount: _tokenAmtCtrl.text.isNotEmpty ? int.tryParse(_tokenAmtCtrl.text) : null,
-      );
+      final txId = await walletService.sendErg(preparationId: preview.preparationId);
       setState(() {
         _resultTxId = txId;
         _sending = false;
@@ -143,8 +137,8 @@ class _SendScreenState extends State<SendScreen> {
                       ),
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                       validator: (v) {
-                        final n = double.tryParse(v ?? '');
-                        if (n == null || n < 0.001) return 'Minimum 0.001 ERG';
+                        final n = parseErgToNano(v ?? '');
+                        if (n == null || n < 1000000) return 'Minimum 0.001 ERG';
                         return null;
                       },
                     ),

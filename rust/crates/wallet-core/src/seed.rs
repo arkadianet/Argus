@@ -16,11 +16,9 @@ impl Drop for MnemonicPhrase {
 
 impl MnemonicPhrase {
     pub fn parse(phrase: impl Into<String>) -> Result<Self, CoreError> {
-        let normalized = phrase
-            .into()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
+        let mut raw = phrase.into();
+        let normalized = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+        raw.zeroize();
         crate::bip39::validate_phrase(&normalized)?;
         Ok(MnemonicPhrase { phrase: normalized })
     }
@@ -55,9 +53,9 @@ impl SeedBox {
         self.encrypted.to_json()
     }
 
-    pub fn from_json(json: &serde_json::Value) -> Result<Self, CoreError> {
+    pub fn from_json(json: &serde_json::Value, wrap_key: Option<&str>) -> Result<Self, CoreError> {
         Ok(SeedBox {
-            encrypted: EncryptedSeed::from_json(json)?,
+            encrypted: EncryptedSeed::from_json(json, wrap_key)?,
         })
     }
 }
