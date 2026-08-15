@@ -27,9 +27,9 @@ Hardcoded in `wallet-net`:
 
 | Role | URL | Used for |
 |---|---|---|
-| Default nodes | `https://ergo-node.eutxo.de`, `https://ergo-node.zoomout.io`, `https://ergo1.oette.info`, `https://node.sigmaspace.io` | UTXOs, height, history, broadcast (HTTPS + extraIndex) |
+| Default nodes | `https://ergo-node.eutxo.de`, `https://ergo-node.zoomout.io`, `https://ergo1.oette.info`, `https://node.sigmaspace.io` | UTXOs, height, history, broadcast, token name/decimals (`/blockchain/token/byId`) |
 | User-added | `https://host` or `http://ip:port` | Same, if the operator adds one in Settings |
-| Explorer | `https://api.sigmaspace.io` | Token name / decimals, and Open in explorer |
+| Explorer | `https://api.sigmaspace.io` | Open in explorer; last-resort token metadata if every node fails |
 
 `ErgoNodeClient::connect(preferred)` tries preferred (if any), then the two candidates, and keeps the first that answers `current_height()`. The Flutter UI never passes a preferred URL, so every call is `connect(None)`.
 
@@ -59,7 +59,7 @@ Goal: a careful person can hold and move ERG/tokens without fighting the app or 
 - Persist a node list. Ship the two current public hosts as defaults. User can add, disable, reorder, or remove (cannot remove the last enabled host).
 - On launch and on pull-to-refresh, probe enabled hosts (`/info` height). Use the first healthy one. Remember last-good for the next cold start.
 - Show the active host and height in Settings, and a small status on the ledger (height or "offline").
-- Optional custom explorer URL for token metadata (default is `api.sigmaspace.io`).
+- Token name/decimals from extraIndex `GET /blockchain/token/byId/{id}` (EIP-4 R4/R6). Explorer URL is for Open in explorer, with explorer REST as last-resort fallback.
 - Mainnet only in this layer. Testnet is a later toggle, not a second product.
 
 Out of scope: running a local node, DNS seeder, automatic scrape of random IPs.
@@ -157,8 +157,9 @@ A user can swap on Spectrum from Argus without a browser wallet, and can explain
 | Tag | Meaning |
 |---|---|
 | `v1.0.0-alpha.0` | Shipped. Proof the path exists. Debug-signed. |
-| `v1.0.0-alpha.1` | Layer 1. Release-signed. Daily driver. |
-| `v1.0.0-alpha.2` | Layer 2. ErgoPay. |
+| `v1.0.0-alpha.1` | Layer 1 daily driver. Debug-signed (same key as alpha.0). |
+| `v1.0.0-alpha.2` | ExtraIndex HTTPS nodes, SigmaSpace explorer, token meta from the node. |
+| `v1.0.0-alpha.3` | Layer 2. ErgoPay. |
 | `v1.0.0-beta.1` | Layer 3 craft on top of 1–2. |
 | `v1.0.0` | External review + store listing. DeFi can land in 1.1. |
 

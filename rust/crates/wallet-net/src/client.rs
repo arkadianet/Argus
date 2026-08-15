@@ -510,6 +510,47 @@ pub fn make_state_context(height: u32) -> ErgoStateContext {
     ErgoStateContext::new(pre_header, headers, Parameters::default())
 }
 
+fn token_by_id_url(base: &str, token_id: &str) -> String {
+    join_url(base, &format!("blockchain/token/byId/{token_id}"))
+}
+
+fn is_indexed_token(value: &serde_json::Value) -> bool {
+    value.get("id").and_then(|v| v.as_str()).is_some()
+        && (value.get("name").is_some() || value.get("decimals").is_some())
+}
+
+/// ExtraIndex nodes first (`/blockchain/token/byId`), explorer last.
+fn token_info_urls(token_id: &str, explorer_url: Option<&str>) -> Vec<String> {
+    let mut urls: Vec<String> = node_urls(None)
+        .into_iter()
+        .map(|u| token_by_id_url(&u, token_id))
+        .collect();
+    let explorer = explorer_url
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(configured_explorer);
+    urls.push(join_url(&explorer, &format!("api/v1/tokens/{token_id}")));
+    urls
+}
+
+async fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let text = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Token info {url}: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Token info {url}: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("Token info {url}: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("Parse token: {e}"))
+}
+
 pub async fn get_token_info(
     token_id: &str,
     explorer_url: Option<&str>,
@@ -517,25 +558,15 @@ pub async fn get_token_info(
     if token_id.len() != 64 || !token_id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("invalid token id".into());
     }
-    let url = format!(
-        "{}/api/v1/tokens/{}",
-        explorer_url
-            .map(|s| s.trim_end_matches('/').to_string())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(configured_explorer),
-        token_id
-    );
-    let text = reqwest::Client::new()
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Explorer token: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("Explorer token: {e}"))?
-        .text()
-        .await
-        .map_err(|e| format!("Explorer token: {e}"))?;
-    serde_json::from_str(&text).map_err(|e| format!("Parse token: {e}"))
+    let mut last = "no token source".to_string();
+    for url in token_info_urls(token_id, explorer_url) {
+        match fetch_json(&url).await {
+            Ok(v) if is_indexed_token(&v) => return Ok(v),
+            Ok(_) => last = format!("{url}: not an IndexedToken"),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
 }
 
 fn net_value_for_address(tx: &serde_json::Value, address: &str) -> i64 {
@@ -646,6 +677,49 @@ mod tests {
     #[test]
     fn rejects_incomplete_parameters() {
         assert!(parse_parameters(&serde_json::json!({"blockVersion": 3})).is_err());
+    }
+
+    #[test]
+    fn token_by_id_url_uses_extraindex_path() {
+        assert_eq!(
+            token_by_id_url(
+                "https://node.sigmaspace.io",
+                "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04"
+            ),
+            "https://node.sigmaspace.io/blockchain/token/byId/03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04"
+        );
+    }
+
+    #[test]
+    fn token_info_tries_nodes_before_explorer() {
+        with_network(|| {
+            let urls = token_info_urls(
+                "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04",
+                None,
+            );
+            assert!(urls[0].starts_with(DEFAULT_NODE_URL));
+            assert!(urls[0].contains("/blockchain/token/byId/"));
+            assert!(urls.last().unwrap().contains("/api/v1/tokens/"));
+            assert!(urls.last().unwrap().starts_with(&configured_explorer()));
+        });
+    }
+
+    #[test]
+    fn accepts_indexed_token_json() {
+        let v = serde_json::json!({
+            "id": "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04",
+            "boxId": "a49076f75e8446fec018d5d32cddf6e05575ef1273232e680f4cd5d716f4e78b",
+            "emissionAmount": 10000000000001i64,
+            "name": "SigUSD",
+            "description": "SigmaUSD - V2",
+            "decimals": 2
+        });
+        assert!(is_indexed_token(&v));
+    }
+
+    #[test]
+    fn rejects_non_token_json() {
+        assert!(!is_indexed_token(&serde_json::json!({"error": 404})));
     }
 
     #[test]

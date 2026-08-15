@@ -231,7 +231,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               TextField(
                 controller: _explorerCtrl,
                 decoration: InputDecoration(
-                  labelText: 'Token metadata and explorer URL',
+                  labelText: 'Explorer URL',
                   hintText: 'https://api.sigmaspace.io',
                   suffixIcon: IconButton(
                     tooltip: 'Save',
@@ -240,6 +240,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
                 onSubmitted: networkController.setExplorer,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Token names and decimals come from the extraIndex node. This URL is for Open in explorer.',
+                style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 28),
               const SectionLabel('Appearance'),
