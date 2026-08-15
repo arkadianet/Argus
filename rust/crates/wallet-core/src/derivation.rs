@@ -4,40 +4,41 @@ use ergo_lib::wallet::mnemonic::Mnemonic;
 
 use crate::CoreError;
 
-/// The standard Ergo BIP-44 derivation path: m/44'/429'/0'/0/index
+pub const ACCOUNT_PATH: &str = "m/44'/429'/0'/0";
+
 pub fn ergo_path(index: u32) -> String {
-    format!("m/44'/429'/0'/0/{}", index)
+    format!("{ACCOUNT_PATH}/{index}")
 }
 
-/// Derive an Ergo mainnet P2PK address from the seed bytes at the given derivation index.
+pub fn derive_child(ext_sk: &ExtSecretKey, index: u32) -> Result<ExtSecretKey, CoreError> {
+    let path = ergo_path(index)
+        .parse()
+        .map_err(|e: ergo_lib::wallet::derivation_path::DerivationPathError| {
+            CoreError::Derivation(e.to_string())
+        })?;
+    ext_sk
+        .derive(path)
+        .map_err(|e| CoreError::Derivation(e.to_string()))
+}
+
 pub fn derive_address_from_seed(seed: [u8; 64], index: u32) -> Result<String, CoreError> {
     let root = ExtSecretKey::derive_master(seed)
         .map_err(|e| CoreError::Derivation(e.to_string()))?;
     derive_address_from_ext_secret_key(&root, index)
 }
 
-/// Derive an Ergo mainnet P2PK address from an ExtSecretKey at the given derivation index.
 pub fn derive_address_from_ext_secret_key(
     ext_sk: &ExtSecretKey,
     index: u32,
 ) -> Result<String, CoreError> {
-    let path = ergo_path(index)
-        .parse()
-        .map_err(|e: ergo_lib::wallet::derivation_path::DerivationPathError| {
-            CoreError::Derivation(e.to_string())
-        })?;
-    let child = ext_sk
-        .derive(path)
-        .map_err(|e| CoreError::Derivation(e.to_string()))?;
+    let child = derive_child(ext_sk, index)?;
     let ext_pub_key = child
         .public_key()
         .map_err(|e| CoreError::Derivation(e.to_string()))?;
     let address: Address = ext_pub_key.into();
-    let network_address = NetworkAddress::new(NetworkPrefix::Mainnet, &address);
-    Ok(network_address.to_base58())
+    Ok(NetworkAddress::new(NetworkPrefix::Mainnet, &address).to_base58())
 }
 
-/// Derive an Ergo mainnet P2PK address from a mnemonic phrase at the given derivation index.
 pub fn derive_address(
     mnemonic_phrase: &str,
     mnemonic_pass: &str,

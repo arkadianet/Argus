@@ -140,41 +140,30 @@ impl ErgoNodeClient {
         Ok(ErgoStateContext::new(pre_header, arr, Parameters::default()))
     }
 
-    /// Fetch UTXOs for an address as EIP-12 input boxes with full context (txId + index).
+    /// Unspent boxes plus EIP-12 views (real txId, index, registers).
+    pub async fn get_unspent(
+        &self,
+        address: &str,
+    ) -> Result<(Vec<ErgoBox>, Vec<ergo_tx::Eip12InputBox>), String> {
+        let boxes = self.unspent_boxes_by_address(address, 0, 500).await?;
+        let eip12 = boxes
+            .iter()
+            .map(|b| {
+                ergo_tx::Eip12InputBox::from_ergo_box(b, b.transaction_id.to_string(), b.index)
+            })
+            .collect();
+        Ok((boxes, eip12))
+    }
+
     pub async fn get_eip12_utxos(
         &self,
         address: &str,
     ) -> Result<Vec<ergo_tx::Eip12InputBox>, String> {
-        use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
-        let boxes = self.unspent_boxes_by_address(address, 0, 500).await?;
-        let mut result = Vec::with_capacity(boxes.len());
-        for b in &boxes {
-            // We need txId + index for EIP-12; skip boxes where we can't derive them.
-            let tx_id = "0000000000000000000000000000000000000000000000000000000000000000".to_string();
-            let index = 0u16;
-            let assets: Vec<ergo_tx::Eip12Asset> = b.tokens.as_ref().map(|tokens| {
-                tokens.iter().map(|t| ergo_tx::Eip12Asset {
-                    token_id: t.token_id.into(),
-                    amount: t.amount.as_u64().to_string(),
-                }).collect()
-            }).unwrap_or_default();
-            use std::collections::HashMap;
-            let ergo_tree_hex = b.ergo_tree.sigma_serialize_bytes()
-                .map(|bytes| base16::encode_lower(&bytes))
-                .unwrap_or_default();
-            result.push(ergo_tx::Eip12InputBox {
-                box_id: b.box_id().to_string(),
-                transaction_id: tx_id,
-                index,
-                value: b.value.as_i64().to_string(),
-                ergo_tree: ergo_tree_hex,
-                assets,
-                creation_height: b.creation_height as i32,
-                additional_registers: HashMap::new(),
-                extension: HashMap::new(),
-            });
-        }
-        Ok(result)
+        Ok(self.get_unspent(address).await?.1)
+    }
+
+    pub async fn address_has_transactions(&self, address: &str) -> Result<bool, String> {
+        Ok(!self.get_transaction_history(address, 1).await?.is_empty())
     }
 
     /// Fetch total nanoERG balance for an address.
@@ -227,9 +216,7 @@ impl ErgoNodeClient {
             let num_inputs = tx["inputs"].as_array().map(|a| a.len() as u32).unwrap_or(0);
             let num_outputs = tx["outputs"].as_array().map(|a| a.len() as u32).unwrap_or(0);
 
-            // Compute the net ERG value: sum outputs[to_self] - sum inputs[from_self]
-            // For now, surface the first output value as a rough indicator.
-            let value_nano_erg = tx["outputs"][0]["value"].as_i64().unwrap_or(0);
+            let value_nano_erg = net_value_for_address(&tx, address);
 
             let token_ids: Vec<String> = tx["outputs"]
                 .as_array()
@@ -322,4 +309,20 @@ pub fn make_state_context(height: u32) -> ErgoStateContext {
     let headers: [Header; HEADERS_COUNT] = core::array::from_fn(|_| header.clone());
 
     ErgoStateContext::new(pre_header, headers, Parameters::default())
+}
+
+fn net_value_for_address(tx: &serde_json::Value, address: &str) -> i64 {
+    let outs = tx["outputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let ins = tx["inputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let to_self: i64 = outs
+        .iter()
+        .filter(|o| o["address"].as_str() == Some(address))
+        .map(|o| o["value"].as_i64().unwrap_or(0))
+        .sum();
+    let from_self: i64 = ins
+        .iter()
+        .filter(|i| i["address"].as_str() == Some(address))
+        .map(|i| i["value"].as_i64().unwrap_or(0))
+        .sum();
+    to_self - from_self
 }

@@ -14,7 +14,7 @@ Pinned SHAs and version rationale for every dependency.
 | `ergo-merkle-tree` | sigma-rust | same SHA | Pinned with ergo-lib |
 | `ergo-nipopow` | sigma-rust | same SHA | Pinned with ergo-lib |
 | `ergo-rest` | sigma-rust | same SHA | Pinned with ergo-lib |
-| `ergo-node-interface` | `github.com/arkadianet/ergo-node-interface-rust` | `0264f6ff...` (HEAD) | Rust Ergo node HTTP wrapper |
+| `ergo-node-interface` | `github.com/arkadianet/ergo-node-interface-rust` | `0264f6ffcb954da135960460d942f4c804ed65c9` | Rust Ergo node HTTP wrapper |
 
 ## Vendored Citadel crates (path deps)
 
@@ -43,10 +43,9 @@ All vendored from `github.com/arkadianet/citadel` commit `f533f15`.
 | `hex` | 0.4 | Hex encoding |
 | `base16` | 0.2 | Base16 encoding |
 | `zeroize` | 1.8 (zeroize_derive) | Secret zeroing |
-| `sha2`| 0.0.10 | SHA-256 hashing |
+| `sha2` | 0.10 | SHA-256 (BIP-39 checksum) |
 | `hmac` | 0.12 | HMAC for BIP-32 |
-| `argon2` | 0.5 | Key derivation (seed encryption) |
-| `aes-gcm` | 0.10 | Seed blob encryption (AES-256-GCM) |
+| `aes-gcm` | 0.10 | Seed blob sealing (AES-256-GCM, random wrap key) |
 | `rand` | 0.8 | Random nonces and salts |
 | `reqwest` | 0.12 (rustls-tls, json) | HTTP client for node queries |
 | `flutter_rust_bridge` | 2.x | Dart-Rust FFI bridge |

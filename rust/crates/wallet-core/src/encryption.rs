@@ -1,105 +1,98 @@
-/// Derive an encryption key from a mnemonic seed and passphrase using Argon2id.
-/// Returns 32 bytes suitable for AES-256-GCM.
-pub fn derive_encryption_key(seed: &[u8], salt: &[u8]) -> Result<[u8; 32], argon2::Error> {
-    let mut key = [0u8; 32];
-    Argon2::default().hash_password_into(seed, salt, &mut key)?;
-    Ok(key)
-}
-
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
 };
-use argon2::Argon2;
 use rand::RngCore;
-use zeroize::ZeroizeOnDrop;
+use zeroize::Zeroize;
 
 use crate::CoreError;
 
-/// An encrypted seed blob that lives in-memory and can be serialized to disk.
-/// The plaintext seed is zeroed on drop.
-#[derive(ZeroizeOnDrop)]
+const VERSION: u32 = 1;
+const NONCE_LEN: usize = 12;
+const KEY_LEN: usize = 32;
+
+/// AES-256-GCM sealed seed. The wrap key lives in this blob; confidentiality
+/// comes from Android Keystore / iOS Keychain, not from this layer.
 pub struct EncryptedSeed {
-    nonce: [u8; 12],
+    nonce: [u8; NONCE_LEN],
     ciphertext: Vec<u8>,
-    salt: [u8; 16],
+    key: [u8; KEY_LEN],
+}
+
+impl Drop for EncryptedSeed {
+    fn drop(&mut self) {
+        self.key.zeroize();
+        self.ciphertext.zeroize();
+        self.nonce.zeroize();
+    }
 }
 
 impl EncryptedSeed {
-    /// Encrypt raw seed bytes using a key derived from the mnemonic seed + salt.
-    pub fn encrypt(seed_bytes: &[u8], key_seed: &[u8]) -> Result<Self, CoreError> {
-        let mut salt = [0u8; 16];
-        OsRng.fill_bytes(&mut salt);
-        let key = derive_encryption_key(key_seed, &salt)
-            .map_err(|e| CoreError::Encryption(e.to_string()))?;
+    pub fn encrypt(seed_bytes: &[u8]) -> Result<Self, CoreError> {
+        let mut key = [0u8; KEY_LEN];
+        OsRng.fill_bytes(&mut key);
         let cipher = Aes256Gcm::new_from_slice(&key)
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
-        let mut nonce = [0u8; 12];
+        let mut nonce = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce);
-        let nonce_vec = Nonce::from_slice(&nonce);
         let ciphertext = cipher
-            .encrypt(nonce_vec, seed_bytes)
+            .encrypt(Nonce::from_slice(&nonce), seed_bytes)
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
         Ok(EncryptedSeed {
             nonce,
             ciphertext,
-            salt,
+            key,
         })
     }
 
-    /// Decrypt and return the raw seed bytes. Caller must zeroize after use.
-    pub fn decrypt(&self, key_seed: &[u8]) -> Result<Vec<u8>, CoreError> {
-        let key = derive_encryption_key(key_seed, &self.salt)
+    pub fn decrypt(&self) -> Result<Vec<u8>, CoreError> {
+        let cipher = Aes256Gcm::new_from_slice(&self.key)
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
-        let cipher = Aes256Gcm::new_from_slice(&key)
-            .map_err(|e| CoreError::Encryption(e.to_string()))?;
-        let nonce_vec = Nonce::from_slice(&self.nonce);
-        let plaintext = cipher
-            .decrypt(nonce_vec, self.ciphertext.as_ref())
-            .map_err(|e| CoreError::Encryption(format!("Decryption failed: {:?}", e)))?;
-        Ok(plaintext)
+        cipher
+            .decrypt(Nonce::from_slice(&self.nonce), self.ciphertext.as_ref())
+            .map_err(|e| CoreError::Encryption(format!("Decryption failed: {e:?}")))
     }
 
-    /// Serialize to a JSON-safe format. Does not contain the key_seed.
     pub fn to_json(&self) -> Result<serde_json::Value, CoreError> {
         Ok(serde_json::json!({
+            "v": VERSION,
             "nonce": hex::encode(self.nonce),
-            "ciphertext": hex::encode(&self.ciphertext),
-            "salt": hex::encode(self.salt),
+            "ct": hex::encode(&self.ciphertext),
+            "k": hex::encode(self.key),
         }))
     }
 
-    /// Deserialize from a previously-exported JSON value.
     pub fn from_json(json: &serde_json::Value) -> Result<Self, CoreError> {
-        let nonce_hex = json["nonce"]
-            .as_str()
-            .ok_or_else(|| CoreError::Serialization("missing nonce".into()))?;
-        let ciphertext_hex = json["ciphertext"]
-            .as_str()
-            .ok_or_else(|| CoreError::Serialization("missing ciphertext".into()))?;
-        let salt_hex = json["salt"]
-            .as_str()
-            .ok_or_else(|| CoreError::Serialization("missing salt".into()))?;
-
-        let mut nonce = [0u8; 12];
-        nonce.copy_from_slice(
-            &hex::decode(nonce_hex)
-                .map_err(|e| CoreError::Serialization(e.to_string()))?,
-        );
-        let ciphertext = hex::decode(ciphertext_hex)
-            .map_err(|e| CoreError::Serialization(e.to_string()))?;
-        let mut salt = [0u8; 16];
-        salt.copy_from_slice(
-            &hex::decode(salt_hex)
-                .map_err(|e| CoreError::Serialization(e.to_string()))?,
-        );
-
+        let nonce = decode_fixed::<NONCE_LEN>(json, "nonce")?;
+        let key = decode_fixed::<KEY_LEN>(json, "k")?;
+        let ciphertext = decode_vec(json, "ct")?;
+        if ciphertext.is_empty() {
+            return Err(CoreError::Serialization("empty ciphertext".into()));
+        }
         Ok(EncryptedSeed {
             nonce,
             ciphertext,
-            salt,
+            key,
         })
     }
+}
+
+fn decode_vec(json: &serde_json::Value, field: &str) -> Result<Vec<u8>, CoreError> {
+    let hex_str = json
+        .get(field)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| CoreError::Serialization(format!("missing {field}")))?;
+    hex::decode(hex_str).map_err(|e| CoreError::Serialization(e.to_string()))
+}
+
+fn decode_fixed<const N: usize>(
+    json: &serde_json::Value,
+    field: &str,
+) -> Result<[u8; N], CoreError> {
+    let bytes = decode_vec(json, field)?;
+    bytes
+        .try_into()
+        .map_err(|_| CoreError::Serialization(format!("{field} must be {N} bytes")))
 }
 
 #[cfg(test)]
@@ -107,31 +100,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_encrypt_decrypt_roundtrip() {
+    fn encrypt_decrypt_roundtrip() {
         let seed = b"my-secret-ergo-seed-00000000000000";
-        let key_seed = b"mnemonic-derived-key-material-here";
-        let encrypted = EncryptedSeed::encrypt(seed, key_seed).unwrap();
-        let decrypted = encrypted.decrypt(key_seed).unwrap();
-        assert_eq!(decrypted.as_slice(), seed);
+        let encrypted = EncryptedSeed::encrypt(seed).unwrap();
+        assert_eq!(encrypted.decrypt().unwrap().as_slice(), seed);
     }
 
     #[test]
-    fn test_encrypt_decrypt_wrong_key() {
-        let seed = b"my-secret-ergo-seed-00000000000000";
-        let key_seed = b"correct-key-material";
-        let encrypted = EncryptedSeed::encrypt(seed, key_seed).unwrap();
-        let result = encrypted.decrypt(b"wrong-key-material");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_json_roundtrip() {
+    fn json_roundtrip() {
         let seed = b"test-seed-for-json-roundtrip-000000";
-        let key_seed = b"key-material-for-json-test";
-        let encrypted = EncryptedSeed::encrypt(seed, key_seed).unwrap();
-        let json = encrypted.to_json().unwrap();
-        let restored = EncryptedSeed::from_json(&json).unwrap();
-        let decrypted = restored.decrypt(key_seed).unwrap();
-        assert_eq!(decrypted.as_slice(), seed);
+        let encrypted = EncryptedSeed::encrypt(seed).unwrap();
+        let restored = EncryptedSeed::from_json(&encrypted.to_json().unwrap()).unwrap();
+        assert_eq!(restored.decrypt().unwrap().as_slice(), seed);
+    }
+
+    #[test]
+    fn from_json_rejects_short_nonce() {
+        let json = serde_json::json!({
+            "v": 1,
+            "nonce": "aa",
+            "ct": "bb",
+            "k": hex::encode([0u8; 32]),
+        });
+        assert!(EncryptedSeed::from_json(&json).is_err());
     }
 }

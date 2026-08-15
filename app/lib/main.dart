@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
+
+import 'ui/create_wallet_screen.dart';
 import 'ui/dashboard_screen.dart';
 import 'ui/receive_screen.dart';
+import 'ui/restore_wallet_screen.dart';
 import 'ui/send_screen.dart';
 import 'ui/transactions_screen.dart';
 
@@ -28,6 +31,8 @@ class ArgusApp extends StatelessWidget {
         '/receive': (context) => const ReceiveScreen(),
         '/send': (context) => const SendScreen(),
         '/transactions': (context) => const TransactionsScreen(),
+        '/create': (context) => const CreateWalletScreen(),
+        '/restore': (context) => const RestoreWalletScreen(),
       },
     );
   }

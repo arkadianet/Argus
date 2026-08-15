@@ -1,11 +1,13 @@
-pub mod seed;
-pub mod wallet;
+pub mod bip39;
 pub mod derivation;
 pub mod encryption;
 pub mod error;
+pub mod seed;
+pub mod spend;
 pub mod transaction;
+pub mod wallet;
 
-pub use error::CoreError;
-pub use wallet::WalletHandle;
-pub use seed::SeedBox;
 pub use encryption::EncryptedSeed;
+pub use error::CoreError;
+pub use seed::SeedBox;
+pub use wallet::WalletHandle;

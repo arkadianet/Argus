@@ -50,7 +50,7 @@ wallet/
 ### wallet-core (pure domain, no HTTP, no FFI)
 
 - Mnemonic → seed (PBKDF2 BIP-39)
-- Encrypted seed (AES-256-GCM + Argon2id)
+- Encrypted seed (AES-256-GCM with a random wrap key; Keystore/Keychain is the wrap)
 - HD derivation (BIP-44 / EIP-3: m/44'/429'/0'/0/index)
 - ergo-lib Wallet creation from seed
 - Transaction reduction (EIP-12 → ReducedTransaction)
@@ -71,8 +71,8 @@ wallet/
 - FRB-annotated functions (`#[flutter_rust_bridge::frb]`)
 - Opaque handle store (`static HANDLES: Lazy<Mutex<HashMap<u64, WalletHandle>>>`)
 - All functions return `Result<T, String>` for Dart consumption
-- No secrets cross the bridge: handles are u64, addresses are base58 strings,
-  tx data is `Vec<u8>` or JSON strings
+- Handles are u64; signed tx data is JSON. Create/restore still take a mnemonic
+  String for the backup UI (Dart must treat it as secret).
 
 ### Vendored Citadel Crates
 

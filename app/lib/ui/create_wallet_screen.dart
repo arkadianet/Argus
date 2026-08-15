@@ -1,0 +1,132 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import '../bridge/argus_error.dart';
+import '../services/secure_storage.dart';
+import '../services/wallet_service.dart';
+
+class CreateWalletScreen extends StatefulWidget {
+  const CreateWalletScreen({super.key});
+
+  @override
+  State<CreateWalletScreen> createState() => _CreateWalletScreenState();
+}
+
+class _CreateWalletScreenState extends State<CreateWalletScreen> {
+  String? _mnemonic;
+  final _confirmCtrl = TextEditingController();
+  bool _busy = false;
+  bool _revealed = false;
+
+  @override
+  void dispose() {
+    _confirmCtrl.clear();
+    _confirmCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _generate() async {
+    setState(() => _busy = true);
+    try {
+      final phrase = await walletService.generateMnemonic(strength: 256);
+      setState(() {
+        _mnemonic = phrase;
+        _revealed = false;
+        _confirmCtrl.clear();
+      });
+    } on ArgusException catch (e) {
+      _snack('${e.code}: ${e.message}');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _finish() async {
+    final phrase = _mnemonic;
+    if (phrase == null) return;
+    if (_confirmCtrl.text.trim() != phrase) {
+      _snack('Confirmation does not match the recovery phrase');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final session = await walletService.createWallet(phrase);
+      await SecureStorageService.saveEncryptedSeed(session.encryptedSeedJson);
+      if (!mounted) return;
+      Navigator.pop(context, true);
+    } on ArgusException catch (e) {
+      _snack('${e.code}: ${e.message}');
+    } on SecureStorageException catch (e) {
+      _snack(e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _snack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Create wallet')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          const Text(
+            'Write down these 24 words offline. They are the only way to recover this wallet. Argus never stores the phrase.',
+          ),
+          const SizedBox(height: 16),
+          if (_mnemonic == null)
+            FilledButton(
+              onPressed: _busy ? null : _generate,
+              child: const Text('Generate recovery phrase'),
+            )
+          else ...[
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: SelectableText(
+                  _revealed ? _mnemonic! : '•••• •••• •••• (tap reveal)',
+                  style: const TextStyle(fontFamily: 'monospace', height: 1.6),
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () => setState(() => _revealed = !_revealed),
+                  child: Text(_revealed ? 'Hide' : 'Reveal'),
+                ),
+                TextButton(
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: _mnemonic!));
+                    _snack('Copied — clear the clipboard when done');
+                  },
+                  child: const Text('Copy'),
+                ),
+              ],
+            ),
+            TextField(
+              controller: _confirmCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Re-enter the recovery phrase',
+              ),
+              minLines: 3,
+              maxLines: 5,
+              enableSuggestions: false,
+              autocorrect: false,
+            ),
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: _busy ? null : _finish,
+              child: const Text('I have backed up my phrase'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}

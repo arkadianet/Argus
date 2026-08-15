@@ -11,8 +11,8 @@ pub enum CoreError {
     #[error("Encryption error: {0}")]
     Encryption(String),
 
-    #[error("Key not found: {0}")]
-    KeyNotFound(String),
+    #[error("Invalid address: {0}")]
+    InvalidAddress(String),
 
     #[error("Transaction error: {0}")]
     Transaction(String),
@@ -28,7 +28,4 @@ pub enum CoreError {
 
     #[error("Serialization error: {0}")]
     Serialization(String),
-
-    #[error("IO error: {0}")]
-    Io(String),
 }

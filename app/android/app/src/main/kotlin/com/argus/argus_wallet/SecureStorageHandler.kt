@@ -24,6 +24,17 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
         }
     }
 
+    private fun isKeyInvalidated(e: Throwable): Boolean {
+        var cur: Throwable? = e
+        while (cur != null) {
+            if (cur is android.security.keystore.KeyPermanentlyInvalidatedException) {
+                return true
+            }
+            cur = cur.cause
+        }
+        return false
+    }
+
     private var prefs: SharedPreferences? = null
 
     private fun getPrefs(): SharedPreferences {
@@ -49,7 +60,14 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
             when (call.method) {
                 "saveEncryptedSeed" -> {
                     val json = call.argument<String>("encryptedSeedJson")
-                    getPrefs().edit().putString(SEED_KEY, json).apply()
+                    if (json.isNullOrEmpty()) {
+                        result.error("INVALID_ARGS", "Missing encryptedSeedJson", null)
+                        return
+                    }
+                    if (!getPrefs().edit().putString(SEED_KEY, json).commit()) {
+                        result.error("STORAGE_ERROR", "Failed to persist seed", null)
+                        return
+                    }
                     result.success(true)
                 }
                 "loadEncryptedSeed" -> {
@@ -57,7 +75,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     result.success(stored)
                 }
                 "deleteEncryptedSeed" -> {
-                    getPrefs().edit().remove(SEED_KEY).apply()
+                    getPrefs().edit().remove(SEED_KEY).commit()
                     result.success(null)
                 }
                 "hasEncryptedSeed" -> {
@@ -66,7 +84,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {
-            if (e.message?.contains("KeyStore") == true) {
+            if (isKeyInvalidated(e)) {
                 result.error("KEY_INVALIDATED", e.message, null)
             } else {
                 result.error("STORAGE_ERROR", e.message, null)
