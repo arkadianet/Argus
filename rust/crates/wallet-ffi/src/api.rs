@@ -95,6 +95,35 @@ async fn node_client(node_url: Option<String>) -> Result<ErgoNodeClient, String>
         .map_err(|e| ArgusError::NodeUnreachable(e).to_json_string())
 }
 
+#[flutter_rust_bridge::frb]
+pub fn set_network(node_urls: Vec<String>, explorer_url: Option<String>) {
+    wallet_net::client::set_network(node_urls, explorer_url);
+}
+
+#[flutter_rust_bridge::frb]
+pub async fn probe_network() -> Result<String, String> {
+    let mut out = Vec::new();
+    for url in wallet_net::client::node_urls(None) {
+        match wallet_net::client::probe_height(&url).await {
+            Ok(height) => out.push(serde_json::json!({
+                "url": url,
+                "ok": true,
+                "height": height,
+            })),
+            Err(err) => out.push(serde_json::json!({
+                "url": url,
+                "ok": false,
+                "error": err,
+            })),
+        }
+    }
+    serde_json::to_string(&serde_json::json!({
+        "nodes": out,
+        "explorer": wallet_net::client::configured_explorer(),
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 fn tokens_json(tokens: &[(String, u64)]) -> Vec<serde_json::Value> {
     tokens
         .iter()
@@ -334,9 +363,59 @@ pub async fn discover_addresses(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+fn resolve_spend_addresses(sender: &str, extra: &[String]) -> Vec<String> {
+    let mut spend = extra
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if spend.is_empty() && !sender.is_empty() {
+        spend.push(sender.to_string());
+    }
+    spend.sort();
+    spend.dedup();
+    spend
+}
+
+async fn gather_unspent(
+    handle_id: u64,
+    client: &ErgoNodeClient,
+    addresses: &[String],
+) -> Result<(Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>, Vec<ergo_tx::Eip12InputBox>), String> {
+    let mut boxes = Vec::new();
+    let mut eip12 = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for addr in addresses {
+        if addr.is_empty() {
+            continue;
+        }
+        with_handle(handle_id, "send", |h| {
+            if !h.owns_address(addr).map_err(err_str)? {
+                return Err(ArgusError::InvalidAddress(
+                    "spend address is not an address of this wallet".into(),
+                )
+                .to_json_string());
+            }
+            Ok(())
+        })?;
+        let (b, e) = client
+            .get_unspent(addr)
+            .await
+            .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+        for (bx, input) in b.into_iter().zip(e.into_iter()) {
+            if seen.insert(input.box_id.clone()) {
+                boxes.push(bx);
+                eip12.push(input);
+            }
+        }
+    }
+    Ok((boxes, eip12))
+}
+
 async fn prepare(
     handle_id: u64,
     sender_address: &str,
+    spend_addresses: &[String],
     change_address: &str,
     recipient_address: &str,
     amount_nano_erg: i64,
@@ -351,12 +430,6 @@ async fn prepare(
         .to_json_string());
     }
     with_handle(handle_id, "send", |h| {
-        if !h.owns_address(sender_address).map_err(err_str)? {
-            return Err(ArgusError::InvalidAddress(
-                "sender is not an address of this wallet".into(),
-            )
-            .to_json_string());
-        }
         if !h.owns_address(change_address).map_err(err_str)? {
             return Err(ArgusError::InvalidAddress(
                 "change is not an address of this wallet".into(),
@@ -366,17 +439,16 @@ async fn prepare(
         Ok(())
     })?;
 
+    let spend = resolve_spend_addresses(sender_address, spend_addresses);
+
     let send_token: Option<(String, u64)> = token_id
         .filter(|s| !s.is_empty())
         .zip(token_amount)
         .filter(|(_, amt)| *amt > 0);
     let client = node_client(node_url).await?;
-    let (boxes, eip12) = client
-        .get_unspent(sender_address)
-        .await
-        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend).await?;
     if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(sender_address.to_string()).to_json_string());
+        return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());
     }
 
     let required = (amount_nano_erg + TX_FEE_NANO + MIN_BOX_VALUE_NANO) as u64;
@@ -426,6 +498,7 @@ async fn prepare(
 pub async fn prepare_send(
     handle_id: u64,
     sender_address: String,
+    spend_addresses: Vec<String>,
     change_address: String,
     recipient_address: String,
     amount_nano_erg: i64,
@@ -436,6 +509,7 @@ pub async fn prepare_send(
     let (ergo_boxes, built) = prepare(
         handle_id,
         &sender_address,
+        &spend_addresses,
         &change_address,
         &recipient_address,
         amount_nano_erg,
@@ -585,6 +659,19 @@ mod tests {
         assert!(take_preparation(8, id).is_err());
         assert!(take_preparation(7, id).is_ok());
         assert!(take_preparation(7, id).is_err());
+    }
+
+    #[test]
+    fn spend_list_uses_all_owned_and_falls_back() {
+        let many = resolve_spend_addresses(
+            "9aaa",
+            &["9ccc".into(), " 9bbb ".into(), "9ccc".into(), "".into()],
+        );
+        assert_eq!(many, vec!["9bbb", "9ccc"]);
+        assert_eq!(
+            resolve_spend_addresses("9aaa", &[]),
+            vec!["9aaa"]
+        );
     }
 
     #[test]

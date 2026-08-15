@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../bridge/argus_error.dart';
 import '../format.dart';
+import '../services/network_controller.dart';
 import '../services/secure_storage.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -12,6 +13,7 @@ import 'create_wallet_screen.dart';
 import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
 import 'settings_screen.dart';
+import 'transaction_detail_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -72,6 +74,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _init() async {
     try {
       await walletService.init();
+      await networkController.load();
+      networkController.probe();
       _hasSeed = await SecureStorageService.hasEncryptedSeed();
       _hasPin = await SecureStorageService.hasPinWrap();
       _canBiometric = await SecureStorageService.hasBiometric() &&
@@ -201,6 +205,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         await walletService.restoreWallet(json, wrapKey: wrapKey);
         await _pinSucceeded();
         _pinCtrl.clear();
+        HapticFeedback.lightImpact();
         await _afterUnlock();
       } on ArgusException catch (e) {
         await _pinFailed();
@@ -222,6 +227,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           return;
         }
         await walletService.restoreWallet(json, wrapKey: wrapKey);
+        HapticFeedback.lightImpact();
         await _afterUnlock();
       } on ArgusException catch (e) {
         _snack('${e.code}: ${e.message}');
@@ -311,6 +317,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _refresh() async {
+    networkController.probe();
     final addresses = _historyAddresses();
     if (addresses.isEmpty) return;
     try {
@@ -386,13 +393,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
-  WalletRouteArgs _args() {
+  WalletRouteArgs _args({Map<String, dynamic>? transaction}) {
     return WalletRouteArgs(
       senderAddress: _senderAddress ?? _receiveAddress ?? '',
       receiveAddress: _receiveAddress ?? '',
       changeAddress: _changeAddress ?? _receiveAddress ?? '',
       historyAddresses: _historyAddresses(),
       tokens: _tokens,
+      spendableNano: _balanceNano,
+      transaction: transaction,
     );
   }
 
@@ -402,6 +411,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
     Navigator.pushNamed(context, route, arguments: _args());
+  }
+
+  void _openTx(Map<String, dynamic> tx) {
+    Navigator.push(
+      context,
+      fadeRoute(const TransactionDetailScreen(), settings: RouteSettings(arguments: _args(transaction: tx))),
+    );
   }
 
   void _openSettings() {
@@ -568,6 +584,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 6),
           const SectionLabel('ERG'),
+          ListenableBuilder(
+            listenable: networkController,
+            builder: (context, _) {
+              final usd = networkController.usdPerErg;
+              final nano = _balanceNano;
+              final fiat = usd != null && nano != null
+                  ? '≈ \$${(nano / 1e9 * usd).toStringAsFixed(2)}'
+                  : null;
+              return Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  [
+                    if (fiat != null) fiat,
+                    networkController.statusLabel,
+                  ].join('  ·  '),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              );
+            },
+          ),
           if (_stale) ...[
             const SizedBox(height: 10),
             Text(_status, style: const TextStyle(color: rust, fontSize: 12)),
@@ -646,19 +682,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (_recentTxs.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 20),
-              child: Text('Nothing yet.', style: Theme.of(context).textTheme.bodyMedium),
+              child: Text(
+                'No activity yet. Receive to the address above.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
             )
           else
-            ..._recentTxs.map((tx) {
-              final nano = (tx['value_nano_erg'] as num?)?.toInt();
-              final txId = tx['tx_id']?.toString() ?? '';
-              return _line(
-                title: formatErg(nano),
-                subtitle: shorten(txId, head: 10, tail: 8),
-                trailing: '#${tx['height'] ?? '?'}',
-                onTap: () => _go('/transactions'),
-              );
-            }),
+            ..._groupedActivity(_recentTxs),
           if (_usedAddresses.isNotEmpty) ...[
             const SizedBox(height: 16),
             const Hairline(),
@@ -678,6 +708,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
     );
+  }
+
+  List<Widget> _groupedActivity(List<Map<String, dynamic>> txs) {
+    final out = <Widget>[];
+    String? lastDay;
+    for (final tx in txs) {
+      final day = dayKey((tx['timestamp'] as num?)?.toInt());
+      if (day != lastDay) {
+        lastDay = day;
+        out.add(Padding(
+          padding: const EdgeInsets.only(top: 12, bottom: 4),
+          child: Text(day, style: Theme.of(context).textTheme.bodySmall),
+        ));
+      }
+      final nano = (tx['value_nano_erg'] as num?)?.toInt();
+      final txId = tx['tx_id']?.toString() ?? '';
+      final height = (tx['height'] as num?)?.toInt();
+      out.add(_line(
+        title: formatErg(nano),
+        subtitle: shorten(txId, head: 10, tail: 8),
+        trailing: formatHeight(height),
+        onTap: () => _openTx(tx),
+      ));
+    }
+    return out;
   }
 
   Widget _line({

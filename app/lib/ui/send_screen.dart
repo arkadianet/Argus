@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../format.dart';
+import '../services/network_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
+import 'scan_screen.dart';
 
 class SendScreen extends StatefulWidget {
   const SendScreen({super.key});
@@ -19,6 +22,9 @@ class _SendScreenState extends State<SendScreen> {
   bool _sending = false;
   String? _resultTxId;
   String? _assetId;
+
+  static const _fee = 1100000;
+  static const _minBox = 1000000;
 
   @override
   void dispose() {
@@ -40,11 +46,44 @@ class _SendScreenState extends State<SendScreen> {
 
   int? _amountNano() => parseErgToNano(_amountCtrl.text);
 
+  void _applyMax() {
+    final token = _selectedToken;
+    if (token != null && !token.isNft) {
+      _tokenAmtCtrl.text = formatTokenAmount(token.amount, token.decimals);
+      setState(() {});
+      return;
+    }
+    final spendable = _args.spendableNano;
+    if (spendable == null) return;
+    final max = spendable - _fee - _minBox;
+    if (max < _minBox) return;
+    _amountCtrl.text = formatErg(max, unit: false);
+    setState(() {});
+  }
+
+  Future<void> _scan() async {
+    final raw = await Navigator.push<String>(context, fadeRoute(const ScanScreen()));
+    if (raw == null) return;
+    final pay = parseErgoUri(raw);
+    if (pay == null) {
+      _snack('Not an Ergo address');
+      return;
+    }
+    _recipientCtrl.text = pay.address;
+    if (pay.amountErg != null && pay.amountErg!.isNotEmpty) {
+      _amountCtrl.text = pay.amountErg!;
+    }
+    setState(() {});
+  }
+
   Future<void> _send() async {
     if (!_formKey.currentState!.validate()) return;
     final args = _args;
-    if (args.senderAddress.isEmpty) {
-      _snack('No sender address');
+    final spend = args.historyAddresses.isNotEmpty
+        ? args.historyAddresses
+        : [if (args.senderAddress.isNotEmpty) args.senderAddress];
+    if (spend.isEmpty) {
+      _snack('No spendable addresses');
       return;
     }
     final amount = _amountNano();
@@ -67,31 +106,38 @@ class _SendScreenState extends State<SendScreen> {
     try {
       final preview = await walletService.prepareSend(
         senderAddress: args.senderAddress,
+        spendAddresses: spend,
         changeAddress: args.changeAddress.isEmpty ? args.senderAddress : args.changeAddress,
         recipientAddress: _recipientCtrl.text.trim(),
         amountNanoErg: amount,
         tokenId: token?.id,
         tokenAmount: tokenAmount,
+        nodeUrl: networkController.activeUrl,
       );
       if (!mounted) return;
-      final tokenLines = preview.tokenId != null && preview.tokenId!.isNotEmpty
-          ? '\nToken: ${token?.label ?? preview.tokenId}\nToken amount: ${preview.tokenAmount}'
-          : '';
-      final changeLine = preview.changeAddress != null && preview.changeAddress!.isNotEmpty
-          ? '\nChange to: ${preview.changeAddress}'
-          : '';
       final ok = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
           title: const Text('Confirm send'),
-          content: Text(
-            'To: ${preview.recipient}\n'
-            'Amount: ${formatErg(preview.amountNanoErg)}\n'
-            'Miner fee: ${formatErg(preview.minerFee)}\n'
-            'Change: ${formatErg(preview.changeNanoErg)}'
-            '$changeLine\n'
-            'Inputs: ${preview.inputCount}'
-            '$tokenLines',
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('To', style: Theme.of(ctx).textTheme.titleSmall),
+              const SizedBox(height: 4),
+              Text(preview.recipient, style: monoStyle(ctx, size: 12)),
+              const SizedBox(height: 12),
+              Text('Amount  ${formatErg(preview.amountNanoErg)}'),
+              Text('Fee  ${formatErg(preview.minerFee)}'),
+              Text('Change  ${formatErg(preview.changeNanoErg)}'),
+              if (preview.tokenId != null && preview.tokenId!.isNotEmpty)
+                Text('Token  ${token?.label ?? preview.tokenId}  × ${preview.tokenAmount}'),
+              const SizedBox(height: 12),
+              Text(
+                networkController.activeUrl ?? 'Node not chosen yet',
+                style: Theme.of(ctx).textTheme.bodySmall,
+              ),
+            ],
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -104,6 +150,7 @@ class _SendScreenState extends State<SendScreen> {
         return;
       }
       final txId = await walletService.sendErg(preparationId: preview.preparationId);
+      HapticFeedback.mediumImpact();
       setState(() {
         _resultTxId = txId;
         _sending = false;
@@ -123,7 +170,16 @@ class _SendScreenState extends State<SendScreen> {
   Widget build(BuildContext context) {
     final token = _selectedToken;
     return Scaffold(
-      appBar: AppBar(title: const Text('Send')),
+      appBar: AppBar(
+        title: const Text('Send'),
+        actions: [
+          IconButton(
+            tooltip: 'Scan',
+            onPressed: _scan,
+            icon: const Icon(Icons.qr_code_scanner),
+          ),
+        ],
+      ),
       body: _resultTxId != null
           ? Center(
               child: Padding(
@@ -156,7 +212,11 @@ class _SendScreenState extends State<SendScreen> {
                       controller: _recipientCtrl,
                       style: monoStyle(context, size: 13),
                       decoration: const InputDecoration(labelText: 'Recipient address'),
-                      validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
+                      validator: (v) {
+                        if (v == null || v.trim().isEmpty) return 'Required';
+                        if (!looksLikeErgoAddress(v)) return 'Not an Ergo address';
+                        return null;
+                      },
                     ),
                     const SizedBox(height: 24),
                     const SectionLabel('Asset'),
@@ -181,6 +241,7 @@ class _SendScreenState extends State<SendScreen> {
                       decoration: InputDecoration(
                         labelText: token == null ? 'Amount (ERG)' : 'ERG for the output box',
                         hintText: '0.001',
+                        suffixIcon: TextButton(onPressed: _applyMax, child: const Text('MAX')),
                       ),
                       keyboardType: const TextInputType.numberWithOptions(decimal: true),
                       validator: (v) {
@@ -193,7 +254,10 @@ class _SendScreenState extends State<SendScreen> {
                       const SizedBox(height: 12),
                       TextFormField(
                         controller: _tokenAmtCtrl,
-                        decoration: InputDecoration(labelText: '${token.label} amount'),
+                        decoration: InputDecoration(
+                          labelText: '${token.label} amount',
+                          suffixIcon: TextButton(onPressed: _applyMax, child: const Text('MAX')),
+                        ),
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
                         validator: (v) {
                           final n = parseDecimalToBase(v ?? '', token.decimals);

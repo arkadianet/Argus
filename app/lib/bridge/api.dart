@@ -6,8 +6,18 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `drop_preparations_for`, `err_str`, `node_client`, `open_wallet`, `prepare`, `recover`, `register_handle`, `session_json`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
+// These functions are ignored because they are not marked as `pub`: `drop_preparations_for`, `err_str`, `gather_unspent`, `node_client`, `open_wallet`, `prepare`, `recover`, `register_handle`, `resolve_spend_addresses`, `session_json`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`
+
+Future<void> setNetwork({
+  required List<String> nodeUrls,
+  String? explorerUrl,
+}) => RustLib.instance.api.crateApiSetNetwork(
+  nodeUrls: nodeUrls,
+  explorerUrl: explorerUrl,
+);
+
+Future<String> probeNetwork() => RustLib.instance.api.crateApiProbeNetwork();
 
 /// Create a wallet from a BIP-39 mnemonic. Returns `{handle_id, encrypted_seed_json, wrap_key}`.
 Future<String> walletCreate({
@@ -109,6 +119,7 @@ Future<String> discoverAddresses({
 Future<String> prepareSend({
   required BigInt handleId,
   required String senderAddress,
+  required List<String> spendAddresses,
   required String changeAddress,
   required String recipientAddress,
   required PlatformInt64 amountNanoErg,
@@ -118,6 +129,7 @@ Future<String> prepareSend({
 }) => RustLib.instance.api.crateApiPrepareSend(
   handleId: handleId,
   senderAddress: senderAddress,
+  spendAddresses: spendAddresses,
   changeAddress: changeAddress,
   recipientAddress: recipientAddress,
   amountNanoErg: amountNanoErg,

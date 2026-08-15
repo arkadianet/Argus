@@ -34,4 +34,31 @@ void main() {
       expect(shorten('1234567890abcdef', head: 4, tail: 4), '1234…cdef');
     });
   });
+
+  group('parseErgoUri', () {
+    const addr = '9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8';
+
+    test('accepts a raw P2PK address', () {
+      expect(parseErgoUri(addr)?.address, addr);
+    });
+
+    test('accepts ergo: and amount', () {
+      final pay = parseErgoUri('ergo:$addr?amount=1.5');
+      expect(pay?.address, addr);
+      expect(pay?.amountErg, '1.5');
+    });
+
+    test('rejects junk', () {
+      expect(parseErgoUri('bitcoin:abc'), isNull);
+      expect(parseErgoUri(''), isNull);
+    });
+  });
+
+  group('formatHeight', () {
+    test('marks missing height as unconfirmed', () {
+      expect(formatHeight(null), 'Unconfirmed');
+      expect(formatHeight(0), 'Unconfirmed');
+      expect(formatHeight(1200), '#1200');
+    });
+  });
 }

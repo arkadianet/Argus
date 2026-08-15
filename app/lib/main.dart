@@ -9,6 +9,7 @@ import 'ui/receive_screen.dart';
 import 'ui/restore_wallet_screen.dart';
 import 'ui/send_screen.dart';
 import 'ui/settings_screen.dart';
+import 'ui/transaction_detail_screen.dart';
 import 'ui/transactions_screen.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -76,6 +77,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/create' => const CreateWalletScreen(),
               '/restore' => const RestoreWalletScreen(),
               '/settings' => const SettingsScreen(),
+              '/tx' => const TransactionDetailScreen(),
               _ => const DashboardScreen(),
             };
             return fadeRoute(page, settings: settings);

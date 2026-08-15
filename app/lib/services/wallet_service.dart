@@ -49,6 +49,8 @@ class WalletRouteArgs {
   final String changeAddress;
   final List<String> historyAddresses;
   final List<TokenBalance> tokens;
+  final int? spendableNano;
+  final Map<String, dynamic>? transaction;
 
   const WalletRouteArgs({
     required this.senderAddress,
@@ -56,6 +58,8 @@ class WalletRouteArgs {
     required this.changeAddress,
     this.historyAddresses = const [],
     this.tokens = const [],
+    this.spendableNano,
+    this.transaction,
   });
 
   static WalletRouteArgs from(Object? args) {
@@ -238,6 +242,7 @@ class WalletService {
 
   Future<SendPreview> prepareSend({
     required String senderAddress,
+    List<String>? spendAddresses,
     required String changeAddress,
     required String recipientAddress,
     required int amountNanoErg,
@@ -249,6 +254,7 @@ class WalletService {
     final raw = await RustLib.instance.api.crateApiPrepareSend(
       handleId: BigInt.from(_handleId!),
       senderAddress: senderAddress,
+      spendAddresses: spendAddresses ?? const [],
       changeAddress: changeAddress,
       recipientAddress: recipientAddress,
       amountNanoErg: amountNanoErg,

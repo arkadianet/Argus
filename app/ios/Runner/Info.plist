@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Unlock Argus without typing your PIN.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Scan an Ergo address or payment QR.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

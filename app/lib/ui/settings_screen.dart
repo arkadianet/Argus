@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/network_controller.dart';
 import '../services/secure_storage.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -17,11 +18,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _canBiometric = false;
   bool _hasPin = false;
   bool _busy = false;
+  final _nodeCtrl = TextEditingController();
+  final _explorerCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
+    _explorerCtrl.text = networkController.explorer;
     _load();
+  }
+
+  @override
+  void dispose() {
+    _nodeCtrl.dispose();
+    _explorerCtrl.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -83,17 +94,85 @@ class _SettingsScreenState extends State<SettingsScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Settings')),
       body: ListenableBuilder(
-        listenable: themeController,
+        listenable: Listenable.merge([themeController, networkController]),
         builder: (context, _) {
           return ListView(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
             children: [
+              const SectionLabel('Network'),
+              const SizedBox(height: 8),
+              Text(
+                networkController.statusLabel,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton(
+                  onPressed: networkController.probing ? null : networkController.probe,
+                  child: Text(networkController.probing ? 'Checking…' : 'Check nodes'),
+                ),
+              ),
+              ...List.generate(networkController.nodes.length, (i) {
+                final n = networkController.nodes[i];
+                final active = n.url == networkController.activeUrl;
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(Uri.tryParse(n.url)?.host ?? n.url,
+                                style: Theme.of(context).textTheme.titleMedium),
+                            Text(
+                              active ? 'In use' : (n.enabled ? 'Standby' : 'Off'),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Up',
+                        onPressed: () => networkController.moveNode(i, -1),
+                        icon: const Icon(Icons.keyboard_arrow_up, size: 20),
+                      ),
+                      IconButton(
+                        tooltip: 'Down',
+                        onPressed: () => networkController.moveNode(i, 1),
+                        icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                      ),
+                      IconButton(
+                        tooltip: n.enabled ? 'Disable' : 'Enable',
+                        onPressed: () => networkController.toggleNode(i),
+                        icon: Icon(n.enabled ? Icons.visibility : Icons.visibility_off, size: 20),
+                      ),
+                      IconButton(
+                        tooltip: 'Remove',
+                        onPressed: () => networkController.removeNode(i),
+                        icon: const Icon(Icons.close, size: 20),
+                      ),
+                    ],
+                  ),
+                );
+              }),
+              TextField(
+                controller: _nodeCtrl,
+                decoration: const InputDecoration(labelText: 'Add node URL'),
+                onSubmitted: (v) async {
+                  await networkController.addNode(v);
+                  _nodeCtrl.clear();
+                },
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _explorerCtrl,
+                decoration: const InputDecoration(labelText: 'Token metadata URL'),
+                onSubmitted: networkController.setExplorer,
+              ),
+              const SizedBox(height: 28),
               const SectionLabel('Appearance'),
               const SizedBox(height: 12),
-              const Text(
-                'One layout, two palettes. System follows the phone.',
-              ),
-              const SizedBox(height: 16),
               ...ArgusPalette.values.map((p) {
                 final label = switch (p) {
                   ArgusPalette.system => 'System',
@@ -111,9 +190,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     decoration: BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(color: Theme.of(context).dividerColor),
-                      ),
+                      border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor)),
                     ),
                     child: Row(
                       children: [
@@ -166,6 +243,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'Set a PIN when you create or restore a wallet.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+              const SizedBox(height: 28),
+              const SectionLabel('Backup'),
+              const SizedBox(height: 12),
+              Text(
+                'Argus does not keep a copy of the recovery phrase. The paper you wrote at create or restore is the only way back in.',
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
             ],
           );
         },

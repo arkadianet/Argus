@@ -7,7 +7,8 @@ use ergo_lib::ergotree_ir::chain::address::{AddressEncoder, NetworkPrefix};
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
 use ergo_node_interface::NodeInterface;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 const HEADERS_COUNT: usize = 10;
 const UNSPENT_PAGE_SIZE: u64 = 500;
@@ -24,18 +25,93 @@ pub const NODE_CANDIDATES: &[&str] = &[
 
 pub const DEFAULT_EXPLORER_URL: &str = "https://api.ergoplatform.com";
 
-/// Preferred URL first, then public fallbacks (no duplicates).
+#[derive(Clone)]
+struct NetworkConfig {
+    nodes: Vec<String>,
+    explorer: String,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            nodes: NODE_CANDIDATES.iter().map(|s| (*s).to_string()).collect(),
+            explorer: DEFAULT_EXPLORER_URL.to_string(),
+        }
+    }
+}
+
+fn network() -> &'static Mutex<NetworkConfig> {
+    static NET: OnceLock<Mutex<NetworkConfig>> = OnceLock::new();
+    NET.get_or_init(|| Mutex::new(NetworkConfig::default()))
+}
+
+fn recover<T>(r: std::sync::LockResult<T>) -> T {
+    r.unwrap_or_else(|p| p.into_inner())
+}
+
+/// Replace the process node list. Empty input keeps the current list.
+pub fn set_network(nodes: Vec<String>, explorer: Option<String>) {
+    let mut cfg = recover(network().lock());
+    let cleaned: Vec<String> = nodes
+        .into_iter()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !cleaned.is_empty() {
+        cfg.nodes = cleaned;
+    }
+    if let Some(url) = explorer
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+    {
+        cfg.explorer = url;
+    }
+}
+
+pub fn configured_nodes() -> Vec<String> {
+    recover(network().lock()).nodes.clone()
+}
+
+pub fn configured_explorer() -> String {
+    recover(network().lock()).explorer.clone()
+}
+
+/// Preferred URL first, then the configured list (no duplicates).
 pub fn node_urls(preferred: Option<String>) -> Vec<String> {
     let mut urls = Vec::new();
     if let Some(url) = preferred.filter(|s| !s.is_empty()) {
-        urls.push(url);
+        urls.push(url.trim_end_matches('/').to_string());
     }
-    for candidate in NODE_CANDIDATES {
-        if !urls.iter().any(|u| u == candidate) {
-            urls.push((*candidate).to_string());
+    for candidate in configured_nodes() {
+        if !urls.iter().any(|u| u == &candidate) {
+            urls.push(candidate);
         }
     }
     urls
+}
+
+pub async fn probe_height(url: &str) -> Result<u64, String> {
+    let info_url = join_url(url, "info");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let text = client
+        .get(&info_url)
+        .send()
+        .await
+        .map_err(|e| format!("probe {url}: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("probe {url}: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("probe {url}: {e}"))?;
+    let info: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("probe parse {url}: {e}"))?;
+    info.get("fullHeight")
+        .or_else(|| info.get("headersHeight"))
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| format!("probe {url}: no height"))
 }
 
 fn join_url(base: &str, path: &str) -> String {
@@ -441,7 +517,10 @@ pub async fn get_token_info(
     }
     let url = format!(
         "{}/api/v1/tokens/{}",
-        explorer_url.unwrap_or(DEFAULT_EXPLORER_URL).trim_end_matches('/'),
+        explorer_url
+            .map(|s| s.trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(configured_explorer),
         token_id
     );
     let text = reqwest::Client::new()
@@ -477,8 +556,16 @@ fn net_value_for_address(tx: &serde_json::Value, address: &str) -> i64 {
 mod tests {
     use super::*;
 
+    fn reset_network() {
+        set_network(
+            NODE_CANDIDATES.iter().map(|s| (*s).to_string()).collect(),
+            Some(DEFAULT_EXPLORER_URL.into()),
+        );
+    }
+
     #[test]
     fn preferred_node_is_first() {
+        reset_network();
         let urls = node_urls(Some("https://custom.node".into()));
         assert_eq!(urls[0], "https://custom.node");
         assert!(urls.contains(&DEFAULT_NODE_URL.to_string()));
@@ -486,8 +573,32 @@ mod tests {
 
     #[test]
     fn default_list_has_no_duplicates() {
+        reset_network();
         let urls = node_urls(Some(DEFAULT_NODE_URL.into()));
         assert_eq!(urls.iter().filter(|u| *u == DEFAULT_NODE_URL).count(), 1);
+    }
+
+    #[test]
+    fn custom_list_replaces_defaults() {
+        set_network(
+            vec!["https://a.example".into(), "https://b.example".into()],
+            Some("https://exp.example".into()),
+        );
+        let urls = node_urls(None);
+        assert_eq!(urls, vec!["https://a.example", "https://b.example"]);
+        assert_eq!(configured_explorer(), "https://exp.example");
+        reset_network();
+    }
+
+    #[test]
+    fn empty_set_network_keeps_list() {
+        set_network(
+            vec!["https://only.example".into()],
+            None,
+        );
+        set_network(vec![], None);
+        assert_eq!(configured_nodes(), vec!["https://only.example"]);
+        reset_network();
     }
 
     #[test]
