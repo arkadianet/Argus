@@ -1,0 +1,37 @@
+import 'package:argus_wallet/format.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  group('formatErg', () {
+    test('trims trailing zeros and keeps needed precision', () {
+      expect(formatErg(1000000000), '1 ERG');
+      expect(formatErg(1500000000), '1.5 ERG');
+      expect(formatErg(1000000), '0.001 ERG');
+      expect(formatErg(1), '0.000000001 ERG');
+      expect(formatErg(0), '0 ERG');
+      expect(formatErg(null), '—');
+    });
+
+    test('can omit the unit', () {
+      expect(formatErg(2500000000, unit: false), '2.5');
+    });
+  });
+
+  group('formatTokenAmount', () {
+    test('respects decimals and trims zeros', () {
+      expect(formatTokenAmount(150, 2), '1.5');
+      expect(formatTokenAmount(1, 0), '1');
+      expect(formatTokenAmount(1000, 3), '1');
+    });
+  });
+
+  group('shorten', () {
+    test('keeps short values whole', () {
+      expect(shorten('abc'), 'abc');
+    });
+
+    test('ellipsizes long values', () {
+      expect(shorten('1234567890abcdef', head: 4, tail: 4), '1234…cdef');
+    });
+  });
+}

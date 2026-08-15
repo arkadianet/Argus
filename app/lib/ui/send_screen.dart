@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../format.dart';
 import '../services/wallet_service.dart';
+import '../theme/argus_theme.dart';
 
 class SendScreen extends StatefulWidget {
   const SendScreen({super.key});
@@ -17,8 +19,6 @@ class _SendScreenState extends State<SendScreen> {
   bool _sending = false;
   String? _resultTxId;
   String? _assetId;
-
-  static const _nano = 1000000000;
 
   @override
   void dispose() {
@@ -39,8 +39,6 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   int? _amountNano() => parseErgToNano(_amountCtrl.text);
-
-  String _erg(int nano) => '${(nano / _nano).toStringAsFixed(4)} ERG';
 
   Future<void> _send() async {
     if (!_formKey.currentState!.validate()) return;
@@ -88,9 +86,9 @@ class _SendScreenState extends State<SendScreen> {
           title: const Text('Confirm send'),
           content: Text(
             'To: ${preview.recipient}\n'
-            'Amount: ${_erg(preview.amountNanoErg)}\n'
-            'Miner fee: ${_erg(preview.minerFee)}\n'
-            'Change: ${_erg(preview.changeNanoErg)}'
+            'Amount: ${formatErg(preview.amountNanoErg)}\n'
+            'Miner fee: ${formatErg(preview.minerFee)}\n'
+            'Change: ${formatErg(preview.changeNanoErg)}'
             '$changeLine\n'
             'Inputs: ${preview.inputCount}'
             '$tokenLines',
@@ -123,39 +121,45 @@ class _SendScreenState extends State<SendScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     final token = _selectedToken;
     return Scaffold(
       appBar: AppBar(title: const Text('Send')),
       body: _resultTxId != null
           ? Center(
               child: Padding(
-                padding: const EdgeInsets.all(24),
+                padding: const EdgeInsets.all(28),
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.check_circle, size: 64, color: Colors.green),
-                    const SizedBox(height: 16),
-                    Text('Broadcast', style: theme.textTheme.titleLarge),
+                    const IrisMark(size: 64),
+                    const SizedBox(height: 20),
+                    Text('Broadcast', style: Theme.of(context).textTheme.headlineSmall),
                     const SizedBox(height: 8),
-                    SelectableText(_resultTxId!, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-                    const SizedBox(height: 24),
+                    const SizedBox(width: 48, child: Hairline(gold: true)),
+                    const SizedBox(height: 16),
+                    SelectableText(_resultTxId!, style: monoStyle(context, size: 12)),
+                    const SizedBox(height: 28),
                     FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Done')),
                   ],
                 ),
               ),
             )
           : Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
               child: Form(
                 key: _formKey,
                 child: ListView(
                   children: [
+                    const SectionLabel('Destination'),
+                    const SizedBox(height: 12),
                     TextFormField(
                       controller: _recipientCtrl,
+                      style: monoStyle(context, size: 13),
                       decoration: const InputDecoration(labelText: 'Recipient address'),
                       validator: (v) => (v == null || v.isEmpty) ? 'Required' : null,
                     ),
+                    const SizedBox(height: 24),
+                    const SectionLabel('Asset'),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String?>(
                       initialValue: _assetId,
@@ -200,13 +204,17 @@ class _SendScreenState extends State<SendScreen> {
                     ],
                     if (token != null && token.isNft) ...[
                       const SizedBox(height: 12),
-                      Text('Sends 1 ${token.label}', style: theme.textTheme.bodySmall),
+                      Text('Sends 1 ${token.label}', style: Theme.of(context).textTheme.bodySmall),
                     ],
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 28),
                     FilledButton(
                       onPressed: _sending ? null : _send,
                       child: _sending
-                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
                           : const Text('Review'),
                     ),
                   ],

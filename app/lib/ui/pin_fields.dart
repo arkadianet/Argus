@@ -27,7 +27,7 @@ class PinFields extends StatelessWidget {
           maxLength: 32,
           decoration: InputDecoration(
             labelText: label,
-            helperText: '6-32 characters. This unlocks the wallet on this device.',
+            helperText: '6–32 characters. Unlocks this device only.',
           ),
         ),
         if (confirm != null) ...[

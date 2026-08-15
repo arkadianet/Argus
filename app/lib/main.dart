@@ -1,17 +1,21 @@
 import 'package:flutter/material.dart';
 
 import 'services/wallet_service.dart';
+import 'theme/argus_theme.dart';
+import 'theme/theme_controller.dart';
 import 'ui/create_wallet_screen.dart';
 import 'ui/dashboard_screen.dart';
 import 'ui/receive_screen.dart';
 import 'ui/restore_wallet_screen.dart';
 import 'ui/send_screen.dart';
+import 'ui/settings_screen.dart';
 import 'ui/transactions_screen.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await themeController.load();
   runApp(const ArgusApp());
 }
 
@@ -54,23 +58,29 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Argus Wallet',
-      navigatorKey: navigatorKey,
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorSchemeSeed: const Color(0xFF00BFA5),
-        useMaterial3: true,
-        brightness: Brightness.dark,
-      ),
-      initialRoute: '/',
-      routes: {
-        '/': (context) => const DashboardScreen(),
-        '/receive': (context) => const ReceiveScreen(),
-        '/send': (context) => const SendScreen(),
-        '/transactions': (context) => const TransactionsScreen(),
-        '/create': (context) => const CreateWalletScreen(),
-        '/restore': (context) => const RestoreWalletScreen(),
+    return ListenableBuilder(
+      listenable: themeController,
+      builder: (context, _) {
+        return MaterialApp(
+          title: 'Argus',
+          navigatorKey: navigatorKey,
+          debugShowCheckedModeBanner: false,
+          theme: argusTheme(watchful: false),
+          darkTheme: argusTheme(watchful: true),
+          themeMode: themeController.themeMode,
+          onGenerateRoute: (settings) {
+            final page = switch (settings.name) {
+              '/receive' => const ReceiveScreen(),
+              '/send' => const SendScreen(),
+              '/transactions' => const TransactionsScreen(),
+              '/create' => const CreateWalletScreen(),
+              '/restore' => const RestoreWalletScreen(),
+              '/settings' => const SettingsScreen(),
+              _ => const DashboardScreen(),
+            };
+            return fadeRoute(page, settings: settings);
+          },
+        );
       },
     );
   }

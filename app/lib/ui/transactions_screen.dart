@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../format.dart';
 import '../services/wallet_service.dart';
+import '../theme/argus_theme.dart';
 
 class TransactionsScreen extends StatefulWidget {
   const TransactionsScreen({super.key});
@@ -40,37 +42,52 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     }
   }
 
-  String _erg(dynamic nano) {
-    final n = (nano as num?)?.toInt();
-    if (n == null) return '?';
-    return '${(n / 1e9).toStringAsFixed(4)} ERG';
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Transaction History')),
+      appBar: AppBar(title: const Text('Activity')),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _txs.isEmpty
-              ? const Center(child: Text('No transactions found'))
+              ? Center(
+                  child: Text(
+                    'No transactions found',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                )
               : RefreshIndicator(
                   onRefresh: _load,
-                  child: ListView.builder(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
                     itemCount: _txs.length,
+                    separatorBuilder: (_, _) => const Hairline(),
                     itemBuilder: (context, i) {
                       final tx = _txs[i];
                       final txId = tx['tx_id']?.toString() ?? '';
-                      return Card(
-                        child: ListTile(
-                          leading: const Icon(Icons.swap_horiz),
-                          title: Text(_erg(tx['value_nano_erg']),
-                              style: const TextStyle(fontFamily: 'monospace')),
-                          subtitle: Text(
-                            txId.length > 20 ? '${txId.substring(0, 20)}...' : txId,
-                            style: const TextStyle(fontSize: 11),
-                          ),
-                          trailing: Text('#${tx['height'] ?? '?'}'),
+                      final nano = (tx['value_nano_erg'] as num?)?.toInt();
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    formatErg(nano),
+                                    style: Theme.of(context).textTheme.titleMedium,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(shorten(txId, head: 12, tail: 10), style: monoStyle(context, size: 11)),
+                                ],
+                              ),
+                            ),
+                            Text(
+                              '#${tx['height'] ?? '?'}',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
                         ),
                       );
                     },

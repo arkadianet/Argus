@@ -4,11 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../bridge/argus_error.dart';
+import '../format.dart';
 import '../services/secure_storage.dart';
 import '../services/wallet_service.dart';
+import '../theme/argus_theme.dart';
 import 'create_wallet_screen.dart';
 import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
+import 'settings_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -86,7 +89,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!mounted) return;
     setState(() {
       _walletUnlocked = true;
-      _status = 'Discovering addresses…';
+      _status = 'Looking up addresses';
     });
     try {
       final raw = await walletService.discoverAddresses();
@@ -283,43 +286,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return value;
   }
 
-  Future<void> _enableBiometric() async {
-    final pin = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Confirm PIN'),
-        content: PinFields(pin: pin),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Continue')),
-        ],
-      ),
-    );
-    final entered = pin.text;
-    pin.dispose();
-    if (ok != true) return;
-    final pinErr = validatePin(entered);
-    if (pinErr != null) {
-      _snack(pinErr);
-      return;
-    }
-    try {
-      final pinWrap = await SecureStorageService.loadPinWrap();
-      if (pinWrap == null) return;
-      final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, entered);
-      await SecureStorageService.saveWrapKey(wrapKey);
-      setState(() => _canBiometric = true);
-      _snack('Biometric unlock enabled');
-    } catch (e) {
-      _snack('Could not enable biometrics: $e');
-    }
-  }
-
   Future<void> _openCreate() async {
     final ok = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(builder: (_) => const CreateWalletScreen()),
+      fadeRoute(const CreateWalletScreen()),
     );
     if (ok == true) {
       _hasSeed = true;
@@ -331,7 +301,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _openRestore() async {
     final ok = await Navigator.push<bool>(
       context,
-      MaterialPageRoute(builder: (_) => const RestoreWalletScreen()),
+      fadeRoute(const RestoreWalletScreen()),
     );
     if (ok == true) {
       _hasSeed = true;
@@ -384,6 +354,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           _status = 'Could not refresh balances';
         } else if (failed > 0) {
           _status = 'Unlocked (balances may be stale)';
+        } else {
+          _status = 'Unlocked';
         }
       });
     } catch (e) {
@@ -432,26 +404,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
     Navigator.pushNamed(context, route, arguments: _args());
   }
 
-  String _erg(int? nano) {
-    if (nano == null) return '—';
-    return '${(nano / 1e9).toStringAsFixed(4)} ERG';
+  void _openSettings() {
+    Navigator.push(context, fadeRoute(const SettingsScreen()));
   }
 
-  String _tokenAmt(TokenBalance t) {
-    final decimals = t.decimals.clamp(0, 18);
-    if (decimals <= 0) return '${t.amount}';
-    var scale = 1;
-    for (var i = 0; i < decimals; i++) {
-      scale *= 10;
-    }
-    final whole = t.amount ~/ scale;
-    final frac = (t.amount % scale).toString().padLeft(decimals, '0');
-    return '$whole.$frac';
-  }
+  bool get _stale =>
+      _status.contains('stale') ||
+      _status.contains('unavailable') ||
+      _status.contains('Could not') ||
+      _status.contains('no address');
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     if (_loading) {
       return Scaffold(
         appBar: AppBar(title: const Text('Argus')),
@@ -459,244 +423,298 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
 
-    final fungible = _tokens.where((t) => !t.isNft).toList();
-    final nfts = _tokens.where((t) => t.isNft).toList();
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Argus'),
         actions: [
           if (_walletUnlocked)
             IconButton(
-              icon: const Icon(Icons.lock_open),
+              icon: const Icon(Icons.lock_open_outlined),
               tooltip: 'Lock wallet',
               onPressed: _lock,
             ),
+          IconButton(
+            icon: const Icon(Icons.tune),
+            tooltip: 'Settings',
+            onPressed: _openSettings,
+          ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _refresh,
-        child: ListView(
-          padding: const EdgeInsets.all(16),
+      body: Column(
+        children: [
+          const WarningStrip(),
+          Expanded(
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 280),
+              switchInCurve: Curves.easeOut,
+              switchOutCurve: Curves.easeIn,
+              child: _walletUnlocked ? _ledger() : _gate(),
+            ),
+          ),
+        ],
+      ),
+      bottomNavigationBar: _walletUnlocked
+          ? NavigationBar(
+              selectedIndex: 0,
+              onDestinationSelected: (i) {
+                if (i == 1) _go('/send');
+                if (i == 2) _go('/receive');
+                if (i == 3) _go('/transactions');
+              },
+              destinations: const [
+                NavigationDestination(icon: Icon(Icons.menu_book_outlined), label: 'Wallet'),
+                NavigationDestination(icon: Icon(Icons.north_east), label: 'Send'),
+                NavigationDestination(icon: Icon(Icons.south_west), label: 'Receive'),
+                NavigationDestination(icon: Icon(Icons.history), label: 'History'),
+              ],
+            )
+          : null,
+    );
+  }
+
+  Widget _gate() {
+    return ListView(
+      key: const ValueKey('gate'),
+      padding: const EdgeInsets.fromLTRB(28, 36, 28, 40),
+      children: [
+        const SizedBox(height: 56),
+        const Center(child: IrisMark(size: 72)),
+        const SizedBox(height: 20),
+        Text(
+          'Argus',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.headlineSmall,
+        ),
+        const SizedBox(height: 8),
+        const Center(child: SizedBox(width: 48, child: Hairline(gold: true))),
+        const SizedBox(height: 12),
+        Text(
+          _hasSeed
+              ? 'Enter your PIN to open the ledger.'
+              : 'Create a wallet, or restore one you already have.',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        if (_status.startsWith('Error') || _status.contains(':')) ...[
+          const SizedBox(height: 12),
+          Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: rust)),
+        ],
+        const SizedBox(height: 36),
+        if (_hasSeed && _hasPin) ...[
+          PinFields(pin: _pinCtrl, label: 'PIN'),
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: _unlockBusy ? null : _unlockWithPin,
+            child: _unlockBusy
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Unlock'),
+          ),
+          if (_canBiometric)
+            TextButton(
+              onPressed: _unlockBusy ? null : _unlockBiometric,
+              child: const Text('Unlock with biometrics'),
+            ),
+        ] else if (_hasSeed)
+          FilledButton(
+            onPressed: _unlockBusy ? null : _unlockLegacyThenPin,
+            child: _unlockBusy
+                ? const SizedBox(
+                    width: 20,
+                    height: 20,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Text('Unlock and set PIN'),
+          ),
+        const SizedBox(height: 20),
+        Row(
           children: [
-            Card(
-              color: theme.colorScheme.errorContainer,
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(
-                  'Unaudited prototype. Use only funds you can afford to lose.',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: theme.colorScheme.onErrorContainer,
-                  ),
-                ),
+            Expanded(
+              child: OutlinedButton(
+                onPressed: _openCreate,
+                child: const Text('Create'),
               ),
             ),
-            const SizedBox(height: 12),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(_status, style: theme.textTheme.titleMedium),
-                    if (_receiveAddress != null) ...[
-                      const SizedBox(height: 8),
-                      Text('Receive address', style: theme.textTheme.labelSmall),
-                      SelectableText(
-                        _receiveAddress!,
-                        style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(_erg(_balanceNano), style: theme.textTheme.headlineSmall),
-                      Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.copy, size: 18),
-                            onPressed: () =>
-                                Clipboard.setData(ClipboardData(text: _receiveAddress!)),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.qr_code, size: 18),
-                            onPressed: () => _go('/receive'),
-                          ),
-                        ],
-                      ),
-                    ],
-                    if (!_walletUnlocked) ...[
-                      const SizedBox(height: 12),
-                      if (_hasSeed && _hasPin) ...[
-                        PinFields(pin: _pinCtrl, label: 'Unlock PIN'),
-                        const SizedBox(height: 8),
-                        FilledButton(
-                          onPressed: _unlockBusy ? null : _unlockWithPin,
-                          child: _unlockBusy
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Text('Unlock'),
-                        ),
-                        if (_canBiometric)
-                          TextButton(
-                            onPressed: _unlockBusy ? null : _unlockBiometric,
-                            child: const Text('Unlock with biometrics'),
-                          ),
-                      ] else if (_hasSeed)
-                        FilledButton(
-                          onPressed: _unlockBusy ? null : _unlockLegacyThenPin,
-                          child: _unlockBusy
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                )
-                              : const Text('Unlock and set PIN'),
-                        ),
-                      const SizedBox(height: 8),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: FilledButton.tonal(
-                              onPressed: _openCreate,
-                              child: const Text('Create'),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: FilledButton.tonal(
-                              onPressed: _openRestore,
-                              child: const Text('Restore'),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                    if (_walletUnlocked && _hasPin && !_canBiometric) ...[
-                      const SizedBox(height: 8),
-                      TextButton(
-                        onPressed: _enableBiometric,
-                        child: const Text('Enable biometric unlock'),
-                      ),
-                    ],
-                  ],
-                ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: OutlinedButton(
+                onPressed: _openRestore,
+                child: const Text('Restore'),
               ),
             ),
-            if (_walletUnlocked) ...[
-              const SizedBox(height: 16),
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: () => _go('/send'),
-                      icon: const Icon(Icons.send),
-                      label: const Text('Send'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton.tonalIcon(
-                      onPressed: () => _go('/receive'),
-                      icon: const Icon(Icons.qr_code),
-                      label: const Text('Receive'),
-                    ),
-                  ),
-                ],
-              ),
-              if (_usedAddresses.isNotEmpty) ...[
-                const SizedBox(height: 16),
-                Text('Used addresses', style: theme.textTheme.titleSmall),
-                ..._usedAddresses.map((a) {
-                  final addr = a['address']?.toString() ?? '';
-                  final nano = (a['balance_nano_erg'] as num?)?.toInt();
-                  return ListTile(
-                    dense: true,
-                    title: Text(
-                      addr.length > 18 ? '${addr.substring(0, 18)}…' : addr,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-                    ),
-                    trailing: Text(_erg(nano)),
-                  );
-                }),
-              ],
-              if (fungible.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text('Tokens', style: theme.textTheme.titleSmall),
-                ...fungible.map(
-                  (t) => ListTile(
-                    dense: true,
-                    title: Text(t.label),
-                    subtitle: Text(
-                      t.id,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-                    ),
-                    trailing: Text(_tokenAmt(t)),
-                  ),
-                ),
-              ],
-              if (nfts.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                Text('NFTs', style: theme.textTheme.titleSmall),
-                ...nfts.map(
-                  (t) => ListTile(
-                    dense: true,
-                    title: Text(t.label),
-                    subtitle: Text(
-                      t.id,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 11),
-                    ),
-                  ),
-                ),
-              ],
-            ],
-            const SizedBox(height: 16),
-            Text('Recent Transactions', style: theme.textTheme.titleSmall),
-            const SizedBox(height: 8),
-            if (_recentTxs.isEmpty)
-              const Card(
-                child: Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(child: Text('No transactions yet')),
-                ),
-              )
-            else
-              ..._recentTxs.map((tx) {
-                final nano = (tx['value_nano_erg'] as num?)?.toInt();
-                final txId = tx['tx_id']?.toString() ?? '';
-                return Card(
-                  child: ListTile(
-                    leading: const Icon(Icons.swap_horiz),
-                    title: Text(_erg(nano), style: const TextStyle(fontFamily: 'monospace')),
-                    subtitle: Text(
-                      txId.length > 16 ? txId.substring(0, 16) : txId,
-                      style: const TextStyle(fontSize: 11),
-                    ),
-                    trailing: Text('#${tx['height'] ?? '?'}'),
-                    onTap: () => _go('/transactions'),
-                  ),
-                );
-              }),
           ],
         ),
-      ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: 0,
-        onDestinationSelected: (i) {
-          if (i == 1) _go('/send');
-          if (i == 2) _go('/receive');
-          if (i == 3) _go('/transactions');
-        },
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home), label: 'Wallet'),
-          NavigationDestination(icon: Icon(Icons.send), label: 'Send'),
-          NavigationDestination(icon: Icon(Icons.qr_code), label: 'Receive'),
-          NavigationDestination(icon: Icon(Icons.list), label: 'History'),
+      ],
+    );
+  }
+
+  Widget _ledger() {
+    final fungible = _tokens.where((t) => !t.isNft).toList();
+    final nfts = _tokens.where((t) => t.isNft).toList();
+
+    return RefreshIndicator(
+      key: const ValueKey('ledger'),
+      onRefresh: _refresh,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
+        children: [
+          const SizedBox(height: 28),
+          Text(
+            formatErg(_balanceNano, unit: false),
+            style: Theme.of(context).textTheme.displayLarge,
+          ),
+          const SizedBox(height: 6),
+          const SectionLabel('ERG'),
+          if (_stale) ...[
+            const SizedBox(height: 10),
+            Text(_status, style: const TextStyle(color: rust, fontSize: 12)),
+          ],
+          const SizedBox(height: 28),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => _go('/send'),
+                  child: const Text('Send'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => _go('/receive'),
+                  child: const Text('Receive'),
+                ),
+              ),
+            ],
+          ),
+          if (_receiveAddress != null) ...[
+            const SizedBox(height: 28),
+            const SectionLabel('Receive'),
+            const SizedBox(height: 8),
+            GestureDetector(
+              onTap: () => _go('/receive'),
+              child: Text(_receiveAddress!, style: monoStyle(context, size: 12)),
+            ),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: () => Clipboard.setData(ClipboardData(text: _receiveAddress!)),
+                child: const Text('Copy address'),
+              ),
+            ),
+          ],
+          if (fungible.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const Hairline(),
+            const SizedBox(height: 20),
+            const SectionLabel('Tokens'),
+            const SizedBox(height: 8),
+            ...fungible.map(
+              (t) => _line(
+                title: t.label,
+                trailing: formatTokenAmount(t.amount, t.decimals),
+                subtitle: shorten(t.id, head: 10, tail: 6),
+              ),
+            ),
+          ],
+          if (nfts.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const Hairline(),
+            const SizedBox(height: 20),
+            const SectionLabel('NFTs'),
+            const SizedBox(height: 8),
+            ...nfts.map(
+              (t) => _line(title: t.label, subtitle: shorten(t.id, head: 10, tail: 6)),
+            ),
+          ],
+          const SizedBox(height: 16),
+          const Hairline(),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              const Expanded(child: SectionLabel('Activity')),
+              if (_recentTxs.isNotEmpty)
+                TextButton(
+                  onPressed: () => _go('/transactions'),
+                  child: const Text('All'),
+                ),
+            ],
+          ),
+          if (_recentTxs.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 20),
+              child: Text('Nothing yet.', style: Theme.of(context).textTheme.bodyMedium),
+            )
+          else
+            ..._recentTxs.map((tx) {
+              final nano = (tx['value_nano_erg'] as num?)?.toInt();
+              final txId = tx['tx_id']?.toString() ?? '';
+              return _line(
+                title: formatErg(nano),
+                subtitle: shorten(txId, head: 10, tail: 8),
+                trailing: '#${tx['height'] ?? '?'}',
+                onTap: () => _go('/transactions'),
+              );
+            }),
+          if (_usedAddresses.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const Hairline(),
+            const SizedBox(height: 20),
+            const SectionLabel('Used addresses'),
+            const SizedBox(height: 8),
+            ..._usedAddresses.map((a) {
+              final addr = a['address']?.toString() ?? '';
+              final nano = (a['balance_nano_erg'] as num?)?.toInt();
+              return _line(
+                title: shorten(addr, head: 10, tail: 8),
+                trailing: formatErg(nano),
+                monoTitle: true,
+              );
+            }),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _line({
+    required String title,
+    String? subtitle,
+    String? trailing,
+    bool monoTitle = false,
+    VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: monoTitle
+                        ? monoStyle(context, size: 13)
+                        : Theme.of(context).textTheme.titleMedium,
+                  ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 3),
+                    Text(subtitle, style: monoStyle(context, size: 11)),
+                  ],
+                ],
+              ),
+            ),
+            if (trailing != null)
+              Text(trailing, style: Theme.of(context).textTheme.bodyMedium),
+          ],
+        ),
       ),
     );
   }
