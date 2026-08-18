@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../bridge/argus_error.dart';
 import '../services/network_controller.dart';
 import '../services/secure_storage.dart';
+import '../services/session_lock.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import '../theme/theme_controller.dart';
@@ -111,12 +112,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     setState(() => _busy = true);
     try {
-      final pinWrap = await SecureStorageService.loadPinWrap();
-      if (pinWrap == null) return;
-      final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, entered);
-      await SecureStorageService.saveWrapKey(wrapKey);
-      await SecureStorageService.clearPinGate();
+      final saved = await sessionLock.run(() async {
+        final pinWrap = await SecureStorageService.loadPinWrap();
+        if (pinWrap == null) return false;
+        final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, entered);
+        await SecureStorageService.saveWrapKey(wrapKey);
+        await SecureStorageService.clearPinGate();
+        return true;
+      });
       if (!mounted) return;
+      if (!saved) {
+        _snack('No PIN-protected wallet found.');
+        return;
+      }
       setState(() => _canBiometric = true);
       _snack('Biometric unlock enabled');
     } on ArgusException catch (e) {
@@ -183,7 +191,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             Text(Uri.tryParse(n.url)?.host ?? n.url,
                                 style: Theme.of(context).textTheme.titleMedium),
                             Text(
-                              active ? 'In use' : (n.enabled ? 'Standby' : 'Off'),
+                              describeNode(
+                                n,
+                                networkController.probes[n.url],
+                                active: active,
+                              ),
                               style: Theme.of(context).textTheme.bodySmall,
                             ),
                           ],

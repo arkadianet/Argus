@@ -6,43 +6,49 @@ class PinFields extends StatelessWidget {
   final TextEditingController pin;
   final TextEditingController? confirm;
   final String label;
+  final ValueChanged<String>? onSubmitted;
 
   const PinFields({
     super.key,
     required this.pin,
     this.confirm,
     this.label = 'PIN',
+    this.onSubmitted,
   });
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
-        TextField(
-          controller: pin,
-          obscureText: true,
-          enableSuggestions: false,
-          autocorrect: false,
-          enableIMEPersonalizedLearning: false,
-          maxLength: 32,
-          decoration: InputDecoration(
-            labelText: label,
-            helperText: '6–32 characters. Unlocks this device only.',
-          ),
-        ),
+        _box(pin, label, helper: '6–32 characters. Number pad first.', onSubmitted: onSubmitted),
         if (confirm != null) ...[
           const SizedBox(height: 12),
-          TextField(
-            controller: confirm,
-            obscureText: true,
-            enableSuggestions: false,
-            autocorrect: false,
-            enableIMEPersonalizedLearning: false,
-            maxLength: 32,
-            decoration: const InputDecoration(labelText: 'Confirm PIN'),
-          ),
+          _box(confirm!, 'Confirm PIN', onSubmitted: onSubmitted),
         ],
       ],
+    );
+  }
+
+  Widget _box(
+    TextEditingController controller,
+    String label, {
+    String? helper,
+    ValueChanged<String>? onSubmitted,
+  }) {
+    return TextField(
+      controller: controller,
+      obscureText: true,
+      enableSuggestions: false,
+      autocorrect: false,
+      enableIMEPersonalizedLearning: false,
+      keyboardType: TextInputType.number,
+      textInputAction: TextInputAction.done,
+      maxLength: 32,
+      onSubmitted: onSubmitted,
+      decoration: InputDecoration(
+        labelText: label,
+        helperText: helper,
+      ),
     );
   }
 }

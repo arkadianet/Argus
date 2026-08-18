@@ -26,7 +26,11 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
         private const val PIN_FAIL_KEY = "pin_fail_count"
         private const val PIN_LOCK_KEY = "pin_lock_until"
 
+        @Volatile
+        var host: FragmentActivity? = null
+
         fun registerWith(engine: FlutterEngine, context: Context) {
+            if (context is FragmentActivity) host = context
             val channel = MethodChannel(
                 engine.dartExecutor.binaryMessenger, CHANNEL
             )
@@ -189,7 +193,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                 "authenticateBiometric" -> authenticate(result)
                 "setSecureFlag" -> {
                     val enable = call.argument<Boolean>("enable") ?: true
-                    val activity = context as? Activity
+                    val activity = host ?: context as? Activity
                     if (activity == null) {
                         result.success(false)
                         return
@@ -219,7 +223,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
     }
 
     private fun authenticate(result: MethodChannel.Result) {
-        val activity = context as? FragmentActivity
+        val activity = host ?: context as? FragmentActivity
         if (activity == null) {
             result.error("NO_ACTIVITY", "Biometric requires an activity", null)
             return
@@ -247,7 +251,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                         code == BiometricPrompt.ERROR_USER_CANCELED ||
                         code == BiometricPrompt.ERROR_CANCELED
                     ) {
-                        result.success(false)
+                        result.success(null)
                     } else {
                         result.error("BIOMETRIC", errString.toString(), null)
                     }

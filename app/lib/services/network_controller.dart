@@ -21,6 +21,61 @@ class NodeEntry {
   }
 }
 
+class NodeProbe {
+  final String url;
+  final bool ok;
+  final int? height;
+  final bool? extraIndex;
+  final int? indexedHeight;
+  final String? error;
+
+  NodeProbe({
+    required this.url,
+    required this.ok,
+    this.height,
+    this.extraIndex,
+    this.indexedHeight,
+    this.error,
+  });
+
+  factory NodeProbe.fromJson(Map<String, dynamic> json) {
+    return NodeProbe(
+      url: json['url'] as String? ?? '',
+      ok: json['ok'] == true,
+      height: (json['height'] as num?)?.toInt(),
+      extraIndex: json['extra_index'] as bool?,
+      indexedHeight: (json['indexed_height'] as num?)?.toInt(),
+      error: json['error'] as String?,
+    );
+  }
+}
+
+int? chainHeightFromInfo(Map<dynamic, dynamic> info) {
+  final raw = info['fullHeight'] ?? info['headersHeight'];
+  return raw is num ? raw.toInt() : null;
+}
+
+int? indexedHeightFromJson(Map<dynamic, dynamic> json) {
+  final raw = json['indexedHeight'] ?? json['indexed_height'];
+  return raw is num ? raw.toInt() : null;
+}
+
+String describeNode(NodeEntry node, NodeProbe? probe, {required bool active}) {
+  final bits = <String>[
+    if (!node.enabled) 'Off' else if (active) 'In use' else 'Standby',
+  ];
+  if (probe != null) {
+    if (probe.extraIndex == true) {
+      bits.add('extraIndex');
+    } else if (probe.extraIndex == false) {
+      bits.add('no extraIndex');
+    }
+    if (probe.height != null) bits.add('#${probe.height}');
+    if (!probe.ok) bits.add('unreachable');
+  }
+  return bits.join('  ·  ');
+}
+
 class NetworkController extends ChangeNotifier {
   static const defaultNodes = [
     'https://ergo-node.eutxo.de',
@@ -31,18 +86,23 @@ class NetworkController extends ChangeNotifier {
   static const defaultExplorer = 'https://api.sigmaspace.io';
   static const _nodesKey = 'argus_nodes';
   static const _explorerKey = 'argus_explorer';
+  static const _lastGoodKey = 'argus_last_good_node';
 
   List<NodeEntry> nodes = [
     for (final url in defaultNodes) NodeEntry(url: url),
   ];
   String explorer = defaultExplorer;
   String? activeUrl;
+  String? lastGood;
   int? height;
   bool probing = false;
   double? usdPerErg;
+  final Map<String, NodeProbe> probes = {};
 
   List<String> get enabledUrls =>
       nodes.where((n) => n.enabled && n.url.isNotEmpty).map((n) => n.url).toList();
+
+  List<String> get orderedUrls => probeOrder(enabledUrls, lastGood);
 
   String get statusLabel {
     if (activeUrl == null || height == null) return 'Offline';
@@ -67,6 +127,7 @@ class NetworkController extends ChangeNotifier {
       } catch (_) {}
     }
     explorer = prefs.getString(_explorerKey) ?? defaultExplorer;
+    lastGood = prefs.getString(_lastGoodKey);
     try {
       await apply();
     } catch (_) {}
@@ -77,10 +138,13 @@ class NetworkController extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_nodesKey, jsonEncode(nodes.map((n) => n.toJson()).toList()));
     await prefs.setString(_explorerKey, explorer);
+    if (lastGood != null && lastGood!.isNotEmpty) {
+      await prefs.setString(_lastGoodKey, lastGood!);
+    }
   }
 
   Future<void> apply() async {
-    final urls = enabledUrls;
+    final urls = orderedUrls;
     if (urls.isEmpty) return;
     await RustLib.instance.api.crateApiSetNetwork(
       nodeUrls: urls,
@@ -94,20 +158,27 @@ class NetworkController extends ChangeNotifier {
     notifyListeners();
     try {
       await apply();
-      final raw = await RustLib.instance.api.crateApiProbeNetwork();
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final list = (map['nodes'] as List? ?? []).whereType<Map>();
-      String? nextUrl;
-      int? nextHeight;
-      for (final n in list) {
-        if (n['ok'] == true) {
-          nextUrl = n['url'] as String?;
-          nextHeight = (n['height'] as num?)?.toInt();
+      final urls = orderedUrls;
+      final results = await Future.wait(urls.map(probeNodeDetails));
+      probes
+        ..clear()
+        ..addEntries(results.map((p) => MapEntry(p.url, p)));
+      NodeProbe? first;
+      for (final p in results) {
+        if (p.ok) {
+          first = p;
           break;
         }
       }
-      activeUrl = nextUrl;
-      height = nextHeight;
+      activeUrl = first?.url;
+      height = first?.height;
+      if (activeUrl != null) {
+        lastGood = activeUrl;
+        await persist();
+      }
+      try {
+        await RustLib.instance.api.crateApiProbeNetwork();
+      } catch (_) {}
     } catch (_) {
       activeUrl = null;
       height = null;
@@ -116,6 +187,47 @@ class NetworkController extends ChangeNotifier {
       notifyListeners();
     }
     await refreshPrice();
+  }
+
+  Future<NodeProbe> probeNodeDetails(String url) async {
+    final clean = url.trim().replaceAll(RegExp(r'/$'), '');
+    try {
+      final infoRes = await http
+          .get(Uri.parse('$clean/info'))
+          .timeout(const Duration(seconds: 8));
+      if (infoRes.statusCode != 200) {
+        return NodeProbe(url: clean, ok: false, error: 'HTTP ${infoRes.statusCode}');
+      }
+      final info = jsonDecode(infoRes.body);
+      if (info is! Map) {
+        return NodeProbe(url: clean, ok: false, error: 'bad /info');
+      }
+      final chain = chainHeightFromInfo(info);
+      bool extra = false;
+      int? indexed;
+      try {
+        final idxRes = await http
+            .get(Uri.parse('$clean/blockchain/indexedHeight'))
+            .timeout(const Duration(seconds: 6));
+        if (idxRes.statusCode == 200) {
+          final idx = jsonDecode(idxRes.body);
+          if (idx is Map) {
+            indexed = indexedHeightFromJson(idx);
+            extra = indexed != null;
+          }
+        }
+      } catch (_) {}
+      return NodeProbe(
+        url: clean,
+        ok: chain != null,
+        height: chain,
+        extraIndex: extra,
+        indexedHeight: indexed,
+        error: chain == null ? 'no height' : null,
+      );
+    } catch (e) {
+      return NodeProbe(url: clean, ok: false, extraIndex: false, error: e.toString());
+    }
   }
 
   DateTime? _priceAt;
@@ -196,6 +308,13 @@ bool isAbsoluteHttpUrl(String url) {
       parsed.hasScheme &&
       (parsed.scheme == 'http' || parsed.scheme == 'https') &&
       parsed.host.isNotEmpty;
+}
+
+List<String> probeOrder(List<String> urls, String? lastGood) {
+  if (lastGood == null || lastGood.isEmpty || !urls.contains(lastGood)) {
+    return List<String>.from(urls);
+  }
+  return [lastGood, ...urls.where((u) => u != lastGood)];
 }
 
 String explorerTransactionUrl(String explorer, String txId) {

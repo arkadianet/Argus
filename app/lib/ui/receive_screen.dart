@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../services/session_lock.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 
@@ -68,7 +69,11 @@ class ReceiveScreen extends StatelessWidget {
           ),
           const SizedBox(height: 12),
           OutlinedButton(
-            onPressed: address.isEmpty ? null : () => SharePlus.instance.share(ShareParams(text: address)),
+            onPressed: address.isEmpty
+                ? null
+                : () => sessionLock.run(
+                      () => SharePlus.instance.share(ShareParams(text: address)),
+                    ),
             child: const Text('Share'),
           ),
         ],
