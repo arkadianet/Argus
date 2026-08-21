@@ -141,6 +141,76 @@ class SendPreview {
   }
 }
 
+class ConsolidatePreview {
+  final int preparationId;
+  final int inputCount;
+  final int totalErgIn;
+  final int changeNanoErg;
+  final int tokenCount;
+  final int minerFee;
+  final List<InputBoxInput> inputBoxes;
+
+  ConsolidatePreview({required this.preparationId, required this.inputCount, required this.totalErgIn, required this.changeNanoErg, required this.tokenCount, required this.minerFee, this.inputBoxes = const []});
+
+  factory ConsolidatePreview.fromJson(Map<String, dynamic> json) => ConsolidatePreview(
+    preparationId: _requireInt(json, 'preparation_id'), inputCount: _requireInt(json, 'input_count'),
+    totalErgIn: _requireInt(json, 'total_erg_in'), changeNanoErg: _requireInt(json, 'change_nano_erg'),
+    tokenCount: _requireInt(json, 'token_count'), minerFee: _requireInt(json, 'miner_fee'),
+    inputBoxes: _parseInputBoxes(json['input_boxes']),
+  );
+}
+
+class SplitPreview {
+  final int preparationId;
+  final int splitCount;
+  final BigInt amountPerBox;
+  final BigInt totalSplit;
+  final int changeNanoErg;
+  final int minerFee;
+  final String? tokenId;
+  final List<InputBoxInput> inputBoxes;
+
+  SplitPreview({required this.preparationId, required this.splitCount, required this.amountPerBox, required this.totalSplit, required this.changeNanoErg, required this.minerFee, this.tokenId, this.inputBoxes = const []});
+
+  factory SplitPreview.fromJson(Map<String, dynamic> json) {
+    final tokenId = json['token_id'];
+    if (tokenId != null && (tokenId is! String || tokenId.isEmpty)) {
+      throw const FormatException('SplitPreview has invalid token_id');
+    }
+    return SplitPreview(
+      preparationId: _requireInt(json, 'preparation_id'), splitCount: _requireInt(json, 'split_count'),
+      amountPerBox: _requireBigInt(json, 'amount_per_box'), totalSplit: _requireBigInt(json, 'total_split'),
+      changeNanoErg: _requireInt(json, 'change_nano_erg'), minerFee: _requireInt(json, 'miner_fee'),
+      tokenId: tokenId as String?, inputBoxes: _parseInputBoxes(json['input_boxes']),
+    );
+  }
+}
+
+class RestructurePreview {
+  final int preparationId;
+  final int inputCount;
+  final int outputCount;
+  final int totalErgIn;
+  final int allocatedErg;
+  final int changeNanoErg;
+  final bool hasChange;
+  final int minerFee;
+  final List<InputBoxInput> inputBoxes;
+
+  RestructurePreview({required this.preparationId, required this.inputCount, required this.outputCount, required this.totalErgIn, required this.allocatedErg, required this.changeNanoErg, required this.hasChange, required this.minerFee, this.inputBoxes = const []});
+
+  factory RestructurePreview.fromJson(Map<String, dynamic> json) {
+    final hasChange = json['has_change'];
+    if (hasChange is! bool) throw const FormatException('RestructurePreview missing or invalid has_change');
+    return RestructurePreview(
+      preparationId: _requireInt(json, 'preparation_id'), inputCount: _requireInt(json, 'input_count'),
+      outputCount: _requireInt(json, 'output_count'), totalErgIn: _requireInt(json, 'total_erg_in'),
+      allocatedErg: _requireInt(json, 'allocated_erg'), changeNanoErg: _requireInt(json, 'change_nano_erg'),
+      hasChange: hasChange, minerFee: _requireInt(json, 'miner_fee'), inputBoxes: _parseInputBoxes(json['input_boxes']),
+    );
+  }
+}
+
 List<InputBoxInput> _parseInputBoxes(dynamic raw) {
   if (raw is! List) return const [];
   final out = <InputBoxInput>[];
@@ -256,10 +326,21 @@ class InputAsset {
 
 int _requireInt(Map<String, dynamic> json, String key) {
   final value = json[key];
-  if (value is! num) {
+  if (value is! num || !value.isFinite || value != value.truncate()) {
     throw FormatException('SendPreview missing or invalid $key');
   }
   return value.toInt();
+}
+
+BigInt _requireBigInt(Map<String, dynamic> json, String key) {
+  final value = json[key];
+  if (value is int) return BigInt.from(value);
+  if (value is num && value.isFinite && value == value.truncate()) return BigInt.from(value);
+  if (value is String) {
+    final parsed = BigInt.tryParse(value);
+    if (parsed != null) return parsed;
+  }
+  throw FormatException('SplitPreview missing or invalid $key');
 }
 
 /// Parse decimal ERG text into nanoERG without using [double].
@@ -429,6 +510,92 @@ class WalletService {
       nodeUrl: nodeUrl,
     );
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  /// Prepare a UTXO consolidation transaction.
+  Future<ConsolidatePreview> prepareConsolidate({
+    required List<String> spendAddresses,
+    List<String>? selectedBoxIds,
+    required String changeAddress,
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareConsolidate(
+      handleId: _handleId!,
+      spendAddresses: spendAddresses,
+      selectedBoxIds: selectedBoxIds ?? const [],
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+    );
+    return ConsolidatePreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  /// Prepare a transaction to split ERG into N equal boxes.
+  Future<SplitPreview> prepareSplitErg({
+    required List<String> spendAddresses,
+    List<String>? selectedBoxIds,
+    required int count,
+    required int amountPerBoxNano,
+    required String changeAddress,
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareSplitErg(
+      handleId: _handleId!,
+      spendAddresses: spendAddresses,
+      selectedBoxIds: selectedBoxIds ?? const [],
+      count: count,
+      amountPerBoxNano: amountPerBoxNano,
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+    );
+    return SplitPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  /// Prepare a transaction to split a token into N equal boxes.
+  Future<SplitPreview> prepareSplitToken({
+    required List<String> spendAddresses,
+    List<String>? selectedBoxIds,
+    required String tokenId,
+    required int count,
+    required BigInt amountPerBox,
+    required int ergPerBoxNano,
+    required String changeAddress,
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareSplitToken(
+      handleId: _handleId!,
+      spendAddresses: spendAddresses,
+      selectedBoxIds: selectedBoxIds ?? const [],
+      tokenId: tokenId,
+      count: count,
+      amountPerBox: amountPerBox,
+      ergPerBoxNano: ergPerBoxNano,
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+    );
+    return SplitPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  /// Prepare a custom restructure transaction to allocate inputs into custom outputs.
+  Future<RestructurePreview> prepareRestructure({
+    required List<String> spendAddresses,
+    List<String>? selectedBoxIds,
+    required List<Map<String, dynamic>> outputs,
+    required String changeAddress,
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareRestructure(
+      handleId: _handleId!,
+      spendAddresses: spendAddresses,
+      selectedBoxIds: selectedBoxIds ?? const [],
+      outputsJson: jsonEncode(outputs),
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+    );
+    return RestructurePreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
 
   Future<String> sendErg({required int preparationId}) async {

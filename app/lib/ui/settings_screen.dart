@@ -475,6 +475,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ],
+              if (walletService.isUnlocked) ...[
+                const SizedBox(height: 28),
+                const SectionLabel('Advanced Tools'),
+                const SizedBox(height: 12),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => Navigator.pushNamed(context, '/utxos'),
+                    icon: const Icon(Icons.layers_outlined),
+                    label: const Text('UTXO Management & Restructuring'),
+                  ),
+                ),
+              ],
               const SizedBox(height: 28),
               const SectionLabel('Backup'),
               const SizedBox(height: 12),

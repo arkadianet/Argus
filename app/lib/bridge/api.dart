@@ -6,8 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `drop_preparations_for`, `err_str`, `gather_unspent`, `input_boxes_json`, `node_client`, `open_wallet`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `session_json`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`
+// These functions are ignored because they are not marked as `pub`: `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `input_boxes_json`, `node_client`, `open_wallet`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `session_json`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `PreparedManagement`
 
 Future<void> setNetwork({
   required List<String> nodeUrls,
@@ -156,6 +156,80 @@ Future<String> prepareSend({
   amountNanoErg: amountNanoErg,
   tokenId: tokenId,
   tokenAmount: tokenAmount,
+  nodeUrl: nodeUrl,
+);
+
+/// Prepare a UTXO consolidation transaction to merge multiple boxes into one.
+Future<String> prepareConsolidate({
+  required BigInt handleId,
+  required List<String> spendAddresses,
+  required List<String> selectedBoxIds,
+  required String changeAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiPrepareConsolidate(
+  handleId: handleId,
+  spendAddresses: spendAddresses,
+  selectedBoxIds: selectedBoxIds,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+);
+
+/// Prepare a transaction to split ERG into N equal boxes.
+Future<String> prepareSplitErg({
+  required BigInt handleId,
+  required List<String> spendAddresses,
+  required List<String> selectedBoxIds,
+  required int count,
+  required PlatformInt64 amountPerBoxNano,
+  required String changeAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiPrepareSplitErg(
+  handleId: handleId,
+  spendAddresses: spendAddresses,
+  selectedBoxIds: selectedBoxIds,
+  count: count,
+  amountPerBoxNano: amountPerBoxNano,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+);
+
+/// Prepare a transaction to split tokens into N equal boxes.
+Future<String> prepareSplitToken({
+  required BigInt handleId,
+  required List<String> spendAddresses,
+  required List<String> selectedBoxIds,
+  required String tokenId,
+  required int count,
+  required BigInt amountPerBox,
+  required PlatformInt64 ergPerBoxNano,
+  required String changeAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiPrepareSplitToken(
+  handleId: handleId,
+  spendAddresses: spendAddresses,
+  selectedBoxIds: selectedBoxIds,
+  tokenId: tokenId,
+  count: count,
+  amountPerBox: amountPerBox,
+  ergPerBoxNano: ergPerBoxNano,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+);
+
+/// Prepare a custom restructure transaction to allocate specific amounts and tokens into custom output boxes.
+Future<String> prepareRestructure({
+  required BigInt handleId,
+  required List<String> spendAddresses,
+  required List<String> selectedBoxIds,
+  required String outputsJson,
+  required String changeAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiPrepareRestructure(
+  handleId: handleId,
+  spendAddresses: spendAddresses,
+  selectedBoxIds: selectedBoxIds,
+  outputsJson: outputsJson,
+  changeAddress: changeAddress,
   nodeUrl: nodeUrl,
 );
 

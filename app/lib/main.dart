@@ -14,6 +14,7 @@ import 'ui/send_screen.dart';
 import 'ui/settings_screen.dart';
 import 'ui/transaction_detail_screen.dart';
 import 'ui/transactions_screen.dart';
+import 'ui/utxo_management_screen.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
@@ -81,6 +82,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/settings' => const SettingsScreen(),
               '/contacts' => const ContactsScreen(),
               '/tx' => const TransactionDetailScreen(),
+              '/utxos' => const UtxoManagementScreen(),
               _ => null,
             };
             if (page == null) return null;

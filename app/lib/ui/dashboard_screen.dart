@@ -40,7 +40,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _canBiometric = false;
   bool _unlockBusy = false;
   int _utxoCount = 0;
-  bool _organizeBusy = false;
   final _pinCtrl = TextEditingController();
 
   @override
@@ -512,35 +511,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-  Future<void> _organize() async {
-    if (_organizeBusy) return;
-    final change = _senderAddress ?? _receiveAddress;
-    if (change == null || change.isEmpty) {
-      _snack('A valid address is required for consolidation');
-      return;
-    }
-    setState(() => _organizeBusy = true);
-    try {
-      final txIds = await walletService.consolidateErg(
-        addresses: _historyAddresses(),
-        changeAddress: change,
-        nodeUrl: networkController.activeUrl,
-      );
-      if (!mounted) return;
-      if (txIds.isNotEmpty) {
-        _snack('Consolidated in ${txIds.length} tx(s): '
-            '${txIds.map((id) => shorten(id, head: 6, tail: 6)).join(', ')}');
-        await _refresh();
-      } else {
-        _snack('Fragmentation is low — no consolidation needed');
-      }
-    } catch (_) {
-      if (mounted) _snack('Could not consolidate UTXOs');
-    } finally {
-      if (mounted) setState(() => _organizeBusy = false);
-    }
-  }
-
   Future<void> _lock() async {
     await walletService.lock();
     setState(_resetLocked);
@@ -743,6 +713,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _ledger() {
     final fungible = _tokens.where((t) => !t.isNft).toList();
     final nfts = _tokens.where((t) => t.isNft).toList();
+    final fragmented = _utxoCount > utxoFragmentationThreshold;
 
     return RefreshIndicator(
       key: const ValueKey('ledger'),
@@ -784,32 +755,58 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 10),
             Text(_status, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
           ],
-          if (_utxoCount > utxoFragmentationThreshold) ...[
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                Icon(Icons.folder_open, size: 14,
-                    color: Theme.of(context).colorScheme.primary),
-                const SizedBox(width: 6),
-                Text(
-                  '$_utxoCount UTXOs',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const Spacer(),
-                TextButton.icon(
-                  onPressed: _organizeBusy ? null : _organize,
-                  icon: _organizeBusy
-                      ? const SizedBox(
-                          width: 14,
-                          height: 14,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.compress, size: 16),
-                  label: Text(_organizeBusy ? 'Organizing…' : 'Organize'),
-                ),
-              ],
+          const SizedBox(height: 10),
+          InkWell(
+            onTap: () => _go('/utxos'),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.layers_outlined,
+                    size: 14,
+                    color: fragmented
+                        ? rust
+                        : Theme.of(context).colorScheme.primary,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '$_utxoCount UTXOs${fragmented ? ' (Fragmented)' : ''}',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: fragmented ? rust : null,
+                          fontWeight: fragmented
+                              ? FontWeight.w600
+                              : null,
+                        ),
+                  ),
+                  const Spacer(),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        fragmented ? 'Organize' : 'Manage',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: fragmented
+                              ? rust
+                              : Theme.of(context).colorScheme.primary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      Icon(
+                        Icons.chevron_right,
+                        size: 14,
+                        color: fragmented
+                            ? rust
+                            : Theme.of(context).colorScheme.primary,
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
-          ],
+          ),
           const SizedBox(height: 28),
           Row(
             children: [
