@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../format.dart';
+
 /// Stores addresses to monitor without holding a wallet seed.
 /// Watch-only addresses use getBalance/loadHistory directly — no
 /// wallet handle required.
@@ -20,7 +22,7 @@ class WatchOnlyService extends ChangeNotifier {
         final list = jsonDecode(raw) as List;
         _addresses
           ..clear()
-          ..addAll(list.whereType<String>().where((a) => a.isNotEmpty));
+          ..addAll(list.whereType<String>().where((a) => a.isNotEmpty && looksLikeErgoAddress(a)));
       } catch (_) {
         _addresses.clear();
       }
@@ -29,8 +31,10 @@ class WatchOnlyService extends ChangeNotifier {
   }
 
   Future<void> add(String address) async {
-    if (address.trim().isEmpty || _addresses.contains(address.trim())) return;
-    _addresses.add(address.trim());
+    final trimmed = address.trim();
+    if (trimmed.isEmpty || !looksLikeErgoAddress(trimmed)) return;
+    if (_addresses.contains(trimmed)) return;
+    _addresses.add(trimmed);
     await _save();
   }
 

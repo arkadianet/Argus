@@ -28,11 +28,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _graceKey = 0;
   final _nodeCtrl = TextEditingController();
   final _explorerCtrl = TextEditingController();
+  late Future<List<WalletInfo>> _walletsFuture;
+  late Future<int> _pinnedIndexFuture;
 
   @override
   void initState() {
     super.initState();
     _explorerCtrl.text = networkController.explorer;
+    _walletsFuture = walletService.listWallets();
+    _pinnedIndexFuture = walletService.getPinnedAddressIndex();
     _load();
   }
 
@@ -166,7 +170,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ListTile(
               leading: const Icon(Icons.account_balance_wallet_outlined),
               title: Text(w.name),
-              subtitle: Text(w.address0 != null ? w.address0! : 'wallet_id: ${w.walletId.substring(0, 8)}…'),
+              subtitle: Text(w.address0 != null ? w.address0! : 'wallet_id: ${w.walletId.length >= 8 ? w.walletId.substring(0, 8) : w.walletId}…'),
               selected: w.walletId == current,
               trailing: w.isUnlocked ? const Icon(Icons.lock_open, size: 16) : null,
               onTap: () => Navigator.pop(ctx, w.walletId),
@@ -175,7 +179,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
-    if (result != null && result != current) {
+    if (result != null && result != current && mounted) {
+      _walletsFuture = walletService.listWallets();
+      _pinnedIndexFuture = walletService.getPinnedAddressIndex();
       Navigator.pop(context, result);
     }
   }
@@ -331,15 +337,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
-    if (ok != true) return;
     final text = indexCtrl.text.trim();
     indexCtrl.dispose();
+    if (ok != true) return;
     final index = int.tryParse(text);
     if (index == null || index < 0) {
       _snack('Invalid index');
       return;
     }
-    await walletService.setPinnedAddressIndex(walletService.activeWalletId!, index);
+    final wid = walletService.activeWalletId;
+    if (wid == null) return;
+    await walletService.setPinnedAddressIndex(wid, index);
+    _pinnedIndexFuture = walletService.getPinnedAddressIndex();
+    if (mounted) setState(() {});
     _snack('Pinned address index $index');
   }
 
@@ -595,7 +605,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 const SectionLabel('Wallets'),
                 const SizedBox(height: 12),
                 FutureBuilder(
-                  future: walletService.listWallets(),
+                  future: _walletsFuture,
                   builder: (context, snapshot) {
                     final wallets = snapshot.data ?? [];
                     if (wallets.length < 2) {
@@ -675,7 +685,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SectionLabel('Primary address'),
               const SizedBox(height: 12),
               FutureBuilder(
-                future: walletService.getPinnedAddressIndex(),
+                future: _pinnedIndexFuture,
                 builder: (context, snapshot) {
                   final pinned = snapshot.data ?? 0;
                   final isPinned = pinned != 0;
@@ -688,13 +698,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         ? IconButton(
                             icon: const Icon(Icons.clear, size: 18),
                             tooltip: 'Unpin',
-                            onPressed: () async {
-                              await walletService.setPinnedAddressIndex(
-                                walletService.activeWalletId!,
-                                0,
-                              );
-                              setState(() {});
-                            },
+                             onPressed: () async {
+                               final wid = walletService.activeWalletId;
+                               if (wid == null) return;
+                               await walletService.setPinnedAddressIndex(wid, 0);
+                               _pinnedIndexFuture = walletService.getPinnedAddressIndex();
+                               if (mounted) setState(() {});
+                             },
                           )
                         : null,
                   );

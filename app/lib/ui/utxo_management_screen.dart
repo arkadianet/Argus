@@ -763,6 +763,20 @@ class _UtxoCard extends StatelessWidget {
   }
 }
 
+Widget _feeNote(BuildContext context) {
+  return Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const SizedBox(height: 4),
+      Text(
+        'Fee is computed by the transaction builder and may be configurable.',
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11, fontStyle: FontStyle.italic),
+      ),
+    ],
+  );
+}
+
 class _ConsolidatePreviewSheet extends StatelessWidget {
   const _ConsolidatePreviewSheet({
     required this.preview,
@@ -791,11 +805,7 @@ class _ConsolidatePreviewSheet extends StatelessWidget {
           _row('Total Value In', formatErg(preview.totalErgIn)),
           _row('Tokens Included', '${preview.tokenCount} token types'),
           _row('Miner Fee', formatErg(preview.minerFee)),
-          const SizedBox(height: 4),
-          Text(
-            'Fee is network-computed based on transaction complexity.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11, fontStyle: FontStyle.italic),
-          ),
+          _feeNote(context),
           const Hairline(),
           const SizedBox(height: 8),
           _row(
@@ -1061,11 +1071,7 @@ class _SplitPreviewSheet extends StatelessWidget {
           ),
           _row('Change Returned', formatErg(preview.changeNanoErg)),
           _row('Miner Fee', formatErg(preview.minerFee)),
-          const SizedBox(height: 4),
-          Text(
-            'Fee is network-computed based on transaction complexity.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11, fontStyle: FontStyle.italic),
-          ),
+          _feeNote(context),
           const SizedBox(height: 20),
           Row(
             children: [
@@ -1270,11 +1276,7 @@ class _RestructurePreviewSheet extends StatelessWidget {
           _row('Allocated to Outputs', formatErg(preview.allocatedErg)),
           _row('Change Output', formatErg(preview.changeNanoErg)),
           _row('Miner Fee', formatErg(preview.minerFee)),
-          const SizedBox(height: 4),
-          Text(
-            'Fee is network-computed based on transaction complexity.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11, fontStyle: FontStyle.italic),
-          ),
+          _feeNote(context),
           const SizedBox(height: 20),
           Row(
             children: [

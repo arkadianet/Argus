@@ -104,17 +104,15 @@ String formatRelativeTime(DateTime? when, {DateTime? now}) {
   if (when == null) return '';
   final reference = now ?? DateTime.now();
   final diff = reference.difference(when);
-  if (diff.isNegative) {
-    final secs = diff.inSeconds.abs();
-    if (secs < 5) return 'Just now';
-    if (secs < 60) return '${secs}s ago';
-    return 'Just now';
-  }
+  if (diff.isNegative) return 'Just now';
   if (diff.inSeconds < 5) return 'Just now';
   if (diff.inMinutes < 1) return '${diff.inSeconds}s ago';
   if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
   if (diff.inHours < 24) return '${diff.inHours}h ago';
-  if (diff.inDays == 1) return 'Yesterday';
-  if (diff.inDays < 7) return '${diff.inDays} days ago';
+  final dayDiff = DateTime(reference.year, reference.month, reference.day)
+      .difference(DateTime(when.year, when.month, when.day))
+      .inDays;
+  if (dayDiff == 1) return 'Yesterday';
+  if (dayDiff < 7) return '${dayDiff} days ago';
   return '${when.month}/${when.day}/${when.year}';
 }

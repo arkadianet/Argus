@@ -159,7 +159,7 @@ class SendPreview {
   final List<InputBoxInput> inputBoxes;
 
   /// For multi-recipient sends, the list of individual recipients.
-  /// Each entry has keys: address, amountNanoErg, tokenId (optional), tokenAmount (optional).
+  /// Each entry has keys: address, amount_nano_erg, token_id (optional), token_amount (optional).
   final List<Map<String, dynamic>>? recipients;
 
   SendPreview({
@@ -516,6 +516,37 @@ class WalletService {
     return RustLib.instance.api.crateApiGenerateMnemonic(strength: strength);
   }
 
+  /// Provision a new wallet end-to-end: generate a name, create the wallet,
+  /// wrap the key with a PIN, persist the sealed seed, derive the first
+  /// address, and save wallet metadata. Returns the new wallet ID.
+  Future<String> provisionWallet({
+    required String phrase,
+    required String passphrase,
+    required String pin,
+  }) async {
+    final walletId = const Uuid().v4();
+    final name = await generateWalletName();
+    final session = await createWallet(
+      phrase,
+      passphrase: passphrase,
+      walletId: walletId,
+    );
+    final pinWrap = await wrapKeyWithPin(session.wrapKey, pin);
+    await SecureStorageService.saveWalletWithPin(
+      walletId: walletId,
+      encryptedSeedJson: session.encryptedSeedJson,
+      pinWrapJson: pinWrap,
+    );
+    final address0 = await deriveAddress(0);
+    await saveWalletInfo(
+      walletId,
+      name: name,
+      createdAt: DateTime.now().toUtc(),
+      address0: address0,
+    );
+    return walletId;
+  }
+
   /// Create a new wallet. If [walletId] is omitted, a UUID is generated.
   Future<WalletSession> createWallet(
     String mnemonic, {
@@ -722,8 +753,8 @@ class WalletService {
   }
 
   /// Prepare a multi-recipient send.
-  /// Each recipient in [recipients] must have keys: address, amountNanoErg (optional if token),
-  /// tokenId (optional), tokenAmount (optional).
+  /// Each recipient in [recipients] must have keys: address, amount_nano_erg (optional if token),
+  /// token_id (optional), token_amount (optional).
   Future<SendPreview> prepareSendMulti({
     required String senderAddress,
     List<String>? spendAddresses,

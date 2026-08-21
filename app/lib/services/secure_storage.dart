@@ -55,8 +55,9 @@ class SecureStorageService {
     }
     if (wrapKey != null) {
       await saveWrapKey(wrapKey, walletId: walletId);
+    } else {
+      await deleteWrapKey(walletId: walletId);
     }
-    await deleteWrapKey(walletId: walletId);
   }
 
   static Future<String?> loadWrapKey({String? walletId}) async {

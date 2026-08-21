@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -38,22 +39,6 @@ class _RecipientEntry {
     amountCtrl.dispose();
     tokenAmtCtrl?.dispose();
   }
-
-  Map<String, dynamic> toJson() {
-    final map = <String, dynamic>{
-      'address': address,
-      'amountNanoErg': parseErgToNano(amount) ?? 0,
-    };
-    if (tokenId != null && tokenId!.isNotEmpty) {
-      map['tokenId'] = tokenId;
-      final amt = tokenAmtCtrl?.text;
-      if (amt != null && amt.isNotEmpty) {
-        final parsed = int.tryParse(amt);
-        if (parsed != null) map['tokenAmount'] = parsed;
-      }
-    }
-    return map;
-  }
 }
 
 class _SendScreenState extends State<SendScreen> {
@@ -64,7 +49,6 @@ class _SendScreenState extends State<SendScreen> {
   bool _sending = false;
   String? _resultTxId;
   String? _assetId;
-  bool _advancedOpen = false;
   Set<String> _selectedSpendAddresses = {};
   final _feeCtrl = TextEditingController();
   final List<_RecipientEntry> _extraRecipients = [];
@@ -207,20 +191,20 @@ class _SendScreenState extends State<SendScreen> {
     if (_recipientValid) {
       final recipient = <String, dynamic>{
         'address': _recipientCtrl.text.trim(),
-        'amountNanoErg': amount,
+        'amount_nano_erg': amount,
       };
       final token = _selectedToken;
       if (token != null) {
-        recipient['tokenId'] = token.id;
+        recipient['token_id'] = token.id;
         if (token.isNft) {
-          recipient['tokenAmount'] = 1;
+          recipient['token_amount'] = 1;
         } else {
           final tokenAmount = parseDecimalToBase(_tokenAmtCtrl.text, token.decimals);
           if (tokenAmount == null || tokenAmount <= 0) {
             _snack('Enter a token amount');
             return;
           }
-          recipient['tokenAmount'] = tokenAmount;
+          recipient['token_amount'] = tokenAmount;
         }
       }
       allRecipients.add(recipient);
@@ -239,17 +223,17 @@ class _SendScreenState extends State<SendScreen> {
       }
       final r = <String, dynamic>{
         'address': entry.address,
-        'amountNanoErg': entryAmount,
+        'amount_nano_erg': entryAmount,
       };
       if (entry.tokenId != null && entry.tokenId!.isNotEmpty) {
-        r['tokenId'] = entry.tokenId;
+        r['token_id'] = entry.tokenId;
         if (entry.tokenAmountText != null && entry.tokenAmountText!.isNotEmpty) {
           final parsed = int.tryParse(entry.tokenAmountText!);
           if (parsed == null || parsed <= 0) {
             _snack('Validate all token amounts');
             return;
           }
-          r['tokenAmount'] = parsed;
+          r['token_amount'] = parsed;
         }
       }
       allRecipients.add(r);
@@ -391,13 +375,13 @@ class _SendScreenState extends State<SendScreen> {
                 ),
               ),
               actions: [
-                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
                 TextButton.icon(
-                  onPressed: () => Navigator.pop(ctx, 'sign_only'),
+                  onPressed: () => Navigator.pop(context, 'sign_only'),
                   icon: const Icon(Icons.save, size: 16),
                   label: const Text('Sign only'),
                 ),
-                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign & broadcast')),
+                FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Sign & broadcast')),
               ],
             );
           },
@@ -427,10 +411,14 @@ class _SendScreenState extends State<SendScreen> {
           if (mounted) Navigator.pop(context);
         });
       }
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
-      _snack('Broadcast may have failed. Check activity before sending again.');
+      if (ok == 'sign_only') {
+        _snack('Signing failed: $e');
+      } else {
+        _snack('Broadcast may have failed. Check activity before sending again.');
+      }
     }
   }
 
@@ -441,10 +429,11 @@ class _SendScreenState extends State<SendScreen> {
       const SizedBox(height: 4),
       ...recips.asMap().entries.map((e) {
         final r = e.value;
+        final nano = r['amount_nano_erg'] as int? ?? 0;
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 2),
           child: Text(
-            '${r['address']}: ${formatErg(r['amountNanoErg'] as int)}',
+            '${r['address']}: ${formatErg(nano)}',
             style: monoStyle(ctx, size: 12),
           ),
         );
@@ -460,7 +449,6 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   void _showRawTx(String rawTxJson) {
-    final ctrl = TextEditingController(text: rawTxJson);
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -476,7 +464,8 @@ class _SendScreenState extends State<SendScreen> {
                 style: TextStyle(fontSize: 12),
               ),
               const SizedBox(height: 12),
-              Expanded(
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 200),
                 child: SingleChildScrollView(
                   child: SelectableText(
                     rawTxJson,
@@ -495,7 +484,7 @@ class _SendScreenState extends State<SendScreen> {
           ),
           TextButton.icon(
                 onPressed: () async {
-                  final bytes = Uint8List.fromList(rawTxJson.codeUnits);
+                  final bytes = Uint8List.fromList(utf8.encode(rawTxJson));
                   await Share.shareXFiles(
                     [XFile.fromData(bytes, name: 'signed_tx.json', mimeType: 'application/json')],
                   );
@@ -700,30 +689,44 @@ class _SendScreenState extends State<SendScreen> {
                                         return null;
                                       },
                                     ),
-                                    if (token != null && !token.isNft) ...[
+                                    if (_args.tokens.any((t) => !t.isNft)) ...[
                                       const SizedBox(height: 12),
                                       DropdownButtonFormField<String?>(
                                         initialValue: entry.tokenId,
                                         decoration: const InputDecoration(labelText: 'Token'),
                                         items: [
                                           const DropdownMenuItem(value: null, child: Text('None')),
-                                          ..._args.tokens.map(
+                                          ..._args.tokens.where((t) => !t.isNft).map(
                                             (t) => DropdownMenuItem(value: t.id, child: Text(t.label)),
                                           ),
                                         ],
                                         onChanged: (v) {
                                           entry.tokenId = v;
+                                          if (v != null && v.isNotEmpty && entry.tokenAmtCtrl == null) {
+                                            entry.tokenAmtCtrl = TextEditingController();
+                                          }
                                           setState(() {});
                                         },
                                       ),
+                                      if (entry.tokenId != null &&
+                                          entry.tokenId!.isNotEmpty &&
+                                          entry.tokenAmtCtrl != null) ...[
+                                        const SizedBox(height: 12),
+                                        TextFormField(
+                                          controller: entry.tokenAmtCtrl,
+                                          decoration: const InputDecoration(labelText: 'Token amount'),
+                                          keyboardType: const TextInputType.numberWithOptions(),
+                                          onChanged: (_) => setState(() {}),
+                                        ),
+                                      ],
                                     ],
                                     const SizedBox(height: 8),
                                     Align(
                                       alignment: Alignment.centerRight,
                                       child: TextButton.icon(
                                         onPressed: () {
-                                          entry.dispose();
                                           setState(() => _extraRecipients.removeAt(idx));
+                                          WidgetsBinding.instance.addPostFrameCallback((_) => entry.dispose());
                                         },
                                         icon: const Icon(Icons.delete, size: 16),
                                         label: const Text('Remove'),
@@ -764,7 +767,7 @@ class _SendScreenState extends State<SendScreen> {
                             : '${_selectedSpendAddresses.length} of ${_allSpendAddresses.length} selected',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
-                      onExpansionChanged: (v) => setState(() => _advancedOpen = v),
+                      onExpansionChanged: (_) => setState(() {}),
                       children: [
                         const Padding(
                           padding: EdgeInsets.only(bottom: 8),
@@ -809,7 +812,7 @@ class _SendScreenState extends State<SendScreen> {
                           decoration: InputDecoration(
                             labelText: 'Custom miner fee (optional)',
                             hintText: 'e.g. 0.0011',
-                            helperText: 'Default: 0.0011 ERG. Leave blank for default.',
+                             helperText: 'Default: ${formatErg(minerFeeNano)} ERG. Leave blank for default.',
                           ),
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                         ),

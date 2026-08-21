@@ -47,9 +47,11 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
         result(FlutterError(code: "INVALID_ARGS", message: "Missing encryptedSeedJson", details: nil))
         return
       }
-      save(json, account: seedAccount(for: walletId), biometric: false, result: result)
-      if walletId != nil {
-        addWalletId(walletId!)
+      save(json, account: seedAccount(for: walletId), biometric: false) { [weak self] res in
+        if (res as? Bool) == true, let wid = walletId {
+          self?.addWalletId(wid)
+        }
+        result(res)
       }
 
     case "loadEncryptedSeed":
@@ -209,32 +211,44 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
 
   private func removeWalletId(_ walletId: String) {
     var ids = getWalletIds()
-    if ids.removeAll { $0 == walletId } {
+    if ids.contains(walletId) {
+      ids.removeAll { $0 == walletId }
       setWalletIds(ids)
     }
   }
 
   private func migrateLegacyWallet(newWalletId: String) -> Bool {
     guard hasItem(account: "encrypted_seed") else { return false }
-    let migrated = getWalletIds().toMutableSet()
-    if migrated.contains(newWalletId) { return false }
+    if getWalletIds().contains(newWalletId) { return false }
     let seedData = loadData(account: "encrypted_seed")
     let wrapData = loadData(account: "wrap_key")
     let pinData = loadData(account: "pin_wrap")
     var success = true
     if let seed = seedData, !seed.isEmpty {
-      save(seed, account: seedAccount(for: newWalletId), biometric: false, result: { _ in })
+      var seedSaved = false
+      save(seed, account: seedAccount(for: newWalletId), biometric: false) { res in
+        seedSaved = (res as? Bool) == true
+      }
+      if !seedSaved { success = false }
     } else { success = false }
     if let wrap = wrapData, !wrap.isEmpty {
-      save(wrap, account: wrapAccount(for: newWalletId), biometric: true, result: { _ in })
+      var wrapSaved = false
+      save(wrap, account: wrapAccount(for: newWalletId), biometric: true) { res in
+        wrapSaved = (res as? Bool) == true
+      }
+      if !wrapSaved { success = false }
     }
     if let pin = pinData, !pin.isEmpty {
-      save(pin, account: pinAccount(for: newWalletId), biometric: false, result: { _ in })
+      var pinSaved = false
+      save(pin, account: pinAccount(for: newWalletId), biometric: false) { res in
+        pinSaved = (res as? Bool) == true
+      }
+      if !pinSaved { success = false }
     }
-    delete(account: "encrypted_seed")
-    delete(account: "wrap_key")
-    delete(account: "pin_wrap")
     if success {
+      delete(account: "encrypted_seed")
+      delete(account: "wrap_key")
+      delete(account: "pin_wrap")
       addWalletId(newWalletId)
     }
     return success
@@ -348,15 +362,39 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
   }
 
   private func load(account: String, result: @escaping FlutterResult) {
-    loadProtected(account: account, result: result)
+    let (status, value) = loadDataWithStatus(account: account)
+    if let value {
+      result(value)
+    } else if status == errSecItemNotFound {
+      result(nil)
+    } else {
+      result(FlutterError(code: "KEYCHAIN_ERROR", message: "Failed to load item: \(status)", details: nil))
+    }
+  }
+
+  private func loadDataWithStatus(account: String) -> (Int, String?) {
+    var item = baseQuery(account: account)
+    item[kSecReturnData as String] = true
+    item[kSecMatchLimit as String] = kSecMatchLimitOne
+
+    var found: CFTypeRef?
+    let status = SecItemCopyMatching(item as CFDictionary, &found)
+
+    if status == errSecSuccess, let data = found as? Data {
+      let value = String(data: data, encoding: .utf8)
+      return (status, value)
+    }
+    return (status, nil)
   }
 
   private func loadProtected(account: String, result: @escaping FlutterResult) {
-    let value = loadData(account: account)
+    let (status, value) = loadDataWithStatus(account: account)
     if let value {
       result(value)
-    } else {
+    } else if status == errSecItemNotFound || status == errSecUserCancelled {
       result(nil)
+    } else {
+      result(FlutterError(code: "KEYCHAIN_ERROR", message: "Failed to load protected item: \(status)", details: nil))
     }
   }
 

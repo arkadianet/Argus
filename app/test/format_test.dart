@@ -146,6 +146,19 @@ void main() {
       expect(formatRelativeTime(now.subtract(const Duration(days: 3)), now: now), '3 days ago');
     });
 
+    test('future timestamps are not reported as ago', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now.add(const Duration(seconds: 30)), now: now), 'Just now');
+      expect(formatRelativeTime(now.add(const Duration(seconds: 59)), now: now), 'Just now');
+    });
+
+    test('day labels use calendar days across midnight', () {
+      final now = DateTime(2025, 6, 15, 0, 30, 0);
+      expect(formatRelativeTime(DateTime(2025, 6, 13, 23, 0, 0), now: now), '2 days ago');
+      expect(formatRelativeTime(DateTime(2025, 6, 14, 23, 30, 0), now: now), '1h ago');
+      expect(formatRelativeTime(DateTime(2025, 6, 13, 12, 0, 0), now: now), '2 days ago');
+    });
+
     test('old dates fall back to date format', () {
       final now = DateTime(2025, 6, 15, 12, 0, 0);
       expect(formatRelativeTime(now.subtract(const Duration(days: 30)), now: now), '5/16/2025');

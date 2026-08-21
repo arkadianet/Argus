@@ -133,7 +133,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _loadWallets() async {
     _wallets = await walletService.listWallets();
     if (_wallets.isNotEmpty) {
-      _walletId = _wallets.first.walletId;
+      if (_walletId == null || !_wallets.any((w) => w.walletId == _walletId)) {
+        _walletId = _wallets.first.walletId;
+      }
     } else {
       _walletId = null;
     }
@@ -436,8 +438,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
       await walletService.switchWallet(walletId);
       _walletId = walletId;
-      setState(_resetLocked);
       await _refreshUnlockMethods();
+      if (walletService.isUnlocked) {
+        await _afterUnlock();
+      } else {
+        setState(_resetLocked);
+      }
     } on ArgusException catch (e) {
       _snack('${e.code}: ${e.message}');
     } catch (e) {
@@ -892,7 +898,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                        const SizedBox(width: 8),
                        const Expanded(
                          child: Text(
-                           'No reachable nodes. Tap to check nodes.',
+                           'No reachable nodes. Tap Retry to check.',
                            style: TextStyle(color: rust, fontSize: 12),
                          ),
                        ),

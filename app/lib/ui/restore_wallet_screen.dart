@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:uuid/uuid.dart';
 
 import '../bridge/argus_error.dart';
 import '../services/secure_storage.dart';
@@ -70,25 +69,10 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
     }
     setState(() => _busy = true);
     try {
-      final walletId = const Uuid().v4();
-      final name = await walletService.generateWalletName();
-      final session = await walletService.createWallet(
-        phrase,
+      final walletId = await walletService.provisionWallet(
+        phrase: phrase,
         passphrase: _passCtrl.text,
-        walletId: walletId,
-      );
-      final pinWrap = await walletService.wrapKeyWithPin(session.wrapKey, _pinCtrl.text);
-      await SecureStorageService.saveWalletWithPin(
-        walletId: walletId,
-        encryptedSeedJson: session.encryptedSeedJson,
-        pinWrapJson: pinWrap,
-      );
-      final address0 = await walletService.deriveAddress(0);
-      await walletService.saveWalletInfo(
-        walletId,
-        name: name,
-        createdAt: DateTime.now().toUtc(),
-        address0: address0,
+        pin: _pinCtrl.text,
       );
       if (!mounted) return null;
       Navigator.pop(context, walletId);

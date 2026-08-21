@@ -101,8 +101,18 @@ fn apply_custom_fee(
             "custom fee {custom_fee} nanoERG exceeds available change {change_val} nanoERG"
         )).to_json_string());
     }
-    tx.outputs[change_idx].value = new_change.to_string();
     tx.outputs[fee_idx].value = custom_fee.to_string();
+    if new_change == 0 {
+        tx.outputs = tx.outputs.iter()
+            .filter(|o| o.ergo_tree != change_ergo_tree)
+            .collect::<Vec<_>>();
+    } else if new_change < MIN_BOX_VALUE_NANO {
+        return Err(ArgusError::TxBuildFailed(format!(
+            "change {new_change} below min box value {MIN_BOX_VALUE_NANO}"
+        )).to_json_string());
+    } else {
+        tx.outputs[change_idx].value = new_change.to_string();
+    }
     Ok(custom_fee)
 }
 
@@ -641,11 +651,10 @@ async fn prepare_management<S>(
             custom_fee,
         )?;
         built.miner_fee = custom_fee;
-        if let Some(change_output) = built.unsigned_tx.outputs.iter()
+        built.change_erg = built.unsigned_tx.outputs.iter()
             .find(|o| o.ergo_tree == change_tree)
-        {
-            built.change_erg = change_output.value.parse::<i64>().unwrap_or(built.change_erg);
-        }
+            .map(|o| o.value.parse::<i64>().unwrap_or(0))
+            .unwrap_or(0);
     }
 
     let mut boxes_by_id = boxes
@@ -755,17 +764,14 @@ async fn prepare(
 
     let mut built = built;
     if let Some(custom_fee) = fee_nano {
-        if let Err(e) = apply_custom_fee(&mut built.unsigned_tx, &change_tree, TX_FEE_NANO, custom_fee) {
+        if let Err(e) = apply_custom_fee(&mut built.unsigned_tx, &change_tree, built.summary.miner_fee, custom_fee) {
             return Err(e);
         }
         built.summary.miner_fee = custom_fee;
-        built.summary.change_erg = {
-            let change_output = built.unsigned_tx.outputs.iter()
-                .find(|o| o.ergo_tree == change_tree)
-                .ok_or_else(|| ArgusError::TxBuildFailed("change output not found".into()).to_json_string())?;
-            change_output.value.parse::<i64>()
-                .map_err(|e| ArgusError::TxBuildFailed(format!("invalid change value: {e}")).to_json_string())?
-        };
+        built.summary.change_erg = built.unsigned_tx.outputs.iter()
+            .find(|o| o.ergo_tree == change_tree)
+            .map(|o| o.value.parse::<i64>().unwrap_or(0))
+            .unwrap_or(0);
     }
 
     let ergo_boxes = selected
@@ -1171,12 +1177,17 @@ pub async fn prepare_send_multi(
     for rcpt in recipients {
         let addr = rcpt["address"].as_str()
             .ok_or_else(|| ArgusError::TxBuildFailed("recipient missing address".into()).to_json_string())?;
-        let amount = rcpt["amount_nano_erg"].as_i64().unwrap_or(0);
         let token = rcpt["token_id"].as_str().and_then(|id| {
             let amt = rcpt["token_amount"].as_u64()?;
             Some((id.to_string(), amt))
         });
-        if amount < MIN_BOX_VALUE_NANO && token.is_none() {
+        let mut amount = rcpt["amount_nano_erg"].as_i64()
+            .ok_or_else(|| ArgusError::TxBuildFailed("recipient missing amount_nano_erg".into()).to_json_string())?;
+        if token.is_some() {
+            if amount < MIN_BOX_VALUE_NANO {
+                amount = MIN_BOX_VALUE_NANO;
+            }
+        } else if amount < MIN_BOX_VALUE_NANO {
             return Err(ArgusError::TxBuildFailed(format!(
                 "recipient {} amount must be at least {MIN_BOX_VALUE_NANO} nanoERG or carry tokens",
                 addr
@@ -1281,6 +1292,12 @@ pub async fn prepare_send_multi(
     let need_change = change_erg > 0 || has_token_change;
 
     if need_change {
+        if has_token_change && change_erg < MIN_BOX_VALUE_NANO {
+            return Err(ArgusError::TxBuildFailed(format!(
+                "token change requires at least {MIN_BOX_VALUE_NANO} nanoERG leftover, have {change_erg}"
+            ))
+            .to_json_string());
+        }
         if change_erg > 0 && change_erg < MIN_BOX_VALUE_NANO {
             return Err(ArgusError::TxBuildFailed(format!(
                 "change {change_erg} below min box value {MIN_BOX_VALUE_NANO}"

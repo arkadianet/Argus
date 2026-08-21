@@ -166,23 +166,25 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     result.success(null)
                 }
                 "deleteEncryptedSeed" -> {
-                    if (!getPrefs().edit()
+                    val committed = getPrefs().edit()
                         .remove(seedKey(walletId))
                         .apply {
                             if (walletId != null) {
                                 remove(wrapKey(walletId))
                                 remove(pinWrapKey(walletId))
-                                val ids = getWalletIds().toMutableSet()
-                                ids.remove(walletId)
-                                saveWalletIds(ids)
                             } else {
                                 remove(wrapKey(walletId))
                                 remove(pinWrapKey(walletId))
                             }
                         }.commit()
-                    ) {
+                    if (!committed) {
                         result.error("STORAGE_ERROR", "Failed to delete wallet secrets", null)
                         return
+                    }
+                    if (walletId != null) {
+                        val ids = getWalletIds().toMutableSet()
+                        ids.remove(walletId)
+                        saveWalletIds(ids)
                     }
                     result.success(null)
                 }
@@ -192,11 +194,15 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                         result.error("INVALID_ARGS", "Missing walletId", null)
                         return
                     }
-                    getPrefs().edit()
+                    if (!getPrefs().edit()
                         .remove(seedKey(wid))
                         .remove(wrapKey(wid))
                         .remove(pinWrapKey(wid))
-                        .apply()
+                        .commit()
+                    ) {
+                        result.error("STORAGE_ERROR", "Failed to delete wallet secrets", null)
+                        return
+                    }
                     val ids = getWalletIds().toMutableSet()
                     ids.remove(wid)
                     saveWalletIds(ids)
@@ -291,13 +297,13 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     editor.remove("encrypted_seed")
                     editor.remove("wrap_key")
                     editor.remove("pin_wrap")
-                    val ids = getWalletIds().toMutableSet()
-                    ids.add(newWalletId)
-                    saveWalletIds(ids)
                     if (!editor.commit()) {
                         result.error("STORAGE_ERROR", "Failed to migrate wallet", null)
                         return
                     }
+                    val ids = getWalletIds().toMutableSet()
+                    ids.add(newWalletId)
+                    saveWalletIds(ids)
                     result.success(true)
                 }
                 else -> result.notImplemented()

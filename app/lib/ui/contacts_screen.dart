@@ -80,9 +80,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
       );
       return;
     }
-    final json = '['
-        '${contacts.map((c) => '{"name":"${c.name}","address":"${c.address}"}').join(',')}'
-        ']';
+    final json = '[${contacts.map((c) => jsonEncode({'name': c.name, 'address': c.address})).join(',')}]';
     try {
       await SharePlus.instance.share(ShareParams(
         files: [XFile.fromData(
