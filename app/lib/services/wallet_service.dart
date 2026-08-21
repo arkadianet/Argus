@@ -347,15 +347,23 @@ class WalletService {
     List<String> addresses, {
     int limit = 20,
     int offset = 0,
+    Map<String, int>? perAddressOffsets,
   }) async {
     var ok = 0;
     var failed = 0;
     final results = await Future.wait(
       addresses.map((address) async {
         try {
-          final raw = await getTransactionHistory(address, limit: limit, offset: offset);
+          final off = perAddressOffsets != null
+              ? (perAddressOffsets[address] ?? 0)
+              : offset;
+          final raw = await getTransactionHistory(address, limit: limit, offset: off);
           ok++;
-          return jsonDecode(raw) as List;
+          final decoded = jsonDecode(raw) as List;
+          if (perAddressOffsets != null) {
+            perAddressOffsets[address] = off + decoded.length;
+          }
+          return decoded;
         } catch (_) {
           failed++;
           return const [];

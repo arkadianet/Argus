@@ -15,12 +15,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
   bool get _selectMode =>
       ModalRoute.of(context)?.settings.arguments == true;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => contactsService.load());
-  }
-
   void _addOrEdit([WalletContact? existing]) {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final addrCtrl = TextEditingController(text: existing?.address ?? '');

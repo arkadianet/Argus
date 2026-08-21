@@ -690,7 +690,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (_stale) ...[
             const SizedBox(height: 10),
             Text(_status, style: const TextStyle(color: rust, fontSize: 12)),
-          ] else if (_status.contains('Syncing') || _status.contains('Refreshing')) ...[
+          ] else if (_status.contains('Syncing') || _status.contains('Refreshing') || _status.contains('Looking up addresses')) ...[
             const SizedBox(height: 10),
             Text(_status, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
           ],
