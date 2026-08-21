@@ -1,9 +1,8 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:share_plus/share_plus.dart' show Share, XFile;
+import 'package:share_plus/share_plus.dart' show SharePlus, ShareParams, XFile;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../format.dart';
@@ -21,10 +20,7 @@ class SendScreen extends StatefulWidget {
 }
 
 class _RecipientEntry {
-  _RecipientEntry({String? address, String? amount, this.tokenId}) {
-    addressCtrl.text = address ?? '';
-    amountCtrl.text = amount ?? '';
-  }
+  _RecipientEntry() {}
   final addressCtrl = TextEditingController();
   final amountCtrl = TextEditingController();
   TextEditingController? tokenAmtCtrl;
@@ -329,7 +325,7 @@ class _SendScreenState extends State<SendScreen> {
                       Container(
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color: Theme.of(ctx).colorScheme.surfaceContainerHighest?.withValues(alpha: 0.3),
+                          color: Theme.of(ctx).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
                           borderRadius: BorderRadius.circular(8),
                         ),
                         child: Column(
@@ -485,9 +481,9 @@ class _SendScreenState extends State<SendScreen> {
           TextButton.icon(
                 onPressed: () async {
                   final bytes = Uint8List.fromList(utf8.encode(rawTxJson));
-                  await Share.shareXFiles(
-                    [XFile.fromData(bytes, name: 'signed_tx.json', mimeType: 'application/json')],
-                  );
+                  await SharePlus.instance.share(ShareParams(
+                    files: [XFile.fromData(bytes, name: 'signed_tx.json', mimeType: 'application/json')],
+                  ));
                 },
             icon: const Icon(Icons.share, size: 16),
             label: const Text('Share'),
@@ -812,7 +808,7 @@ class _SendScreenState extends State<SendScreen> {
                           decoration: InputDecoration(
                             labelText: 'Custom miner fee (optional)',
                             hintText: 'e.g. 0.0011',
-                             helperText: 'Default: ${formatErg(minerFeeNano)} ERG. Leave blank for default.',
+                             helperText: 'Default: ${formatErg(minerFeeNano, unit: false)} ERG. Leave blank for default.',
                           ),
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                         ),

@@ -68,9 +68,6 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     }
   }
 
-  String get _address =>
-      WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments).receiveAddress;
-
   Future<void> _editLabel(String address) async {
     final existing = addressLabelService.labelFor(address) ?? '';
     final ctrl = TextEditingController(text: existing);

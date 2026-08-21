@@ -531,19 +531,24 @@ class WalletService {
       passphrase: passphrase,
       walletId: walletId,
     );
-    final pinWrap = await wrapKeyWithPin(session.wrapKey, pin);
-    await SecureStorageService.saveWalletWithPin(
-      walletId: walletId,
-      encryptedSeedJson: session.encryptedSeedJson,
-      pinWrapJson: pinWrap,
-    );
-    final address0 = await deriveAddress(0);
-    await saveWalletInfo(
-      walletId,
-      name: name,
-      createdAt: DateTime.now().toUtc(),
-      address0: address0,
-    );
+    try {
+      final pinWrap = await wrapKeyWithPin(session.wrapKey, pin);
+      await SecureStorageService.saveWalletWithPin(
+        walletId: walletId,
+        encryptedSeedJson: session.encryptedSeedJson,
+        pinWrapJson: pinWrap,
+      );
+      final address0 = await deriveAddress(0);
+      await saveWalletInfo(
+        walletId,
+        name: name,
+        createdAt: DateTime.now().toUtc(),
+        address0: address0,
+      );
+    } catch (_) {
+      await lock(walletId);
+      rethrow;
+    }
     return walletId;
   }
 

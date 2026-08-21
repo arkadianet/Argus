@@ -103,9 +103,7 @@ fn apply_custom_fee(
     }
     tx.outputs[fee_idx].value = custom_fee.to_string();
     if new_change == 0 {
-        tx.outputs = tx.outputs.iter()
-            .filter(|o| o.ergo_tree != change_ergo_tree)
-            .collect::<Vec<_>>();
+        tx.outputs.retain(|o| o.ergo_tree != change_ergo_tree);
     } else if new_change < MIN_BOX_VALUE_NANO {
         return Err(ArgusError::TxBuildFailed(format!(
             "change {new_change} below min box value {MIN_BOX_VALUE_NANO}"
@@ -1177,10 +1175,10 @@ pub async fn prepare_send_multi(
     for rcpt in recipients {
         let addr = rcpt["address"].as_str()
             .ok_or_else(|| ArgusError::TxBuildFailed("recipient missing address".into()).to_json_string())?;
-        let token = rcpt["token_id"].as_str().and_then(|id| {
-            let amt = rcpt["token_amount"].as_u64()?;
-            Some((id.to_string(), amt))
-        });
+        let token = resolve_send_token(
+            rcpt["token_id"].as_str().map(|id| id.to_string()),
+            rcpt["token_amount"].as_u64(),
+        )?;
         let mut amount = rcpt["amount_nano_erg"].as_i64()
             .ok_or_else(|| ArgusError::TxBuildFailed("recipient missing amount_nano_erg".into()).to_json_string())?;
         if token.is_some() {
@@ -1238,12 +1236,11 @@ pub async fn prepare_send_multi(
 
     // For input selection we need the total ERG + all token amounts
     let fee_for_required = fee_nano.unwrap_or(TX_FEE_NANO);
-    let total_token_ids: Vec<String> = needed_tokens.keys().cloned().collect();
 
     // Use UTXO selection: pick boxes covering total_send_erg + fee + min change,
     // and which collectively hold the needed tokens.
     let required = (total_send_erg + fee_for_required + MIN_BOX_VALUE_NANO) as u64;
-    let selected = select_for_multi_send(&eip12, required, &needed_tokens, &total_token_ids)
+    let selected = select_for_multi_send(&eip12, required, &needed_tokens)
         .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
 
     if selected.is_empty() {
@@ -1394,7 +1391,6 @@ fn select_for_multi_send(
     eip12: &[ergo_tx::Eip12InputBox],
     required_erg: u64,
     needed_tokens: &HashMap<String, u64>,
-    token_ids: &[String],
 ) -> Result<Vec<ergo_tx::Eip12InputBox>, String> {
     let mut total_erg: u64 = 0;
     let mut total_tokens: HashMap<String, u64> = HashMap::new();
@@ -1410,8 +1406,8 @@ fn select_for_multi_send(
         }
 
         if total_erg >= required_erg {
-            let all_ok = token_ids.iter().all(|id| {
-                total_tokens.get(id).copied().unwrap_or(0) >= *needed_tokens.get(id).unwrap()
+            let all_ok = needed_tokens.iter().all(|(id, need)| {
+                total_tokens.get(id).copied().unwrap_or(0) >= *need
             });
             if all_ok {
                 break;
@@ -1424,10 +1420,9 @@ fn select_for_multi_send(
             "insufficient ERG: have {total_erg}, need at least {required_erg}"
         ));
     }
-    for id in token_ids {
+    for (id, need) in needed_tokens {
         let have = total_tokens.get(id).copied().unwrap_or(0);
-        let need = needed_tokens.get(id).copied().unwrap_or(0);
-        if have < need {
+        if have < *need {
             return Err(format!("insufficient tokens {id}: have {have}, need {need}"));
         }
     }

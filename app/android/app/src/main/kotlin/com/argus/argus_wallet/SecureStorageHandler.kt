@@ -106,9 +106,8 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
         return reg.toMutableSet()
     }
 
-    private fun saveWalletIds(ids: Set<String>) {
+    private fun saveWalletIds(ids: Set<String>): Boolean =
         getPrefs().edit().putStringSet(WALLET_REGISTRY_KEY, ids).commit()
-    }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         try {
@@ -127,7 +126,10 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     if (walletId != null) {
                         val ids = getWalletIds().toMutableSet()
                         ids.add(walletId)
-                        saveWalletIds(ids)
+                        if (!saveWalletIds(ids)) {
+                            result.error("STORAGE_ERROR", "Failed to update wallet registry", null)
+                            return
+                        }
                     }
                     result.success(true)
                 }
@@ -168,15 +170,9 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                 "deleteEncryptedSeed" -> {
                     val committed = getPrefs().edit()
                         .remove(seedKey(walletId))
-                        .apply {
-                            if (walletId != null) {
-                                remove(wrapKey(walletId))
-                                remove(pinWrapKey(walletId))
-                            } else {
-                                remove(wrapKey(walletId))
-                                remove(pinWrapKey(walletId))
-                            }
-                        }.commit()
+                        .remove(wrapKey(walletId))
+                        .remove(pinWrapKey(walletId))
+                        .commit()
                     if (!committed) {
                         result.error("STORAGE_ERROR", "Failed to delete wallet secrets", null)
                         return
@@ -184,7 +180,10 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     if (walletId != null) {
                         val ids = getWalletIds().toMutableSet()
                         ids.remove(walletId)
-                        saveWalletIds(ids)
+                        if (!saveWalletIds(ids)) {
+                            result.error("STORAGE_ERROR", "Failed to update wallet registry", null)
+                            return
+                        }
                     }
                     result.success(null)
                 }
@@ -205,7 +204,10 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     }
                     val ids = getWalletIds().toMutableSet()
                     ids.remove(wid)
-                    saveWalletIds(ids)
+                    if (!saveWalletIds(ids)) {
+                        result.error("STORAGE_ERROR", "Failed to update wallet registry", null)
+                        return
+                    }
                     result.success(null)
                 }
                 "hasEncryptedSeed" -> {
@@ -303,7 +305,10 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     }
                     val ids = getWalletIds().toMutableSet()
                     ids.add(newWalletId)
-                    saveWalletIds(ids)
+                    if (!saveWalletIds(ids)) {
+                        result.error("STORAGE_ERROR", "Failed to update wallet registry", null)
+                        return
+                    }
                     result.success(true)
                 }
                 else -> result.notImplemented()

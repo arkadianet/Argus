@@ -22,7 +22,13 @@ class WatchOnlyService extends ChangeNotifier {
         final list = jsonDecode(raw) as List;
         _addresses
           ..clear()
-          ..addAll(list.whereType<String>().where((a) => a.isNotEmpty && looksLikeErgoAddress(a)));
+          ..addAll(
+            list
+                .whereType<String>()
+                .map((a) => a.trim())
+                .where((a) => a.isNotEmpty && looksLikeErgoAddress(a))
+                .toSet(),
+          );
       } catch (_) {
         _addresses.clear();
       }

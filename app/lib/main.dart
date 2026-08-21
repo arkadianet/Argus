@@ -4,7 +4,6 @@ import 'services/address_label_service.dart';
 import 'services/contacts_service.dart';
 import 'services/session_lock.dart';
 import 'services/watch_only_service.dart';
-import 'services/session_lock.dart';
 import 'services/wallet_service.dart';
 import 'theme/argus_theme.dart';
 import 'theme/theme_controller.dart';
