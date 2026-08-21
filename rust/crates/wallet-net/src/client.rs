@@ -7,14 +7,122 @@ use ergo_lib::ergotree_ir::chain::address::{AddressEncoder, NetworkPrefix};
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
 use ergo_node_interface::NodeInterface;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 const HEADERS_COUNT: usize = 10;
 const UNSPENT_PAGE_SIZE: u64 = 500;
 const UNSPENT_MAX_BOXES: usize = 10_000;
 
 /// Default public Ergo node URL (mainnet).
-pub const DEFAULT_NODE_URL: &str = "https://ergo-explorer-01.ergonode.net";
+pub const DEFAULT_NODE_URL: &str = "https://ergo-node.eutxo.de";
+
+/// Public HTTPS nodes with extraIndex, tried after the preferred URL.
+pub const NODE_CANDIDATES: &[&str] = &[
+    DEFAULT_NODE_URL,
+    "https://ergo-node.zoomout.io",
+    "https://ergo1.oette.info",
+    "https://node.sigmaspace.io",
+];
+
+pub const DEFAULT_EXPLORER_URL: &str = "https://api.sigmaspace.io";
+
+#[derive(Clone)]
+struct NetworkConfig {
+    nodes: Vec<String>,
+    explorer: String,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            nodes: NODE_CANDIDATES.iter().map(|s| (*s).to_string()).collect(),
+            explorer: DEFAULT_EXPLORER_URL.to_string(),
+        }
+    }
+}
+
+fn network() -> &'static Mutex<NetworkConfig> {
+    static NET: OnceLock<Mutex<NetworkConfig>> = OnceLock::new();
+    NET.get_or_init(|| Mutex::new(NetworkConfig::default()))
+}
+
+fn recover<T>(r: std::sync::LockResult<T>) -> T {
+    r.unwrap_or_else(|p| p.into_inner())
+}
+
+/// Replace the process node list. Empty input keeps the current list.
+pub fn set_network(nodes: Vec<String>, explorer: Option<String>) {
+    let mut cfg = recover(network().lock());
+    let cleaned: Vec<String> = nodes
+        .into_iter()
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if !cleaned.is_empty() {
+        cfg.nodes = cleaned;
+    }
+    if let Some(url) = explorer
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+    {
+        cfg.explorer = url;
+    }
+}
+
+pub fn configured_nodes() -> Vec<String> {
+    recover(network().lock()).nodes.clone()
+}
+
+pub fn configured_explorer() -> String {
+    recover(network().lock()).explorer.clone()
+}
+
+/// Preferred URL first, then the configured list (no duplicates).
+pub fn node_urls(preferred: Option<String>) -> Vec<String> {
+    let mut urls = Vec::new();
+    if let Some(url) = preferred.filter(|s| !s.is_empty()) {
+        urls.push(url.trim_end_matches('/').to_string());
+    }
+    for candidate in configured_nodes() {
+        if !urls.iter().any(|u| u == &candidate) {
+            urls.push(candidate);
+        }
+    }
+    urls
+}
+
+pub async fn probe_height(url: &str) -> Result<u64, String> {
+    let info_url = join_url(url, "info");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let text = client
+        .get(&info_url)
+        .send()
+        .await
+        .map_err(|e| format!("probe {url}: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("probe {url}: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("probe {url}: {e}"))?;
+    let info: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("probe parse {url}: {e}"))?;
+    info.get("fullHeight")
+        .or_else(|| info.get("headersHeight"))
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| format!("probe {url}: no height"))
+}
+
+fn join_url(base: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
 
 /// Create a default mainnet NodeConfig.
 pub fn default_node_config() -> NodeConfig {
@@ -22,6 +130,27 @@ pub fn default_node_config() -> NodeConfig {
         url: DEFAULT_NODE_URL.to_string(),
         api_key: String::new(),
     }
+}
+
+pub fn parse_parameters(value: &serde_json::Value) -> Result<Parameters, String> {
+    let req = |key: &str| -> Result<i32, String> {
+        let raw = value
+            .get(key)
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| format!("missing parameter {key}"))?;
+        i32::try_from(raw).map_err(|_| format!("parameter {key} out of range"))
+    };
+    Ok(Parameters::new(
+        req("blockVersion")?,
+        req("storageFeeFactor")?,
+        req("minValuePerByte")?,
+        req("maxBlockSize")?,
+        req("maxBlockCost")?,
+        req("tokenAccessCost")?,
+        req("inputCost")?,
+        req("dataInputCost")?,
+        req("outputCost")?,
+    ))
 }
 
 /// Convert an Ergo base58 address to an ErgoTree hex string.
@@ -39,6 +168,7 @@ pub fn address_to_ergo_tree(address: &str) -> Result<String, String> {
 #[derive(Clone)]
 pub struct ErgoNodeClient {
     inner: Arc<NodeInterface>,
+    url: String,
 }
 
 /// A parsed transaction summary from the explorer API.
@@ -61,7 +191,30 @@ impl ErgoNodeClient {
             .map_err(|e| format!("Failed to connect to node: {}", e))?;
         Ok(ErgoNodeClient {
             inner: Arc::new(node),
+            url: config.url,
         })
+    }
+
+    /// Connect to the preferred node, then public fallbacks.
+    pub async fn connect(preferred: Option<String>) -> Result<Self, String> {
+        let mut last = "no node candidates".to_string();
+        for url in node_urls(preferred) {
+            match Self::new(NodeConfig {
+                url: url.clone(),
+                api_key: String::new(),
+            })
+            .await
+            {
+                Ok(client) => {
+                    if client.current_height().await.is_ok() {
+                        return Ok(client);
+                    }
+                    last = format!("node {url} did not return height");
+                }
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
     }
 
     pub async fn current_height(&self) -> Result<u64, String> {
@@ -139,7 +292,26 @@ impl ErgoNodeClient {
             arr[i] = h.clone();
         }
 
-        Ok(ErgoStateContext::new(pre_header, arr, Parameters::default()))
+        let params = self.parameters().await.unwrap_or_else(|_| Parameters::default());
+        Ok(ErgoStateContext::new(pre_header, arr, params))
+    }
+
+    pub async fn parameters(&self) -> Result<Parameters, String> {
+        let url = join_url(&self.url, "info");
+        let text = reqwest::Client::new()
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Node /info: {e}"))?
+            .error_for_status()
+            .map_err(|e| format!("Node /info: {e}"))?
+            .text()
+            .await
+            .map_err(|e| format!("Node /info: {e}"))?;
+        let info: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("Parse /info: {e}"))?;
+        let params = info.get("parameters").unwrap_or(&info);
+        parse_parameters(params)
     }
 
     async fn all_unspent_boxes(&self, address: &str) -> Result<Vec<ErgoBox>, String> {
@@ -189,20 +361,24 @@ impl ErgoNodeClient {
         Ok(!self.get_transaction_history(address, 1).await?.is_empty())
     }
 
-    /// Fetch total nanoERG balance for an address.
-    pub async fn get_address_balances(&self, address: &str) -> Result<(u64, Vec<String>), String> {
-        use std::collections::HashSet;
+    /// Fetch total nanoERG and per-token amounts for an address.
+    pub async fn get_address_balances(
+        &self,
+        address: &str,
+    ) -> Result<(u64, Vec<(String, u64)>), String> {
+        use std::collections::HashMap;
         let boxes = self.all_unspent_boxes(address).await?;
         let erg_total: u64 = boxes.iter().map(|b| *b.value.as_u64()).sum();
-        let mut token_ids = HashSet::new();
+        let mut tokens: HashMap<String, u64> = HashMap::new();
         for b in &boxes {
-            if let Some(tokens) = b.tokens.as_ref() {
-                for t in tokens.iter() {
-                    token_ids.insert(t.token_id.clone().into());
+            if let Some(held) = b.tokens.as_ref() {
+                for t in held.iter() {
+                    let id: String = t.token_id.clone().into();
+                    *tokens.entry(id).or_insert(0) += *t.amount.as_u64();
                 }
             }
         }
-        Ok((erg_total, token_ids.into_iter().collect()))
+        Ok((erg_total, tokens.into_iter().collect()))
     }
 
     /// Fetch transaction history for an address (paginated, max 50).
@@ -334,6 +510,65 @@ pub fn make_state_context(height: u32) -> ErgoStateContext {
     ErgoStateContext::new(pre_header, headers, Parameters::default())
 }
 
+fn token_by_id_url(base: &str, token_id: &str) -> String {
+    join_url(base, &format!("blockchain/token/byId/{token_id}"))
+}
+
+fn is_indexed_token(value: &serde_json::Value, token_id: &str) -> bool {
+    value.get("id").and_then(|v| v.as_str()) == Some(token_id)
+        && (value.get("name").is_some() || value.get("decimals").is_some())
+}
+
+/// ExtraIndex nodes first (`/blockchain/token/byId`), explorer last.
+fn token_info_urls(token_id: &str, explorer_url: Option<&str>) -> Vec<String> {
+    let mut urls: Vec<String> = node_urls(None)
+        .into_iter()
+        .map(|u| token_by_id_url(&u, token_id))
+        .collect();
+    let explorer = explorer_url
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(configured_explorer);
+    urls.push(join_url(&explorer, &format!("api/v1/tokens/{token_id}")));
+    urls
+}
+
+async fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let text = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| format!("Token info {url}: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Token info {url}: {e}"))?
+        .text()
+        .await
+        .map_err(|e| format!("Token info {url}: {e}"))?;
+    serde_json::from_str(&text).map_err(|e| format!("Parse token: {e}"))
+}
+
+pub async fn get_token_info(
+    token_id: &str,
+    explorer_url: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    if token_id.len() != 64 || !token_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("invalid token id".into());
+    }
+    let mut last = "no token source".to_string();
+    for url in token_info_urls(token_id, explorer_url) {
+        match fetch_json(&url).await {
+            Ok(v) if is_indexed_token(&v, token_id) => return Ok(v),
+            Ok(_) => last = format!("{url}: not an IndexedToken"),
+            Err(e) => last = e,
+        }
+    }
+    Err(last)
+}
+
 fn net_value_for_address(tx: &serde_json::Value, address: &str) -> i64 {
     let outs = tx["outputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
     let ins = tx["inputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
@@ -348,4 +583,178 @@ fn net_value_for_address(tx: &serde_json::Value, address: &str) -> i64 {
         .map(|i| i["value"].as_i64().unwrap_or(0))
         .sum();
     to_self - from_self
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reset_network() {
+        set_network(
+            NODE_CANDIDATES.iter().map(|s| (*s).to_string()).collect(),
+            Some(DEFAULT_EXPLORER_URL.into()),
+        );
+    }
+
+    fn with_network<F: FnOnce()>(f: F) {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        struct Reset;
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                reset_network();
+            }
+        }
+        let _reset = Reset;
+        reset_network();
+        f();
+    }
+
+    #[test]
+    fn preferred_node_is_first() {
+        with_network(|| {
+            let urls = node_urls(Some("https://custom.node".into()));
+            assert_eq!(urls[0], "https://custom.node");
+            assert!(urls.contains(&DEFAULT_NODE_URL.to_string()));
+        });
+    }
+
+    #[test]
+    fn default_list_has_no_duplicates() {
+        with_network(|| {
+            let urls = node_urls(Some(DEFAULT_NODE_URL.into()));
+            assert_eq!(urls.iter().filter(|u| *u == DEFAULT_NODE_URL).count(), 1);
+        });
+    }
+
+    #[test]
+    fn custom_list_replaces_defaults() {
+        with_network(|| {
+            set_network(
+                vec!["https://a.example".into(), "https://b.example".into()],
+                Some("https://exp.example".into()),
+            );
+            let urls = node_urls(None);
+            assert_eq!(urls, vec!["https://a.example", "https://b.example"]);
+            assert_eq!(configured_explorer(), "https://exp.example");
+        });
+    }
+
+    #[test]
+    fn empty_set_network_keeps_list() {
+        with_network(|| {
+            set_network(
+                vec!["https://only.example".into()],
+                None,
+            );
+            set_network(vec![], None);
+            assert_eq!(configured_nodes(), vec!["https://only.example"]);
+        });
+    }
+
+    #[test]
+    fn parses_node_parameters() {
+        let json = serde_json::json!({
+            "outputCost": 194,
+            "tokenAccessCost": 100,
+            "maxBlockCost": 8001091,
+            "maxBlockSize": 1271009,
+            "dataInputCost": 100,
+            "blockVersion": 3,
+            "inputCost": 2407,
+            "storageFeeFactor": 1250000,
+            "minValuePerByte": 360
+        });
+        let params = parse_parameters(&json).unwrap();
+        assert_eq!(params.block_version(), 3);
+        assert_eq!(params.min_value_per_byte(), 360);
+        assert_eq!(params.max_block_cost(), 8001091);
+    }
+
+    #[test]
+    fn rejects_incomplete_parameters() {
+        assert!(parse_parameters(&serde_json::json!({"blockVersion": 3})).is_err());
+    }
+
+    #[test]
+    fn token_by_id_url_uses_extraindex_path() {
+        assert_eq!(
+            token_by_id_url(
+                "https://node.sigmaspace.io",
+                "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04"
+            ),
+            "https://node.sigmaspace.io/blockchain/token/byId/03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04"
+        );
+    }
+
+    #[test]
+    fn token_info_tries_nodes_before_explorer() {
+        with_network(|| {
+            let urls = token_info_urls(
+                "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04",
+                None,
+            );
+            assert!(urls[0].starts_with(DEFAULT_NODE_URL));
+            assert!(urls[0].contains("/blockchain/token/byId/"));
+            assert!(urls.last().unwrap().contains("/api/v1/tokens/"));
+            assert!(urls.last().unwrap().starts_with(&configured_explorer()));
+        });
+    }
+
+    #[test]
+    fn accepts_indexed_token_json() {
+        let v = serde_json::json!({
+            "id": "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04",
+            "boxId": "a49076f75e8446fec018d5d32cddf6e05575ef1273232e680f4cd5d716f4e78b",
+            "emissionAmount": 10000000000001i64,
+            "name": "SigUSD",
+            "description": "SigmaUSD - V2",
+            "decimals": 2
+        });
+        assert!(is_indexed_token(
+            &v,
+            "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04"
+        ));
+    }
+
+    #[test]
+    fn rejects_indexed_token_with_other_id() {
+        let v = serde_json::json!({
+            "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "name": "SigUSD",
+            "decimals": 2
+        });
+        assert!(!is_indexed_token(
+            &v,
+            "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04"
+        ));
+    }
+
+    #[test]
+    fn rejects_non_token_json() {
+        assert!(!is_indexed_token(
+            &serde_json::json!({"error": 404}),
+            "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04"
+        ));
+    }
+
+    #[test]
+    fn rejects_parameter_outside_i32() {
+        let mut json = serde_json::json!({
+            "outputCost": 194,
+            "tokenAccessCost": 100,
+            "maxBlockCost": 8001091,
+            "maxBlockSize": 1271009,
+            "dataInputCost": 100,
+            "blockVersion": 3,
+            "inputCost": 2407,
+            "storageFeeFactor": 1250000,
+            "minValuePerByte": 360
+        });
+        json["maxBlockCost"] = serde_json::json!(i64::MAX);
+        assert!(parse_parameters(&json).is_err());
+    }
 }

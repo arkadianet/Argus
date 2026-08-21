@@ -40,9 +40,31 @@ android {
         }
     }
 
+    val releaseStore = System.getenv("ARGUS_KEYSTORE")
+    signingConfigs {
+        create("release") {
+            if (!releaseStore.isNullOrBlank()) {
+                val storePassword = System.getenv("ARGUS_KEYSTORE_PASSWORD")
+                val keyAlias = System.getenv("ARGUS_KEY_ALIAS")
+                val keyPassword = System.getenv("ARGUS_KEY_PASSWORD")
+                    ?: storePassword
+                require(!storePassword.isNullOrBlank()) { "ARGUS_KEYSTORE_PASSWORD is required" }
+                require(!keyAlias.isNullOrBlank()) { "ARGUS_KEY_ALIAS is required" }
+                require(!keyPassword.isNullOrBlank()) { "ARGUS_KEY_PASSWORD is required" }
+                storeFile = file(releaseStore)
+                this.storePassword = storePassword
+                this.keyAlias = keyAlias
+                this.keyPassword = keyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("debug")
+            require(!releaseStore.isNullOrBlank()) {
+                "Release builds require ARGUS_KEYSTORE. Copy example.env to .env and set the signing values."
+            }
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -58,4 +80,5 @@ flutter {
 
 dependencies {
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.biometric:biometric:1.1.0")
 }

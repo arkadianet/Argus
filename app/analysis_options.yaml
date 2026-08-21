@@ -3,3 +3,11 @@ analyzer:
     undefined_class: ignore
     experiment_not_enabled: ignore
     invalid_use_of_internal_member: ignore
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**

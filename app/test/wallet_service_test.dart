@@ -1,3 +1,4 @@
+import 'package:argus_wallet/services/network_controller.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -70,6 +71,97 @@ void main() {
       expect(parseErgToNano('1.2.3'), isNull);
       expect(parseErgToNano('-1'), isNull);
       expect(parseErgToNano('0.0000000001'), isNull);
+    });
+  });
+
+  group('parseDecimalToBase', () {
+    test('respects token decimals', () {
+      expect(parseDecimalToBase('1', 0), 1);
+      expect(parseDecimalToBase('1.50', 2), 150);
+      expect(parseDecimalToBase('0.001', 3), 1);
+    });
+
+    test('rejects extra fractional digits', () {
+      expect(parseDecimalToBase('1.001', 2), isNull);
+      expect(parseDecimalToBase('x', 2), isNull);
+    });
+
+    test('rejects decimals outside 0-18', () {
+      expect(parseDecimalToBase('1', -1), isNull);
+      expect(parseDecimalToBase('1', 19), isNull);
+    });
+
+    test('rejects values that overflow signed 64-bit', () {
+      expect(parseDecimalToBase('99999999999', 18), isNull);
+    });
+  });
+
+  group('validatePin', () {
+    test('enforces length', () {
+      expect(validatePin('12345'), isNotNull);
+      expect(validatePin('123456'), isNull);
+      expect(validatePin('a' * 32), isNull);
+      expect(validatePin('a' * 33), isNotNull);
+    });
+  });
+
+  group('mnemonicWords', () {
+    test('normalizes case and whitespace', () {
+      expect(
+        mnemonicWordsEqual('  Slow   SILLY start  ', 'slow silly start'),
+        isTrue,
+      );
+      expect(mnemonicWords('one two').length, 2);
+    });
+  });
+
+  group('isAbsoluteHttpUrl', () {
+    test('accepts only http(s) with a host', () {
+      expect(isAbsoluteHttpUrl('https://ergo-node.eutxo.de'), isTrue);
+      expect(isAbsoluteHttpUrl('http://127.0.0.1:9053'), isTrue);
+      expect(isAbsoluteHttpUrl('ftp://x'), isFalse);
+      expect(isAbsoluteHttpUrl('not a url'), isFalse);
+    });
+  });
+
+  group('explorerTransactionUrl', () {
+    test('opens SigmaSpace and official explorer pages', () {
+      expect(
+        explorerTransactionUrl('https://api.sigmaspace.io', 'abc'),
+        'https://sigmaspace.io/en/transaction/abc',
+      );
+      expect(
+        explorerTransactionUrl('https://api.ergoplatform.com', 'abc'),
+        'https://explorer.ergoplatform.com/en/transactions/abc',
+      );
+    });
+  });
+
+  group('normalizeNodeUrl', () {
+    test('accepts a bare ip:port as http', () {
+      expect(normalizeNodeUrl('104.131.9.252:9053'), 'http://104.131.9.252:9053');
+    });
+
+    test('keeps https hosts', () {
+      expect(normalizeNodeUrl('https://node.sigmaspace.io/'), 'https://node.sigmaspace.io');
+    });
+  });
+
+  group('WalletRouteArgs.copyWith', () {
+    test('keeps tokens and spendable when replacing the transaction', () {
+      final token = TokenBalance(id: 't', amount: 1);
+      final base = WalletRouteArgs(
+        senderAddress: 'a',
+        receiveAddress: 'b',
+        changeAddress: 'c',
+        historyAddresses: const ['a'],
+        tokens: [token],
+        spendableNano: 9,
+      );
+      final next = base.copyWith(transaction: {'tx_id': 'x'});
+      expect(next.tokens.single.id, 't');
+      expect(next.spendableNano, 9);
+      expect(next.transaction?['tx_id'], 'x');
     });
   });
 }

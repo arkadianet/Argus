@@ -29,3 +29,7 @@ Thumbs.db
 # Environment
 .env
 *.env.local
+
+# Extra cargo-ndk cdylibs; keep libwallet_ffi.so
+app/android/app/src/main/jniLibs/**/libergo_*.so
+app/ios/Frameworks/

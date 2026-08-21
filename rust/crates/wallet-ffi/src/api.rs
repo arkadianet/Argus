@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use citadel_core::constants::{MIN_BOX_VALUE_NANO, TX_FEE_NANO};
-use citadel_core::NodeConfig;
 use ergo_lib::chain::transaction::reduced::ReducedTransaction;
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
 use ergo_tx::{build_send_tx_with_fee, DevFeeConfig};
@@ -14,6 +13,7 @@ use rand::RngCore;
 use wallet_core::seed::MnemonicPhrase;
 use wallet_core::spend::select_for_send;
 use wallet_core::wallet::WalletHandle;
+use wallet_core::PinWrappedKey;
 use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
 
 use crate::error::ArgusError;
@@ -89,11 +89,46 @@ fn with_handle<T>(handle_id: u64, op: &'static str, f: impl FnOnce(&WalletHandle
     f(handle)
 }
 
-fn node_config(node_url: Option<String>) -> NodeConfig {
-    NodeConfig {
-        url: node_url.unwrap_or_else(|| wallet_net::client::DEFAULT_NODE_URL.to_string()),
-        api_key: String::new(),
+async fn node_client(node_url: Option<String>) -> Result<ErgoNodeClient, String> {
+    ErgoNodeClient::connect(node_url)
+        .await
+        .map_err(|e| ArgusError::NodeUnreachable(e).to_json_string())
+}
+
+#[flutter_rust_bridge::frb]
+pub fn set_network(node_urls: Vec<String>, explorer_url: Option<String>) {
+    wallet_net::client::set_network(node_urls, explorer_url);
+}
+
+#[flutter_rust_bridge::frb]
+pub async fn probe_network() -> Result<String, String> {
+    let mut out = Vec::new();
+    for url in wallet_net::client::node_urls(None) {
+        match wallet_net::client::probe_height(&url).await {
+            Ok(height) => out.push(serde_json::json!({
+                "url": url,
+                "ok": true,
+                "height": height,
+            })),
+            Err(err) => out.push(serde_json::json!({
+                "url": url,
+                "ok": false,
+                "error": err,
+            })),
+        }
     }
+    serde_json::to_string(&serde_json::json!({
+        "nodes": out,
+        "explorer": wallet_net::client::configured_explorer(),
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+fn tokens_json(tokens: &[(String, u64)]) -> Vec<serde_json::Value> {
+    tokens
+        .iter()
+        .map(|(id, amount)| serde_json::json!({ "id": id, "amount": amount }))
+        .collect()
 }
 
 fn session_json(
@@ -181,6 +216,25 @@ pub fn create_encrypted_seed(mnemonic_phrase: String, passphrase: String) -> Res
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+/// Seal the AES wrap key with a PIN (Argon2id + AES-GCM). Returns pin-wrap JSON.
+#[flutter_rust_bridge::frb]
+pub fn wrap_key_with_pin(wrap_key_hex: String, pin: String) -> Result<String, String> {
+    let bytes = hex::decode(wrap_key_hex.trim())
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let wrapped = PinWrappedKey::wrap(&bytes, &pin).map_err(err_str)?;
+    Ok(wrapped.to_json().to_string())
+}
+
+/// Recover the AES wrap key from pin-wrap JSON.
+#[flutter_rust_bridge::frb]
+pub fn unwrap_key_with_pin(pin_wrap_json: String, pin: String) -> Result<String, String> {
+    let json: serde_json::Value = serde_json::from_str(&pin_wrap_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let wrapped = PinWrappedKey::from_json(&json).map_err(err_str)?;
+    let key = wrapped.unwrap(&pin).map_err(err_str)?;
+    Ok(hex::encode(key))
+}
+
 #[flutter_rust_bridge::frb]
 pub fn sign_reduced_transaction(
     handle_id: u64,
@@ -214,19 +268,25 @@ pub fn generate_mnemonic(strength: u32) -> Result<String, String> {
 
 #[flutter_rust_bridge::frb]
 pub async fn get_balance(address: String, node_url: Option<String>) -> Result<String, String> {
-    let client = ErgoNodeClient::new(node_config(node_url))
-        .await
-        .map_err(|e| ArgusError::NodeUnreachable(e).to_json_string())?;
+    let client = node_client(node_url).await?;
     let (nano, tokens) = client
         .get_address_balances(&address)
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
     serde_json::to_string(&serde_json::json!({
         "balance_nano_erg": nano,
-        "token_count": tokens.len(),
-        "token_ids": tokens,
+        "tokens": tokens_json(&tokens),
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+#[flutter_rust_bridge::frb]
+pub async fn get_token_info(token_id: String, explorer_url: Option<String>) -> Result<String, String> {
+    let info = wallet_net::client::get_token_info(&token_id, explorer_url.as_deref())
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    serde_json::to_string(&info)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
 #[flutter_rust_bridge::frb]
@@ -235,9 +295,7 @@ pub async fn get_transaction_history(
     node_url: Option<String>,
     limit: u64,
 ) -> Result<String, String> {
-    let client = ErgoNodeClient::new(node_config(node_url))
-        .await
-        .map_err(|e| ArgusError::NodeUnreachable(e).to_json_string())?;
+    let client = node_client(node_url).await?;
     let cap = if limit == 0 { 20 } else { limit.min(100) };
     let txs = client
         .get_transaction_history(&address, cap)
@@ -255,9 +313,7 @@ pub async fn discover_addresses(
     node_url: Option<String>,
     gap_limit: u32,
 ) -> Result<String, String> {
-    let client = ErgoNodeClient::new(node_config(node_url))
-        .await
-        .map_err(|e| ArgusError::NodeUnreachable(e).to_json_string())?;
+    let client = node_client(node_url).await?;
     let gap = gap_limit.max(1).min(100);
 
     let mut used = Vec::new();
@@ -288,7 +344,7 @@ pub async fn discover_addresses(
                 "index": index,
                 "address": addr,
                 "balance_nano_erg": balances.0,
-                "token_count": balances.1.len(),
+                "tokens": tokens_json(&balances.1),
             }));
         } else {
             consecutive_empty += 1;
@@ -307,9 +363,74 @@ pub async fn discover_addresses(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+fn resolve_send_token(
+    token_id: Option<String>,
+    token_amount: Option<u64>,
+) -> Result<Option<(String, u64)>, String> {
+    match (token_id, token_amount) {
+        (None, None) => Ok(None),
+        (Some(id), Some(amt)) if !id.is_empty() && amt > 0 => Ok(Some((id, amt))),
+        _ => Err(ArgusError::TxBuildFailed(
+            "token_id and token_amount must both be a non-empty id and amount > 0".into(),
+        )
+        .to_json_string()),
+    }
+}
+
+fn resolve_spend_addresses(sender: &str, extra: &[String]) -> Vec<String> {
+    let mut spend = extra
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if spend.is_empty() && !sender.is_empty() {
+        spend.push(sender.to_string());
+    }
+    spend.sort();
+    spend.dedup();
+    spend
+}
+
+async fn gather_unspent(
+    handle_id: u64,
+    client: &ErgoNodeClient,
+    addresses: &[String],
+) -> Result<(Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>, Vec<ergo_tx::Eip12InputBox>), String> {
+    let mut boxes = Vec::new();
+    let mut eip12 = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for addr in addresses {
+        if addr.is_empty() {
+            continue;
+        }
+        with_handle(handle_id, "send", |h| {
+            if !h.owns_address(addr).map_err(err_str)? {
+                return Err(ArgusError::InvalidAddress(
+                    "spend address is not an address of this wallet".into(),
+                )
+                .to_json_string());
+            }
+            Ok(())
+        })?;
+        let (b, e) = client
+            .get_unspent(addr)
+            .await
+            .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+        for (bx, input) in b.into_iter().zip(e.into_iter()) {
+            if seen.insert(input.box_id.clone()) {
+                boxes.push(bx);
+                eip12.push(input);
+            }
+        }
+    }
+    Ok((boxes, eip12))
+}
+
 async fn prepare(
     handle_id: u64,
     sender_address: &str,
+    spend_addresses: &[String],
+    change_address: &str,
     recipient_address: &str,
     amount_nano_erg: i64,
     token_id: Option<String>,
@@ -323,28 +444,22 @@ async fn prepare(
         .to_json_string());
     }
     with_handle(handle_id, "send", |h| {
-        if !h.owns_address(sender_address).map_err(err_str)? {
+        if !h.owns_address(change_address).map_err(err_str)? {
             return Err(ArgusError::InvalidAddress(
-                "sender is not an address of this wallet".into(),
+                "change is not an address of this wallet".into(),
             )
             .to_json_string());
         }
         Ok(())
     })?;
 
-    let send_token: Option<(String, u64)> = token_id
-        .filter(|s| !s.is_empty())
-        .zip(token_amount)
-        .filter(|(_, amt)| *amt > 0);
-    let client = ErgoNodeClient::new(node_config(node_url))
-        .await
-        .map_err(|e| ArgusError::NodeUnreachable(e).to_json_string())?;
-    let (boxes, eip12) = client
-        .get_unspent(sender_address)
-        .await
-        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    let spend = resolve_spend_addresses(sender_address, spend_addresses);
+
+    let send_token = resolve_send_token(token_id, token_amount)?;
+    let client = node_client(node_url).await?;
+    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend).await?;
     if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(sender_address.to_string()).to_json_string());
+        return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());
     }
 
     let required = (amount_nano_erg + TX_FEE_NANO + MIN_BOX_VALUE_NANO) as u64;
@@ -359,13 +474,13 @@ async fn prepare(
         .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
     let recipient_tree = address_to_ergo_tree(recipient_address)
         .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-    let sender_tree = address_to_ergo_tree(sender_address)
+    let change_tree = address_to_ergo_tree(change_address)
         .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
 
     let built = build_send_tx_with_fee(
         &selected.boxes,
         &recipient_tree,
-        &sender_tree,
+        &change_tree,
         amount_nano_erg,
         token_ref,
         height,
@@ -394,6 +509,8 @@ async fn prepare(
 pub async fn prepare_send(
     handle_id: u64,
     sender_address: String,
+    spend_addresses: Vec<String>,
+    change_address: String,
     recipient_address: String,
     amount_nano_erg: i64,
     token_id: Option<String>,
@@ -403,6 +520,8 @@ pub async fn prepare_send(
     let (ergo_boxes, built) = prepare(
         handle_id,
         &sender_address,
+        &spend_addresses,
+        &change_address,
         &recipient_address,
         amount_nano_erg,
         token_id,
@@ -426,6 +545,7 @@ pub async fn prepare_send(
     serde_json::to_string(&serde_json::json!({
         "preparation_id": preparation_id,
         "recipient": recipient_address,
+        "change_address": change_address,
         "amount_nano_erg": recipient_erg,
         "miner_fee": miner_fee,
         "change_nano_erg": change_erg,
@@ -440,9 +560,7 @@ pub async fn prepare_send(
 #[flutter_rust_bridge::frb]
 pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, String> {
     let prep = take_preparation(handle_id, preparation_id)?;
-    let client = ErgoNodeClient::new(node_config(prep.node_url))
-        .await
-        .map_err(|e| ArgusError::NodeUnreachable(e).to_json_string())?;
+    let client = node_client(prep.node_url).await?;
 
     let state_context = client
         .get_state_context()
@@ -552,5 +670,39 @@ mod tests {
         assert!(take_preparation(8, id).is_err());
         assert!(take_preparation(7, id).is_ok());
         assert!(take_preparation(7, id).is_err());
+    }
+
+    #[test]
+    fn spend_list_uses_all_owned_and_falls_back() {
+        let many = resolve_spend_addresses(
+            "9aaa",
+            &["9ccc".into(), " 9bbb ".into(), "9ccc".into(), "".into()],
+        );
+        assert_eq!(many, vec!["9bbb", "9ccc"]);
+        assert_eq!(
+            resolve_spend_addresses("9aaa", &[]),
+            vec!["9aaa"]
+        );
+    }
+
+    #[test]
+    fn send_token_pair_must_be_complete() {
+        assert!(resolve_send_token(None, None).unwrap().is_none());
+        assert_eq!(
+            resolve_send_token(Some("abc".into()), Some(2)).unwrap(),
+            Some(("abc".into(), 2))
+        );
+        assert!(resolve_send_token(Some("abc".into()), None).is_err());
+        assert!(resolve_send_token(None, Some(2)).is_err());
+        assert!(resolve_send_token(Some("".into()), Some(2)).is_err());
+        assert!(resolve_send_token(Some("abc".into()), Some(0)).is_err());
+    }
+
+    #[test]
+    fn pin_wrap_roundtrip() {
+        let key = hex::encode([3u8; 32]);
+        let json = wrap_key_with_pin(key.clone(), "123456".into()).unwrap();
+        assert_eq!(unwrap_key_with_pin(json.clone(), "123456".into()).unwrap(), key);
+        assert!(unwrap_key_with_pin(json, "654321".into()).is_err());
     }
 }
