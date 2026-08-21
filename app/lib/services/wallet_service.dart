@@ -2,15 +2,65 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
+import 'secure_storage.dart';
+
+/// Metadata for a stored wallet.
+class WalletInfo {
+  final String walletId;
+  final String name;
+  final DateTime createdAt;
+  final String? address0;
+  final int? pinnedAddressIndex;
+  final bool isUnlocked;
+
+  WalletInfo({
+    required this.walletId,
+    required this.name,
+    required this.createdAt,
+    this.address0,
+    this.pinnedAddressIndex,
+    this.isUnlocked = false,
+  });
+
+  WalletInfo copyWith({bool? isUnlocked}) => WalletInfo(
+        walletId: walletId,
+        name: name,
+        createdAt: createdAt,
+        address0: address0,
+        pinnedAddressIndex: pinnedAddressIndex,
+        isUnlocked: isUnlocked ?? this.isUnlocked,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'walletId': walletId,
+        'name': name,
+        'createdAt': createdAt.toIso8601String(),
+        'address0': address0,
+        'pinnedAddressIndex': pinnedAddressIndex,
+      };
+
+  factory WalletInfo.fromJson(Map<String, dynamic> json) => WalletInfo(
+        walletId: json['walletId'] as String,
+        name: json['name'] as String,
+        createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+            DateTime.now(),
+        address0: json['address0'] as String?,
+        pinnedAddressIndex: json['pinnedAddressIndex'] as int?,
+      );
+}
 
 class WalletSession {
+  final String walletId;
   final BigInt handleId;
   final String encryptedSeedJson;
   final String wrapKey;
   WalletSession({
+    required this.walletId,
     required this.handleId,
     required this.encryptedSeedJson,
     required this.wrapKey,
@@ -108,6 +158,10 @@ class SendPreview {
   /// preview. Empty for older preparations that predate this field.
   final List<InputBoxInput> inputBoxes;
 
+  /// For multi-recipient sends, the list of individual recipients.
+  /// Each entry has keys: address, amountNanoErg, tokenId (optional), tokenAmount (optional).
+  final List<Map<String, dynamic>>? recipients;
+
   SendPreview({
     required this.preparationId,
     required this.recipient,
@@ -119,12 +173,18 @@ class SendPreview {
     this.tokenId,
     this.tokenAmount,
     this.inputBoxes = const [],
+    this.recipients,
   });
 
   factory SendPreview.fromJson(Map<String, dynamic> json) {
     final recipient = json['recipient'];
     if (recipient is! String || recipient.isEmpty) {
       throw const FormatException('SendPreview missing or invalid recipient');
+    }
+    final recipsRaw = json['recipients'];
+    List<Map<String, dynamic>>? recips;
+    if (recipsRaw is List) {
+      recips = recipsRaw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
     }
     return SendPreview(
       preparationId: _requireInt(json, 'preparation_id'),
@@ -137,6 +197,7 @@ class SendPreview {
       tokenId: json['token_id'] as String?,
       tokenAmount: (json['token_amount'] as num?)?.toInt(),
       inputBoxes: _parseInputBoxes(json['input_boxes']),
+      recipients: recips,
     );
   }
 }
@@ -407,34 +468,71 @@ bool isIncorrectPin(Object error) {
 }
 
 class WalletService {
-  BigInt? _handleId;
+  /// All wallet handle IDs currently in memory, keyed by wallet ID.
+  final Map<String, BigInt> _handles = {};
+
+  /// The currently active wallet ID (null when locked or unassigned).
+  String? _currentWalletId;
+
+  /// Handle ID for the active wallet (computed).
+  BigInt? get _handleId => _handles[_currentWalletId];
+
+  /// WalletId-scoped key for [SharedPreferences].
+  static const _walletMetaKey = 'argus_wallet_meta_v2';
+
   bool _initialized = false;
   final ValueNotifier<bool> unlocked = ValueNotifier(false);
+  final ValueNotifier<String?> currentWalletId = ValueNotifier<String?>(null);
   final Map<String, TokenBalance> _tokenMeta = {};
 
   Future<void> init() async {
     if (_initialized) return;
     await RustLib.init();
     _initialized = true;
+    await _migrateLegacyIfNeeded();
+  }
+
+  /// Migrate pre-multi-wallet single-slot storage to a new wallet ID.
+  Future<void> _migrateLegacyIfNeeded() async {
+    final migratedId = await SecureStorageService.migrateLegacyWallet();
+    if (migratedId != null) {
+      await _upsertWalletMeta(
+        migratedId,
+        name: 'Wallet 1',
+        createdAt: DateTime.now().toUtc(),
+      );
+    }
   }
 
   bool get isUnlocked => _handleId != null;
+
+  /// The handle ID of the currently active wallet.
   BigInt? get handleId => _handleId;
+
+  /// The wallet ID of the currently active wallet.
+  String? get activeWalletId => _currentWalletId;
 
   Future<String> generateMnemonic({int strength = 256}) async {
     return RustLib.instance.api.crateApiGenerateMnemonic(strength: strength);
   }
 
-  Future<WalletSession> createWallet(String mnemonic, {String passphrase = ''}) async {
+  /// Create a new wallet. If [walletId] is omitted, a UUID is generated.
+  Future<WalletSession> createWallet(
+    String mnemonic, {
+    String passphrase = '',
+    String? walletId,
+  }) async {
     final raw = await RustLib.instance.api
         .crateApiWalletCreate(mnemonicPhrase: mnemonic, passphrase: passphrase);
     final map = jsonDecode(raw) as Map<String, dynamic>;
+    final id = walletId ?? const Uuid().v4();
     final session = WalletSession(
+      walletId: id,
       handleId: BigInt.parse(map['handle_id'].toString()),
       encryptedSeedJson: map['encrypted_seed_json'] as String,
       wrapKey: map['wrap_key'] as String,
     );
-    _setHandle(session.handleId);
+    _setHandle(id, session.handleId);
     return session;
   }
 
@@ -446,30 +544,139 @@ class WalletService {
     return RustLib.instance.api.crateApiUnwrapKeyWithPin(pinWrapJson: pinWrapJson, pin: pin);
   }
 
-  Future<void> restoreWallet(String encryptedSeedJson, {String? wrapKey}) async {
+  /// Restore a wallet from an encrypted seed JSON blob.
+  /// If [walletId] is omitted, a UUID is generated.
+  Future<void> restoreWallet(
+    String encryptedSeedJson, {
+    String? wrapKey,
+    String? walletId,
+  }) async {
     final raw = await RustLib.instance.api.crateApiWalletRestore(
       encryptedSeedJson: encryptedSeedJson,
       wrapKey: wrapKey,
     );
-    _setHandle(raw);
+    final id = walletId ?? const Uuid().v4();
+    _setHandle(id, raw);
   }
 
-  Future<void> lock() async {
-    final id = _handleId;
+  /// Lock the currently active wallet. If [walletId] is provided, lock only
+  /// that specific wallet; otherwise lock the active one.
+  Future<void> lock([String? walletId]) async {
+    final id = _handles[walletId ?? _currentWalletId];
+    final wid = walletId ?? _currentWalletId;
     if (id == null) {
       unlocked.value = false;
+      if (wid == null) currentWalletId.value = null;
       return;
     }
     try {
       await RustLib.instance.api.crateApiWalletLock(handleId: id);
     } finally {
-      // Only clear state if no newer unlock replaced the handle while the
-      // lock FFI call was in flight.
-      if (_handleId == id) {
-        _handleId = null;
-        unlocked.value = false;
+      if (_handles[wid] == id) {
+        _handles.remove(wid);
+        if (_currentWalletId == wid) {
+          _currentWalletId = null;
+          currentWalletId.value = null;
+          unlocked.value = false;
+        }
       }
     }
+  }
+
+  /// Switch the active wallet to [targetId]. If the target is locked, it is
+  /// restored from secure storage first.
+  Future<void> switchWallet(String targetId) async {
+    if (_currentWalletId == targetId && _handles.containsKey(targetId)) return;
+
+    // Lock current wallet
+    if (_handleId != null) await lock();
+
+    // Restore target
+    final json = await SecureStorageService.loadEncryptedSeed(walletId: targetId);
+    if (json == null) {
+      throw ArgusException(
+        code: 'NO_WALLET',
+        message: 'Wallet data not found for $targetId',
+      );
+    }
+    final wrapKey = await SecureStorageService.loadWrapKey(walletId: targetId);
+    await restoreWallet(json, wrapKey: wrapKey, walletId: targetId);
+  }
+
+  /// Returns metadata for all stored wallets.
+  Future<List<WalletInfo>> listWallets() async {
+    final ids = await SecureStorageService.listWalletIds();
+    final List<WalletInfo> infos = [];
+    for (final id in ids) {
+      final meta = await _loadWalletMeta(id);
+      infos.add(meta.copyWith(isUnlocked: _handles.containsKey(id)));
+    }
+    return infos;
+  }
+
+  /// Returns the pinned address index for the active wallet, or 0 if none pinned.
+  Future<int> getPinnedAddressIndex() async {
+    final id = _currentWalletId;
+    if (id == null) return 0;
+    final meta = await _loadWalletMeta(id);
+    return meta.pinnedAddressIndex ?? 0;
+  }
+
+  /// Persist metadata for a wallet (name, address, creation time).
+  Future<void> saveWalletInfo(
+    String walletId, {
+    required String name,
+    required DateTime createdAt,
+    String? address0,
+    int? pinnedAddressIndex,
+  }) async {
+    await _upsertWalletMeta(
+      walletId,
+      name: name,
+      createdAt: createdAt,
+      address0: address0,
+      pinnedAddressIndex: pinnedAddressIndex,
+    );
+  }
+
+  /// Auto-generate a wallet name based on the current count.
+  Future<String> generateWalletName() async {
+    final existing = await listWallets();
+    return 'Wallet ${existing.length + 1}';
+  }
+
+  /// Rename a stored wallet.
+  Future<void> renameWallet(String walletId, String newName) async {
+    final meta = await _loadWalletMeta(walletId);
+    await _upsertWalletMeta(
+      walletId,
+      name: newName,
+      createdAt: meta.createdAt,
+      address0: meta.address0,
+      pinnedAddressIndex: meta.pinnedAddressIndex,
+    );
+  }
+
+  /// Pin a specific address index as the primary send/receive address for this wallet.
+  /// Pass `null` to reset to the default (index 0).
+  Future<void> setPinnedAddressIndex(String walletId, int? index) async {
+    final meta = await _loadWalletMeta(walletId);
+    await _upsertWalletMeta(
+      walletId,
+      name: meta.name,
+      createdAt: meta.createdAt,
+      address0: meta.address0,
+      pinnedAddressIndex: index,
+    );
+  }
+
+  /// Delete a wallet and all its secure storage.
+  Future<void> deleteWallet(String walletId) async {
+    if (_handles.containsKey(walletId)) {
+      await lock(walletId);
+    }
+    await SecureStorageService.deleteWallet(walletId);
+    await _removeWalletMeta(walletId);
   }
 
   Future<String> deriveAddress(int index) {
@@ -496,6 +703,7 @@ class WalletService {
     String? tokenId,
     int? tokenAmount,
     String? nodeUrl,
+    int? feeNanoErg,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareSend(
@@ -508,6 +716,31 @@ class WalletService {
       tokenId: tokenId,
       tokenAmount: tokenAmount != null ? BigInt.from(tokenAmount) : null,
       nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+    return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  /// Prepare a multi-recipient send.
+  /// Each recipient in [recipients] must have keys: address, amountNanoErg (optional if token),
+  /// tokenId (optional), tokenAmount (optional).
+  Future<SendPreview> prepareSendMulti({
+    required String senderAddress,
+    List<String>? spendAddresses,
+    required String changeAddress,
+    required List<Map<String, dynamic>> recipients,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareSendMulti(
+      handleId: _handleId!,
+      senderAddress: senderAddress,
+      spendAddresses: spendAddresses ?? const [],
+      changeAddress: changeAddress,
+      recipientsJson: jsonEncode(recipients),
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
     );
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -518,6 +751,7 @@ class WalletService {
     List<String>? selectedBoxIds,
     required String changeAddress,
     String? nodeUrl,
+    int? feeNanoErg,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareConsolidate(
@@ -526,6 +760,7 @@ class WalletService {
       selectedBoxIds: selectedBoxIds ?? const [],
       changeAddress: changeAddress,
       nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
     );
     return ConsolidatePreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -538,6 +773,7 @@ class WalletService {
     required int amountPerBoxNano,
     required String changeAddress,
     String? nodeUrl,
+    int? feeNanoErg,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareSplitErg(
@@ -548,6 +784,7 @@ class WalletService {
       amountPerBoxNano: amountPerBoxNano,
       changeAddress: changeAddress,
       nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
     );
     return SplitPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -562,6 +799,7 @@ class WalletService {
     required int ergPerBoxNano,
     required String changeAddress,
     String? nodeUrl,
+    int? feeNanoErg,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareSplitToken(
@@ -574,6 +812,7 @@ class WalletService {
       ergPerBoxNano: ergPerBoxNano,
       changeAddress: changeAddress,
       nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
     );
     return SplitPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -585,6 +824,7 @@ class WalletService {
     required List<Map<String, dynamic>> outputs,
     required String changeAddress,
     String? nodeUrl,
+    int? feeNanoErg,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareRestructure(
@@ -594,6 +834,7 @@ class WalletService {
       outputsJson: jsonEncode(outputs),
       changeAddress: changeAddress,
       nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
     );
     return RestructurePreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -606,6 +847,16 @@ class WalletService {
     );
     final map = jsonDecode(raw) as Map<String, dynamic>;
     return map['tx_id'] as String? ?? raw;
+  }
+
+  /// Sign a prepared transaction without submitting it. Returns the raw signed
+  /// transaction JSON (for export / air-gapped signing).
+  Future<String> signPreparation({required int preparationId}) async {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiSignPreparation(
+      handleId: _handleId!,
+      preparationId: BigInt.from(preparationId),
+    );
   }
 
   Future<int> getBalanceNano(String address, {String? nodeUrl}) async {
@@ -879,8 +1130,10 @@ class WalletService {
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
-  void _setHandle(BigInt id) {
-    _handleId = id;
+  void _setHandle(String walletId, BigInt id) {
+    _handles[walletId] = id;
+    _currentWalletId = walletId;
+    currentWalletId.value = walletId;
     unlocked.value = true;
   }
 
@@ -888,6 +1141,55 @@ class WalletService {
     if (_handleId == null) {
       throw ArgusException(code: 'WALLET_LOCKED', message: 'Wallet is locked');
     }
+  }
+
+  /// --- Wallet metadata (stored in [SharedPreferences], unencrypted) ---
+
+  Future<Map<String, dynamic>> _loadAllWalletMeta() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_walletMetaKey);
+    if (raw == null) return {};
+    final decoded = jsonDecode(raw) as Map<String, dynamic>;
+    return decoded.map((k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)));
+  }
+
+  Future<WalletInfo> _loadWalletMeta(String walletId) async {
+    final all = await _loadAllWalletMeta();
+    final meta = all[walletId];
+    if (meta != null) {
+      return WalletInfo.fromJson(meta);
+    }
+    return WalletInfo(
+      walletId: walletId,
+      name: 'Wallet',
+      createdAt: DateTime.now(),
+    );
+  }
+
+  Future<void> _upsertWalletMeta(
+    String walletId, {
+    required String name,
+    required DateTime createdAt,
+    String? address0,
+    int? pinnedAddressIndex,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final all = await _loadAllWalletMeta();
+    all[walletId] = {
+      'walletId': walletId,
+      'name': name,
+      'createdAt': createdAt.toIso8601String(),
+      'address0': address0,
+      'pinnedAddressIndex': pinnedAddressIndex,
+    };
+    await prefs.setString(_walletMetaKey, jsonEncode(all));
+  }
+
+  Future<void> _removeWalletMeta(String walletId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final all = await _loadAllWalletMeta();
+    all.remove(walletId);
+    await prefs.setString(_walletMetaKey, jsonEncode(all));
   }
 }
 

@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -918512305;
+  int get rustContentHash => 1725604841;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -125,6 +125,7 @@ abstract class RustLibApi extends BaseApi {
     required List<String> selectedBoxIds,
     required String changeAddress,
     String? nodeUrl,
+    PlatformInt64? feeNano,
   });
 
   Future<String> crateApiPrepareRestructure({
@@ -134,6 +135,7 @@ abstract class RustLibApi extends BaseApi {
     required String outputsJson,
     required String changeAddress,
     String? nodeUrl,
+    PlatformInt64? feeNano,
   });
 
   Future<String> crateApiPrepareSend({
@@ -146,6 +148,17 @@ abstract class RustLibApi extends BaseApi {
     String? tokenId,
     BigInt? tokenAmount,
     String? nodeUrl,
+    PlatformInt64? feeNano,
+  });
+
+  Future<String> crateApiPrepareSendMulti({
+    required BigInt handleId,
+    required String senderAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    required String recipientsJson,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
   });
 
   Future<String> crateApiPrepareSplitErg({
@@ -156,6 +169,7 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 amountPerBoxNano,
     required String changeAddress,
     String? nodeUrl,
+    PlatformInt64? feeNano,
   });
 
   Future<String> crateApiPrepareSplitToken({
@@ -168,6 +182,7 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 ergPerBoxNano,
     required String changeAddress,
     String? nodeUrl,
+    PlatformInt64? feeNano,
   });
 
   Future<String> crateApiProbeNetwork();
@@ -180,6 +195,11 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiSetNetwork({
     required List<String> nodeUrls,
     String? explorerUrl,
+  });
+
+  Future<String> crateApiSignPreparation({
+    required BigInt handleId,
+    required BigInt preparationId,
   });
 
   Future<String> crateApiSignReducedTransaction({
@@ -569,6 +589,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required List<String> selectedBoxIds,
     required String changeAddress,
     String? nodeUrl,
+    PlatformInt64? feeNano,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -579,6 +600,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_list_String(selectedBoxIds, serializer);
           sse_encode_String(changeAddress, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -597,6 +619,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           selectedBoxIds,
           changeAddress,
           nodeUrl,
+          feeNano,
         ],
         apiImpl: this,
       ),
@@ -611,6 +634,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "selectedBoxIds",
       "changeAddress",
       "nodeUrl",
+      "feeNano",
     ],
   );
 
@@ -622,6 +646,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String outputsJson,
     required String changeAddress,
     String? nodeUrl,
+    PlatformInt64? feeNano,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -633,6 +658,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(outputsJson, serializer);
           sse_encode_String(changeAddress, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -652,6 +678,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           outputsJson,
           changeAddress,
           nodeUrl,
+          feeNano,
         ],
         apiImpl: this,
       ),
@@ -667,6 +694,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "outputsJson",
       "changeAddress",
       "nodeUrl",
+      "feeNano",
     ],
   );
 
@@ -681,6 +709,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     String? tokenId,
     BigInt? tokenAmount,
     String? nodeUrl,
+    PlatformInt64? feeNano,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -695,6 +724,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_opt_String(tokenId, serializer);
           sse_encode_opt_box_autoadd_u_64(tokenAmount, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -717,6 +747,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           tokenId,
           tokenAmount,
           nodeUrl,
+          feeNano,
         ],
         apiImpl: this,
       ),
@@ -735,6 +766,67 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "tokenId",
       "tokenAmount",
       "nodeUrl",
+      "feeNano",
+    ],
+  );
+
+  @override
+  Future<String> crateApiPrepareSendMulti({
+    required BigInt handleId,
+    required String senderAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    required String recipientsJson,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_String(senderAddress, serializer);
+          sse_encode_list_String(spendAddresses, serializer);
+          sse_encode_String(changeAddress, serializer);
+          sse_encode_String(recipientsJson, serializer);
+          sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiPrepareSendMultiConstMeta,
+        argValues: [
+          handleId,
+          senderAddress,
+          spendAddresses,
+          changeAddress,
+          recipientsJson,
+          nodeUrl,
+          feeNano,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPrepareSendMultiConstMeta => const TaskConstMeta(
+    debugName: "prepare_send_multi",
+    argNames: [
+      "handleId",
+      "senderAddress",
+      "spendAddresses",
+      "changeAddress",
+      "recipientsJson",
+      "nodeUrl",
+      "feeNano",
     ],
   );
 
@@ -747,6 +839,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required PlatformInt64 amountPerBoxNano,
     required String changeAddress,
     String? nodeUrl,
+    PlatformInt64? feeNano,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -759,10 +852,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_i_64(amountPerBoxNano, serializer);
           sse_encode_String(changeAddress, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 15,
             port: port_,
           );
         },
@@ -779,6 +873,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           amountPerBoxNano,
           changeAddress,
           nodeUrl,
+          feeNano,
         ],
         apiImpl: this,
       ),
@@ -795,6 +890,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "amountPerBoxNano",
       "changeAddress",
       "nodeUrl",
+      "feeNano",
     ],
   );
 
@@ -809,6 +905,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required PlatformInt64 ergPerBoxNano,
     required String changeAddress,
     String? nodeUrl,
+    PlatformInt64? feeNano,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -823,10 +920,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_i_64(ergPerBoxNano, serializer);
           sse_encode_String(changeAddress, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 16,
             port: port_,
           );
         },
@@ -845,6 +943,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           ergPerBoxNano,
           changeAddress,
           nodeUrl,
+          feeNano,
         ],
         apiImpl: this,
       ),
@@ -863,6 +962,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "ergPerBoxNano",
       "changeAddress",
       "nodeUrl",
+      "feeNano",
     ],
   );
 
@@ -875,7 +975,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 17,
             port: port_,
           );
         },
@@ -907,7 +1007,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 18,
             port: port_,
           );
         },
@@ -941,7 +1041,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 19,
             port: port_,
           );
         },
@@ -962,6 +1062,40 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<String> crateApiSignPreparation({
+    required BigInt handleId,
+    required BigInt preparationId,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_u_64(preparationId, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 20,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSignPreparationConstMeta,
+        argValues: [handleId, preparationId],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSignPreparationConstMeta => const TaskConstMeta(
+    debugName: "sign_preparation",
+    argNames: ["handleId", "preparationId"],
+  );
+
+  @override
   Future<String> crateApiSignReducedTransaction({
     required BigInt handleId,
     required List<int> reducedTxBytes,
@@ -975,7 +1109,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 21,
             port: port_,
           );
         },
@@ -1010,7 +1144,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 22,
             port: port_,
           );
         },
@@ -1048,7 +1182,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 23,
             port: port_,
           );
         },
@@ -1083,7 +1217,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 24,
             port: port_,
           );
         },
@@ -1113,7 +1247,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 23,
+            funcId: 25,
             port: port_,
           );
         },
@@ -1143,7 +1277,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 24,
+            funcId: 26,
             port: port_,
           );
         },
@@ -1175,7 +1309,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 25,
+            funcId: 27,
             port: port_,
           );
         },
@@ -1209,7 +1343,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 26,
+            funcId: 28,
             port: port_,
           );
         },
@@ -1239,6 +1373,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   bool dco_decode_bool(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as bool;
+  }
+
+  @protected
+  PlatformInt64 dco_decode_box_autoadd_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return dco_decode_i_64(raw);
   }
 
   @protected
@@ -1281,6 +1421,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   String? dco_decode_opt_String(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw == null ? null : dco_decode_String(raw);
+  }
+
+  @protected
+  PlatformInt64? dco_decode_opt_box_autoadd_i_64(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_box_autoadd_i_64(raw);
   }
 
   @protected
@@ -1333,6 +1479,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  PlatformInt64 sse_decode_box_autoadd_i_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return (sse_decode_i_64(deserializer));
+  }
+
+  @protected
   int sse_decode_box_autoadd_u_32(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_u_32(deserializer));
@@ -1382,6 +1534,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_String(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  PlatformInt64? sse_decode_opt_box_autoadd_i_64(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_box_autoadd_i_64(deserializer));
     } else {
       return null;
     }
@@ -1451,6 +1614,15 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  void sse_encode_box_autoadd_i_64(
+    PlatformInt64 self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_64(self, serializer);
+  }
+
+  @protected
   void sse_encode_box_autoadd_u_32(int self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_32(self, serializer);
@@ -1506,6 +1678,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_String(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_box_autoadd_i_64(
+    PlatformInt64? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_box_autoadd_i_64(self, serializer);
     }
   }
 

@@ -1,13 +1,15 @@
 import 'package:flutter/services.dart';
+import 'package:uuid/uuid.dart';
 
 /// Platform Keystore/Keychain for the sealed seed, PIN wrap, and optional wrap key.
 class SecureStorageService {
   static const _channel = MethodChannel('com.argus.wallet/secure_storage');
 
-  static Future<bool> saveEncryptedSeed(String encryptedSeedJson) async {
+  static Future<bool> saveEncryptedSeed(String encryptedSeedJson, {String? walletId}) async {
     try {
       await _channel.invokeMethod('saveEncryptedSeed', {
         'encryptedSeedJson': encryptedSeedJson,
+        if (walletId != null) 'walletId': walletId,
       });
       return true;
     } on PlatformException catch (e) {
@@ -15,96 +17,139 @@ class SecureStorageService {
     }
   }
 
-  static Future<bool> saveWrapKey(String wrapKey) async {
+  static Future<bool> saveWrapKey(String wrapKey, {String? walletId}) async {
     try {
-      await _channel.invokeMethod('saveWrapKey', {'wrapKey': wrapKey});
+      await _channel.invokeMethod('saveWrapKey', {
+        'wrapKey': wrapKey,
+        if (walletId != null) 'walletId': walletId,
+      });
       return true;
     } on PlatformException catch (e) {
       throw _map(e, 'Failed to save wrap key');
     }
   }
 
-  static Future<void> savePinWrap(String pinWrapJson) async {
+  static Future<void> savePinWrap(String pinWrapJson, {String? walletId}) async {
     try {
-      await _channel.invokeMethod('savePinWrap', {'pinWrapJson': pinWrapJson});
+      await _channel.invokeMethod('savePinWrap', {
+        'pinWrapJson': pinWrapJson,
+        if (walletId != null) 'walletId': walletId,
+      });
     } on PlatformException catch (e) {
       throw _map(e, 'Failed to save PIN wrap');
     }
   }
 
   static Future<void> saveWalletWithPin({
+    required String walletId,
     required String encryptedSeedJson,
     required String pinWrapJson,
+    String? wrapKey,
   }) async {
-    await saveEncryptedSeed(encryptedSeedJson);
+    await saveEncryptedSeed(encryptedSeedJson, walletId: walletId);
     try {
-      await savePinWrap(pinWrapJson);
+      await savePinWrap(pinWrapJson, walletId: walletId);
     } catch (_) {
-      await deleteEncryptedSeed();
+      await deleteEncryptedSeed(walletId: walletId);
       rethrow;
     }
-    await deleteWrapKey();
+    if (wrapKey != null) {
+      await saveWrapKey(wrapKey, walletId: walletId);
+    }
+    await deleteWrapKey(walletId: walletId);
   }
 
-  static Future<String?> loadWrapKey() async {
+  static Future<String?> loadWrapKey({String? walletId}) async {
     try {
-      return await _channel.invokeMethod<String>('loadWrapKey');
+      return await _channel.invokeMethod<String>(
+        'loadWrapKey',
+        walletId != null ? {'walletId': walletId} : null,
+      );
     } on PlatformException catch (e) {
       throw _map(e, 'Failed to load wrap key');
     }
   }
 
-  static Future<String?> loadPinWrap() async {
+  static Future<String?> loadPinWrap({String? walletId}) async {
     try {
-      return await _channel.invokeMethod<String>('loadPinWrap');
+      return await _channel.invokeMethod<String>(
+        'loadPinWrap',
+        walletId != null ? {'walletId': walletId} : null,
+      );
     } on PlatformException catch (e) {
       throw _map(e, 'Failed to load PIN wrap');
     }
   }
 
-  static Future<String?> loadEncryptedSeed() async {
+  static Future<String?> loadEncryptedSeed({String? walletId}) async {
     try {
-      return await _channel.invokeMethod<String>('loadEncryptedSeed');
+      return await _channel.invokeMethod<String>(
+        'loadEncryptedSeed',
+        walletId != null ? {'walletId': walletId} : null,
+      );
     } on PlatformException catch (e) {
       throw _map(e, 'Failed to load');
     }
   }
 
-  static Future<void> deleteEncryptedSeed() async {
+  static Future<void> deleteWrapKey({String? walletId}) async {
     try {
-      await _channel.invokeMethod('deleteEncryptedSeed');
-    } on PlatformException catch (e) {
-      throw SecureStorageException('Failed to delete: ${e.message}');
-    }
-  }
-
-  static Future<void> deleteWrapKey() async {
-    try {
-      await _channel.invokeMethod('deleteWrapKey');
+      await _channel.invokeMethod(
+        'deleteWrapKey',
+        walletId != null ? {'walletId': walletId} : null,
+      );
     } on PlatformException catch (e) {
       throw SecureStorageException('Failed to delete wrap key: ${e.message}');
     }
   }
 
-  static Future<bool> hasEncryptedSeed() async {
+  static Future<void> deleteEncryptedSeed({String? walletId}) async {
     try {
-      return await _channel.invokeMethod<bool>('hasEncryptedSeed') ?? false;
+      await _channel.invokeMethod(
+        'deleteEncryptedSeed',
+        walletId != null ? {'walletId': walletId} : null,
+      );
+    } on PlatformException catch (e) {
+      throw SecureStorageException('Failed to delete wallet secrets: ${e.message}');
+    }
+  }
+
+  static Future<void> deleteWallet(String walletId) async {
+    try {
+      await _channel.invokeMethod('deleteWallet', {'walletId': walletId});
+    } on PlatformException catch (e) {
+      throw SecureStorageException('Failed to delete wallet: ${e.message}');
+    }
+  }
+
+  static Future<bool> hasEncryptedSeed({String? walletId}) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+        'hasEncryptedSeed',
+        walletId != null ? {'walletId': walletId} : null,
+      ) ?? false;
     } on PlatformException catch (e) {
       throw SecureStorageException('Failed to check: ${e.message}');
     }
   }
 
-  static Future<bool> hasPinWrap() async {
+  static Future<bool> hasPinWrap({String? walletId}) async {
     try {
-      return await _channel.invokeMethod<bool>('hasPinWrap') ?? false;
+      return await _channel.invokeMethod<bool>(
+        'hasPinWrap',
+        walletId != null ? {'walletId': walletId} : null,
+      ) ?? false;
     } on PlatformException catch (e) {
       throw _map(e, 'Failed to check PIN wrap');
     }
   }
 
-  static Future<bool> hasWrapKey() async {
+  static Future<bool> hasWrapKey({String? walletId}) async {
     try {
-      return await _channel.invokeMethod<bool>('hasWrapKey') ?? false;
+      return await _channel.invokeMethod<bool>(
+        'hasWrapKey',
+        walletId != null ? {'walletId': walletId} : null,
+      ) ?? false;
     } on PlatformException catch (e) {
       throw _map(e, 'Failed to check wrap key');
     }
@@ -120,9 +165,12 @@ class SecureStorageService {
   }
 
   /// Returns the wrap key after a biometric prompt, or null if the user cancelled.
-  static Future<String?> authenticateBiometric() async {
+  static Future<String?> authenticateBiometric({String? walletId}) async {
     try {
-      final raw = await _channel.invokeMethod('authenticateBiometric');
+      final raw = await _channel.invokeMethod(
+        'authenticateBiometric',
+        walletId != null ? {'walletId': walletId} : null,
+      );
       if (raw is String && raw.isNotEmpty) return raw;
       return null;
     } on PlatformException catch (e) {
@@ -186,6 +234,35 @@ class SecureStorageService {
     }
   }
 
+  /// Returns all wallet IDs currently stored.
+  static Future<List<String>> listWalletIds() async {
+    try {
+      final result = await _channel.invokeMethod<List<dynamic>>('listWalletIds');
+      return result?.map((e) => e.toString()).toList() ?? [];
+    } on PlatformException catch (e) {
+      throw SecureStorageException('Failed to list wallets: ${e.message}');
+    }
+  }
+
+  /// Migrates a legacy single-slot wallet (pre-multi-wallet) to a new wallet ID.
+  /// Returns the wallet ID if migration was performed, or null if there was
+  /// nothing to migrate.
+  static Future<String?> migrateLegacyWallet() async {
+    final hasLegacy = await _channel.invokeMethod<bool>('hasEncryptedSeed');
+    if (hasLegacy != true) return null;
+    // If already migrated (wallet registry exists), do nothing.
+    final ids = await listWalletIds();
+    if (ids.isNotEmpty && !ids.contains('legacy')) return null;
+
+    final newWalletId = const Uuid().v4();
+    final migrated = await _channel.invokeMethod<bool>(
+      'migrateLegacyWallet',
+      {'newWalletId': newWalletId},
+    );
+    if (migrated == true) return newWalletId;
+    return null;
+  }
+
   static bool _isCancel(PlatformException e) {
     final msg = e.message?.toLowerCase() ?? '';
     return e.code == 'BIOMETRIC' &&
@@ -205,6 +282,7 @@ class SecureStorageException implements Exception {
   final bool isBiometricChanged;
 
   SecureStorageException(this.message) : isBiometricChanged = false;
+
   SecureStorageException.biometricChanged()
       : message = 'Biometric enrollment changed; re-enter mnemonic',
         isBiometricChanged = true;

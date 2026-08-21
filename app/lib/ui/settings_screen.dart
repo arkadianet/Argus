@@ -1,16 +1,20 @@
 import 'package:flutter/material.dart';
 
 import '../bridge/argus_error.dart';
+import '../format.dart';
+import '../services/address_label_service.dart';
 import '../services/network_controller.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
+import '../services/watch_only_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import '../theme/theme_controller.dart';
 import 'pin_fields.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final String? walletId;
+  const SettingsScreen({super.key, this.walletId});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -41,10 +45,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _load() async {
     try {
-      final hasPin = await SecureStorageService.hasPinWrap();
+      final hasPin = await SecureStorageService.hasPinWrap(walletId: widget.walletId);
       final bio = hasPin &&
           await SecureStorageService.hasBiometric() &&
-          await SecureStorageService.hasWrapKey();
+          await SecureStorageService.hasWrapKey(walletId: widget.walletId);
       if (!mounted) return;
       setState(() {
         _hasPin = hasPin;
@@ -61,7 +65,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _disableBiometric() async {
     setState(() => _busy = true);
     try {
-      await SecureStorageService.deleteWrapKey();
+      await SecureStorageService.deleteWrapKey(walletId: widget.walletId);
       await _load();
     } catch (_) {
       _snack('Could not disable biometrics');
@@ -114,10 +118,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _busy = true);
     try {
       final saved = await sessionLock.run(() async {
-        final pinWrap = await SecureStorageService.loadPinWrap();
+        final pinWrap = await SecureStorageService.loadPinWrap(walletId: widget.walletId);
         if (pinWrap == null) return false;
         final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, entered);
-        await SecureStorageService.saveWrapKey(wrapKey);
+        await SecureStorageService.saveWrapKey(wrapKey, walletId: widget.walletId);
         await SecureStorageService.clearPinGate();
         return true;
       });
@@ -141,6 +145,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _snack('Could not enable biometrics');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _switchWallet() async {
+    final wallets = await walletService.listWallets();
+    if (!mounted) return;
+    final current = widget.walletId;
+    final result = await showModalBottomSheet<String?>(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('Select wallet', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+          ),
+          for (final w in wallets)
+            ListTile(
+              leading: const Icon(Icons.account_balance_wallet_outlined),
+              title: Text(w.name),
+              subtitle: Text(w.address0 != null ? w.address0! : 'wallet_id: ${w.walletId.substring(0, 8)}…'),
+              selected: w.walletId == current,
+              trailing: w.isUnlocked ? const Icon(Icons.lock_open, size: 16) : null,
+              onTap: () => Navigator.pop(ctx, w.walletId),
+            ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+    if (result != null && result != current) {
+      Navigator.pop(context, result);
     }
   }
 
@@ -186,7 +222,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       var changed = false;
       await sessionLock.run(() async {
-        final pinWrap = await SecureStorageService.loadPinWrap();
+        final pinWrap = await SecureStorageService.loadPinWrap(walletId: widget.walletId);
         if (pinWrap == null) {
           _snack('No PIN-protected wallet found');
           return;
@@ -198,7 +234,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
         final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, old);
         final newPinWrap = await walletService.wrapKeyWithPin(wrapKey, next);
-        await SecureStorageService.savePinWrap(newPinWrap);
+        await SecureStorageService.savePinWrap(newPinWrap, walletId: widget.walletId);
         changed = true;
       });
       if (changed) {
@@ -230,6 +266,83 @@ class _SettingsScreenState extends State<SettingsScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Future<void> _addWatchAddress() async {
+    final ctrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Add watch-only address'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: ctrl,
+              decoration: const InputDecoration(
+                labelText: 'Ergo address',
+                hintText: '9...',
+              ),
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Add')),
+        ],
+      ),
+    );
+    final addr = ctrl.text.trim();
+    ctrl.dispose();
+    if (ok != true || addr.isEmpty) return;
+    if (!looksLikeErgoAddress(addr)) {
+      _snack('Not a valid Ergo address');
+      return;
+    }
+    await watchOnlyService.add(addr);
+    _snack('Address added');
+  }
+
+  Future<void> _pinAddressIndex() async {
+    final indexCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Pin address index'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Derive address at this index and pin it as the primary '
+                'address for send/receive flows. Use index 0 to reset to default.'),
+            const SizedBox(height: 12),
+            TextField(
+              controller: indexCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Index',
+                hintText: '0',
+              ),
+              keyboardType: TextInputType.number,
+              autofocus: true,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Pin')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final text = indexCtrl.text.trim();
+    indexCtrl.dispose();
+    final index = int.tryParse(text);
+    if (index == null || index < 0) {
+      _snack('Invalid index');
+      return;
+    }
+    await walletService.setPinnedAddressIndex(walletService.activeWalletId!, index);
+    _snack('Pinned address index $index');
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -239,6 +352,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           themeController,
           networkController,
           walletService.unlocked,
+          addressLabelService,
+          watchOnlyService,
         ]),
         builder: (context, _) {
           return ListView(
@@ -477,6 +592,38 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
               if (walletService.isUnlocked) ...[
                 const SizedBox(height: 28),
+                const SectionLabel('Wallets'),
+                const SizedBox(height: 12),
+                FutureBuilder(
+                  future: walletService.listWallets(),
+                  builder: (context, snapshot) {
+                    final wallets = snapshot.data ?? [];
+                    if (wallets.length < 2) {
+                      return Text(
+                        wallets.isEmpty
+                            ? 'No wallets stored.'
+                            : '1 wallet stored. Create or restore another to switch.',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      );
+                    }
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${wallets.length} wallets stored',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        TextButton.icon(
+                          onPressed: _busy ? null : _switchWallet,
+                          icon: const Icon(Icons.swap_horiz),
+                          label: const Text('Switch wallet'),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 28),
                 const SectionLabel('Advanced Tools'),
                 const SizedBox(height: 12),
                 Align(
@@ -488,6 +635,99 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ],
+              const SizedBox(height: 28),
+              const SectionLabel('Watch-only addresses'),
+              const SizedBox(height: 12),
+              if (watchOnlyService.addresses.isEmpty)
+                Text(
+                  'Monitor balances for addresses without a seed. Add addresses to track them on the dashboard.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                )
+              else
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 6,
+                      children: watchOnlyService.addresses.map((addr) {
+                        return Chip(
+                          label: Text(
+                            shorten(addr, head: 6, tail: 4),
+                            style: monoStyle(context, size: 10),
+                          ),
+                          onDeleted: () => watchOnlyService.remove(addr),
+                          visualDensity: VisualDensity.compact,
+                        );
+                      }).toList(),
+                    ),
+                    TextButton(
+                      onPressed: () => _addWatchAddress(),
+                      child: const Text('Add address'),
+                    ),
+                  ],
+                ),
+              if (watchOnlyService.addresses.isEmpty)
+                TextButton(
+                  onPressed: () => _addWatchAddress(),
+                  child: const Text('Add watch-only address'),
+                ),
+              const SizedBox(height: 28),
+              const SectionLabel('Primary address'),
+              const SizedBox(height: 12),
+              FutureBuilder(
+                future: walletService.getPinnedAddressIndex(),
+                builder: (context, snapshot) {
+                  final pinned = snapshot.data ?? 0;
+                  final isPinned = pinned != 0;
+                  return ListTile(
+                    leading: const Icon(Icons.push_pin_outlined),
+                    title: Text(isPinned
+                        ? 'Address index #$pinned is pinned as primary'
+                        : 'Primary address (index 0)'),
+                    trailing: isPinned
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            tooltip: 'Unpin',
+                            onPressed: () async {
+                              await walletService.setPinnedAddressIndex(
+                                walletService.activeWalletId!,
+                                0,
+                              );
+                              setState(() {});
+                            },
+                          )
+                        : null,
+                  );
+                },
+              ),
+              TextButton.icon(
+                onPressed: walletService.isUnlocked
+                    ? _pinAddressIndex
+                    : null,
+                icon: const Icon(Icons.search),
+                label: const Text('Find & pin an address index'),
+              ),
+              const SizedBox(height: 28),
+              const SectionLabel('Address labels'),
+              const SizedBox(height: 12),
+              if (addressLabelService.labels.isEmpty)
+                Text(
+                  'Tap any address on the dashboard or receive screen to label it.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                )
+              else
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: addressLabelService.labels.entries.map((e) => Chip(
+                    label: Text(
+                      '${e.value}: ${shorten(e.key, head: 6, tail: 4)}',
+                      style: monoStyle(context, size: 10),
+                    ),
+                    onDeleted: () => addressLabelService.removeLabel(e.key),
+                    visualDensity: VisualDensity.compact,
+                  )).toList(),
+                ),
               const SizedBox(height: 28),
               const SectionLabel('Backup'),
               const SizedBox(height: 12),

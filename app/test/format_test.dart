@@ -115,4 +115,40 @@ void main() {
       );
     });
   });
+
+  group('formatRelativeTime', () {
+    test('null returns empty', () {
+      expect(formatRelativeTime(null), '');
+    });
+
+    test('within a few seconds is just now', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now, now: now), 'Just now');
+      expect(formatRelativeTime(now.subtract(const Duration(seconds: 3)), now: now), 'Just now');
+    });
+
+    test('seconds are reported individually', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now.subtract(const Duration(seconds: 10)), now: now), '10s ago');
+      expect(formatRelativeTime(now.subtract(const Duration(seconds: 59)), now: now), '59s ago');
+    });
+
+    test('minutes and hours', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now.subtract(const Duration(minutes: 5)), now: now), '5 min ago');
+      expect(formatRelativeTime(now.subtract(const Duration(minutes: 45)), now: now), '45 min ago');
+      expect(formatRelativeTime(now.subtract(const Duration(hours: 2)), now: now), '2h ago');
+    });
+
+    test('days', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now.subtract(const Duration(days: 1)), now: now), 'Yesterday');
+      expect(formatRelativeTime(now.subtract(const Duration(days: 3)), now: now), '3 days ago');
+    });
+
+    test('old dates fall back to date format', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now.subtract(const Duration(days: 30)), now: now), '5/16/2025');
+    });
+  });
 }

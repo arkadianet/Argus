@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 
+import 'services/address_label_service.dart';
 import 'services/contacts_service.dart';
+import 'services/session_lock.dart';
+import 'services/watch_only_service.dart';
 import 'services/session_lock.dart';
 import 'services/wallet_service.dart';
 import 'theme/argus_theme.dart';
@@ -23,6 +26,8 @@ Future<void> main() async {
   themeController.load().catchError((_) {});
   await sessionLock.loadGrace().catchError((_) {});
   await contactsService.load().catchError((_) {});
+  await addressLabelService.load().catchError((_) {});
+  await watchOnlyService.load().catchError((_) {});
   runApp(const ArgusApp());
 }
 

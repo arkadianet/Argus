@@ -791,6 +791,11 @@ class _ConsolidatePreviewSheet extends StatelessWidget {
           _row('Total Value In', formatErg(preview.totalErgIn)),
           _row('Tokens Included', '${preview.tokenCount} token types'),
           _row('Miner Fee', formatErg(preview.minerFee)),
+          const SizedBox(height: 4),
+          Text(
+            'Fee is network-computed based on transaction complexity.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11, fontStyle: FontStyle.italic),
+          ),
           const Hairline(),
           const SizedBox(height: 8),
           _row(
@@ -1056,6 +1061,11 @@ class _SplitPreviewSheet extends StatelessWidget {
           ),
           _row('Change Returned', formatErg(preview.changeNanoErg)),
           _row('Miner Fee', formatErg(preview.minerFee)),
+          const SizedBox(height: 4),
+          Text(
+            'Fee is network-computed based on transaction complexity.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11, fontStyle: FontStyle.italic),
+          ),
           const SizedBox(height: 20),
           Row(
             children: [
@@ -1260,6 +1270,11 @@ class _RestructurePreviewSheet extends StatelessWidget {
           _row('Allocated to Outputs', formatErg(preview.allocatedErg)),
           _row('Change Output', formatErg(preview.changeNanoErg)),
           _row('Miner Fee', formatErg(preview.minerFee)),
+          const SizedBox(height: 4),
+          Text(
+            'Fee is network-computed based on transaction complexity.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11, fontStyle: FontStyle.italic),
+          ),
           const SizedBox(height: 20),
           Row(
             children: [

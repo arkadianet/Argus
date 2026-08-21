@@ -19,11 +19,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
     companion object {
         private const val CHANNEL = "com.argus.wallet/secure_storage"
         private const val PREFS_NAME = "argus_secure_prefs"
-        private const val SEED_KEY = "encrypted_seed"
-        private const val WRAP_KEY = "wrap_key"
-        private const val PIN_WRAP_KEY = "pin_wrap"
-        private const val PIN_FAIL_KEY = "pin_fail_count"
-        private const val PIN_LOCK_KEY = "pin_lock_until"
+        private const val WALLET_REGISTRY_KEY = "wallet_registry"
 
         @Volatile
         var host: FragmentActivity? = null
@@ -96,8 +92,27 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
         }
     }
 
+    private fun seedKey(walletId: String?) =
+        if (walletId != null) "seed_${walletId}" else "encrypted_seed"
+
+    private fun wrapKey(walletId: String?) =
+        if (walletId != null) "wrap_${walletId}" else "wrap_key"
+
+    private fun pinWrapKey(walletId: String?) =
+        if (walletId != null) "pin_${walletId}" else "pin_wrap"
+
+    private fun getWalletIds(): Set<String> {
+        val reg = getPrefs().getStringSet(WALLET_REGISTRY_KEY, emptySet()) ?: emptySet()
+        return reg.toMutableSet()
+    }
+
+    private fun saveWalletIds(ids: Set<String>) {
+        getPrefs().edit().putStringSet(WALLET_REGISTRY_KEY, ids).commit()
+    }
+
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         try {
+            val walletId = call.argument<String>("walletId")
             when (call.method) {
                 "saveEncryptedSeed" -> {
                     val json = call.argument<String>("encryptedSeedJson")
@@ -105,41 +120,46 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                         result.error("INVALID_ARGS", "Missing encryptedSeedJson", null)
                         return
                     }
-                    if (!getPrefs().edit().putString(SEED_KEY, json).commit()) {
+                    if (!getPrefs().edit().putString(seedKey(walletId), json).commit()) {
                         result.error("STORAGE_ERROR", "Failed to persist seed", null)
                         return
                     }
+                    if (walletId != null) {
+                        val ids = getWalletIds().toMutableSet()
+                        ids.add(walletId)
+                        saveWalletIds(ids)
+                    }
                     result.success(true)
                 }
-                "loadEncryptedSeed" -> result.success(getPrefs().getString(SEED_KEY, null))
+                "loadEncryptedSeed" -> result.success(getPrefs().getString(seedKey(walletId), null))
                 "saveWrapKey" -> {
                     val key = call.argument<String>("wrapKey")
                     if (key.isNullOrEmpty()) {
                         result.error("INVALID_ARGS", "Missing wrapKey", null)
                         return
                     }
-                    if (!getPrefs().edit().putString(WRAP_KEY, key).commit()) {
+                    if (!getPrefs().edit().putString(wrapKey(walletId), key).commit()) {
                         result.error("STORAGE_ERROR", "Failed to persist wrap key", null)
                         return
                     }
                     result.success(true)
                 }
-                "loadWrapKey" -> result.success(getPrefs().getString(WRAP_KEY, null))
+                "loadWrapKey" -> result.success(getPrefs().getString(wrapKey(walletId), null))
                 "savePinWrap" -> {
                     val json = call.argument<String>("pinWrapJson")
                     if (json.isNullOrEmpty()) {
                         result.error("INVALID_ARGS", "Missing pinWrapJson", null)
                         return
                     }
-                    if (!getPrefs().edit().putString(PIN_WRAP_KEY, json).commit()) {
+                    if (!getPrefs().edit().putString(pinWrapKey(walletId), json).commit()) {
                         result.error("STORAGE_ERROR", "Failed to persist PIN wrap", null)
                         return
                     }
                     result.success(true)
                 }
-                "loadPinWrap" -> result.success(getPrefs().getString(PIN_WRAP_KEY, null))
+                "loadPinWrap" -> result.success(getPrefs().getString(pinWrapKey(walletId), null))
                 "deleteWrapKey" -> {
-                    if (!getPrefs().edit().remove(WRAP_KEY).commit()) {
+                    if (!getPrefs().edit().remove(wrapKey(walletId)).commit()) {
                         result.error("STORAGE_ERROR", "Failed to delete wrap key", null)
                         return
                     }
@@ -147,22 +167,67 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                 }
                 "deleteEncryptedSeed" -> {
                     if (!getPrefs().edit()
-                        .remove(SEED_KEY)
-                        .remove(WRAP_KEY)
-                        .remove(PIN_WRAP_KEY)
-                        .commit()
+                        .remove(seedKey(walletId))
+                        .apply {
+                            if (walletId != null) {
+                                remove(wrapKey(walletId))
+                                remove(pinWrapKey(walletId))
+                                val ids = getWalletIds().toMutableSet()
+                                ids.remove(walletId)
+                                saveWalletIds(ids)
+                            } else {
+                                remove(wrapKey(walletId))
+                                remove(pinWrapKey(walletId))
+                            }
+                        }.commit()
                     ) {
                         result.error("STORAGE_ERROR", "Failed to delete wallet secrets", null)
                         return
                     }
                     result.success(null)
                 }
+                "deleteWallet" -> {
+                    val wid = call.argument<String>("walletId")
+                    if (wid == null) {
+                        result.error("INVALID_ARGS", "Missing walletId", null)
+                        return
+                    }
+                    getPrefs().edit()
+                        .remove(seedKey(wid))
+                        .remove(wrapKey(wid))
+                        .remove(pinWrapKey(wid))
+                        .apply()
+                    val ids = getWalletIds().toMutableSet()
+                    ids.remove(wid)
+                    saveWalletIds(ids)
+                    result.success(null)
+                }
+                "hasEncryptedSeed" -> {
+                    if (walletId != null) {
+                        result.success(getPrefs().contains(seedKey(walletId)))
+                    } else {
+                        result.success(
+                            getPrefs().contains("encrypted_seed") ||
+                            getPrefs().contains(WALLET_REGISTRY_KEY)
+                        )
+                    }
+                }
+                "hasPinWrap" -> result.success(getPrefs().contains(pinWrapKey(walletId)))
+                "hasWrapKey" -> result.success(getPrefs().contains(wrapKey(walletId)))
+                "listWalletIds" -> {
+                    val ids = getWalletIds().toMutableList()
+                    // Migration: if legacy single-wallet seed exists, add a migration ID
+                    if (getPrefs().contains("encrypted_seed") && !ids.contains("legacy")) {
+                        ids.add("legacy")
+                    }
+                    result.success(ids)
+                }
                 "loadPinGate" -> {
                     val prefs = getPrefs()
                     result.success(
                         mapOf(
-                            "count" to prefs.getInt(PIN_FAIL_KEY, 0),
-                            "until" to prefs.getLong(PIN_LOCK_KEY, 0L),
+                            "count" to prefs.getInt("pin_fail_count", 0),
+                            "until" to prefs.getLong("pin_lock_until", 0L),
                         )
                     )
                 }
@@ -170,8 +235,8 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     val count = call.argument<Int>("count") ?: 0
                     val until = (call.argument<Number>("until") ?: 0).toLong()
                     if (!getPrefs().edit()
-                        .putInt(PIN_FAIL_KEY, count)
-                        .putLong(PIN_LOCK_KEY, until)
+                        .putInt("pin_fail_count", count)
+                        .putLong("pin_lock_until", until)
                         .commit()
                     ) {
                         result.error("STORAGE_ERROR", "Failed to persist PIN gate", null)
@@ -179,9 +244,6 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     }
                     result.success(null)
                 }
-                "hasEncryptedSeed" -> result.success(getPrefs().contains(SEED_KEY))
-                "hasPinWrap" -> result.success(getPrefs().contains(PIN_WRAP_KEY))
-                "hasWrapKey" -> result.success(getPrefs().contains(WRAP_KEY))
                 "hasBiometric" -> {
                     val can = BiometricManager.from(context).canAuthenticate(
                         BiometricManager.Authenticators.BIOMETRIC_STRONG or
@@ -189,7 +251,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     )
                     result.success(can == BiometricManager.BIOMETRIC_SUCCESS)
                 }
-                "authenticateBiometric" -> authenticate(result)
+                "authenticateBiometric" -> authenticate(result, walletId)
                 "setSecureFlag" -> {
                     val enable = call.argument<Boolean>("enable") ?: true
                     val activity = host
@@ -209,6 +271,35 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     }
                     result.success(true)
                 }
+                "migrateLegacyWallet" -> {
+                    val newWalletId = call.argument<String>("newWalletId")
+                    if (newWalletId == null) {
+                        result.error("INVALID_ARGS", "Missing newWalletId", null)
+                        return
+                    }
+                    val legacySeed = getPrefs().getString("encrypted_seed", null)
+                    val legacyWrap = getPrefs().getString("wrap_key", null)
+                    val legacyPin = getPrefs().getString("pin_wrap", null)
+                    if (legacySeed == null) {
+                        result.success(false)
+                        return
+                    }
+                    val editor = getPrefs().edit()
+                    editor.putString("seed_${newWalletId}", legacySeed)
+                    if (legacyWrap != null) editor.putString("wrap_${newWalletId}", legacyWrap)
+                    if (legacyPin != null) editor.putString("pin_${newWalletId}", legacyPin)
+                    editor.remove("encrypted_seed")
+                    editor.remove("wrap_key")
+                    editor.remove("pin_wrap")
+                    val ids = getWalletIds().toMutableSet()
+                    ids.add(newWalletId)
+                    saveWalletIds(ids)
+                    if (!editor.commit()) {
+                        result.error("STORAGE_ERROR", "Failed to migrate wallet", null)
+                        return
+                    }
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         } catch (e: Exception) {
@@ -221,7 +312,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
         }
     }
 
-    private fun authenticate(result: MethodChannel.Result) {
+    private fun authenticate(result: MethodChannel.Result, walletId: String?) {
         val activity = host
         if (activity == null) {
             result.error("NO_ACTIVITY", "Biometric requires an activity", null)
@@ -234,7 +325,8 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationSucceeded(res: BiometricPrompt.AuthenticationResult) {
                     try {
-                        result.success(getPrefs().getString(WRAP_KEY, null))
+                        val wrap = getPrefs().getString(wrapKey(walletId), null)
+                        result.success(wrap)
                     } catch (e: Exception) {
                         if (isKeyInvalidated(e)) {
                             resetInvalidatedStorage()

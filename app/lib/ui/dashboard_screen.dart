@@ -5,9 +5,11 @@ import 'package:flutter/services.dart';
 
 import '../bridge/argus_error.dart';
 import '../format.dart';
+import '../services/address_label_service.dart';
 import '../services/network_controller.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
+import '../services/watch_only_service.dart';
 import '../services/wallet_database_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -40,20 +42,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _canBiometric = false;
   bool _unlockBusy = false;
   int _utxoCount = 0;
+  DateTime? _lastSynced;
+  int _watchOnlyTotal = 0;
+  bool _watchOnlyLoading = false;
   final _pinCtrl = TextEditingController();
+  List<WalletInfo> _wallets = [];
+  String? _walletId;
 
   @override
   void initState() {
     super.initState();
     walletService.unlocked.addListener(_syncLock);
+    watchOnlyService.addListener(_onWatchOnlyChanged);
     _init();
   }
 
   @override
   void dispose() {
     walletService.unlocked.removeListener(_syncLock);
+    watchOnlyService.removeListener(_onWatchOnlyChanged);
     _pinCtrl.dispose();
     super.dispose();
+  }
+
+  void _onWatchOnlyChanged() {
+    _refreshWatchOnly();
   }
 
   void _syncLock() {
@@ -72,7 +85,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _usedAddresses = [];
     _tokens = [];
     _utxoCount = 0;
-    _status = _hasSeed ? 'Locked' : 'No wallet. Create or restore one.';
+    _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
+  }
+
+  Future<void> _refreshWatchOnly() async {
+    final addrs = watchOnlyService.addresses;
+    if (addrs.isEmpty) return;
+    if (!mounted) return;
+    setState(() => _watchOnlyLoading = true);
+    var total = 0;
+    for (final addr in addrs) {
+      try {
+        final bal = await walletService.getBalance(addr, nodeUrl: networkController.activeUrl);
+        total += (bal['balance_nano_erg'] as num?)?.toInt() ?? 0;
+      } catch (_) {}
+    }
+    if (mounted) setState(() {
+      _watchOnlyTotal = total;
+      _watchOnlyLoading = false;
+    });
   }
 
   Future<void> _init() async {
@@ -80,21 +111,45 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await walletService.init();
       await networkController.load();
       networkController.probe();
+       await _loadWallets();
       await _refreshUnlockMethods();
-      _status = _hasSeed ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.';
+      _status = _wallets.isEmpty
+          ? 'No wallet. Create or restore one.'
+          : 'Wallet found. Unlock to continue.';
+      // Auto-trigger biometric unlock when available so the user isn't
+      // forced to press a button just to open the wallet on launch.
+      if (_canBiometric && _walletId != null) {
+        _unlockBiometric();
+      }
     } on ArgusException catch (e) {
       _status = '${e.code}: ${e.message}';
     } catch (e) {
       _status = 'Error: $e';
     }
+    _refreshWatchOnly();
     if (mounted) setState(() => _loading = false);
   }
 
+  Future<void> _loadWallets() async {
+    _wallets = await walletService.listWallets();
+    if (_wallets.isNotEmpty) {
+      _walletId = _wallets.first.walletId;
+    } else {
+      _walletId = null;
+    }
+  }
+
   Future<void> _refreshUnlockMethods() async {
-    _hasSeed = await SecureStorageService.hasEncryptedSeed();
-    _hasPin = await SecureStorageService.hasPinWrap();
+    if (_walletId == null) {
+      _hasSeed = false;
+      _hasPin = false;
+      _canBiometric = false;
+      return;
+    }
+    _hasSeed = await SecureStorageService.hasEncryptedSeed(walletId: _walletId);
+    _hasPin = await SecureStorageService.hasPinWrap(walletId: _walletId);
     _canBiometric = await SecureStorageService.hasBiometric() &&
-        await SecureStorageService.hasWrapKey();
+        await SecureStorageService.hasWrapKey(walletId: _walletId);
   }
 
   Future<void> _afterUnlock() async {
@@ -104,10 +159,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       return;
     }
 
-    // 1. Derive index 0 locally (instant, deterministic)
+    // 1. Derive address (pinned index or 0) locally (instant, deterministic)
+    final int addressIndex = await walletService.getPinnedAddressIndex();
     final String receive;
     try {
-      receive = await walletService.deriveAddress(0);
+      receive = await walletService.deriveAddress(addressIndex);
       if (!mounted) return;
       if (!walletService.isUnlocked) {
         setState(_resetLocked);
@@ -234,14 +290,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await _runUnlock(() async {
       if (!await _pinAllowed()) return;
       try {
-        final json = await SecureStorageService.loadEncryptedSeed();
-        final pinWrap = await SecureStorageService.loadPinWrap();
+        final json = await SecureStorageService.loadEncryptedSeed(walletId: _walletId);
+        final pinWrap = await SecureStorageService.loadPinWrap(walletId: _walletId);
         if (json == null || pinWrap == null) {
           if (mounted) setState(() => _status = 'No PIN-protected wallet found.');
           return;
         }
         final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, _pinCtrl.text);
-        await walletService.restoreWallet(json, wrapKey: wrapKey);
+        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: _walletId);
         try {
           await _pinSucceeded();
         } catch (_) {}
@@ -262,19 +318,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _unlockBiometric() async {
     await _runUnlock(() async {
       try {
-        final wrapKey = await sessionLock.run(SecureStorageService.authenticateBiometric);
+        final wrapKey = await sessionLock.run(() => SecureStorageService.authenticateBiometric(walletId: _walletId));
         if (wrapKey == null) {
-          if (!await SecureStorageService.hasWrapKey()) {
+          if (!await SecureStorageService.hasWrapKey(walletId: _walletId)) {
             _snack('Biometric unlock is not set up. Enable it in Settings after unlocking with PIN.');
+          } else if (mounted && !_walletUnlocked) {
+            setState(() => _status = 'Biometric cancelled. Enter PIN or tap below.');
           }
           return;
         }
-        final json = await SecureStorageService.loadEncryptedSeed();
+        final json = await SecureStorageService.loadEncryptedSeed(walletId: _walletId);
         if (json == null) {
           _snack('Biometric unlock is not set up');
           return;
         }
-        await walletService.restoreWallet(json, wrapKey: wrapKey);
+        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: _walletId);
         HapticFeedback.lightImpact();
         await _afterUnlock();
       } on ArgusException catch (e) {
@@ -288,19 +346,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _unlockLegacyThenPin() async {
     await _runUnlock(() async {
       try {
-        final json = await SecureStorageService.loadEncryptedSeed();
-        final wrapKey = await SecureStorageService.loadWrapKey();
+        final json = await SecureStorageService.loadEncryptedSeed(walletId: _walletId);
+        final wrapKey = await SecureStorageService.loadWrapKey(walletId: _walletId);
         if (json == null || wrapKey == null) {
           if (mounted) setState(() => _status = 'No wallet found. Create or restore.');
           return;
         }
-        await walletService.restoreWallet(json, wrapKey: wrapKey);
+        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: _walletId);
         if (!mounted) return;
         final pin = await _askNewPin();
         if (pin != null) {
           final pinWrap = await walletService.wrapKeyWithPin(wrapKey, pin);
-          await SecureStorageService.savePinWrap(pinWrap);
-          await SecureStorageService.deleteWrapKey();
+          await SecureStorageService.savePinWrap(pinWrap, walletId: _walletId);
+          await SecureStorageService.deleteWrapKey(walletId: _walletId);
           _hasPin = true;
           _canBiometric = false;
         }
@@ -341,12 +399,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _openCreate() async {
-    final ok = await Navigator.push<bool>(
+    final walletId = await Navigator.push<String?>(
       context,
       fadeRoute(const CreateWalletScreen()),
     );
-    if (ok == true) {
+    if (walletId != null) {
+      _walletId = walletId;
       await sessionLock.run(() async {
+        await _loadWallets();
         await _refreshUnlockMethods();
         await _afterUnlock();
       });
@@ -354,15 +414,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _openRestore() async {
-    final ok = await Navigator.push<bool>(
+    final walletId = await Navigator.push<String?>(
       context,
       fadeRoute(const RestoreWalletScreen()),
     );
-    if (ok == true) {
+    if (walletId != null) {
+      _walletId = walletId;
       await sessionLock.run(() async {
+        await _loadWallets();
         await _refreshUnlockMethods();
         await _afterUnlock();
       });
+    }
+  }
+
+  Future<void> _switchWallet(String walletId) async {
+    setState(() => _status = 'Switching wallet…');
+    try {
+      if (walletService.isUnlocked) {
+        await walletService.lock();
+      }
+      await walletService.switchWallet(walletId);
+      _walletId = walletId;
+      setState(_resetLocked);
+      await _refreshUnlockMethods();
+    } on ArgusException catch (e) {
+      _snack('${e.code}: ${e.message}');
+    } catch (e) {
+      _snack('Could not switch wallet: $e');
     }
   }
 
@@ -382,8 +461,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
       final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
+      final pinnedIndex = await walletService.getPinnedAddressIndex();
       final receive = next == 0
-          ? (_receiveAddress ?? await walletService.deriveAddress(0))
+          ? (_receiveAddress ?? await walletService.deriveAddress(pinnedIndex))
           : await walletService.deriveAddress(next);
       if (!mounted) return;
       if (!walletService.isUnlocked) {
@@ -464,6 +544,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() => _status = 'Could not refresh balances');
     }
     await _refreshUtxos();
+    _lastSynced = DateTime.now();
 
     // Persist latest state to local mini-db cache for instant load next time
     if (_receiveAddress != null) {
@@ -521,6 +602,42 @@ class _DashboardScreenState extends State<DashboardScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Future<void> _labelAddress(String address) async {
+    final existing = addressLabelService.labelFor(address) ?? '';
+    final ctrl = TextEditingController(text: existing);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Address label'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SelectableText(
+              shorten(address, head: 10, tail: 8),
+              style: monoStyle(ctx, size: 11),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: ctrl,
+              decoration: const InputDecoration(labelText: 'Label (optional)'),
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    final label = ctrl.text;
+    ctrl.dispose();
+    if (ok != true) return;
+    await addressLabelService.setLabel(address, label);
+    if (mounted) setState(() {});
+  }
+
   WalletRouteArgs _args({Map<String, dynamic>? transaction}) {
     return WalletRouteArgs(
       senderAddress: _senderAddress ?? _receiveAddress ?? '',
@@ -553,8 +670,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _openSettings() async {
-    await Navigator.push(context, fadeRoute(const SettingsScreen()));
+    final switchedTo = await Navigator.push<String?>(
+      context,
+      fadeRoute(SettingsScreen(walletId: _walletId)),
+    );
     if (!mounted) return;
+    if (switchedTo != null && switchedTo != _walletId) {
+      await _switchWallet(switchedTo);
+    }
     try {
       await _refreshUnlockMethods();
     } catch (_) {}
@@ -593,18 +716,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          const WarningStrip(),
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 280),
-              switchInCurve: Curves.easeOut,
-              switchOutCurve: Curves.easeIn,
-              child: _walletUnlocked ? _ledger() : _gate(),
+      body: ListenableBuilder(
+        listenable: addressLabelService,
+        builder: (context, _) => Column(
+          children: [
+            const WarningStrip(),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 280),
+                switchInCurve: Curves.easeOut,
+                switchOutCurve: Curves.easeIn,
+                child: _walletUnlocked ? _ledger() : _gate(),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
       bottomNavigationBar: _walletUnlocked
           ? NavigationBar(
@@ -651,6 +777,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
         if (_status.startsWith('Error') || _status.contains(':')) ...[
           const SizedBox(height: 12),
           Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: rust)),
+        ],
+        if (watchOnlyService.addresses.isNotEmpty) ...[
+          const SizedBox(height: 24),
+          ListenableBuilder(
+            listenable: watchOnlyService,
+            builder: (context, _) => _watchOnlyLoading
+                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
+                : Column(
+                    children: [
+                      Text(
+                        'Watch-only balance',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        formatErg(_watchOnlyTotal),
+                        style: const TextStyle(
+                          fontFamily: 'Newsreader',
+                          fontSize: 32,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        '${watchOnlyService.addresses.length} addresses',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11),
+                      ),
+                    ],
+                  ),
+          ),
         ],
         const SizedBox(height: 36),
         if (_hasSeed && _hasPin) ...[
@@ -721,9 +877,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
         children: [
-          const SizedBox(height: 28),
-          Text(
-            formatErg(_balanceNano, unit: false),
+           const SizedBox(height: 28),
+           if (networkController.activeUrl == null && !networkController.probing)
+             Padding(
+               padding: const EdgeInsets.only(bottom: 12),
+               child: Material(
+                 color: rust.withValues(alpha: 0.12),
+                 borderRadius: BorderRadius.circular(8),
+                 child: Padding(
+                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                   child: Row(
+                     children: [
+                       const Icon(Icons.wifi_off_outlined, color: rust, size: 16),
+                       const SizedBox(width: 8),
+                       const Expanded(
+                         child: Text(
+                           'No reachable nodes. Tap to check nodes.',
+                           style: TextStyle(color: rust, fontSize: 12),
+                         ),
+                       ),
+                       TextButton(
+                         onPressed: networkController.probing ? null : networkController.probe,
+                         child: const Text('Retry'),
+                       ),
+                     ],
+                   ),
+                 ),
+               ),
+             ),
+           Text(
+             formatErg(_balanceNano, unit: false),
             style: Theme.of(context).textTheme.displayLarge,
           ),
           const SizedBox(height: 6),
@@ -754,6 +937,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ] else if (_status.contains('Syncing') || _status.contains('Refreshing') || _status.contains('Looking up addresses')) ...[
             const SizedBox(height: 10),
             Text(_status, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
+          ],
+          if (!_stale && !_status.contains('Syncing') && _lastSynced != null && (networkController.activeUrl != null)) ...[
+            const SizedBox(height: 10),
+            Text(
+              'Synced ${formatRelativeTime(_lastSynced!)}',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11),
+            ),
           ],
           const SizedBox(height: 10),
           InkWell(
@@ -897,10 +1087,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ..._usedAddresses.map((a) {
               final addr = a['address']?.toString() ?? '';
               final nano = (a['balance_nano_erg'] as num?)?.toInt();
+              final label = addressLabelService.labelFor(addr);
               return _line(
                 title: shorten(addr, head: 10, tail: 8),
+                subtitle: label,
                 trailing: formatErg(nano),
                 monoTitle: true,
+                onTap: () => _labelAddress(addr),
               );
             }),
           ],

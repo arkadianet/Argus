@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `input_boxes_json`, `node_client`, `open_wallet`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `session_json`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `input_boxes_json`, `node_client`, `open_wallet`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `PreparedManagement`
 
 Future<void> setNetwork({
@@ -147,6 +147,7 @@ Future<String> prepareSend({
   String? tokenId,
   BigInt? tokenAmount,
   String? nodeUrl,
+  PlatformInt64? feeNano,
 }) => RustLib.instance.api.crateApiPrepareSend(
   handleId: handleId,
   senderAddress: senderAddress,
@@ -157,6 +158,7 @@ Future<String> prepareSend({
   tokenId: tokenId,
   tokenAmount: tokenAmount,
   nodeUrl: nodeUrl,
+  feeNano: feeNano,
 );
 
 /// Prepare a UTXO consolidation transaction to merge multiple boxes into one.
@@ -166,12 +168,14 @@ Future<String> prepareConsolidate({
   required List<String> selectedBoxIds,
   required String changeAddress,
   String? nodeUrl,
+  PlatformInt64? feeNano,
 }) => RustLib.instance.api.crateApiPrepareConsolidate(
   handleId: handleId,
   spendAddresses: spendAddresses,
   selectedBoxIds: selectedBoxIds,
   changeAddress: changeAddress,
   nodeUrl: nodeUrl,
+  feeNano: feeNano,
 );
 
 /// Prepare a transaction to split ERG into N equal boxes.
@@ -183,6 +187,7 @@ Future<String> prepareSplitErg({
   required PlatformInt64 amountPerBoxNano,
   required String changeAddress,
   String? nodeUrl,
+  PlatformInt64? feeNano,
 }) => RustLib.instance.api.crateApiPrepareSplitErg(
   handleId: handleId,
   spendAddresses: spendAddresses,
@@ -191,6 +196,7 @@ Future<String> prepareSplitErg({
   amountPerBoxNano: amountPerBoxNano,
   changeAddress: changeAddress,
   nodeUrl: nodeUrl,
+  feeNano: feeNano,
 );
 
 /// Prepare a transaction to split tokens into N equal boxes.
@@ -204,6 +210,7 @@ Future<String> prepareSplitToken({
   required PlatformInt64 ergPerBoxNano,
   required String changeAddress,
   String? nodeUrl,
+  PlatformInt64? feeNano,
 }) => RustLib.instance.api.crateApiPrepareSplitToken(
   handleId: handleId,
   spendAddresses: spendAddresses,
@@ -214,6 +221,7 @@ Future<String> prepareSplitToken({
   ergPerBoxNano: ergPerBoxNano,
   changeAddress: changeAddress,
   nodeUrl: nodeUrl,
+  feeNano: feeNano,
 );
 
 /// Prepare a custom restructure transaction to allocate specific amounts and tokens into custom output boxes.
@@ -224,6 +232,7 @@ Future<String> prepareRestructure({
   required String outputsJson,
   required String changeAddress,
   String? nodeUrl,
+  PlatformInt64? feeNano,
 }) => RustLib.instance.api.crateApiPrepareRestructure(
   handleId: handleId,
   spendAddresses: spendAddresses,
@@ -231,6 +240,7 @@ Future<String> prepareRestructure({
   outputsJson: outputsJson,
   changeAddress: changeAddress,
   nodeUrl: nodeUrl,
+  feeNano: feeNano,
 );
 
 /// List all unspent boxes (UTXOs) for the given addresses. Returns a JSON array
@@ -252,4 +262,37 @@ Future<String> sendErg({
 }) => RustLib.instance.api.crateApiSendErg(
   handleId: handleId,
   preparationId: preparationId,
+);
+
+/// Sign a prepared transaction without submitting it. Returns the raw signed
+/// transaction as an EIP-12 JSON string. Use this for air-gapped / raw-tx
+/// export workflows.
+Future<String> signPreparation({
+  required BigInt handleId,
+  required BigInt preparationId,
+}) => RustLib.instance.api.crateApiSignPreparation(
+  handleId: handleId,
+  preparationId: preparationId,
+);
+
+/// Prepare a multi-recipient send. Each element of `recipients_json` is a JSON
+/// object: `{"address":"...","amount_nano_erg":123,"token_id":"...","token_amount":456}`.
+/// At least one recipient must carry ERG or tokens. The change goes to
+/// `change_address`. Supports all `prepare_send` options (fee_nano, etc.).
+Future<String> prepareSendMulti({
+  required BigInt handleId,
+  required String senderAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  required String recipientsJson,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiPrepareSendMulti(
+  handleId: handleId,
+  senderAddress: senderAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  recipientsJson: recipientsJson,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
 );

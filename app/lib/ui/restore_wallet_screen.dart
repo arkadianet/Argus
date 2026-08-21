@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 
 import '../bridge/argus_error.dart';
 import '../services/secure_storage.dart';
@@ -55,32 +56,42 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
     setState(() => _step = 1);
   }
 
-  Future<void> _restore() async {
+  Future<String?> _restore() async {
     final words = mnemonicWords(_phraseCtrl.text);
     final phrase = words.join(' ');
     if (phrase.isEmpty) {
       _snack('Enter a recovery phrase');
-      return;
+      return null;
     }
     final pinErr = pinError(_pinCtrl.text, _pinConfirmCtrl.text);
     if (pinErr != null) {
       _snack(pinErr);
-      return;
+      return null;
     }
     setState(() => _busy = true);
     try {
-      if (!await confirmReplaceExistingWallet(context)) return;
+      final walletId = const Uuid().v4();
+      final name = await walletService.generateWalletName();
       final session = await walletService.createWallet(
         phrase,
         passphrase: _passCtrl.text,
+        walletId: walletId,
       );
       final pinWrap = await walletService.wrapKeyWithPin(session.wrapKey, _pinCtrl.text);
       await SecureStorageService.saveWalletWithPin(
+        walletId: walletId,
         encryptedSeedJson: session.encryptedSeedJson,
         pinWrapJson: pinWrap,
       );
-      if (!mounted) return;
-      Navigator.pop(context, true);
+      final address0 = await walletService.deriveAddress(0);
+      await walletService.saveWalletInfo(
+        walletId,
+        name: name,
+        createdAt: DateTime.now().toUtc(),
+        address0: address0,
+      );
+      if (!mounted) return null;
+      Navigator.pop(context, walletId);
     } on ArgusException catch (e) {
       _snack('${e.code}: ${e.message}');
     } on SecureStorageException catch (e) {
@@ -90,6 +101,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    return null;
   }
 
   void _snack(String msg) {

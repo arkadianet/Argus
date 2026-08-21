@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../format.dart';
 import '../services/contacts_service.dart';
@@ -27,8 +31,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
           children: [
             TextField(
               controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Name'),
-              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Name'),              textCapitalization: TextCapitalization.words,
             ),
             const SizedBox(height: 12),
             TextField(
@@ -68,10 +71,50 @@ class _ContactsScreenState extends State<ContactsScreen> {
     });
   }
 
+  Future<void> _exportContacts() async {
+    final contacts = contactsService.contacts;
+    if (contacts.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No contacts to export')),
+      );
+      return;
+    }
+    final json = '['
+        '${contacts.map((c) => '{"name":"${c.name}","address":"${c.address}"}').join(',')}'
+        ']';
+    try {
+      await SharePlus.instance.share(ShareParams(
+        files: [XFile.fromData(
+          Uint8List.fromList(utf8.encode(json)),
+          mimeType: 'application/json',
+          name: 'argus_contacts.json',
+        )],
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text(_selectMode ? 'Select contact' : 'Contacts')),
+      appBar: AppBar(
+        title: Text(_selectMode ? 'Select contact' : 'Contacts'),
+        actions: _selectMode
+            ? null
+            : [
+                if (contactsService.contacts.isNotEmpty)
+                  IconButton(
+                    icon: const Icon(Icons.file_download),
+                    tooltip: 'Export contacts',
+                    onPressed: _exportContacts,
+                  ),
+              ],
+      ),
       floatingActionButton: _selectMode
           ? null
           : FloatingActionButton(

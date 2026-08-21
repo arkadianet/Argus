@@ -225,6 +225,7 @@ void main() {
     test('supports large 64-bit integer handleIds without overflow', () {
       final largeId = BigInt.parse('14285714285714285714');
       final session = WalletSession(
+        walletId: 'test-wallet',
         handleId: largeId,
         encryptedSeedJson: '{"test": true}',
         wrapKey: 'deadbeef',

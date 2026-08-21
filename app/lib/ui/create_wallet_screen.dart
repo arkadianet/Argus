@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 
 import '../bridge/argus_error.dart';
 import '../services/secure_storage.dart';
@@ -70,25 +71,38 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
     setState(() => _step = 2);
   }
 
-  Future<void> _finish() async {
+  Future<String?> _finish() async {
     final phrase = _mnemonic;
-    if (phrase == null) return;
+    if (phrase == null) return null;
     final pinErr = pinError(_pinCtrl.text, _pinConfirmCtrl.text);
     if (pinErr != null) {
       _snack(pinErr);
-      return;
+      return null;
     }
     setState(() => _busy = true);
     try {
-      if (!await confirmReplaceExistingWallet(context)) return;
-      final session = await walletService.createWallet(phrase);
+      final walletId = const Uuid().v4();
+      final name = await walletService.generateWalletName();
+      final session = await walletService.createWallet(
+        phrase,
+        passphrase: '',
+        walletId: walletId,
+      );
       final pinWrap = await walletService.wrapKeyWithPin(session.wrapKey, _pinCtrl.text);
       await SecureStorageService.saveWalletWithPin(
+        walletId: walletId,
         encryptedSeedJson: session.encryptedSeedJson,
         pinWrapJson: pinWrap,
       );
-      if (!mounted) return;
-      Navigator.pop(context, true);
+      final address0 = await walletService.deriveAddress(0);
+      await walletService.saveWalletInfo(
+        walletId,
+        name: name,
+        createdAt: DateTime.now().toUtc(),
+        address0: address0,
+      );
+      if (!mounted) return null;
+      Navigator.pop(context, walletId);
     } on ArgusException catch (e) {
       _snack('${e.code}: ${e.message}');
     } on SecureStorageException catch (e) {
@@ -98,6 +112,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    return null;
   }
 
   void _snack(String msg) {
