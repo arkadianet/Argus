@@ -1132,32 +1132,20 @@ mod tests {
         assert_eq!(phrase24.split_whitespace().count(), 24);
     }
 
-    fn dummy_build() -> ergo_tx::SendBuildResult {
-        ergo_tx::SendBuildResult {
-            unsigned_tx: ergo_tx::Eip12UnsignedTx {
-                inputs: vec![],
-                data_inputs: vec![],
-                outputs: vec![],
-            },
-            summary: ergo_tx::SendSummary {
-                recipient_erg: 0,
-                token_id: None,
-                token_amount: None,
-                change_erg: 0,
-                miner_fee: 0,
-                citadel_fee_nano: 0,
-                input_count: 0,
-            },
-        }
-    }
-
     #[test]
     fn take_preparation_rejects_unknown_stale_and_repeat() {
         assert!(take_preparation(1, 99).is_err());
         let id = store_preparation(CachedPreparation {
             handle_id: 7,
             ergo_boxes: Vec::new(),
-            built: dummy_build(),
+            unsigned_tx: ergo_tx::Eip12UnsignedTx {
+                inputs: vec![],
+                data_inputs: vec![],
+                outputs: vec![],
+            },
+            miner_fee: 0,
+            change_erg: 0,
+            recipient_erg: 0,
             node_url: None,
         });
         assert!(take_preparation(8, id).is_err());
