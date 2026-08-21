@@ -64,6 +64,24 @@ void main() {
     });
   });
 
+  test('release while still backgrounded starts the grace lock', () {
+    fakeAsync((async) {
+      var locked = 0;
+      final lock = SessionLock(
+        onLock: () => locked++,
+        grace: const Duration(milliseconds: 50),
+      );
+      lock.suppress();
+      lock.onLifecycle(AppLifecycleState.paused);
+      async.elapse(const Duration(milliseconds: 80));
+      expect(locked, 0);
+      lock.release();
+      async.elapse(const Duration(milliseconds: 80));
+      expect(locked, 1);
+      lock.dispose();
+    });
+  });
+
   test('inactive does not lock', () {
     fakeAsync((async) {
       var locked = 0;

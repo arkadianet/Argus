@@ -1,6 +1,5 @@
 package com.argus.argus_wallet
 
-import android.app.Activity
 import android.content.Context
 import android.content.SharedPreferences
 import android.view.WindowManager
@@ -34,7 +33,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
             val channel = MethodChannel(
                 engine.dartExecutor.binaryMessenger, CHANNEL
             )
-            channel.setMethodCallHandler(SecureStorageHandler(context))
+            channel.setMethodCallHandler(SecureStorageHandler(context.applicationContext))
         }
     }
 
@@ -193,7 +192,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                 "authenticateBiometric" -> authenticate(result)
                 "setSecureFlag" -> {
                     val enable = call.argument<Boolean>("enable") ?: true
-                    val activity = host ?: context as? Activity
+                    val activity = host
                     if (activity == null) {
                         result.success(false)
                         return
@@ -223,7 +222,7 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
     }
 
     private fun authenticate(result: MethodChannel.Result) {
-        val activity = host ?: context as? FragmentActivity
+        val activity = host
         if (activity == null) {
             result.error("NO_ACTIVITY", "Biometric requires an activity", null)
             return

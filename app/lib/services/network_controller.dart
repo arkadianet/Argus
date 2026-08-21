@@ -203,7 +203,7 @@ class NetworkController extends ChangeNotifier {
         return NodeProbe(url: clean, ok: false, error: 'bad /info');
       }
       final chain = chainHeightFromInfo(info);
-      bool extra = false;
+      bool? extraIndex;
       int? indexed;
       try {
         final idxRes = await http
@@ -213,20 +213,22 @@ class NetworkController extends ChangeNotifier {
           final idx = jsonDecode(idxRes.body);
           if (idx is Map) {
             indexed = indexedHeightFromJson(idx);
-            extra = indexed != null;
+            extraIndex = indexed == null ? null : true;
           }
+        } else if (idxRes.statusCode == 404) {
+          extraIndex = false;
         }
       } catch (_) {}
       return NodeProbe(
         url: clean,
         ok: chain != null,
         height: chain,
-        extraIndex: extra,
+        extraIndex: extraIndex,
         indexedHeight: indexed,
         error: chain == null ? 'no height' : null,
       );
     } catch (e) {
-      return NodeProbe(url: clean, ok: false, extraIndex: false, error: e.toString());
+      return NodeProbe(url: clean, ok: false, error: e.toString());
     }
   }
 

@@ -82,5 +82,18 @@ void main() {
         'Standby  ·  no extraIndex  ·  #50',
       );
     });
+
+    test('omits extraIndex when the probe is unknown', () {
+      final node = NodeEntry(url: 'https://n.example');
+      final probe = NodeProbe(
+        url: node.url,
+        ok: true,
+        height: 50,
+      );
+      expect(
+        describeNode(node, probe, active: false),
+        'Standby  ·  #50',
+      );
+    });
   });
 }

@@ -20,11 +20,16 @@ class SessionLock {
 
   Timer? _pending;
   int _suppress = 0;
+  bool _backgrounded = false;
 
   void suppress() => _suppress++;
 
   void release() {
-    if (_suppress > 0) _suppress--;
+    if (_suppress == 0) return;
+    _suppress--;
+    if (_suppress == 0 && _backgrounded) {
+      _scheduleLock();
+    }
   }
 
   Future<T> run<T>(Future<T> Function() body) async {
@@ -38,6 +43,7 @@ class SessionLock {
 
   void onLifecycle(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
+      _backgrounded = false;
       _pending?.cancel();
       _pending = null;
       return;
@@ -45,11 +51,16 @@ class SessionLock {
     if (state != AppLifecycleState.paused && state != AppLifecycleState.hidden) {
       return;
     }
+    _backgrounded = true;
     if (_suppress > 0) return;
+    _scheduleLock();
+  }
+
+  void _scheduleLock() {
     _pending?.cancel();
     _pending = Timer(grace, () {
       _pending = null;
-      if (_suppress > 0) return;
+      if (_suppress > 0 || !_backgrounded) return;
       onLock();
     });
   }

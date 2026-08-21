@@ -103,6 +103,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     try {
       final receive = await walletService.deriveAddress(0);
       if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
       setState(() {
         _walletUnlocked = true;
         _receiveAddress = receive;
@@ -133,6 +137,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
       final receive = next == 0 ? _receiveAddress! : await walletService.deriveAddress(next);
       if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
       setState(() {
         _usedAddresses = used;
         _receiveAddress = receive;
@@ -143,6 +151,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await _refresh();
     } catch (_) {
       if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
       setState(() => _status = 'Unlocked (discovery unavailable)');
       await _refresh();
     }
@@ -368,6 +380,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
       final txs = await walletService.loadHistory(addresses, limit: 20);
       if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
       setState(() {
         _balanceNano = erg;
         _tokens = tokens.values.toList();
