@@ -20,6 +20,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   static const _pageSize = 50;
   int _offset = 0;
   bool _hasMore = true;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -44,6 +45,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     try {
       _offset = 0;
       _hasMore = true;
+      _loadGeneration++;
+      final gen = _loadGeneration;
       final all = await walletService.loadHistory(addresses, limit: _pageSize, offset: 0);
       if (!mounted) return;
       _hasMore = all.length >= _pageSize;
@@ -65,13 +68,16 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   Future<void> _loadMore() async {
     if (_loadingMore || !_hasMore) return;
     final args = _args;
-    final addresses = args.historyAddresses;
+    final addresses = args.historyAddresses.isNotEmpty
+        ? args.historyAddresses
+        : [if (args.senderAddress.isNotEmpty) args.senderAddress];
     if (addresses.isEmpty) return;
     setState(() => _loadingMore = true);
+    final gen = _loadGeneration;
     try {
       final nextOffset = _offset + _pageSize;
       final more = await walletService.loadHistory(addresses, limit: _pageSize, offset: nextOffset);
-      if (!mounted) return;
+      if (!mounted || gen != _loadGeneration) return;
       _offset = nextOffset;
       _hasMore = more.length >= _pageSize;
       final seen = _txs.map((t) => t['tx_id']?.toString() ?? '').toSet();
@@ -84,7 +90,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         _loadingMore = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _loadingMore = false);
+      if (mounted) {
+        setState(() {
+          _loadingMore = false;
+          _hasMore = false;
+        });
+      }
     }
   }
 

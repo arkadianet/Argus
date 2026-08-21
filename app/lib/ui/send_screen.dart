@@ -43,6 +43,10 @@ class _SendScreenState extends State<SendScreen> {
     return null;
   }
 
+  bool get _recipientValid =>
+      _recipientCtrl.text.trim().isNotEmpty &&
+      looksLikeErgoAddress(_recipientCtrl.text.trim());
+
   int? _amountNano() => parseErgToNano(_amountCtrl.text);
 
   void _applyMaxErg() {
@@ -88,6 +92,7 @@ class _SendScreenState extends State<SendScreen> {
 
   Future<void> _saveRecipientToContacts() async {
     final addr = _recipientCtrl.text.trim();
+    if (!looksLikeErgoAddress(addr)) return;
     final nameCtrl = TextEditingController();
     final ok = await showDialog<bool>(
       context: context,
@@ -228,7 +233,13 @@ class _SendScreenState extends State<SendScreen> {
         actions: [
           IconButton(
             tooltip: 'Contacts',
-            onPressed: () => Navigator.pushNamed(context, '/contacts'),
+            onPressed: () async {
+              final result = await Navigator.pushNamed<WalletContact>(context, '/contacts');
+              if (result != null && result.address.isNotEmpty) {
+                _recipientCtrl.text = result.address;
+                setState(() {});
+              }
+            },
             icon: const Icon(Icons.people_outline),
           ),
           IconButton(
@@ -270,14 +281,14 @@ class _SendScreenState extends State<SendScreen> {
                       controller: _recipientCtrl,
                       style: monoStyle(context, size: 13),
                       decoration: const InputDecoration(labelText: 'Recipient address'),
+                      onChanged: (_) => setState(() {}),
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) return 'Required';
                         if (!looksLikeErgoAddress(v)) return 'Not an Ergo address';
                         return null;
                       },
                     ),
-                    if (_recipientCtrl.text.isNotEmpty &&
-                        looksLikeErgoAddress(_recipientCtrl.text))
+                    if (_recipientValid)
                       Align(
                         alignment: Alignment.centerLeft,
                         child: TextButton.icon(

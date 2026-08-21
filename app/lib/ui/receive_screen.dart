@@ -21,8 +21,13 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   @override
   void initState() {
     super.initState();
-    _updateQr();
     _amountCtrl.addListener(_updateQr);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _updateQr();
   }
 
   @override
@@ -36,7 +41,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     final args = WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
     final address = args.receiveAddress;
     final amount = _amountCtrl.text.trim();
-    final data = amount.isEmpty ? address : 'ergo:$address?amount=$amount';
+    if (amount.isEmpty) {
+      if (address != _qrData) setState(() => _qrData = address);
+      return;
+    }
+    if (!RegExp(r'^\d+(\.\d+)?$').hasMatch(amount)) return;
+    final data = 'ergo:$address?amount=$amount';
     if (data != _qrData) setState(() => _qrData = data);
   }
 

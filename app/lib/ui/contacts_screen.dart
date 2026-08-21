@@ -12,6 +12,9 @@ class ContactsScreen extends StatefulWidget {
 }
 
 class _ContactsScreenState extends State<ContactsScreen> {
+  bool get _selectMode =>
+      ModalRoute.of(context)?.settings.arguments == true;
+
   @override
   void initState() {
     super.initState();
@@ -74,11 +77,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Contacts')),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () => _addOrEdit(),
-        child: const Icon(Icons.person_add),
-      ),
+      appBar: AppBar(title: Text(_selectMode ? 'Select contact' : 'Contacts')),
+      floatingActionButton: _selectMode
+          ? null
+          : FloatingActionButton(
+              onPressed: () => _addOrEdit(),
+              child: const Icon(Icons.person_add),
+            ),
       body: ListenableBuilder(
         listenable: contactsService,
         builder: (context, _) {
@@ -102,7 +107,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
             itemBuilder: (context, i) {
               final c = contacts[i];
               return InkWell(
-                onTap: () => _addOrEdit(c),
+                onTap: () {
+                  if (_selectMode) {
+                    Navigator.pop(context, c);
+                  } else {
+                    _addOrEdit(c);
+                  }
+                },
                 onLongPress: () async {
                   final ok = await showDialog<bool>(
                     context: context,
@@ -131,7 +142,8 @@ class _ContactsScreenState extends State<ContactsScreen> {
                           ],
                         ),
                       ),
-                      const Icon(Icons.chevron_right, color: Colors.grey),
+                      if (!_selectMode)
+                        const Icon(Icons.chevron_right, color: Colors.grey),
                     ],
                   ),
                 ),

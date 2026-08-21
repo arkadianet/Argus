@@ -27,4 +27,9 @@ void main() {
     final prefs = await SharedPreferences.getInstance();
     expect(prefs.getInt('argus_auto_lock_seconds'), 60);
   });
+
+  test('new SessionLock defaults to 2 seconds before loadGrace', () {
+    final lock = SessionLock(onLock: () {});
+    expect(lock.grace, const Duration(seconds: 2));
+  });
 }

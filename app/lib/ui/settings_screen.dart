@@ -146,6 +146,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _changePin() async {
     final oldPin = TextEditingController();
     final newPin = TextEditingController();
+    final confirmPin = TextEditingController();
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -155,7 +156,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           children: [
             PinFields(pin: oldPin, label: 'Current PIN'),
             const SizedBox(height: 12),
-            PinFields(pin: newPin, label: 'New PIN'),
+            PinFields(pin: newPin, confirm: confirmPin, label: 'New PIN'),
           ],
         ),
         actions: [
@@ -166,12 +167,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     final old = oldPin.text;
     final next = newPin.text;
+    final confirm = confirmPin.text;
     oldPin.dispose();
     newPin.dispose();
+    confirmPin.dispose();
     if (ok != true) return;
     final pinErr = validatePin(next);
     if (pinErr != null) {
       _snack(pinErr);
+      return;
+    }
+    if (next != confirm) {
+      _snack('PINs do not match');
       return;
     }
     setState(() => _busy = true);
@@ -181,12 +188,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _snack('No PIN-protected wallet found');
         return;
       }
+      final blocked = await SecureStorageService.pinBlockedMessage();
+      if (blocked != null) {
+        _snack(blocked);
+        return;
+      }
       final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, old);
       final newPinWrap = await walletService.wrapKeyWithPin(wrapKey, next);
       await SecureStorageService.savePinWrap(newPinWrap);
+      await SecureStorageService.clearPinGate();
       _snack('PIN changed');
     } on ArgusException catch (e) {
-      _snack('${e.code}: ${e.message}');
+      if (isIncorrectPin(e)) {
+        await SecureStorageService.recordPinFailure();
+        _snack('Incorrect PIN');
+      } else {
+        _snack('${e.code}: ${e.message}');
+      }
     } catch (_) {
       _snack('Could not change PIN');
     } finally {

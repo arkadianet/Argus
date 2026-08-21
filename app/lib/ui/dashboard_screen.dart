@@ -135,7 +135,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
       final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
-      final receive = next == 0 ? _receiveAddress! : await walletService.deriveAddress(next);
+      final receive = next == 0
+          ? (_receiveAddress ?? await walletService.deriveAddress(0))
+          : await walletService.deriveAddress(next);
       if (!mounted) return;
       if (!walletService.isUnlocked) {
         setState(_resetLocked);
@@ -359,7 +361,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
       final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
-      final receive = next == 0 ? _receiveAddress! : await walletService.deriveAddress(next);
+      final receive = next == 0
+          ? (_receiveAddress ?? await walletService.deriveAddress(0))
+          : await walletService.deriveAddress(next);
       if (!mounted) return;
       if (!walletService.isUnlocked) {
         setState(_resetLocked);
@@ -683,6 +687,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (_stale) ...[
             const SizedBox(height: 10),
             Text(_status, style: const TextStyle(color: rust, fontSize: 12)),
+          ] else if (_status.contains('Syncing') || _status.contains('Refreshing')) ...[
+            const SizedBox(height: 10),
+            Text(_status, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
           ],
           const SizedBox(height: 28),
           Row(

@@ -13,11 +13,11 @@ import 'wallet_service.dart';
 class SessionLock {
   SessionLock({
     required this.onLock,
-    Duration grace = const Duration(milliseconds: 1500),
+    Duration grace = const Duration(seconds: 2),
   }) : _grace = grace;
 
   final VoidCallback onLock;
-  Duration _grace = const Duration(milliseconds: 1500);
+  Duration _grace = const Duration(seconds: 2);
 
   Timer? _pending;
   int _suppress = 0;
