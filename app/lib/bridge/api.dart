@@ -118,6 +118,25 @@ Future<String> discoverAddresses({
   gapLimit: gapLimit,
 );
 
+/// Follow a singleton token forward through spent transactions to locate the current unspent box.
+///
+/// Designed to work on standard nodes without extraIndex or explorer indexing.
+Future<String> walkSingletonLineage({
+  required String singletonTokenId,
+  required String startingBoxId,
+  String? nodeUrl,
+  int? maxHops,
+}) => RustLib.instance.api.crateApiWalkSingletonLineage(
+  singletonTokenId: singletonTokenId,
+  startingBoxId: startingBoxId,
+  nodeUrl: nodeUrl,
+  maxHops: maxHops,
+);
+
+/// Compute total balances and summary from a local WalletDatabase JSON snapshot.
+Future<String> dbComputeSummary({required String dbJson}) =>
+    RustLib.instance.api.crateApiDbComputeSummary(dbJson: dbJson);
+
 Future<String> prepareSend({
   required BigInt handleId,
   required String senderAddress,

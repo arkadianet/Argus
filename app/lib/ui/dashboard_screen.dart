@@ -8,6 +8,7 @@ import '../format.dart';
 import '../services/network_controller.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
+import '../services/wallet_database_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'create_wallet_screen.dart';
@@ -103,67 +104,77 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(_resetLocked);
       return;
     }
+
+    // 1. Derive index 0 locally (instant, deterministic)
+    final String receive;
     try {
-      final receive = await walletService.deriveAddress(0);
+      receive = await walletService.deriveAddress(0);
       if (!mounted) return;
       if (!walletService.isUnlocked) {
         setState(_resetLocked);
         return;
       }
-      setState(() {
-        _walletUnlocked = true;
-        _receiveAddress = receive;
-        _changeAddress = receive;
-        _senderAddress = receive;
-        _status = 'Looking up addresses';
-      });
     } catch (e) {
       if (!mounted) return;
       debugPrint('argus: address derivation failed after unlock: $e');
       setState(() {
         _walletUnlocked = walletService.isUnlocked;
-        _receiveAddress = null;
-        _changeAddress = null;
-        _senderAddress = null;
         _status = walletService.isUnlocked
             ? 'Unlocked, but no address could be derived'
             : 'Locked';
       });
       return;
     }
-    try {
-      final raw = await walletService.discoverAddresses();
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final used = (map['addresses'] as List? ?? [])
+
+    // 2. Instant 0ms hydration from local mini-db cache validated by wallet identifier
+    final cached = await WalletDatabaseService.loadCachedState(expectedWalletId: receive);
+    if (cached != null && mounted) {
+      final used = (cached['used_addresses'] as List? ?? [])
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
-      final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
-      final receive = next == 0
-          ? (_receiveAddress ?? await walletService.deriveAddress(0))
-          : await walletService.deriveAddress(next);
-      if (!mounted) return;
-      if (!walletService.isUnlocked) {
-        setState(_resetLocked);
-        return;
+      final balance = cached['balance_nano_erg'] as int?;
+      final txs = (cached['transactions'] as List? ?? [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      final rawTokens = (cached['tokens'] as List? ?? []);
+      final tokenList = <TokenBalance>[];
+      for (final t in rawTokens) {
+        if (t is Map) {
+          tokenList.add(TokenBalance(
+            id: t['id']?.toString() ?? '',
+            amount: (t['amount'] as num?)?.toInt() ?? 0,
+            name: t['name']?.toString(),
+            decimals: (t['decimals'] as num?)?.toInt() ?? 0,
+          ));
+        }
       }
+
       setState(() {
+        _walletUnlocked = true;
+        _receiveAddress ??= receive;
+        _changeAddress ??= receive;
+        _senderAddress ??= _bestSender(receive);
         _usedAddresses = used;
-        _receiveAddress = receive;
-        _changeAddress = receive;
-        _senderAddress = _bestSender(receive);
+        _balanceNano = balance;
+        _tokens = tokenList;
+        _recentTxs = txs;
+        _utxoCount = (cached['utxo_count'] as num?)?.toInt() ?? 0;
         _status = 'Unlocked';
       });
-      await _refresh();
-    } catch (_) {
-      if (!mounted) return;
-      if (!walletService.isUnlocked) {
-        setState(_resetLocked);
-        return;
-      }
-      setState(() => _status = 'Unlocked (discovery unavailable)');
-      await _refresh();
+    } else {
+      setState(() {
+        _walletUnlocked = true;
+        _receiveAddress ??= receive;
+        _changeAddress ??= receive;
+        _senderAddress ??= receive;
+        _status = 'Unlocked';
+      });
     }
+
+    // 3. Fast sync in background
+    await _refresh();
   }
 
   String _bestSender(String receive) {
@@ -432,10 +443,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
         setState(_resetLocked);
         return;
       }
+      final balanceSucceeded = failed < addresses.length && addresses.isNotEmpty;
       setState(() {
-        _balanceNano = erg;
-        _tokens = tokens.values.toList();
-        _recentTxs = txs.take(5).toList();
+        if (balanceSucceeded) {
+          _balanceNano = erg;
+          _tokens = tokens.values.toList();
+        }
+        if (txs.isNotEmpty) {
+          _recentTxs = txs.take(5).toList();
+        }
         if (failed == addresses.length) {
           _status = 'Could not refresh balances';
         } else if (failed > 0) {
@@ -449,6 +465,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() => _status = 'Could not refresh balances');
     }
     await _refreshUtxos();
+
+    // Persist latest state to local mini-db cache for instant load next time
+    if (_receiveAddress != null) {
+      await WalletDatabaseService.saveCachedState(
+        walletId: _receiveAddress!,
+        primaryAddress: _receiveAddress,
+        usedAddresses: _usedAddresses,
+        balanceNano: _balanceNano ?? 0,
+        tokens: _tokens
+            .map((t) => {
+                  'id': t.id,
+                  'amount': t.amount,
+                  'name': t.name,
+                  'decimals': t.decimals,
+                })
+            .toList(),
+        transactions: _recentTxs,
+        utxoCount: _utxoCount,
+      );
+    }
   }
 
   List<String> _historyAddresses() {

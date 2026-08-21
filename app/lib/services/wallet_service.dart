@@ -7,7 +7,7 @@ import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
 
 class WalletSession {
-  final int handleId;
+  final BigInt handleId;
   final String encryptedSeedJson;
   final String wrapKey;
   WalletSession({
@@ -326,7 +326,7 @@ bool isIncorrectPin(Object error) {
 }
 
 class WalletService {
-  int? _handleId;
+  BigInt? _handleId;
   bool _initialized = false;
   final ValueNotifier<bool> unlocked = ValueNotifier(false);
   final Map<String, TokenBalance> _tokenMeta = {};
@@ -338,7 +338,7 @@ class WalletService {
   }
 
   bool get isUnlocked => _handleId != null;
-  int? get handleId => _handleId;
+  BigInt? get handleId => _handleId;
 
   Future<String> generateMnemonic({int strength = 256}) async {
     return RustLib.instance.api.crateApiGenerateMnemonic(strength: strength);
@@ -349,7 +349,7 @@ class WalletService {
         .crateApiWalletCreate(mnemonicPhrase: mnemonic, passphrase: passphrase);
     final map = jsonDecode(raw) as Map<String, dynamic>;
     final session = WalletSession(
-      handleId: (map['handle_id'] as num).toInt(),
+      handleId: BigInt.parse(map['handle_id'].toString()),
       encryptedSeedJson: map['encrypted_seed_json'] as String,
       wrapKey: map['wrap_key'] as String,
     );
@@ -370,7 +370,7 @@ class WalletService {
       encryptedSeedJson: encryptedSeedJson,
       wrapKey: wrapKey,
     );
-    _setHandle(raw.toInt());
+    _setHandle(raw);
   }
 
   Future<void> lock() async {
@@ -380,7 +380,7 @@ class WalletService {
       return;
     }
     try {
-      await RustLib.instance.api.crateApiWalletLock(handleId: BigInt.from(id));
+      await RustLib.instance.api.crateApiWalletLock(handleId: id);
     } finally {
       // Only clear state if no newer unlock replaced the handle while the
       // lock FFI call was in flight.
@@ -394,13 +394,13 @@ class WalletService {
   Future<String> deriveAddress(int index) {
     _requireUnlocked();
     return RustLib.instance.api
-        .crateApiDeriveAddress(handleId: BigInt.from(_handleId!), index: index);
+        .crateApiDeriveAddress(handleId: _handleId!, index: index);
   }
 
   Future<String> discoverAddresses({int gapLimit = 20, String? nodeUrl}) async {
     _requireUnlocked();
     return RustLib.instance.api.crateApiDiscoverAddresses(
-      handleId: BigInt.from(_handleId!),
+      handleId: _handleId!,
       nodeUrl: nodeUrl,
       gapLimit: gapLimit,
     );
@@ -418,7 +418,7 @@ class WalletService {
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareSend(
-      handleId: BigInt.from(_handleId!),
+      handleId: _handleId!,
       senderAddress: senderAddress,
       spendAddresses: spendAddresses ?? const [],
       changeAddress: changeAddress,
@@ -434,7 +434,7 @@ class WalletService {
   Future<String> sendErg({required int preparationId}) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiSendErg(
-      handleId: BigInt.from(_handleId!),
+      handleId: _handleId!,
       preparationId: BigInt.from(preparationId),
     );
     final map = jsonDecode(raw) as Map<String, dynamic>;
@@ -689,7 +689,30 @@ class WalletService {
     return txIds;
   }
 
-  void _setHandle(int id) {
+  /// Track a singleton token (NFT / contract state) forward through spent transaction outputs.
+  /// Works without extraIndex or explorer indexing by following spent box transaction chains.
+  Future<Map<String, dynamic>> walkSingletonLineage({
+    required String singletonTokenId,
+    required String startingBoxId,
+    String? nodeUrl,
+    int? maxHops,
+  }) async {
+    final raw = await RustLib.instance.api.crateApiWalkSingletonLineage(
+      singletonTokenId: singletonTokenId,
+      startingBoxId: startingBoxId,
+      nodeUrl: nodeUrl,
+      maxHops: maxHops,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  /// Compute total balances and summary from a local WalletDatabase JSON snapshot.
+  Future<Map<String, dynamic>> computeDbSummary(String dbJson) async {
+    final raw = await RustLib.instance.api.crateApiDbComputeSummary(dbJson: dbJson);
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  void _setHandle(BigInt id) {
     _handleId = id;
     unlocked.value = true;
   }
