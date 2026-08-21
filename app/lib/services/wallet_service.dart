@@ -601,45 +601,62 @@ class WalletService {
     }
   }
 
-  /// Consolidate ERG by sending-to-self. This triggers coin selection which
-  /// picks boxes and produces change, naturally merging fragmented UTXOs.
+  /// Consolidate ERG by sending-to-self in batches of up to 200 inputs.
   ///
-  /// Returns the transaction ID on success, or null if consolidation is not
-  /// needed or fails. Only consolidates ERG (no tokens moved).
-  Future<String?> consolidateErg({
+  /// sigma-rust's coin selection (`select_for_send`) picks the largest boxes
+  /// first. Since it trusts the node to reject oversized txs, we cap each
+  /// batch at 200 inputs — well under Ergo's practical tx-size ceiling of
+  /// ~500 inputs / ~250 KB. The node parameters (`inputCost` = 2407,
+  /// `maxBlockCost` ≈ 8,000,091) would theoretically allow ~3300 inputs per
+  /// block, but serialization in EIP-12 JSON pushes ~500 bytes per input, so
+  /// 200 keeps each batch safe and reliably includable.
+  ///
+  /// Returns the list of transaction IDs for all consolidation txs.
+  /// Only consolidates ERG (no tokens moved; token-bearing boxes untouched).
+  Future<List<String>> consolidateErg({
     required List<String> addresses,
     required String changeAddress,
     String? nodeUrl,
   }) async {
     _requireUnlocked();
-    if (addresses.isEmpty) return null;
+    if (addresses.isEmpty) return [];
     final boxes = await listUnspentBoxes(addresses, nodeUrl: nodeUrl);
-    final ergOnly = boxes.where((b) => b.assets.isEmpty).toList();
-    if (ergOnly.length < 2) return null; // nothing to consolidate
+    // Only ERG-only boxes — leave token-bearing boxes alone.
+    var ergOnly = boxes.where((b) => b.assets.isEmpty).toList();
+    if (ergOnly.length < 2) return [];
 
-    // Compute total nanoERG from ERG-only boxes plus fee allowance.
-    final totalNano = ergOnly.fold(BigInt.zero,
-        (sum, b) => sum + b.valueNanoErg);
-    final fee = BigInt.from(minerFeeNano);
-    final amountToSend = totalNano - fee;
-    if (amountToSend <= BigInt.from(minBoxNano)) return null;
+    // Sort largest first so each batch hits the most value with the fewest inputs.
+    ergOnly.sort((a, b) => b.valueNanoErg.compareTo(a.valueNanoErg));
 
-    try {
-      // Send the minimum reasonable amount to self, which pastures all
-      // applicable boxes and produces one change output (the consolidation).
-      final preview = await prepareSend(
-        senderAddress: changeAddress,
-        spendAddresses: addresses,
-        changeAddress: changeAddress,
-        recipientAddress: changeAddress,
-        amountNanoErg: amountToSend.toInt(),
-        nodeUrl: nodeUrl,
-      );
-      final txId = await sendErg(preparationId: preview.preparationId);
-      return txId;
-    } catch (_) {
-      return null;
+    const maxInputsPerTx = 200;
+    final txIds = <String>[];
+
+    for (var i = 0; i < ergOnly.length; i += maxInputsPerTx) {
+      final batch = ergOnly.sublist(i, (i + maxInputsPerTx).clamp(0, ergOnly.length));
+      if (batch.length < 2) break; // single-box batches can't consolidate
+
+      final totalNano = batch.fold(BigInt.zero, (s, b) => s + b.valueNanoErg);
+      final fee = BigInt.from(minerFeeNano);
+      final amountToSend = totalNano - fee;
+      if (amountToSend <= BigInt.from(minBoxNano)) break;
+
+      try {
+        final preview = await prepareSend(
+          senderAddress: changeAddress,
+          spendAddresses: addresses,
+          changeAddress: changeAddress,
+          recipientAddress: changeAddress,
+          amountNanoErg: amountToSend.toInt(),
+          nodeUrl: nodeUrl,
+        );
+        final txId = await sendErg(preparationId: preview.preparationId);
+        txIds.add(txId);
+      } catch (_) {
+        // If one batch fails (e.g. node reject), skip remaining.
+        break;
+      }
     }
+    return txIds;
   }
 
   void _setHandle(int id) {

@@ -471,14 +471,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (_organizeBusy) return;
     setState(() => _organizeBusy = true);
     try {
-      final txId = await walletService.consolidateErg(
+      final txIds = await walletService.consolidateErg(
         addresses: _historyAddresses(),
         changeAddress: _senderAddress ?? _receiveAddress ?? '',
         nodeUrl: networkController.activeUrl,
       );
       if (!mounted) return;
-      if (txId != null) {
-        _snack('Consolidated: ${shorten(txId, head: 8, tail: 8)}');
+      if (txIds.isNotEmpty) {
+        _snack('Consolidated in ${txIds.length} tx(s): '
+            '${txIds.map((id) => shorten(id, head: 6, tail: 6)).join(', ')}');
         await _refresh();
       } else {
         _snack('Fragmentation is low — no consolidation needed');
@@ -733,7 +734,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 10),
             Text(_status, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
           ],
-          if (_utxoCount > 5) ...[
+          if (_utxoCount > 80) ...[
             const SizedBox(height: 8),
             Row(
               children: [
