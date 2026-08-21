@@ -165,33 +165,56 @@ class _SendScreenState extends State<SendScreen> {
       if (!mounted) return;
       final ok = await showDialog<bool>(
         context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Confirm send'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('To', style: Theme.of(ctx).textTheme.titleSmall),
-              const SizedBox(height: 4),
-              Text(preview.recipient, style: monoStyle(ctx, size: 12)),
-              const SizedBox(height: 12),
-              Text('Amount  ${formatErg(preview.amountNanoErg)}'),
-              Text('Fee  ${formatErg(preview.minerFee)}'),
-              Text('Change  ${formatErg(preview.changeNanoErg)}'),
-              if (preview.tokenId != null && preview.tokenId!.isNotEmpty)
-                Text('Token  ${token?.label ?? preview.tokenId}  × ${preview.tokenAmount}'),
-              const SizedBox(height: 12),
-              Text(
-                networkController.activeUrl ?? 'Node not chosen yet',
-                style: Theme.of(ctx).textTheme.bodySmall,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign & broadcast')),
-          ],
-        ),
+        builder: (ctx) {
+          var showUtxos = false;
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              return AlertDialog(
+                title: const Text('Confirm send'),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('To', style: Theme.of(ctx).textTheme.titleSmall),
+                        const SizedBox(height: 4),
+                        Text(preview.recipient, style: monoStyle(ctx, size: 12)),
+                        const SizedBox(height: 12),
+                        Text('Amount  ${formatErg(preview.amountNanoErg)}'),
+                        Text('Fee  ${formatErg(preview.minerFee)}'),
+                        Text('Change  ${formatErg(preview.changeNanoErg)}'),
+                        if (preview.tokenId != null && preview.tokenId!.isNotEmpty)
+                          Text('Token  ${token?.label ?? preview.tokenId}  × ${preview.tokenAmount}'),
+                        if (preview.inputBoxes.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          CheckboxListTile(
+                            contentPadding: EdgeInsets.zero,
+                            value: showUtxos,
+                            onChanged: (v) => setDialogState(() => showUtxos = v ?? false),
+                            title: const Text('Show UTXOs'),
+                            controlAffinity: ListTileControlAffinity.leading,
+                          ),
+                          if (showUtxos) _InputBoxList(preview.inputBoxes, token),
+                        ],
+                        const SizedBox(height: 12),
+                        Text(
+                          networkController.activeUrl ?? 'Node not chosen yet',
+                          style: Theme.of(ctx).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                  FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign & broadcast')),
+                ],
+              );
+            },
+          );
+        },
       );
       if (!mounted) return;
       if (ok != true) {
@@ -365,6 +388,67 @@ class _SendScreenState extends State<SendScreen> {
                 ),
               ),
             ),
+    );
+  }
+}
+
+class _InputBoxList extends StatelessWidget {
+  const _InputBoxList(this.inputBoxes, this.selectedToken);
+
+  final List<InputBoxInput> inputBoxes;
+  final TokenBalance? selectedToken;
+
+  String _formatAsset(InputAsset asset) {
+    final known = selectedToken?.id == asset.tokenId ? selectedToken : null;
+    final label = known != null
+        ? known.label
+        : shorten(asset.tokenId, head: 8, tail: 8);
+    if (known != null) {
+      return '$label  ${formatTokenAmountBigInt(asset.amount, known.decimals)}';
+    }
+    return '$label  ${asset.amount.toString()}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Selected inputs', style: TextStyle(fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        Text('Inputs: ${inputBoxes.length}', style: Theme.of(context).textTheme.bodySmall),
+        const SizedBox(height: 8),
+        ...inputBoxes.map((box) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(shorten(box.boxId, head: 8, tail: 8), style: monoStyle(context, size: 11)),
+                const SizedBox(height: 2),
+                Text(
+                  '${formatNanoErg(box.valueNanoErg)} (height ${box.creationHeight})',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                if (box.assets.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 4,
+                    children: [
+                      for (final a in box.assets)
+                        Text(
+                          _formatAsset(a),
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          );
+        }),
+      ],
     );
   }
 }

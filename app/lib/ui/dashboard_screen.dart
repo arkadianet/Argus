@@ -38,6 +38,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _hasPin = false;
   bool _canBiometric = false;
   bool _unlockBusy = false;
+  int _utxoCount = 0;
+  bool _organizeBusy = false;
   final _pinCtrl = TextEditingController();
 
   @override
@@ -69,6 +71,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _recentTxs = [];
     _usedAddresses = [];
     _tokens = [];
+    _utxoCount = 0;
     _status = _hasSeed ? 'Locked' : 'No wallet. Create or restore one.';
   }
 
@@ -445,6 +448,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!mounted) return;
       setState(() => _status = 'Could not refresh balances');
     }
+    await _refreshUtxos();
   }
 
   List<String> _historyAddresses() {
@@ -457,6 +461,48 @@ class _DashboardScreenState extends State<DashboardScreen> {
       out.add(_receiveAddress!);
     }
     return out;
+  }
+
+  Future<void> _refreshUtxos() async {
+    final addr = _historyAddresses();
+    if (addr.isEmpty) return;
+    try {
+      final boxes = await walletService.listUnspentBoxes(addr,
+          nodeUrl: networkController.activeUrl);
+      if (!mounted) return;
+      setState(() => _utxoCount = boxes.length);
+    } catch (_) {
+      // UTXO count is best-effort; don't disrupt the dashboard
+    }
+  }
+
+  Future<void> _organize() async {
+    if (_organizeBusy) return;
+    final change = _senderAddress ?? _receiveAddress;
+    if (change == null || change.isEmpty) {
+      _snack('A valid address is required for consolidation');
+      return;
+    }
+    setState(() => _organizeBusy = true);
+    try {
+      final txIds = await walletService.consolidateErg(
+        addresses: _historyAddresses(),
+        changeAddress: change,
+        nodeUrl: networkController.activeUrl,
+      );
+      if (!mounted) return;
+      if (txIds.isNotEmpty) {
+        _snack('Consolidated in ${txIds.length} tx(s): '
+            '${txIds.map((id) => shorten(id, head: 6, tail: 6)).join(', ')}');
+        await _refresh();
+      } else {
+        _snack('Fragmentation is low — no consolidation needed');
+      }
+    } catch (_) {
+      if (mounted) _snack('Could not consolidate UTXOs');
+    } finally {
+      if (mounted) setState(() => _organizeBusy = false);
+    }
   }
 
   Future<void> _lock() async {
@@ -701,6 +747,32 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ] else if (_status.contains('Syncing') || _status.contains('Refreshing') || _status.contains('Looking up addresses')) ...[
             const SizedBox(height: 10),
             Text(_status, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
+          ],
+          if (_utxoCount > utxoFragmentationThreshold) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Icon(Icons.folder_open, size: 14,
+                    color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: 6),
+                Text(
+                  '$_utxoCount UTXOs',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _organizeBusy ? null : _organize,
+                  icon: _organizeBusy
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.compress, size: 16),
+                  label: Text(_organizeBusy ? 'Organizing…' : 'Organize'),
+                ),
+              ],
+            ),
           ],
           const SizedBox(height: 28),
           Row(

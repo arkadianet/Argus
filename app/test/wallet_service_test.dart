@@ -54,6 +54,60 @@ void main() {
       expect(preview.tokenId, 'tok');
       expect(preview.tokenAmount, 5);
     });
+
+    test('parses advanced input_boxes for the UTXO preview', () {
+      final preview = SendPreview.fromJson({
+        ...valid,
+        'input_boxes': [
+          {
+            'box_id': '0123456789abcdef',
+            'value_nano_erg': '2700000000',
+            'creation_height': 100,
+            'assets': [],
+          },
+          {
+            'box_id': 'fedcba9876543210',
+            'value_nano_erg': 1000000,
+            'creation_height': 99,
+            'assets': [
+              {'token_id': 'nft-token-id', 'amount': '1'},
+            ],
+          },
+        ],
+      });
+      expect(preview.inputBoxes, isNotEmpty);
+      expect(preview.inputBoxes.length, 2);
+      expect(preview.inputBoxes[0].boxId, '0123456789abcdef');
+      expect(preview.inputBoxes[0].valueNanoErg, BigInt.parse('2700000000'));
+      expect(preview.inputBoxes[0].creationHeight, 100);
+      expect(preview.inputBoxes[0].assets, isEmpty);
+      expect(preview.inputBoxes[1].valueNanoErg, BigInt.from(1000000));
+      expect(preview.inputBoxes[1].assets.single.tokenId, 'nft-token-id');
+      expect(preview.inputBoxes[1].assets.single.amount, BigInt.one);
+    });
+
+    test('input_boxes defaults to empty when absent (legacy preparation)', () {
+      final preview = SendPreview.fromJson(valid);
+      expect(preview.inputBoxes, isEmpty);
+    });
+
+    test('InputBoxInput.fromErgoBox parses camelCase node box response', () {
+      final box = InputBoxInput.fromErgoBox({
+        'boxId': 'node_box_id_123',
+        'value': '3500000000',
+        'creationHeight': 1050200,
+        'assets': [
+          {'tokenId': 'token_abc', 'amount': '500'},
+        ],
+      }, address: '9addr');
+      expect(box.boxId, 'node_box_id_123');
+      expect(box.valueNanoErg, BigInt.parse('3500000000'));
+      expect(box.creationHeight, 1050200);
+      expect(box.assets.length, 1);
+      expect(box.assets.single.tokenId, 'token_abc');
+      expect(box.assets.single.amount, BigInt.from(500));
+      expect(box.address, '9addr');
+    });
   });
 
   group('parseErgToNano', () {

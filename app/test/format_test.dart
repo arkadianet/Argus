@@ -90,4 +90,29 @@ void main() {
       expect(formatHeight(1200), '#1200');
     });
   });
+
+  group('formatNanoErg', () {
+    test('matches formatErg for in-range values', () {
+      expect(formatNanoErg(BigInt.parse('1000000000')), '1 ERG');
+      expect(formatNanoErg(BigInt.parse('1500000000')), '1.5 ERG');
+      expect(formatNanoErg(BigInt.parse('1000000')), '0.001 ERG');
+      expect(formatNanoErg(BigInt.parse('1')), '0.000000001 ERG');
+      expect(formatNanoErg(BigInt.zero), '0 ERG');
+    });
+
+    test('omits the unit and supports maxFrac', () {
+      expect(formatNanoErg(BigInt.parse('2500000000'), unit: false), '2.5');
+      expect(formatNanoErg(BigInt.parse('1000000000'), maxFrac: 2), '1 ERG');
+      expect(formatNanoErg(BigInt.parse('1234567890')), '1.23456789 ERG');
+    });
+
+    test('handles values beyond 64-bit', () {
+      final bigValue = BigInt.parse('10000000000000000000000000000');
+      expect(formatNanoErg(bigValue), '10000000000000000000 ERG');
+      expect(
+        formatNanoErg(bigValue, unit: false),
+        '10000000000000000000',
+      );
+    });
+  });
 }
