@@ -34,7 +34,10 @@ static HANDLES: Lazy<Mutex<HashMap<u64, WalletHandle>>> = Lazy::new(|| Mutex::ne
 struct CachedPreparation {
     handle_id: u64,
     ergo_boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
-    built: ergo_tx::SendBuildResult,
+    unsigned_tx: ergo_tx::Eip12UnsignedTx,
+    miner_fee: i64,
+    change_erg: i64,
+    recipient_erg: i64,
     node_url: Option<String>,
 }
 
@@ -633,7 +636,10 @@ pub async fn prepare_send(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         ergo_boxes,
-        built,
+        unsigned_tx: built.unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg,
         node_url,
     });
     serde_json::to_string(&serde_json::json!({
@@ -647,6 +653,382 @@ pub async fn prepare_send(
         "citadel_fee_nano": citadel_fee_nano,
         "token_id": preview_token_id,
         "token_amount": preview_token_amount,
+        "input_boxes": input_boxes,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Prepare a UTXO consolidation transaction to merge multiple boxes into one.
+#[flutter_rust_bridge::frb]
+pub async fn prepare_consolidate(
+    handle_id: u64,
+    spend_addresses: Vec<String>,
+    selected_box_ids: Vec<String>,
+    change_address: String,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    with_handle(handle_id, "consolidate", |h| {
+        if !h.owns_address(&change_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "change is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        Ok(())
+    })?;
+
+    let client = node_client(node_url.clone()).await?;
+    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend_addresses).await?;
+    if eip12.is_empty() {
+        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+    }
+
+    let filtered_eip: Vec<ergo_tx::Eip12InputBox> = if selected_box_ids.is_empty() {
+        eip12
+    } else {
+        eip12
+            .into_iter()
+            .filter(|b| selected_box_ids.contains(&b.box_id))
+            .collect()
+    };
+
+    if filtered_eip.len() < 2 {
+        return Err(ArgusError::TxBuildFailed(
+            "Consolidation requires at least 2 input boxes".into(),
+        )
+        .to_json_string());
+    }
+
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    let change_tree = address_to_ergo_tree(&change_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+
+    let built = ergo_tx::build_consolidate_tx(&filtered_eip, &change_tree, height)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    let ergo_boxes = filtered_eip
+        .iter()
+        .filter_map(|eip| {
+            boxes
+                .iter()
+                .find(|b| b.box_id().to_string() == eip.box_id)
+                .cloned()
+        })
+        .collect::<Vec<_>>();
+    if ergo_boxes.len() != filtered_eip.len() {
+        return Err(ArgusError::TxBuildFailed("UTXO set mismatch".into()).to_json_string());
+    }
+
+    let input_boxes = input_boxes_json(&filtered_eip);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        unsigned_tx: built.unsigned_tx,
+        miner_fee: built.summary.miner_fee,
+        change_erg: built.summary.change_erg,
+        recipient_erg: 0,
+        node_url,
+    });
+
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "input_count": built.summary.input_count,
+        "total_erg_in": built.summary.total_erg_in,
+        "change_nano_erg": built.summary.change_erg,
+        "token_count": built.summary.token_count,
+        "miner_fee": built.summary.miner_fee,
+        "input_boxes": input_boxes,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Prepare a transaction to split ERG into N equal boxes.
+#[flutter_rust_bridge::frb]
+pub async fn prepare_split_erg(
+    handle_id: u64,
+    spend_addresses: Vec<String>,
+    selected_box_ids: Vec<String>,
+    count: u32,
+    amount_per_box_nano: i64,
+    change_address: String,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    with_handle(handle_id, "split_erg", |h| {
+        if !h.owns_address(&change_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "change is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        Ok(())
+    })?;
+
+    let client = node_client(node_url.clone()).await?;
+    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend_addresses).await?;
+    let filtered_eip: Vec<ergo_tx::Eip12InputBox> = if selected_box_ids.is_empty() {
+        eip12
+    } else {
+        eip12
+            .into_iter()
+            .filter(|b| selected_box_ids.contains(&b.box_id))
+            .collect()
+    };
+
+    if filtered_eip.is_empty() {
+        return Err(ArgusError::NoUtxos("no inputs available for split".into()).to_json_string());
+    }
+
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    let change_tree = address_to_ergo_tree(&change_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+
+    let mode = ergo_tx::SplitMode::Erg {
+        amount_per_box: amount_per_box_nano,
+    };
+    let built = ergo_tx::build_split_tx(
+        &filtered_eip,
+        &mode,
+        count as usize,
+        &change_tree,
+        height,
+    )
+    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    let ergo_boxes = filtered_eip
+        .iter()
+        .filter_map(|eip| {
+            boxes
+                .iter()
+                .find(|b| b.box_id().to_string() == eip.box_id)
+                .cloned()
+        })
+        .collect::<Vec<_>>();
+
+    let input_boxes = input_boxes_json(&filtered_eip);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        unsigned_tx: built.unsigned_tx,
+        miner_fee: built.summary.miner_fee,
+        change_erg: built.summary.change_erg,
+        recipient_erg: 0,
+        node_url,
+    });
+
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "split_count": built.summary.split_count,
+        "amount_per_box": built.summary.amount_per_box,
+        "total_split": built.summary.total_split,
+        "change_nano_erg": built.summary.change_erg,
+        "miner_fee": built.summary.miner_fee,
+        "input_boxes": input_boxes,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Prepare a transaction to split tokens into N equal boxes.
+#[flutter_rust_bridge::frb]
+pub async fn prepare_split_token(
+    handle_id: u64,
+    spend_addresses: Vec<String>,
+    selected_box_ids: Vec<String>,
+    token_id: String,
+    count: u32,
+    amount_per_box: u64,
+    erg_per_box_nano: i64,
+    change_address: String,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    with_handle(handle_id, "split_token", |h| {
+        if !h.owns_address(&change_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "change is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        Ok(())
+    })?;
+
+    let client = node_client(node_url.clone()).await?;
+    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend_addresses).await?;
+    let filtered_eip: Vec<ergo_tx::Eip12InputBox> = if selected_box_ids.is_empty() {
+        eip12
+    } else {
+        eip12
+            .into_iter()
+            .filter(|b| selected_box_ids.contains(&b.box_id))
+            .collect()
+    };
+
+    if filtered_eip.is_empty() {
+        return Err(ArgusError::NoUtxos("no inputs available for split".into()).to_json_string());
+    }
+
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    let change_tree = address_to_ergo_tree(&change_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+
+    let mode = ergo_tx::SplitMode::Token {
+        token_id: token_id.clone(),
+        amount_per_box,
+        erg_per_box: erg_per_box_nano,
+    };
+    let built = ergo_tx::build_split_tx(
+        &filtered_eip,
+        &mode,
+        count as usize,
+        &change_tree,
+        height,
+    )
+    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    let ergo_boxes = filtered_eip
+        .iter()
+        .filter_map(|eip| {
+            boxes
+                .iter()
+                .find(|b| b.box_id().to_string() == eip.box_id)
+                .cloned()
+        })
+        .collect::<Vec<_>>();
+
+    let input_boxes = input_boxes_json(&filtered_eip);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        unsigned_tx: built.unsigned_tx,
+        miner_fee: built.summary.miner_fee,
+        change_erg: built.summary.change_erg,
+        recipient_erg: 0,
+        node_url,
+    });
+
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "split_count": built.summary.split_count,
+        "token_id": token_id,
+        "amount_per_box": built.summary.amount_per_box,
+        "total_split": built.summary.total_split,
+        "change_nano_erg": built.summary.change_erg,
+        "miner_fee": built.summary.miner_fee,
+        "input_boxes": input_boxes,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Prepare a custom restructure transaction to allocate specific amounts and tokens into custom output boxes.
+#[flutter_rust_bridge::frb]
+pub async fn prepare_restructure(
+    handle_id: u64,
+    spend_addresses: Vec<String>,
+    selected_box_ids: Vec<String>,
+    outputs_json: String,
+    change_address: String,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    with_handle(handle_id, "restructure", |h| {
+        if !h.owns_address(&change_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "change is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        Ok(())
+    })?;
+
+    let client = node_client(node_url.clone()).await?;
+    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend_addresses).await?;
+    let filtered_eip: Vec<ergo_tx::Eip12InputBox> = if selected_box_ids.is_empty() {
+        eip12
+    } else {
+        eip12
+            .into_iter()
+            .filter(|b| selected_box_ids.contains(&b.box_id))
+            .collect()
+    };
+
+    if filtered_eip.is_empty() {
+        return Err(ArgusError::NoUtxos("no inputs available for restructure".into()).to_json_string());
+    }
+
+    let parsed_specs: Vec<serde_json::Value> = serde_json::from_str(&outputs_json)
+        .map_err(|e| ArgusError::SerializationError(format!("Invalid outputs JSON: {e}")).to_json_string())?;
+
+    let mut specs = Vec::with_capacity(parsed_specs.len());
+    for s in parsed_specs {
+        let value = s["value_nano_erg"]
+            .as_i64()
+            .ok_or_else(|| ArgusError::TxBuildFailed("output missing value_nano_erg".into()).to_json_string())?;
+        let tokens = s["tokens"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|t| {
+                        let id = t["id"].as_str()?.to_string();
+                        let amt = t["amount"].as_u64()?;
+                        Some((id, amt))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        specs.push(ergo_tx::RestructureOutputSpec { value, tokens });
+    }
+
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    let change_tree = address_to_ergo_tree(&change_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+
+    let built = ergo_tx::build_restructure_tx(
+        &filtered_eip,
+        &specs,
+        &change_tree,
+        height,
+    )
+    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    let ergo_boxes = filtered_eip
+        .iter()
+        .filter_map(|eip| {
+            boxes
+                .iter()
+                .find(|b| b.box_id().to_string() == eip.box_id)
+                .cloned()
+        })
+        .collect::<Vec<_>>();
+
+    let input_boxes = input_boxes_json(&filtered_eip);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        unsigned_tx: built.unsigned_tx,
+        miner_fee: built.summary.miner_fee,
+        change_erg: built.summary.change_erg,
+        recipient_erg: built.summary.allocated_erg,
+        node_url,
+    });
+
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "input_count": built.summary.input_count,
+        "output_count": built.summary.output_count,
+        "total_erg_in": built.summary.total_erg_in,
+        "allocated_erg": built.summary.allocated_erg,
+        "change_nano_erg": built.summary.change_erg,
+        "has_change": built.summary.has_change,
+        "miner_fee": built.summary.miner_fee,
         "input_boxes": input_boxes,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
@@ -678,7 +1060,7 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
     let reduced_bytes = reduce_transaction_with_context(
-        &prep.built.unsigned_tx,
+        &prep.unsigned_tx,
         prep.ergo_boxes,
         Vec::new(),
         &state_context,
@@ -701,9 +1083,9 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
     serde_json::to_string(&serde_json::json!({
         "tx_id": tx_id,
         "preparation_id": preparation_id,
-        "miner_fee": prep.built.summary.miner_fee,
-        "change_nano_erg": prep.built.summary.change_erg,
-        "amount_nano_erg": prep.built.summary.recipient_erg,
+        "miner_fee": prep.miner_fee,
+        "change_nano_erg": prep.change_erg,
+        "amount_nano_erg": prep.recipient_erg,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }

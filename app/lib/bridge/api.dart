@@ -159,6 +159,80 @@ Future<String> prepareSend({
   nodeUrl: nodeUrl,
 );
 
+/// Prepare a UTXO consolidation transaction to merge multiple boxes into one.
+Future<String> prepareConsolidate({
+  required BigInt handleId,
+  required List<String> spendAddresses,
+  required List<String> selectedBoxIds,
+  required String changeAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiPrepareConsolidate(
+  handleId: handleId,
+  spendAddresses: spendAddresses,
+  selectedBoxIds: selectedBoxIds,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+);
+
+/// Prepare a transaction to split ERG into N equal boxes.
+Future<String> prepareSplitErg({
+  required BigInt handleId,
+  required List<String> spendAddresses,
+  required List<String> selectedBoxIds,
+  required int count,
+  required PlatformInt64 amountPerBoxNano,
+  required String changeAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiPrepareSplitErg(
+  handleId: handleId,
+  spendAddresses: spendAddresses,
+  selectedBoxIds: selectedBoxIds,
+  count: count,
+  amountPerBoxNano: amountPerBoxNano,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+);
+
+/// Prepare a transaction to split tokens into N equal boxes.
+Future<String> prepareSplitToken({
+  required BigInt handleId,
+  required List<String> spendAddresses,
+  required List<String> selectedBoxIds,
+  required String tokenId,
+  required int count,
+  required BigInt amountPerBox,
+  required PlatformInt64 ergPerBoxNano,
+  required String changeAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiPrepareSplitToken(
+  handleId: handleId,
+  spendAddresses: spendAddresses,
+  selectedBoxIds: selectedBoxIds,
+  tokenId: tokenId,
+  count: count,
+  amountPerBox: amountPerBox,
+  ergPerBoxNano: ergPerBoxNano,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+);
+
+/// Prepare a custom restructure transaction to allocate specific amounts and tokens into custom output boxes.
+Future<String> prepareRestructure({
+  required BigInt handleId,
+  required List<String> spendAddresses,
+  required List<String> selectedBoxIds,
+  required String outputsJson,
+  required String changeAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiPrepareRestructure(
+  handleId: handleId,
+  spendAddresses: spendAddresses,
+  selectedBoxIds: selectedBoxIds,
+  outputsJson: outputsJson,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+);
+
 /// List all unspent boxes (UTXOs) for the given addresses. Returns a JSON array
 /// of `InputBoxInput`-compatible objects (same shape as the `input_boxes` field
 /// in `prepareSend`).

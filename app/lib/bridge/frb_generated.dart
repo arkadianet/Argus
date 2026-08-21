@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => 1647184601;
+  int get rustContentHash => -918512305;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -119,6 +119,23 @@ abstract class RustLibApi extends BaseApi {
     String? nodeUrl,
   });
 
+  Future<String> crateApiPrepareConsolidate({
+    required BigInt handleId,
+    required List<String> spendAddresses,
+    required List<String> selectedBoxIds,
+    required String changeAddress,
+    String? nodeUrl,
+  });
+
+  Future<String> crateApiPrepareRestructure({
+    required BigInt handleId,
+    required List<String> spendAddresses,
+    required List<String> selectedBoxIds,
+    required String outputsJson,
+    required String changeAddress,
+    String? nodeUrl,
+  });
+
   Future<String> crateApiPrepareSend({
     required BigInt handleId,
     required String senderAddress,
@@ -128,6 +145,28 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 amountNanoErg,
     String? tokenId,
     BigInt? tokenAmount,
+    String? nodeUrl,
+  });
+
+  Future<String> crateApiPrepareSplitErg({
+    required BigInt handleId,
+    required List<String> spendAddresses,
+    required List<String> selectedBoxIds,
+    required int count,
+    required PlatformInt64 amountPerBoxNano,
+    required String changeAddress,
+    String? nodeUrl,
+  });
+
+  Future<String> crateApiPrepareSplitToken({
+    required BigInt handleId,
+    required List<String> spendAddresses,
+    required List<String> selectedBoxIds,
+    required String tokenId,
+    required int count,
+    required BigInt amountPerBox,
+    required PlatformInt64 ergPerBoxNano,
+    required String changeAddress,
     String? nodeUrl,
   });
 
@@ -524,6 +563,114 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<String> crateApiPrepareConsolidate({
+    required BigInt handleId,
+    required List<String> spendAddresses,
+    required List<String> selectedBoxIds,
+    required String changeAddress,
+    String? nodeUrl,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_list_String(spendAddresses, serializer);
+          sse_encode_list_String(selectedBoxIds, serializer);
+          sse_encode_String(changeAddress, serializer);
+          sse_encode_opt_String(nodeUrl, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 11,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiPrepareConsolidateConstMeta,
+        argValues: [
+          handleId,
+          spendAddresses,
+          selectedBoxIds,
+          changeAddress,
+          nodeUrl,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPrepareConsolidateConstMeta => const TaskConstMeta(
+    debugName: "prepare_consolidate",
+    argNames: [
+      "handleId",
+      "spendAddresses",
+      "selectedBoxIds",
+      "changeAddress",
+      "nodeUrl",
+    ],
+  );
+
+  @override
+  Future<String> crateApiPrepareRestructure({
+    required BigInt handleId,
+    required List<String> spendAddresses,
+    required List<String> selectedBoxIds,
+    required String outputsJson,
+    required String changeAddress,
+    String? nodeUrl,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_list_String(spendAddresses, serializer);
+          sse_encode_list_String(selectedBoxIds, serializer);
+          sse_encode_String(outputsJson, serializer);
+          sse_encode_String(changeAddress, serializer);
+          sse_encode_opt_String(nodeUrl, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 12,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiPrepareRestructureConstMeta,
+        argValues: [
+          handleId,
+          spendAddresses,
+          selectedBoxIds,
+          outputsJson,
+          changeAddress,
+          nodeUrl,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPrepareRestructureConstMeta => const TaskConstMeta(
+    debugName: "prepare_restructure",
+    argNames: [
+      "handleId",
+      "spendAddresses",
+      "selectedBoxIds",
+      "outputsJson",
+      "changeAddress",
+      "nodeUrl",
+    ],
+  );
+
+  @override
   Future<String> crateApiPrepareSend({
     required BigInt handleId,
     required String senderAddress,
@@ -551,7 +698,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 11,
+            funcId: 13,
             port: port_,
           );
         },
@@ -592,6 +739,134 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  Future<String> crateApiPrepareSplitErg({
+    required BigInt handleId,
+    required List<String> spendAddresses,
+    required List<String> selectedBoxIds,
+    required int count,
+    required PlatformInt64 amountPerBoxNano,
+    required String changeAddress,
+    String? nodeUrl,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_list_String(spendAddresses, serializer);
+          sse_encode_list_String(selectedBoxIds, serializer);
+          sse_encode_u_32(count, serializer);
+          sse_encode_i_64(amountPerBoxNano, serializer);
+          sse_encode_String(changeAddress, serializer);
+          sse_encode_opt_String(nodeUrl, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 14,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiPrepareSplitErgConstMeta,
+        argValues: [
+          handleId,
+          spendAddresses,
+          selectedBoxIds,
+          count,
+          amountPerBoxNano,
+          changeAddress,
+          nodeUrl,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPrepareSplitErgConstMeta => const TaskConstMeta(
+    debugName: "prepare_split_erg",
+    argNames: [
+      "handleId",
+      "spendAddresses",
+      "selectedBoxIds",
+      "count",
+      "amountPerBoxNano",
+      "changeAddress",
+      "nodeUrl",
+    ],
+  );
+
+  @override
+  Future<String> crateApiPrepareSplitToken({
+    required BigInt handleId,
+    required List<String> spendAddresses,
+    required List<String> selectedBoxIds,
+    required String tokenId,
+    required int count,
+    required BigInt amountPerBox,
+    required PlatformInt64 ergPerBoxNano,
+    required String changeAddress,
+    String? nodeUrl,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_list_String(spendAddresses, serializer);
+          sse_encode_list_String(selectedBoxIds, serializer);
+          sse_encode_String(tokenId, serializer);
+          sse_encode_u_32(count, serializer);
+          sse_encode_u_64(amountPerBox, serializer);
+          sse_encode_i_64(ergPerBoxNano, serializer);
+          sse_encode_String(changeAddress, serializer);
+          sse_encode_opt_String(nodeUrl, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 15,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiPrepareSplitTokenConstMeta,
+        argValues: [
+          handleId,
+          spendAddresses,
+          selectedBoxIds,
+          tokenId,
+          count,
+          amountPerBox,
+          ergPerBoxNano,
+          changeAddress,
+          nodeUrl,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiPrepareSplitTokenConstMeta => const TaskConstMeta(
+    debugName: "prepare_split_token",
+    argNames: [
+      "handleId",
+      "spendAddresses",
+      "selectedBoxIds",
+      "tokenId",
+      "count",
+      "amountPerBox",
+      "ergPerBoxNano",
+      "changeAddress",
+      "nodeUrl",
+    ],
+  );
+
+  @override
   Future<String> crateApiProbeNetwork() {
     return handler.executeNormal(
       NormalTask(
@@ -600,7 +875,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 12,
+            funcId: 16,
             port: port_,
           );
         },
@@ -632,7 +907,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 13,
+            funcId: 17,
             port: port_,
           );
         },
@@ -666,7 +941,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 14,
+            funcId: 18,
             port: port_,
           );
         },
@@ -700,7 +975,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 15,
+            funcId: 19,
             port: port_,
           );
         },
@@ -735,7 +1010,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 16,
+            funcId: 20,
             port: port_,
           );
         },
@@ -773,7 +1048,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 17,
+            funcId: 21,
             port: port_,
           );
         },
@@ -808,7 +1083,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 18,
+            funcId: 22,
             port: port_,
           );
         },
@@ -838,7 +1113,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 19,
+            funcId: 23,
             port: port_,
           );
         },
@@ -868,7 +1143,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 20,
+            funcId: 24,
             port: port_,
           );
         },
@@ -900,7 +1175,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 21,
+            funcId: 25,
             port: port_,
           );
         },
@@ -934,7 +1209,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 22,
+            funcId: 26,
             port: port_,
           );
         },

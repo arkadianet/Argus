@@ -431,6 +431,92 @@ class WalletService {
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
 
+  /// Prepare a UTXO consolidation transaction.
+  Future<Map<String, dynamic>> prepareConsolidate({
+    required List<String> spendAddresses,
+    List<String>? selectedBoxIds,
+    required String changeAddress,
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareConsolidate(
+      handleId: _handleId!,
+      spendAddresses: spendAddresses,
+      selectedBoxIds: selectedBoxIds ?? const [],
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  /// Prepare a transaction to split ERG into N equal boxes.
+  Future<Map<String, dynamic>> prepareSplitErg({
+    required List<String> spendAddresses,
+    List<String>? selectedBoxIds,
+    required int count,
+    required int amountPerBoxNano,
+    required String changeAddress,
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareSplitErg(
+      handleId: _handleId!,
+      spendAddresses: spendAddresses,
+      selectedBoxIds: selectedBoxIds ?? const [],
+      count: count,
+      amountPerBoxNano: amountPerBoxNano,
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  /// Prepare a transaction to split a token into N equal boxes.
+  Future<Map<String, dynamic>> prepareSplitToken({
+    required List<String> spendAddresses,
+    List<String>? selectedBoxIds,
+    required String tokenId,
+    required int count,
+    required BigInt amountPerBox,
+    required int ergPerBoxNano,
+    required String changeAddress,
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareSplitToken(
+      handleId: _handleId!,
+      spendAddresses: spendAddresses,
+      selectedBoxIds: selectedBoxIds ?? const [],
+      tokenId: tokenId,
+      count: count,
+      amountPerBox: amountPerBox,
+      ergPerBoxNano: ergPerBoxNano,
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  /// Prepare a custom restructure transaction to allocate inputs into custom outputs.
+  Future<Map<String, dynamic>> prepareRestructure({
+    required List<String> spendAddresses,
+    List<String>? selectedBoxIds,
+    required List<Map<String, dynamic>> outputs,
+    required String changeAddress,
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareRestructure(
+      handleId: _handleId!,
+      spendAddresses: spendAddresses,
+      selectedBoxIds: selectedBoxIds ?? const [],
+      outputsJson: jsonEncode(outputs),
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
   Future<String> sendErg({required int preparationId}) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiSendErg(
