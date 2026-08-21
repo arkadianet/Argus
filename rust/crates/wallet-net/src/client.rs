@@ -514,8 +514,8 @@ fn token_by_id_url(base: &str, token_id: &str) -> String {
     join_url(base, &format!("blockchain/token/byId/{token_id}"))
 }
 
-fn is_indexed_token(value: &serde_json::Value) -> bool {
-    value.get("id").and_then(|v| v.as_str()).is_some()
+fn is_indexed_token(value: &serde_json::Value, token_id: &str) -> bool {
+    value.get("id").and_then(|v| v.as_str()) == Some(token_id)
         && (value.get("name").is_some() || value.get("decimals").is_some())
 }
 
@@ -561,7 +561,7 @@ pub async fn get_token_info(
     let mut last = "no token source".to_string();
     for url in token_info_urls(token_id, explorer_url) {
         match fetch_json(&url).await {
-            Ok(v) if is_indexed_token(&v) => return Ok(v),
+            Ok(v) if is_indexed_token(&v, token_id) => return Ok(v),
             Ok(_) => last = format!("{url}: not an IndexedToken"),
             Err(e) => last = e,
         }
@@ -714,12 +714,31 @@ mod tests {
             "description": "SigmaUSD - V2",
             "decimals": 2
         });
-        assert!(is_indexed_token(&v));
+        assert!(is_indexed_token(
+            &v,
+            "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04"
+        ));
+    }
+
+    #[test]
+    fn rejects_indexed_token_with_other_id() {
+        let v = serde_json::json!({
+            "id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "name": "SigUSD",
+            "decimals": 2
+        });
+        assert!(!is_indexed_token(
+            &v,
+            "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04"
+        ));
     }
 
     #[test]
     fn rejects_non_token_json() {
-        assert!(!is_indexed_token(&serde_json::json!({"error": 404})));
+        assert!(!is_indexed_token(
+            &serde_json::json!({"error": 404}),
+            "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04"
+        ));
     }
 
     #[test]

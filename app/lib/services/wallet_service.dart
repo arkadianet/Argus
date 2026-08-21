@@ -347,16 +347,26 @@ class WalletService {
     List<String> addresses, {
     int limit = 20,
   }) async {
+    var ok = 0;
+    var failed = 0;
     final results = await Future.wait(
       addresses.take(8).map((address) async {
         try {
           final raw = await getTransactionHistory(address, limit: limit);
+          ok++;
           return jsonDecode(raw) as List;
         } catch (_) {
+          failed++;
           return const [];
         }
       }),
     );
+    if (ok == 0 && failed > 0) {
+      throw ArgusException(
+        code: 'NODE_UNREACHABLE',
+        message: 'Could not load activity',
+      );
+    }
     final all = <Map<String, dynamic>>[];
     final seen = <String>{};
     for (final txs in results) {

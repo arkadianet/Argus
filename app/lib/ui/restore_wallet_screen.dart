@@ -56,7 +56,8 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
   }
 
   Future<void> _restore() async {
-    final phrase = _phraseCtrl.text.trim();
+    final words = mnemonicWords(_phraseCtrl.text);
+    final phrase = words.join(' ');
     if (phrase.isEmpty) {
       _snack('Enter a recovery phrase');
       return;

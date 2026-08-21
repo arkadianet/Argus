@@ -76,10 +76,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await walletService.init();
       await networkController.load();
       networkController.probe();
-      _hasSeed = await SecureStorageService.hasEncryptedSeed();
-      _hasPin = await SecureStorageService.hasPinWrap();
-      _canBiometric = await SecureStorageService.hasBiometric() &&
-          await SecureStorageService.hasWrapKey();
+      await _refreshUnlockFlags();
       _status = _hasSeed ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.';
     } on ArgusException catch (e) {
       _status = '${e.code}: ${e.message}';
@@ -421,8 +418,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  void _openSettings() {
-    Navigator.push(context, fadeRoute(const SettingsScreen()));
+  Future<void> _refreshUnlockFlags() async {
+    _hasSeed = await SecureStorageService.hasEncryptedSeed();
+    _hasPin = await SecureStorageService.hasPinWrap();
+    _canBiometric = await SecureStorageService.hasBiometric() &&
+        await SecureStorageService.hasWrapKey();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _openSettings() async {
+    await Navigator.push(context, fadeRoute(const SettingsScreen()));
+    if (!mounted) return;
+    try {
+      await _refreshUnlockFlags();
+    } catch (_) {}
   }
 
   bool get _stale =>

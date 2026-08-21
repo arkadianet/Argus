@@ -61,11 +61,10 @@ android {
 
     buildTypes {
         release {
-            signingConfig = if (!releaseStore.isNullOrBlank()) {
-                signingConfigs.getByName("release")
-            } else {
-                signingConfigs.getByName("debug")
+            require(!releaseStore.isNullOrBlank()) {
+                "Release builds require ARGUS_KEYSTORE. Copy example.env to .env and set the signing values."
             }
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

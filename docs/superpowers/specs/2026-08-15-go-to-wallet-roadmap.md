@@ -28,10 +28,10 @@ Hardcoded in `wallet-net`:
 | Role | URL | Used for |
 |---|---|---|
 | Default nodes | `https://ergo-node.eutxo.de`, `https://ergo-node.zoomout.io`, `https://ergo1.oette.info`, `https://node.sigmaspace.io` | UTXOs, height, history, broadcast, token name/decimals (`/blockchain/token/byId`) |
-| User-added | `https://host` or `http://ip:port` | Same, if the operator adds one in Settings |
+| User-added | `https://host` (preferred) or explicit `http://ip:port` | Same, if the operator adds one in Settings. HTTP is an insecure opt-in for a node you run or trust; Settings warns that the traffic is not encrypted. |
 | Explorer | `https://api.sigmaspace.io` | Open in explorer; last-resort token metadata if every node fails |
 
-`ErgoNodeClient::connect(preferred)` tries preferred (if any), then the two candidates, and keeps the first that answers `current_height()`. The Flutter UI never passes a preferred URL, so every call is `connect(None)`.
+`ErgoNodeClient::connect(preferred)` tries preferred (if any), then the four default extraIndex nodes, and keeps the first that answers `current_height()`. The Flutter UI never passes a preferred URL, so every call is `connect(None)`.
 
 There is **no** node list in Settings, **no** add/remove, **no** display of which host won, **no** persisted last-good node, **no** testnet, **no** peer discovery. "Discovery" in this repo means HD address gap scan, not finding nodes.
 
@@ -56,7 +56,7 @@ Goal: a careful person can hold and move ERG/tokens without fighting the app or 
 
 ### Nodes
 
-- Persist a node list. Ship the two current public hosts as defaults. User can add, disable, reorder, or remove (cannot remove the last enabled host).
+- Persist a node list. Ship the four current extraIndex hosts as defaults. User can add, disable, reorder, or remove (cannot remove the last enabled host).
 - On launch and on pull-to-refresh, probe enabled hosts (`/info` height). Use the first healthy one. Remember last-good for the next cold start.
 - Show the active host and height in Settings, and a small status on the ledger (height or "offline").
 - Token name/decimals from extraIndex `GET /blockchain/token/byId/{id}` (EIP-4 R4/R6). Explorer URL is for Open in explorer, with explorer REST as last-resort fallback.
@@ -81,12 +81,12 @@ Out of scope: running a local node, DNS seeder, automatic scrape of random IPs.
 
 ### Trust ops
 
-- Release-sign the next APK (`ARGUS_KEYSTORE` via local `.env`, never committed). Alpha 0 is debug-signed; a store key will not update over it.
+- Release-sign starting at `v1.0.0-alpha.2` (`ARGUS_KEYSTORE` via local `.env`, never committed). Alpha 0 and alpha.1 are debug-signed; a store key will not update over those installs.
 - Keep the unaudited-prototype strip until an external review exists.
 
 ### Done when
 
-A wallet that received on two addresses can send the combined ERG in one tx. Settings shows the live node and height. A phone can scan a receive QR and pay it. Activity opens a real tx. The next published APK is release-signed.
+A wallet that received on two addresses can send the combined ERG in one tx. Settings shows the live node and height. A phone can scan a receive QR and pay it. Activity opens a real tx. `v1.0.0-alpha.2` is the first release-signed APK.
 
 ## Layer 2 — dApp wallet
 
@@ -158,7 +158,7 @@ A user can swap on Spectrum from Argus without a browser wallet, and can explain
 |---|---|
 | `v1.0.0-alpha.0` | Shipped. Proof the path exists. Debug-signed. |
 | `v1.0.0-alpha.1` | Layer 1 daily driver. Debug-signed (same key as alpha.0). |
-| `v1.0.0-alpha.2` | ExtraIndex HTTPS nodes, SigmaSpace explorer, token meta from the node. |
+| `v1.0.0-alpha.2` | ExtraIndex HTTPS nodes, SigmaSpace explorer, token meta from the node. First release-signed APK. |
 | `v1.0.0-alpha.3` | Layer 2. ErgoPay. |
 | `v1.0.0-beta.1` | Layer 3 craft on top of 1–2. |
 | `v1.0.0` | External review + store listing. DeFi can land in 1.1. |
@@ -167,7 +167,7 @@ A user can swap on Spectrum from Argus without a browser wallet, and can explain
 
 - Public nodes rate-limit and drift. A visible list is the mitigation, not a hidden retry.
 - One-address spend will look like a "missing balance" bug the first time someone restores a used wallet. Fix that in layer 1 before any UI craft sprint.
-- Alpha 0's debug signature trains testers to install a key we must abandon. Say so on every debug build; switch at alpha.1.
+- Alpha 0 and alpha.1 debug signatures train testers to install a key we must abandon. Say so on every debug build; switch at alpha.2.
 - ErgoPay is how you win mobile. Spectrum-in-app without ErgoPay still loses desktop users.
 
 ## Next document

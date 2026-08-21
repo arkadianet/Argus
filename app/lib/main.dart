@@ -14,11 +14,9 @@ import 'ui/transactions_screen.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
 
-Future<void> main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  try {
-    await themeController.load();
-  } catch (_) {}
+  themeController.load().catchError((_) {});
   runApp(const ArgusApp());
 }
 

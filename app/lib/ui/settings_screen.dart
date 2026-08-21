@@ -18,6 +18,7 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   bool _canBiometric = false;
   bool _hasPin = false;
+  bool _unlockLoadFailed = false;
   bool _busy = false;
   final _nodeCtrl = TextEditingController();
   final _explorerCtrl = TextEditingController();
@@ -46,9 +47,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _hasPin = hasPin;
         _canBiometric = bio;
+        _unlockLoadFailed = false;
       });
     } catch (_) {
       if (!mounted) return;
+      setState(() => _unlockLoadFailed = true);
       _snack('Could not load unlock settings');
     }
   }
@@ -71,6 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _snack(err);
       return;
     }
+    if (!mounted) return;
     _nodeCtrl.clear();
   }
 
@@ -243,7 +247,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Token names and decimals come from the extraIndex node. This URL is for Open in explorer.',
+                'Token names and decimals come from extraIndex nodes first, then this explorer API as a fallback. The URL is also used for Open in explorer.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 28),
@@ -305,6 +309,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Text(
                   'Unlock the wallet to change biometric settings.',
                   style: Theme.of(context).textTheme.bodySmall,
+                )
+              else if (_unlockLoadFailed)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    onPressed: _busy ? null : _load,
+                    child: const Text('Retry unlock settings'),
+                  ),
                 )
               else if (_canBiometric) ...[
                 Text(

@@ -67,7 +67,9 @@ class NetworkController extends ChangeNotifier {
       } catch (_) {}
     }
     explorer = prefs.getString(_explorerKey) ?? defaultExplorer;
-    await apply();
+    try {
+      await apply();
+    } catch (_) {}
     notifyListeners();
   }
 
@@ -80,12 +82,10 @@ class NetworkController extends ChangeNotifier {
   Future<void> apply() async {
     final urls = enabledUrls;
     if (urls.isEmpty) return;
-    try {
-      await RustLib.instance.api.crateApiSetNetwork(
-        nodeUrls: urls,
-        explorerUrl: explorer,
-      );
-    } catch (_) {}
+    await RustLib.instance.api.crateApiSetNetwork(
+      nodeUrls: urls,
+      explorerUrl: explorer,
+    );
   }
 
   Future<void> probe() async {
@@ -183,7 +183,9 @@ class NetworkController extends ChangeNotifier {
     if (clean.isEmpty) return;
     explorer = clean;
     await persist();
-    await apply();
+    try {
+      await apply();
+    } catch (_) {}
     notifyListeners();
   }
 }
