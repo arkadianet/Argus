@@ -150,6 +150,20 @@ List<InputBoxInput> _parseInputBoxes(dynamic raw) {
   return out;
 }
 
+/// Parses an on-chain amount that may arrive as a JSON string (node EIP-12
+/// uses strings for box values and token amounts) or a number. Falls back to
+/// zero on a malformed value rather than throwing, so a single bad field can
+/// never sink the whole preview.
+BigInt _parseBigInt(dynamic raw) {
+  if (raw is num) return BigInt.from(raw.toInt());
+  if (raw is String) {
+    final s = raw.trim();
+    if (s.isEmpty) return BigInt.zero;
+    return BigInt.tryParse(s) ?? BigInt.zero;
+  }
+  return BigInt.zero;
+}
+
 /// A selected UTXO shown in the advanced send preview.
 class InputBoxInput {
   final String boxId;
@@ -170,11 +184,7 @@ class InputBoxInput {
       throw const FormatException('InputBoxInput missing or invalid box_id');
     }
     final valueRaw = json['value_nano_erg'];
-    final value = switch (valueRaw) {
-      String s when s.isNotEmpty => BigInt.parse(s),
-      num n => BigInt.from(n.toInt()),
-      _ => BigInt.zero,
-    };
+    final value = _parseBigInt(valueRaw);
     final height = (json['creation_height'] as num?)?.toInt() ?? 0;
     final assets = <InputAsset>[];
     final rawAssets = json['assets'];
@@ -183,11 +193,7 @@ class InputBoxInput {
         if (a is! Map) continue;
         final aMap = a as Map<String, dynamic>;
         final id = aMap['token_id'] as String? ?? '';
-        final amt = switch (aMap['amount']) {
-          String s => BigInt.parse(s),
-          num n => BigInt.from(n.toInt()),
-          _ => BigInt.zero,
-        };
+        final amt = _parseBigInt(aMap['amount']);
         if (id.isNotEmpty) {
           assets.add(InputAsset(tokenId: id, amount: amt));
         }

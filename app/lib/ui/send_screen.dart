@@ -133,36 +133,38 @@ class _SendScreenState extends State<SendScreen> {
               title: const Text('Confirm send'),
               content: SizedBox(
                 width: double.maxFinite,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('To', style: Theme.of(ctx).textTheme.titleSmall),
-                    const SizedBox(height: 4),
-                    Text(preview.recipient, style: monoStyle(ctx, size: 12)),
-                    const SizedBox(height: 12),
-                    Text('Amount  ${formatErg(preview.amountNanoErg)}'),
-                    Text('Fee  ${formatErg(preview.minerFee)}'),
-                    Text('Change  ${formatErg(preview.changeNanoErg)}'),
-                    if (preview.tokenId != null && preview.tokenId!.isNotEmpty)
-                      Text('Token  ${token?.label ?? preview.tokenId}  × ${preview.tokenAmount}'),
-                    if (preview.inputBoxes.isNotEmpty) ...[
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('To', style: Theme.of(ctx).textTheme.titleSmall),
+                      const SizedBox(height: 4),
+                      Text(preview.recipient, style: monoStyle(ctx, size: 12)),
                       const SizedBox(height: 12),
-                      CheckboxListTile(
-                        contentPadding: EdgeInsets.zero,
-                        value: showUtxos,
-                        onChanged: (v) => setState(() => showUtxos = v ?? false),
-                        title: const Text('Show UTXOs'),
-                        controlAffinity: ListTileControlAffinity.leading,
+                      Text('Amount  ${formatErg(preview.amountNanoErg)}'),
+                      Text('Fee  ${formatErg(preview.minerFee)}'),
+                      Text('Change  ${formatErg(preview.changeNanoErg)}'),
+                      if (preview.tokenId != null && preview.tokenId!.isNotEmpty)
+                        Text('Token  ${token?.label ?? preview.tokenId}  × ${preview.tokenAmount}'),
+                      if (preview.inputBoxes.isNotEmpty) ...[
+                        const SizedBox(height: 12),
+                        CheckboxListTile(
+                          contentPadding: EdgeInsets.zero,
+                          value: showUtxos,
+                          onChanged: (v) => setState(() => showUtxos = v ?? false),
+                          title: const Text('Show UTXOs'),
+                          controlAffinity: ListTileControlAffinity.leading,
+                        ),
+                        if (showUtxos) _InputBoxList(preview.inputBoxes, token),
+                      ],
+                      const SizedBox(height: 12),
+                      Text(
+                        networkController.activeUrl ?? 'Node not chosen yet',
+                        style: Theme.of(ctx).textTheme.bodySmall,
                       ),
-                      if (showUtxos) _InputBoxList(preview.inputBoxes, token),
                     ],
-                    const SizedBox(height: 12),
-                    Text(
-                      networkController.activeUrl ?? 'Node not chosen yet',
-                      style: Theme.of(ctx).textTheme.bodySmall,
-                    ),
-                  ],
+                  ),
                 ),
               ),
               actions: [
