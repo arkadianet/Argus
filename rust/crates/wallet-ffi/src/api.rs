@@ -1,6 +1,6 @@
 //! Argus wallet FFI — flutter_rust_bridge interface.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use citadel_core::constants::{MIN_BOX_VALUE_NANO, TX_FEE_NANO};
@@ -521,6 +521,111 @@ fn input_boxes_json(boxes: &[ergo_tx::Eip12InputBox]) -> Vec<serde_json::Value> 
         .collect()
 }
 
+struct ManagementBuild<S> {
+    unsigned_tx: ergo_tx::Eip12UnsignedTx,
+    summary: S,
+    miner_fee: i64,
+    change_erg: i64,
+    recipient_erg: i64,
+}
+
+struct PreparedManagement<S> {
+    preparation_id: u64,
+    input_boxes: Vec<serde_json::Value>,
+    summary: S,
+}
+
+fn filter_selected_inputs(
+    inputs: Vec<ergo_tx::Eip12InputBox>,
+    selected_box_ids: &[String],
+) -> Result<Vec<ergo_tx::Eip12InputBox>, String> {
+    let selected_ids = selected_box_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    if selected_ids.is_empty() {
+        return Ok(inputs);
+    }
+    let available_ids = inputs.iter().map(|input| input.box_id.as_str()).collect::<HashSet<_>>();
+    let mut missing = selected_ids.difference(&available_ids).copied().collect::<Vec<_>>();
+    missing.sort_unstable();
+    if !missing.is_empty() {
+        return Err(ArgusError::TxBuildFailed(format!(
+            "selected UTXO(s) not found: {}",
+            missing.join(", ")
+        ))
+        .to_json_string());
+    }
+    Ok(inputs
+        .into_iter()
+        .filter(|input| selected_ids.contains(input.box_id.as_str()))
+        .collect())
+}
+
+async fn prepare_management<S>(
+    handle_id: u64,
+    operation: &'static str,
+    spend_addresses: &[String],
+    selected_box_ids: &[String],
+    change_address: &str,
+    no_inputs_message: String,
+    node_url: Option<String>,
+    build: impl FnOnce(&[ergo_tx::Eip12InputBox], &str, i32) -> Result<ManagementBuild<S>, String>,
+) -> Result<PreparedManagement<S>, String> {
+    with_handle(handle_id, operation, |handle| {
+        if !handle.owns_address(change_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "change is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        Ok(())
+    })?;
+
+    let client = node_client(node_url.clone()).await?;
+    let (boxes, inputs) = gather_unspent(handle_id, &client, spend_addresses).await?;
+    let inputs = filter_selected_inputs(inputs, selected_box_ids)?;
+    if inputs.is_empty() {
+        return Err(ArgusError::NoUtxos(no_inputs_message).to_json_string());
+    }
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    let change_tree = address_to_ergo_tree(change_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    let built = build(&inputs, &change_tree, height)?;
+
+    let mut boxes_by_id = boxes
+        .into_iter()
+        .map(|ergo_box| (ergo_box.box_id().to_string(), ergo_box))
+        .collect::<HashMap<_, _>>();
+    let ergo_boxes = inputs
+        .iter()
+        .map(|input| {
+            boxes_by_id.remove(&input.box_id).ok_or_else(|| {
+                ArgusError::TxBuildFailed(format!(
+                    "UTXO set mismatch: missing ErgoBox {}",
+                    input.box_id
+                ))
+                .to_json_string()
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let input_boxes = input_boxes_json(&inputs);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        unsigned_tx: built.unsigned_tx,
+        miner_fee: built.miner_fee,
+        change_erg: built.change_erg,
+        recipient_erg: built.recipient_erg,
+        node_url,
+    });
+    Ok(PreparedManagement {
+        preparation_id,
+        input_boxes,
+        summary: built.summary,
+    })
+}
+
 async fn prepare(
     handle_id: u64,
     sender_address: &str,
@@ -667,80 +772,36 @@ pub async fn prepare_consolidate(
     change_address: String,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    with_handle(handle_id, "consolidate", |h| {
-        if !h.owns_address(&change_address).map_err(err_str)? {
-            return Err(ArgusError::InvalidAddress(
-                "change is not an address of this wallet".into(),
-            )
-            .to_json_string());
-        }
-        Ok(())
-    })?;
-
-    let client = node_client(node_url.clone()).await?;
-    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend_addresses).await?;
-    if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
-    }
-
-    let filtered_eip: Vec<ergo_tx::Eip12InputBox> = if selected_box_ids.is_empty() {
-        eip12
-    } else {
-        eip12
-            .into_iter()
-            .filter(|b| selected_box_ids.contains(&b.box_id))
-            .collect()
-    };
-
-    if filtered_eip.len() < 2 {
-        return Err(ArgusError::TxBuildFailed(
-            "Consolidation requires at least 2 input boxes".into(),
-        )
-        .to_json_string());
-    }
-
-    let height = client
-        .current_height()
-        .await
-        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
-    let change_tree = address_to_ergo_tree(&change_address)
-        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-
-    let built = ergo_tx::build_consolidate_tx(&filtered_eip, &change_tree, height)
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
-
-    let ergo_boxes = filtered_eip
-        .iter()
-        .filter_map(|eip| {
-            boxes
-                .iter()
-                .find(|b| b.box_id().to_string() == eip.box_id)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
-    if ergo_boxes.len() != filtered_eip.len() {
-        return Err(ArgusError::TxBuildFailed("UTXO set mismatch".into()).to_json_string());
-    }
-
-    let input_boxes = input_boxes_json(&filtered_eip);
-    let preparation_id = store_preparation(CachedPreparation {
-        handle_id,
-        ergo_boxes,
-        unsigned_tx: built.unsigned_tx,
-        miner_fee: built.summary.miner_fee,
-        change_erg: built.summary.change_erg,
-        recipient_erg: 0,
-        node_url,
-    });
+    let prepared = prepare_management(
+        handle_id, "consolidate", &spend_addresses, &selected_box_ids, &change_address,
+        spend_addresses.join(","), node_url,
+        |inputs, change_tree, height| {
+            if inputs.len() < 2 {
+                return Err(ArgusError::TxBuildFailed(
+                    "Consolidation requires at least 2 input boxes".into(),
+                ).to_json_string());
+            }
+            let built = ergo_tx::build_consolidate_tx(inputs, change_tree, height)
+                .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+            Ok(ManagementBuild {
+                miner_fee: built.summary.miner_fee,
+                change_erg: built.summary.change_erg,
+                recipient_erg: 0,
+                unsigned_tx: built.unsigned_tx,
+                summary: built.summary,
+            })
+        },
+    ).await?;
+    let summary = prepared.summary;
 
     serde_json::to_string(&serde_json::json!({
-        "preparation_id": preparation_id,
-        "input_count": built.summary.input_count,
-        "total_erg_in": built.summary.total_erg_in,
-        "change_nano_erg": built.summary.change_erg,
-        "token_count": built.summary.token_count,
-        "miner_fee": built.summary.miner_fee,
-        "input_boxes": input_boxes,
+        "preparation_id": prepared.preparation_id,
+        "input_count": summary.input_count,
+        "total_erg_in": summary.total_erg_in,
+        "change_nano_erg": summary.change_erg,
+        "token_count": summary.token_count,
+        "miner_fee": summary.miner_fee,
+        "input_boxes": prepared.input_boxes,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -756,79 +817,34 @@ pub async fn prepare_split_erg(
     change_address: String,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    with_handle(handle_id, "split_erg", |h| {
-        if !h.owns_address(&change_address).map_err(err_str)? {
-            return Err(ArgusError::InvalidAddress(
-                "change is not an address of this wallet".into(),
-            )
-            .to_json_string());
-        }
-        Ok(())
-    })?;
-
-    let client = node_client(node_url.clone()).await?;
-    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend_addresses).await?;
-    let filtered_eip: Vec<ergo_tx::Eip12InputBox> = if selected_box_ids.is_empty() {
-        eip12
-    } else {
-        eip12
-            .into_iter()
-            .filter(|b| selected_box_ids.contains(&b.box_id))
-            .collect()
-    };
-
-    if filtered_eip.is_empty() {
-        return Err(ArgusError::NoUtxos("no inputs available for split".into()).to_json_string());
-    }
-
-    let height = client
-        .current_height()
-        .await
-        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
-    let change_tree = address_to_ergo_tree(&change_address)
-        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-
     let mode = ergo_tx::SplitMode::Erg {
         amount_per_box: amount_per_box_nano,
     };
-    let built = ergo_tx::build_split_tx(
-        &filtered_eip,
-        &mode,
-        count as usize,
-        &change_tree,
-        height,
-    )
-    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
-
-    let ergo_boxes = filtered_eip
-        .iter()
-        .filter_map(|eip| {
-            boxes
-                .iter()
-                .find(|b| b.box_id().to_string() == eip.box_id)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
-
-    let input_boxes = input_boxes_json(&filtered_eip);
-    let preparation_id = store_preparation(CachedPreparation {
-        handle_id,
-        ergo_boxes,
-        unsigned_tx: built.unsigned_tx,
-        miner_fee: built.summary.miner_fee,
-        change_erg: built.summary.change_erg,
-        recipient_erg: 0,
-        node_url,
-    });
+    let prepared = prepare_management(
+        handle_id, "split_erg", &spend_addresses, &selected_box_ids, &change_address,
+        "no inputs available for split".into(), node_url,
+        move |inputs, change_tree, height| {
+            let built = ergo_tx::build_split_tx(inputs, &mode, count as usize, change_tree, height)
+                .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+            Ok(ManagementBuild {
+                miner_fee: built.summary.miner_fee,
+                change_erg: built.summary.change_erg,
+                recipient_erg: 0,
+                unsigned_tx: built.unsigned_tx,
+                summary: built.summary,
+            })
+        },
+    ).await?;
+    let summary = prepared.summary;
 
     serde_json::to_string(&serde_json::json!({
-        "preparation_id": preparation_id,
-        "split_count": built.summary.split_count,
-        "amount_per_box": built.summary.amount_per_box,
-        "total_split": built.summary.total_split,
-        "change_nano_erg": built.summary.change_erg,
-        "miner_fee": built.summary.miner_fee,
-        "input_boxes": input_boxes,
+        "preparation_id": prepared.preparation_id,
+        "split_count": summary.split_count,
+        "amount_per_box": summary.amount_per_box,
+        "total_split": summary.total_split,
+        "change_nano_erg": summary.change_erg,
+        "miner_fee": summary.miner_fee,
+        "input_boxes": prepared.input_boxes,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -846,82 +862,37 @@ pub async fn prepare_split_token(
     change_address: String,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    with_handle(handle_id, "split_token", |h| {
-        if !h.owns_address(&change_address).map_err(err_str)? {
-            return Err(ArgusError::InvalidAddress(
-                "change is not an address of this wallet".into(),
-            )
-            .to_json_string());
-        }
-        Ok(())
-    })?;
-
-    let client = node_client(node_url.clone()).await?;
-    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend_addresses).await?;
-    let filtered_eip: Vec<ergo_tx::Eip12InputBox> = if selected_box_ids.is_empty() {
-        eip12
-    } else {
-        eip12
-            .into_iter()
-            .filter(|b| selected_box_ids.contains(&b.box_id))
-            .collect()
-    };
-
-    if filtered_eip.is_empty() {
-        return Err(ArgusError::NoUtxos("no inputs available for split".into()).to_json_string());
-    }
-
-    let height = client
-        .current_height()
-        .await
-        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
-    let change_tree = address_to_ergo_tree(&change_address)
-        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-
     let mode = ergo_tx::SplitMode::Token {
         token_id: token_id.clone(),
         amount_per_box,
         erg_per_box: erg_per_box_nano,
     };
-    let built = ergo_tx::build_split_tx(
-        &filtered_eip,
-        &mode,
-        count as usize,
-        &change_tree,
-        height,
-    )
-    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
-
-    let ergo_boxes = filtered_eip
-        .iter()
-        .filter_map(|eip| {
-            boxes
-                .iter()
-                .find(|b| b.box_id().to_string() == eip.box_id)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
-
-    let input_boxes = input_boxes_json(&filtered_eip);
-    let preparation_id = store_preparation(CachedPreparation {
-        handle_id,
-        ergo_boxes,
-        unsigned_tx: built.unsigned_tx,
-        miner_fee: built.summary.miner_fee,
-        change_erg: built.summary.change_erg,
-        recipient_erg: 0,
-        node_url,
-    });
+    let prepared = prepare_management(
+        handle_id, "split_token", &spend_addresses, &selected_box_ids, &change_address,
+        "no inputs available for split".into(), node_url,
+        move |inputs, change_tree, height| {
+            let built = ergo_tx::build_split_tx(inputs, &mode, count as usize, change_tree, height)
+                .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+            Ok(ManagementBuild {
+                miner_fee: built.summary.miner_fee,
+                change_erg: built.summary.change_erg,
+                recipient_erg: 0,
+                unsigned_tx: built.unsigned_tx,
+                summary: built.summary,
+            })
+        },
+    ).await?;
+    let summary = prepared.summary;
 
     serde_json::to_string(&serde_json::json!({
-        "preparation_id": preparation_id,
-        "split_count": built.summary.split_count,
+        "preparation_id": prepared.preparation_id,
+        "split_count": summary.split_count,
         "token_id": token_id,
-        "amount_per_box": built.summary.amount_per_box,
-        "total_split": built.summary.total_split,
-        "change_nano_erg": built.summary.change_erg,
-        "miner_fee": built.summary.miner_fee,
-        "input_boxes": input_boxes,
+        "amount_per_box": summary.amount_per_box,
+        "total_split": summary.total_split,
+        "change_nano_erg": summary.change_erg,
+        "miner_fee": summary.miner_fee,
+        "input_boxes": prepared.input_boxes,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -936,31 +907,6 @@ pub async fn prepare_restructure(
     change_address: String,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    with_handle(handle_id, "restructure", |h| {
-        if !h.owns_address(&change_address).map_err(err_str)? {
-            return Err(ArgusError::InvalidAddress(
-                "change is not an address of this wallet".into(),
-            )
-            .to_json_string());
-        }
-        Ok(())
-    })?;
-
-    let client = node_client(node_url.clone()).await?;
-    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend_addresses).await?;
-    let filtered_eip: Vec<ergo_tx::Eip12InputBox> = if selected_box_ids.is_empty() {
-        eip12
-    } else {
-        eip12
-            .into_iter()
-            .filter(|b| selected_box_ids.contains(&b.box_id))
-            .collect()
-    };
-
-    if filtered_eip.is_empty() {
-        return Err(ArgusError::NoUtxos("no inputs available for restructure".into()).to_json_string());
-    }
-
     let parsed_specs: Vec<serde_json::Value> = serde_json::from_str(&outputs_json)
         .map_err(|e| ArgusError::SerializationError(format!("Invalid outputs JSON: {e}")).to_json_string())?;
 
@@ -983,53 +929,33 @@ pub async fn prepare_restructure(
             .unwrap_or_default();
         specs.push(ergo_tx::RestructureOutputSpec { value, tokens });
     }
-
-    let height = client
-        .current_height()
-        .await
-        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
-    let change_tree = address_to_ergo_tree(&change_address)
-        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-
-    let built = ergo_tx::build_restructure_tx(
-        &filtered_eip,
-        &specs,
-        &change_tree,
-        height,
-    )
-    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
-
-    let ergo_boxes = filtered_eip
-        .iter()
-        .filter_map(|eip| {
-            boxes
-                .iter()
-                .find(|b| b.box_id().to_string() == eip.box_id)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
-
-    let input_boxes = input_boxes_json(&filtered_eip);
-    let preparation_id = store_preparation(CachedPreparation {
-        handle_id,
-        ergo_boxes,
-        unsigned_tx: built.unsigned_tx,
-        miner_fee: built.summary.miner_fee,
-        change_erg: built.summary.change_erg,
-        recipient_erg: built.summary.allocated_erg,
-        node_url,
-    });
+    let prepared = prepare_management(
+        handle_id, "restructure", &spend_addresses, &selected_box_ids, &change_address,
+        "no inputs available for restructure".into(), node_url,
+        move |inputs, change_tree, height| {
+            let built = ergo_tx::build_restructure_tx(inputs, &specs, change_tree, height)
+                .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+            Ok(ManagementBuild {
+                miner_fee: built.summary.miner_fee,
+                change_erg: built.summary.change_erg,
+                recipient_erg: built.summary.allocated_erg,
+                unsigned_tx: built.unsigned_tx,
+                summary: built.summary,
+            })
+        },
+    ).await?;
+    let summary = prepared.summary;
 
     serde_json::to_string(&serde_json::json!({
-        "preparation_id": preparation_id,
-        "input_count": built.summary.input_count,
-        "output_count": built.summary.output_count,
-        "total_erg_in": built.summary.total_erg_in,
-        "allocated_erg": built.summary.allocated_erg,
-        "change_nano_erg": built.summary.change_erg,
-        "has_change": built.summary.has_change,
-        "miner_fee": built.summary.miner_fee,
-        "input_boxes": input_boxes,
+        "preparation_id": prepared.preparation_id,
+        "input_count": summary.input_count,
+        "output_count": summary.output_count,
+        "total_erg_in": summary.total_erg_in,
+        "allocated_erg": summary.allocated_erg,
+        "change_nano_erg": summary.change_erg,
+        "has_change": summary.has_change,
+        "miner_fee": summary.miner_fee,
+        "input_boxes": prepared.input_boxes,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -1218,5 +1144,21 @@ mod tests {
         assert_eq!(arr[1]["box_id"], "b2");
         assert_eq!(arr[1]["assets"][0]["token_id"], "nft");
         assert_eq!(arr[1]["assets"][0]["amount"], "1");
+    }
+
+    #[test]
+    fn selected_inputs_reject_missing_ids_and_preserve_input_order() {
+        let inputs = vec![
+            test_input_box("b1", "1000000", vec![]),
+            test_input_box("b2", "2000000", vec![]),
+            test_input_box("b3", "3000000", vec![]),
+        ];
+        let filtered = filter_selected_inputs(inputs.clone(), &["b3".into(), "b1".into()]).unwrap();
+        assert_eq!(
+            filtered.iter().map(|input| input.box_id.as_str()).collect::<Vec<_>>(),
+            vec!["b1", "b3"]
+        );
+        let error = filter_selected_inputs(inputs, &["b1".into(), "missing".into()]).unwrap_err();
+        assert!(error.contains("selected UTXO(s) not found: missing"));
     }
 }

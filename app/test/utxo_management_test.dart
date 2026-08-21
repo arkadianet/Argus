@@ -37,40 +37,85 @@ void main() {
     });
   });
 
-  group('Consolidate & Restructure preview maps', () {
-    test('Consolidate preview contains expected summary fields', () {
-      final preview = {
+  group('UTXO management previews', () {
+    test('parses consolidation payload', () {
+      final preview = ConsolidatePreview.fromJson({
         'preparation_id': 101,
         'input_count': 5,
         'total_erg_in': 10000000000,
         'change_nano_erg': 9998900000,
         'token_count': 3,
         'miner_fee': 1100000,
-      };
+      });
 
-      expect(preview['preparation_id'], 101);
-      expect(preview['input_count'], 5);
-      expect(preview['total_erg_in'], 10000000000);
-      expect(preview['change_nano_erg'], 9998900000);
-      expect(preview['token_count'], 3);
-      expect(preview['miner_fee'], 1100000);
+      expect(preview.preparationId, 101);
+      expect(preview.inputCount, 5);
+      expect(preview.totalErgIn, 10000000000);
+      expect(preview.changeNanoErg, 9998900000);
+      expect(preview.tokenCount, 3);
+      expect(preview.minerFee, minerFeeNano);
     });
 
-    test('Split preview contains split_count and amounts', () {
-      final preview = {
+    test('parses numeric ERG split amounts without losing their value', () {
+      final preview = SplitPreview.fromJson({
         'preparation_id': 102,
         'split_count': 4,
-        'amount_per_box': '2000000000',
+        'amount_per_box': 2000000000,
         'total_split': '8000000000',
         'change_nano_erg': 1998900000,
         'miner_fee': 1100000,
-      };
+      });
 
-      expect(preview['preparation_id'], 102);
-      expect(preview['split_count'], 4);
-      expect(preview['amount_per_box'], '2000000000');
-      expect(preview['total_split'], '8000000000');
-      expect(preview['change_nano_erg'], 1998900000);
+      expect(preview.preparationId, 102);
+      expect(preview.splitCount, 4);
+      expect(preview.amountPerBox, BigInt.from(2000000000));
+      expect(preview.totalSplit, BigInt.from(8000000000));
+      expect(preview.changeNanoErg, 1998900000);
+    });
+
+    test('parses and validates token split identifiers', () {
+      final preview = SplitPreview.fromJson({
+        'preparation_id': 103,
+        'split_count': 2,
+        'token_id': 'token_abc',
+        'amount_per_box': '25',
+        'total_split': '50',
+        'change_nano_erg': 1000000,
+        'miner_fee': 1100000,
+      });
+
+      expect(preview.tokenId, 'token_abc');
+      expect(preview.amountPerBox, BigInt.from(25));
+      expect(
+        () => SplitPreview.fromJson({
+          'preparation_id': 103,
+          'split_count': 2,
+          'token_id': '',
+          'amount_per_box': '25',
+          'total_split': '50',
+          'change_nano_erg': 1000000,
+          'miner_fee': 1100000,
+        }),
+        throwsFormatException,
+      );
+    });
+
+    test('parses restructure payload', () {
+      final preview = RestructurePreview.fromJson({
+        'preparation_id': 104,
+        'input_count': 3,
+        'output_count': 2,
+        'total_erg_in': 5000000000,
+        'allocated_erg': 3000000000,
+        'change_nano_erg': 1998900000,
+        'has_change': true,
+        'miner_fee': 1100000,
+      });
+
+      expect(preview.preparationId, 104);
+      expect(preview.inputCount, 3);
+      expect(preview.outputCount, 2);
+      expect(preview.hasChange, isTrue);
     });
   });
 }

@@ -9,6 +9,8 @@ import '../theme/argus_theme.dart';
 
 enum UtxoFilter { all, ergOnly, withTokens, dust }
 
+const _dustThresholdNano = 100000000;
+
 class UtxoManagementScreen extends StatefulWidget {
   const UtxoManagementScreen({super.key});
 
@@ -110,12 +112,14 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           if (box.assets.isEmpty) return false;
           break;
         case UtxoFilter.dust:
-          if (box.valueNanoErg >= BigInt.from(100000000)) return false;
+          if (box.valueNanoErg >= BigInt.from(_dustThresholdNano)) return false;
           break;
       }
       if (_searchQuery.isNotEmpty) {
         final matchId = box.boxId.toLowerCase().contains(_searchQuery);
-        final matchToken = box.assets.any((a) => a.tokenId.toLowerCase().contains(_searchQuery));
+        final matchToken = box.assets.any(
+          (a) => a.tokenId.toLowerCase().contains(_searchQuery),
+        );
         if (!matchId && !matchToken) return false;
       }
       return true;
@@ -147,10 +151,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
   void _snack(String msg, {bool isError = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(msg),
-        backgroundColor: isError ? rust : null,
-      ),
+      SnackBar(content: Text(msg), backgroundColor: isError ? rust : null),
     );
   }
 
@@ -165,14 +166,16 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     }
 
     final addrs = await _getWalletAddresses();
-    if (addrs.isEmpty) return;
+    if (!mounted || addrs.isEmpty) return;
     final changeAddress = addrs.first;
 
     setState(() => _busy = true);
     try {
       final preview = await walletService.prepareConsolidate(
         spendAddresses: addrs,
-        selectedBoxIds: _selectedBoxIds.isNotEmpty ? _selectedBoxIds.toList() : null,
+        selectedBoxIds: _selectedBoxIds.isNotEmpty
+            ? _selectedBoxIds.toList()
+            : null,
         changeAddress: changeAddress,
         nodeUrl: networkController.activeUrl,
       );
@@ -192,12 +195,19 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       );
 
       if (confirmed == true) {
-        final prepId = (preview['preparation_id'] as num).toInt();
         setState(() => _busy = true);
-        final txId = await walletService.sendErg(preparationId: prepId);
-        _snack('Consolidation broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}');
+        try {
+          final txId = await walletService.sendErg(
+            preparationId: preview.preparationId,
+          );
+          _snack(
+            'Consolidation broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}',
+          );
         await Future.delayed(const Duration(seconds: 1));
         await _loadBoxes();
+        } finally {
+          if (mounted) setState(() => _busy = false);
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -209,7 +219,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
 
   Future<void> _openSplitFlow() async {
     final addrs = await _getWalletAddresses();
-    if (addrs.isEmpty) return;
+    if (!mounted || addrs.isEmpty) return;
     final changeAddress = addrs.first;
 
     final result = await showModalBottomSheet<Map<String, dynamic>>(
@@ -231,7 +241,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       final selectedBoxes = (result['selected_box_ids'] as List).cast<String>();
       final count = result['count'] as int;
 
-      final Map<String, dynamic> preview;
+      final SplitPreview preview;
       if (!isToken) {
         final nanoPerBox = result['amount_nano_erg'] as int;
         preview = await walletService.prepareSplitErg(
@@ -264,16 +274,24 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       final confirmed = await showModalBottomSheet<bool>(
         context: context,
         backgroundColor: Theme.of(context).colorScheme.surface,
-        builder: (ctx) => _SplitPreviewSheet(preview: preview, isToken: isToken),
+        builder: (ctx) =>
+            _SplitPreviewSheet(preview: preview, isToken: isToken),
       );
 
       if (confirmed == true) {
-        final prepId = (preview['preparation_id'] as num).toInt();
         setState(() => _busy = true);
-        final txId = await walletService.sendErg(preparationId: prepId);
-        _snack('Split transaction broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}');
+        try {
+          final txId = await walletService.sendErg(
+            preparationId: preview.preparationId,
+          );
+          _snack(
+            'Split transaction broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}',
+          );
         await Future.delayed(const Duration(seconds: 1));
         await _loadBoxes();
+        } finally {
+          if (mounted) setState(() => _busy = false);
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -285,7 +303,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
 
   Future<void> _openRestructureFlow() async {
     final addrs = await _getWalletAddresses();
-    if (addrs.isEmpty) return;
+    if (!mounted || addrs.isEmpty) return;
     final changeAddress = addrs.first;
 
     final result = await showModalBottomSheet<Map<String, dynamic>>(
@@ -324,12 +342,19 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       );
 
       if (confirmed == true) {
-        final prepId = (preview['preparation_id'] as num).toInt();
         setState(() => _busy = true);
-        final txId = await walletService.sendErg(preparationId: prepId);
-        _snack('Restructure transaction broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}');
+        try {
+          final txId = await walletService.sendErg(
+            preparationId: preview.preparationId,
+          );
+          _snack(
+            'Restructure transaction broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}',
+          );
         await Future.delayed(const Duration(seconds: 1));
         await _loadBoxes();
+        } finally {
+          if (mounted) setState(() => _busy = false);
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -377,9 +402,16 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: rust)),
+                    Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: rust),
+                    ),
                         const SizedBox(height: 16),
-                        FilledButton(onPressed: _loadBoxes, child: const Text('Retry')),
+                    FilledButton(
+                      onPressed: _loadBoxes,
+                      child: const Text('Retry'),
+                    ),
                       ],
                     ),
                   ),
@@ -392,7 +424,9 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
                         color: Theme.of(context).colorScheme.surface,
-                        border: Border.all(color: Theme.of(context).colorScheme.outline),
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.outline,
+                    ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -404,7 +438,9 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                                 children: [
                                   Text(
                                     '${_boxes.length} UTXOs',
-                                    style: Theme.of(context).textTheme.headlineSmall,
+                                style: Theme.of(
+                                  context,
+                                ).textTheme.headlineSmall,
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
@@ -415,7 +451,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                               ),
                               const Spacer(),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
                                 decoration: BoxDecoration(
                                   color: healthColor.withValues(alpha: 0.15),
                                   border: Border.all(color: healthColor),
@@ -441,7 +480,9 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                                 child: OutlinedButton.icon(
                                   icon: const Icon(Icons.merge_type, size: 16),
                                   label: const Text('Consolidate'),
-                                  onPressed: _busy || _boxes.length < 2 ? null : _openConsolidateFlow,
+                              onPressed: _busy || _boxes.length < 2
+                                  ? null
+                                  : _openConsolidateFlow,
                                 ),
                               ),
                               const SizedBox(width: 8),
@@ -449,7 +490,9 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                                 child: OutlinedButton.icon(
                                   icon: const Icon(Icons.call_split, size: 16),
                                   label: const Text('Split'),
-                                  onPressed: _busy || _boxes.isEmpty ? null : _openSplitFlow,
+                              onPressed: _busy || _boxes.isEmpty
+                                  ? null
+                                  : _openSplitFlow,
                                 ),
                               ),
                               const SizedBox(width: 8),
@@ -457,7 +500,9 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                                 child: OutlinedButton.icon(
                                   icon: const Icon(Icons.tune, size: 16),
                                   label: const Text('Restructure'),
-                                  onPressed: _busy || _boxes.isEmpty ? null : _openRestructureFlow,
+                              onPressed: _busy || _boxes.isEmpty
+                                  ? null
+                                  : _openRestructureFlow,
                                 ),
                               ),
                             ],
@@ -495,11 +540,20 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                         children: [
                           _filterChip(UtxoFilter.all, 'All (${_boxes.length})'),
                           const SizedBox(width: 6),
-                          _filterChip(UtxoFilter.ergOnly, 'ERG Only (${_boxes.where((b) => b.assets.isEmpty).length})'),
+                      _filterChip(
+                        UtxoFilter.ergOnly,
+                        'ERG Only (${_boxes.where((b) => b.assets.isEmpty).length})',
+                      ),
                           const SizedBox(width: 6),
-                          _filterChip(UtxoFilter.withTokens, 'Tokens (${_boxes.where((b) => b.assets.isNotEmpty).length})'),
+                      _filterChip(
+                        UtxoFilter.withTokens,
+                        'Tokens (${_boxes.where((b) => b.assets.isNotEmpty).length})',
+                      ),
                           const SizedBox(width: 6),
-                          _filterChip(UtxoFilter.dust, 'Dust (${_boxes.where((b) => b.valueNanoErg < BigInt.from(100000000)).length})'),
+                      _filterChip(
+                        UtxoFilter.dust,
+                        'Dust (${_boxes.where((b) => b.valueNanoErg < BigInt.from(_dustThresholdNano)).length})',
+                      ),
                           const SizedBox(width: 12),
                           if (_selectedBoxIds.isNotEmpty) ...[
                             TextButton(
@@ -527,7 +581,9 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                               itemCount: _filteredBoxes.length,
                               itemBuilder: (ctx, i) {
                                 final box = _filteredBoxes[i];
-                                final isSelected = _selectedBoxIds.contains(box.boxId);
+                            final isSelected = _selectedBoxIds.contains(
+                              box.boxId,
+                            );
                                 return _UtxoCard(
                                   box: box,
                                   isSelected: isSelected,
@@ -543,7 +599,9 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
               decoration: BoxDecoration(
                 color: Theme.of(context).colorScheme.surface,
-                border: Border(top: BorderSide(color: Theme.of(context).colorScheme.outline)),
+                border: Border(
+                  top: BorderSide(color: Theme.of(context).colorScheme.outline),
+                ),
               ),
               child: Row(
                 children: [
@@ -572,7 +630,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
   Widget _filterChip(UtxoFilter filter, String label) {
     final active = _activeFilter == filter;
     return ChoiceChip(
-      label: Text(label, style: TextStyle(fontSize: 12, color: active ? ink : null)),
+      label: Text(
+        label,
+        style: TextStyle(fontSize: 12, color: active ? ink : null),
+      ),
       selected: active,
       selectedColor: iris,
       onSelected: (_) => setState(() => _activeFilter = filter),
@@ -642,9 +703,13 @@ class _UtxoCard extends StatelessWidget {
                               constraints: const BoxConstraints(),
                               tooltip: 'Copy Box ID',
                               onPressed: () {
-                                Clipboard.setData(ClipboardData(text: box.boxId));
+                                Clipboard.setData(
+                                  ClipboardData(text: box.boxId),
+                                );
                                 ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Box ID copied')),
+                                  const SnackBar(
+                                    content: Text('Box ID copied'),
+                                  ),
                                 );
                               },
                             ),
@@ -656,7 +721,9 @@ class _UtxoCard extends StatelessWidget {
                   if (box.creationHeight > 0)
                     Text(
                       'H: ${box.creationHeight}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(fontSize: 11),
                     ),
                 ],
               ),
@@ -667,14 +734,20 @@ class _UtxoCard extends StatelessWidget {
                   runSpacing: 4,
                   children: box.assets.map((a) {
                     return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
                       decoration: BoxDecoration(
                         color: iris.withValues(alpha: 0.12),
                         border: Border.all(color: iris.withValues(alpha: 0.4)),
                       ),
                       child: Text(
                         '${a.amount} ${shorten(a.tokenId, head: 4, tail: 4)}',
-                        style: const TextStyle(fontSize: 11, fontFamily: 'IBMPlexMono'),
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontFamily: 'IBMPlexMono',
+                        ),
                       ),
                     );
                   }).toList(),
@@ -695,34 +768,36 @@ class _ConsolidatePreviewSheet extends StatelessWidget {
     required this.changeAddress,
   });
 
-  final Map<String, dynamic> preview;
+  final ConsolidatePreview preview;
   final int targetCount;
   final String changeAddress;
 
   @override
   Widget build(BuildContext context) {
-    final totalIn = preview['total_erg_in'] as num? ?? 0;
-    final changeNano = preview['change_nano_erg'] as num? ?? 0;
-    final fee = preview['miner_fee'] as num? ?? 1100000;
-    final tokenCount = preview['token_count'] as num? ?? 0;
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Consolidate UTXOs', style: Theme.of(context).textTheme.titleLarge),
+          Text(
+            'Consolidate UTXOs',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
           const SizedBox(height: 12),
           const Hairline(),
           const SizedBox(height: 16),
           _row('Inputs Merged', '$targetCount boxes'),
-          _row('Total Value In', formatErg(totalIn.toInt())),
-          _row('Tokens Included', '$tokenCount token types'),
-          _row('Miner Fee', formatErg(fee.toInt())),
+          _row('Total Value In', formatErg(preview.totalErgIn)),
+          _row('Tokens Included', '${preview.tokenCount} token types'),
+          _row('Miner Fee', formatErg(preview.minerFee)),
           const Hairline(),
           const SizedBox(height: 8),
-          _row('Consolidated Output', formatErg(changeNano.toInt()), bold: true),
+          _row(
+            'Consolidated Output',
+            formatErg(preview.changeNanoErg),
+            bold: true,
+          ),
           const SizedBox(height: 20),
           Row(
             children: [
@@ -752,8 +827,18 @@ class _ConsolidatePreviewSheet extends StatelessWidget {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: TextStyle(fontWeight: bold ? FontWeight.w600 : FontWeight.normal)),
-          Text(value, style: TextStyle(fontWeight: bold ? FontWeight.w600 : FontWeight.normal)),
+          Text(
+            label,
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
+            ),
+          ),
         ],
       ),
     );
@@ -781,10 +866,21 @@ class _SplitConfigSheetState extends State<_SplitConfigSheet> {
   final TextEditingController _amountCtrl = TextEditingController();
   String? _selectedTokenId;
 
+  List<String> get _availableTokenIds {
+    final ids = widget.boxes
+        .expand((box) => box.assets.map((asset) => asset.tokenId))
+        .toSet()
+        .toList();
+    ids.sort();
+    return ids;
+  }
+
   @override
   void initState() {
     super.initState();
     _amountCtrl.text = '1.0';
+    final tokenIds = _availableTokenIds;
+    _selectedTokenId = tokenIds.isEmpty ? null : tokenIds.first;
   }
 
   @override
@@ -793,10 +889,33 @@ class _SplitConfigSheetState extends State<_SplitConfigSheet> {
     super.dispose();
   }
 
+  void _setTokenMode(bool isToken) {
+    if (_isToken == isToken) return;
+    setState(() {
+      _isToken = isToken;
+      _amountCtrl.clear();
+      if (isToken && !_availableTokenIds.contains(_selectedTokenId)) {
+        final tokenIds = _availableTokenIds;
+        _selectedTokenId = tokenIds.isEmpty ? null : tokenIds.first;
+      }
+    });
+  }
+
+  void _showValidation(String message) {
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.fromLTRB(24, 20, 24, MediaQuery.of(context).viewInsets.bottom + 24),
+      padding: EdgeInsets.fromLTRB(
+        24,
+        20,
+        24,
+        MediaQuery.of(context).viewInsets.bottom + 24,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -808,29 +927,53 @@ class _SplitConfigSheetState extends State<_SplitConfigSheet> {
               ChoiceChip(
                 label: const Text('Split ERG'),
                 selected: !_isToken,
-                onSelected: (_) => setState(() => _isToken = false),
+                onSelected: (_) => _setTokenMode(false),
                 selectedColor: iris,
               ),
               const SizedBox(width: 8),
               ChoiceChip(
                 label: const Text('Split Token'),
                 selected: _isToken,
-                onSelected: (_) => setState(() => _isToken = true),
+                onSelected: (_) => _setTokenMode(true),
                 selectedColor: iris,
               ),
             ],
           ),
           const SizedBox(height: 16),
+          if (_isToken) ...[
+            DropdownButtonFormField<String>(
+              initialValue: _selectedTokenId,
+              decoration: const InputDecoration(
+                labelText: 'Token',
+                isDense: true,
+              ),
+              items: _availableTokenIds
+                  .map(
+                    (id) => DropdownMenuItem(
+                      value: id,
+                      child: Text(shorten(id, head: 8, tail: 6)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (id) => setState(() => _selectedTokenId = id),
+            ),
+            const SizedBox(height: 16),
+          ],
           TextField(
             controller: _amountCtrl,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-              labelText: _isToken ? 'Amount per box (raw integer)' : 'ERG amount per box',
+              labelText: _isToken
+                  ? 'Amount per box (raw integer)'
+                  : 'ERG amount per box',
               isDense: true,
             ),
           ),
           const SizedBox(height: 16),
-          Text('Number of Outputs: $_count', style: const TextStyle(fontWeight: FontWeight.w500)),
+          Text(
+            'Number of Outputs: $_count',
+            style: const TextStyle(fontWeight: FontWeight.w500),
+          ),
           Slider(
             value: _count.toDouble(),
             min: 2,
@@ -844,7 +987,10 @@ class _SplitConfigSheetState extends State<_SplitConfigSheet> {
             onPressed: () {
               if (!_isToken) {
                 final nano = parseErgToNano(_amountCtrl.text);
-                if (nano == null || nano <= 0) return;
+                if (nano == null || nano <= 0) {
+                  _showValidation('Enter a valid ERG amount');
+                  return;
+                }
                 Navigator.pop(context, {
                   'is_token': false,
                   'count': _count,
@@ -852,14 +998,22 @@ class _SplitConfigSheetState extends State<_SplitConfigSheet> {
                   'selected_box_ids': widget.selectedBoxIds.toList(),
                 });
               } else {
+                final tokenId = _selectedTokenId;
                 final amt = BigInt.tryParse(_amountCtrl.text);
-                if (amt == null || amt <= BigInt.zero) return;
+                if (tokenId == null || !_availableTokenIds.contains(tokenId)) {
+                  _showValidation('Select a token to split');
+                  return;
+                }
+                if (amt == null || amt <= BigInt.zero) {
+                  _showValidation('Enter a valid whole token amount');
+                  return;
+                }
                 Navigator.pop(context, {
                   'is_token': true,
                   'count': _count,
-                  'token_id': _selectedTokenId ?? '',
+                  'token_id': tokenId,
                   'amount_per_box': amt,
-                  'erg_per_box_nano': 1000000,
+                  'erg_per_box_nano': minBoxNano,
                   'selected_box_ids': widget.selectedBoxIds.toList(),
                 });
               }
@@ -875,16 +1029,11 @@ class _SplitConfigSheetState extends State<_SplitConfigSheet> {
 class _SplitPreviewSheet extends StatelessWidget {
   const _SplitPreviewSheet({required this.preview, required this.isToken});
 
-  final Map<String, dynamic> preview;
+  final SplitPreview preview;
   final bool isToken;
 
   @override
   Widget build(BuildContext context) {
-    final count = preview['split_count'] ?? 0;
-    final amtPerBox = preview['amount_per_box'] ?? '0';
-    final fee = preview['miner_fee'] as num? ?? 1100000;
-    final change = preview['change_nano_erg'] as num? ?? 0;
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
       child: Column(
@@ -895,10 +1044,15 @@ class _SplitPreviewSheet extends StatelessWidget {
           const SizedBox(height: 12),
           const Hairline(),
           const SizedBox(height: 12),
-          _row('Outputs Created', '$count boxes'),
-          _row('Amount per Box', isToken ? '$amtPerBox tokens' : formatErg(int.tryParse(amtPerBox.toString()))),
-          _row('Change Returned', formatErg(change.toInt())),
-          _row('Miner Fee', formatErg(fee.toInt())),
+          _row('Outputs Created', '${preview.splitCount} boxes'),
+          _row(
+            'Amount per Box',
+            isToken
+                ? '${preview.amountPerBox} tokens'
+                : formatErg(preview.amountPerBox.toInt()),
+          ),
+          _row('Change Returned', formatErg(preview.changeNanoErg)),
+          _row('Miner Fee', formatErg(preview.minerFee)),
           const SizedBox(height: 20),
           Row(
             children: [
@@ -948,7 +1102,8 @@ class _RestructureConfigSheet extends StatefulWidget {
   final String changeAddress;
 
   @override
-  State<_RestructureConfigSheet> createState() => _RestructureConfigSheetState();
+  State<_RestructureConfigSheet> createState() =>
+      _RestructureConfigSheetState();
 }
 
 class _RestructureConfigSheetState extends State<_RestructureConfigSheet> {
@@ -985,7 +1140,12 @@ class _RestructureConfigSheetState extends State<_RestructureConfigSheet> {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: EdgeInsets.fromLTRB(24, 20, 24, MediaQuery.of(context).viewInsets.bottom + 24),
+      padding: EdgeInsets.fromLTRB(
+        24,
+        20,
+        24,
+        MediaQuery.of(context).viewInsets.bottom + 24,
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -993,7 +1153,10 @@ class _RestructureConfigSheetState extends State<_RestructureConfigSheet> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Custom Restructure', style: Theme.of(context).textTheme.titleLarge),
+              Text(
+                'Custom Restructure',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
               IconButton(
                 icon: const Icon(Icons.add),
                 tooltip: 'Add output',
@@ -1002,7 +1165,9 @@ class _RestructureConfigSheetState extends State<_RestructureConfigSheet> {
             ],
           ),
           const SizedBox(height: 8),
-          const Text('Define desired output boxes. Remainder returns to change.'),
+          const Text(
+            'Define desired output boxes. Remainder returns to change.',
+          ),
           const SizedBox(height: 12),
           ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 240),
@@ -1017,7 +1182,9 @@ class _RestructureConfigSheetState extends State<_RestructureConfigSheet> {
                       Expanded(
                         child: TextField(
                           controller: _outputAmounts[i],
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
                           decoration: InputDecoration(
                             labelText: 'Box #${i + 1} ERG Amount',
                             isDense: true,
@@ -1043,14 +1210,13 @@ class _RestructureConfigSheetState extends State<_RestructureConfigSheet> {
                 final nano = parseErgToNano(c.text);
                 if (nano == null || nano < 1000000) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Invalid amount: min 0.001 ERG per box')),
+                    const SnackBar(
+                      content: Text('Invalid amount: min 0.001 ERG per box'),
+                    ),
                   );
                   return;
                 }
-                outputs.add({
-                  'value_nano_erg': nano,
-                  'tokens': [],
-                });
+                outputs.add({'value_nano_erg': nano, 'tokens': []});
               }
               Navigator.pop(context, {
                 'outputs': outputs,
@@ -1068,33 +1234,29 @@ class _RestructureConfigSheetState extends State<_RestructureConfigSheet> {
 class _RestructurePreviewSheet extends StatelessWidget {
   const _RestructurePreviewSheet({required this.preview});
 
-  final Map<String, dynamic> preview;
+  final RestructurePreview preview;
 
   @override
   Widget build(BuildContext context) {
-    final inCount = preview['input_count'] ?? 0;
-    final outCount = preview['output_count'] ?? 0;
-    final totalIn = preview['total_erg_in'] as num? ?? 0;
-    final allocated = preview['allocated_erg'] as num? ?? 0;
-    final change = preview['change_nano_erg'] as num? ?? 0;
-    final fee = preview['miner_fee'] as num? ?? 1100000;
-
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Confirm Restructure', style: Theme.of(context).textTheme.titleLarge),
+          Text(
+            'Confirm Restructure',
+            style: Theme.of(context).textTheme.titleLarge,
+          ),
           const SizedBox(height: 12),
           const Hairline(),
           const SizedBox(height: 12),
-          _row('Inputs Consumed', '$inCount boxes'),
-          _row('Outputs Generated', '$outCount boxes'),
-          _row('Total Value In', formatErg(totalIn.toInt())),
-          _row('Allocated to Outputs', formatErg(allocated.toInt())),
-          _row('Change Output', formatErg(change.toInt())),
-          _row('Miner Fee', formatErg(fee.toInt())),
+          _row('Inputs Consumed', '${preview.inputCount} boxes'),
+          _row('Outputs Generated', '${preview.outputCount} boxes'),
+          _row('Total Value In', formatErg(preview.totalErgIn)),
+          _row('Allocated to Outputs', formatErg(preview.allocatedErg)),
+          _row('Change Output', formatErg(preview.changeNanoErg)),
+          _row('Miner Fee', formatErg(preview.minerFee)),
           const SizedBox(height: 20),
           Row(
             children: [

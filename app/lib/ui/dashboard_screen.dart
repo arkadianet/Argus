@@ -713,6 +713,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget _ledger() {
     final fungible = _tokens.where((t) => !t.isNft).toList();
     final nfts = _tokens.where((t) => t.isNft).toList();
+    final fragmented = _utxoCount > utxoFragmentationThreshold;
 
     return RefreshIndicator(
       key: const ValueKey('ledger'),
@@ -764,16 +765,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Icon(
                     Icons.layers_outlined,
                     size: 14,
-                    color: _utxoCount > utxoFragmentationThreshold
+                    color: fragmented
                         ? rust
                         : Theme.of(context).colorScheme.primary,
                   ),
                   const SizedBox(width: 6),
                   Text(
-                    '$_utxoCount UTXOs${_utxoCount > utxoFragmentationThreshold ? ' (Fragmented)' : ''}',
+                    '$_utxoCount UTXOs${fragmented ? ' (Fragmented)' : ''}',
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: _utxoCount > utxoFragmentationThreshold ? rust : null,
-                          fontWeight: _utxoCount > utxoFragmentationThreshold
+                          color: fragmented ? rust : null,
+                          fontWeight: fragmented
                               ? FontWeight.w600
                               : null,
                         ),
@@ -783,10 +784,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        _utxoCount > utxoFragmentationThreshold ? 'Organize' : 'Manage',
+                        fragmented ? 'Organize' : 'Manage',
                         style: TextStyle(
                           fontSize: 12,
-                          color: _utxoCount > utxoFragmentationThreshold
+                          color: fragmented
                               ? rust
                               : Theme.of(context).colorScheme.primary,
                           fontWeight: FontWeight.w500,
@@ -796,7 +797,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       Icon(
                         Icons.chevron_right,
                         size: 14,
-                        color: _utxoCount > utxoFragmentationThreshold
+                        color: fragmented
                             ? rust
                             : Theme.of(context).colorScheme.primary,
                       ),
