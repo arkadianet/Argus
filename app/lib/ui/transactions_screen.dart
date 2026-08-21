@@ -18,7 +18,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   String? _error;
   List<Map<String, dynamic>> _txs = [];
   static const _pageSize = 50;
-  int _offset = 0;
+  Map<String, int> _perAddressOffsets = {};
   bool _hasMore = true;
   int _loadGeneration = 0;
 
@@ -42,13 +42,14 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       });
       return;
     }
-    _offset = 0;
+    _perAddressOffsets.clear();
     _hasMore = false;
     _loadingMore = false;
     _loadGeneration++;
     final gen = _loadGeneration;
     try {
-      final all = await walletService.loadHistory(addresses, limit: _pageSize, offset: 0);
+      final all = await walletService.loadHistory(addresses,
+          limit: _pageSize, perAddressOffsets: _perAddressOffsets);
       if (!mounted || gen != _loadGeneration) return;
       _hasMore = all.length >= _pageSize;
       setState(() {
@@ -69,6 +70,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   }
 
   Future<void> _loadMore() async {
+    if (!mounted) return;
     if (_loadingMore || !_hasMore) return;
     final args = _args;
     final addresses = args.historyAddresses.isNotEmpty
@@ -78,10 +80,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     setState(() => _loadingMore = true);
     final gen = _loadGeneration;
     try {
-      final nextOffset = _offset + _pageSize;
-      final more = await walletService.loadHistory(addresses, limit: _pageSize, offset: nextOffset);
+      final more = await walletService.loadHistory(addresses,
+          limit: _pageSize, perAddressOffsets: _perAddressOffsets);
       if (!mounted || gen != _loadGeneration) return;
-      _offset = nextOffset;
       _hasMore = more.length >= _pageSize;
       final seen = _txs.map((t) => t['tx_id']?.toString() ?? '').toSet();
       final deduped = more.where((t) {

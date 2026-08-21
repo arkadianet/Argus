@@ -120,7 +120,6 @@ class _SendScreenState extends State<SendScreen> {
     final name = nameCtrl.text.trim();
     nameCtrl.dispose();
     if (ok != true || name.isEmpty) return;
-    await contactsService.load();
     await contactsService.add(name, addr);
     _snack('Contact saved');
   }

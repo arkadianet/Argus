@@ -21,7 +21,7 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   themeController.load().catchError((_) {});
   await sessionLock.loadGrace().catchError((_) {});
-  contactsService.load().catchError((_) {});
+  await contactsService.load().catchError((_) {});
   runApp(const ArgusApp());
 }
 

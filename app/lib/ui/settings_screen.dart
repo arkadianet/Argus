@@ -184,6 +184,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     setState(() => _busy = true);
     try {
+      var changed = false;
       await sessionLock.run(() async {
         final pinWrap = await SecureStorageService.loadPinWrap();
         if (pinWrap == null) {
@@ -198,9 +199,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, old);
         final newPinWrap = await walletService.wrapKeyWithPin(wrapKey, next);
         await SecureStorageService.savePinWrap(newPinWrap);
-        await SecureStorageService.clearPinGate();
-        _snack('PIN changed');
+        changed = true;
       });
+      if (changed) {
+        _snack('PIN changed');
+        try {
+          await SecureStorageService.clearPinGate();
+        } catch (_) {
+          _snack('PIN changed but lockout state could not be reset');
+        }
+      }
     } on ArgusException catch (e) {
       if (isIncorrectPin(e)) {
         try {

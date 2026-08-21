@@ -47,7 +47,13 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     if (amount.isEmpty) {
       data = address;
     } else if (RegExp(r'^\d+(\.\d+)?$').hasMatch(amount)) {
-      data = 'ergo:$address?amount=$amount';
+      final nano = parseErgToNano(amount);
+      if (nano != null && nano > 0) {
+        data = 'ergo:$address?amount=$amount';
+      } else {
+        data = address;
+        error = 'Amount must be greater than zero';
+      }
     } else {
       data = address;
       error = 'Amount must be a decimal number, like 0.001';
