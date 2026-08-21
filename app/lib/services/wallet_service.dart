@@ -103,6 +103,10 @@ class SendPreview {
   final String? tokenId;
   final int? tokenAmount;
 
+  /// The UTXOs selected to fund this transaction, for use in an advanced
+  /// preview. Empty for older preparations that predate this field.
+  final List<InputBoxInput> inputBoxes;
+
   SendPreview({
     required this.preparationId,
     required this.recipient,
@@ -113,6 +117,7 @@ class SendPreview {
     this.changeAddress,
     this.tokenId,
     this.tokenAmount,
+    this.inputBoxes = const [],
   });
 
   factory SendPreview.fromJson(Map<String, dynamic> json) {
@@ -130,8 +135,79 @@ class SendPreview {
       inputCount: _requireInt(json, 'input_count'),
       tokenId: json['token_id'] as String?,
       tokenAmount: (json['token_amount'] as num?)?.toInt(),
+      inputBoxes: _parseInputBoxes(json['input_boxes']),
     );
   }
+}
+
+List<InputBoxInput> _parseInputBoxes(dynamic raw) {
+  if (raw is! List) return const [];
+  final out = <InputBoxInput>[];
+  for (final item in raw) {
+    if (item is! Map) continue;
+    out.add(InputBoxInput.fromJson(item as Map<String, dynamic>));
+  }
+  return out;
+}
+
+/// A selected UTXO shown in the advanced send preview.
+class InputBoxInput {
+  final String boxId;
+  final BigInt valueNanoErg;
+  final int creationHeight;
+  final List<InputAsset> assets;
+
+  InputBoxInput({
+    required this.boxId,
+    required this.valueNanoErg,
+    required this.creationHeight,
+    required this.assets,
+  });
+
+  factory InputBoxInput.fromJson(Map<String, dynamic> json) {
+    final boxId = json['box_id'];
+    if (boxId is! String || boxId.isEmpty) {
+      throw const FormatException('InputBoxInput missing or invalid box_id');
+    }
+    final valueRaw = json['value_nano_erg'];
+    final value = switch (valueRaw) {
+      String s when s.isNotEmpty => BigInt.parse(s),
+      num n => BigInt.from(n.toInt()),
+      _ => BigInt.zero,
+    };
+    final height = (json['creation_height'] as num?)?.toInt() ?? 0;
+    final assets = <InputAsset>[];
+    final rawAssets = json['assets'];
+    if (rawAssets is List) {
+      for (final a in rawAssets) {
+        if (a is! Map) continue;
+        final aMap = a as Map<String, dynamic>;
+        final id = aMap['token_id'] as String? ?? '';
+        final amt = switch (aMap['amount']) {
+          String s => BigInt.parse(s),
+          num n => BigInt.from(n.toInt()),
+          _ => BigInt.zero,
+        };
+        if (id.isNotEmpty) {
+          assets.add(InputAsset(tokenId: id, amount: amt));
+        }
+      }
+    }
+    return InputBoxInput(
+      boxId: boxId,
+      valueNanoErg: value,
+      creationHeight: height,
+      assets: assets,
+    );
+  }
+}
+
+/// A token held by a selected [InputBoxInput].
+class InputAsset {
+  final String tokenId;
+  final BigInt amount;
+
+  const InputAsset({required this.tokenId, required this.amount});
 }
 
 int _requireInt(Map<String, dynamic> json, String key) {
