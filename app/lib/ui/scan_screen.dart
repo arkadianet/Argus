@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import '../services/session_lock.dart';
+
 class ScanScreen extends StatefulWidget {
   const ScanScreen({super.key});
 
@@ -10,6 +12,18 @@ class ScanScreen extends StatefulWidget {
 
 class _ScanScreenState extends State<ScanScreen> {
   bool _done = false;
+
+  @override
+  void initState() {
+    super.initState();
+    sessionLock.suppress();
+  }
+
+  @override
+  void dispose() {
+    sessionLock.release();
+    super.dispose();
+  }
 
   void _onDetect(BarcodeCapture capture) {
     if (_done || !mounted) return;

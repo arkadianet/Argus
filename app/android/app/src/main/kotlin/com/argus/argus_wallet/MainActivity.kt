@@ -13,4 +13,11 @@ class MainActivity : FlutterFragmentActivity() {
         super.configureFlutterEngine(flutterEngine)
         SecureStorageHandler.registerWith(flutterEngine, this)
     }
+
+    override fun onDestroy() {
+        if (SecureStorageHandler.host === this) {
+            SecureStorageHandler.host = null
+        }
+        super.onDestroy()
+    }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'services/session_lock.dart';
 import 'services/wallet_service.dart';
 import 'theme/argus_theme.dart';
 import 'theme/theme_controller.dart';
@@ -44,11 +45,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
-      walletService.lock().catchError((Object e, StackTrace st) {
-        FlutterError.reportError(FlutterErrorDetails(exception: e, stack: st));
-      });
-    }
+    sessionLock.onLifecycle(state);
   }
 
   void _onUnlockChanged() {

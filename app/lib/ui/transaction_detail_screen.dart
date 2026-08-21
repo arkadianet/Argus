@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../format.dart';
 import '../services/network_controller.dart';
+import '../services/session_lock.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 
@@ -68,8 +69,12 @@ class TransactionDetailScreen extends StatelessWidget {
                 ? null
                 : () async {
                     try {
-                      final uri = Uri.parse(networkController.explorerTx(txId));
-                      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+                      final ok = await sessionLock.run(
+                        () => launchUrl(
+                          Uri.parse(networkController.explorerTx(txId)),
+                          mode: LaunchMode.externalApplication,
+                        ),
+                      );
                       if (!ok && context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Could not open explorer')),

@@ -7,6 +7,7 @@ import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/network_controller.dart';
 import '../services/secure_storage.dart';
+import '../services/session_lock.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'create_wallet_screen.dart';
@@ -76,7 +77,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       await walletService.init();
       await networkController.load();
       networkController.probe();
-      await _refreshUnlockFlags();
+      await _refreshUnlockMethods();
       _status = _hasSeed ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.';
     } on ArgusException catch (e) {
       _status = '${e.code}: ${e.message}';
@@ -86,12 +87,46 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (mounted) setState(() => _loading = false);
   }
 
+  Future<void> _refreshUnlockMethods() async {
+    _hasSeed = await SecureStorageService.hasEncryptedSeed();
+    _hasPin = await SecureStorageService.hasPinWrap();
+    _canBiometric = await SecureStorageService.hasBiometric() &&
+        await SecureStorageService.hasWrapKey();
+  }
+
   Future<void> _afterUnlock() async {
     if (!mounted) return;
-    setState(() {
-      _walletUnlocked = true;
-      _status = 'Looking up addresses';
-    });
+    if (!walletService.isUnlocked) {
+      setState(_resetLocked);
+      return;
+    }
+    try {
+      final receive = await walletService.deriveAddress(0);
+      if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
+      setState(() {
+        _walletUnlocked = true;
+        _receiveAddress = receive;
+        _changeAddress = receive;
+        _senderAddress = receive;
+        _status = 'Looking up addresses';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _walletUnlocked = walletService.isUnlocked;
+        _receiveAddress = null;
+        _changeAddress = null;
+        _senderAddress = null;
+        _status = walletService.isUnlocked
+            ? 'Unlocked, but no address could be derived'
+            : 'Locked';
+      });
+      return;
+    }
     try {
       final raw = await walletService.discoverAddresses();
       final map = jsonDecode(raw) as Map<String, dynamic>;
@@ -100,8 +135,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
       final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
-      final receive = await walletService.deriveAddress(next);
+      final receive = next == 0 ? _receiveAddress! : await walletService.deriveAddress(next);
       if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
       setState(() {
         _usedAddresses = used;
         _receiveAddress = receive;
@@ -111,26 +150,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       });
       await _refresh();
     } catch (_) {
-      try {
-        final fallback = await walletService.deriveAddress(0);
-        if (!mounted) return;
-        setState(() {
-          _receiveAddress = fallback;
-          _changeAddress = fallback;
-          _senderAddress = fallback;
-          _status = 'Unlocked (discovery unavailable)';
-        });
-        await _refresh();
-      } catch (e) {
-        if (!mounted) return;
-        setState(() {
-          _walletUnlocked = walletService.isUnlocked;
-          _receiveAddress = null;
-          _changeAddress = null;
-          _senderAddress = null;
-          _status = 'Unlocked, but no address could be derived';
-        });
+      if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
       }
+      setState(() => _status = 'Unlocked (discovery unavailable)');
+      await _refresh();
     }
   }
 
@@ -217,8 +243,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _unlockBiometric() async {
     await _runUnlock(() async {
       try {
-        final wrapKey = await SecureStorageService.authenticateBiometric();
-        if (wrapKey == null) return;
+        final wrapKey = await sessionLock.run(SecureStorageService.authenticateBiometric);
+        if (wrapKey == null) {
+          if (!await SecureStorageService.hasWrapKey()) {
+            _snack('Biometric unlock is not set up. Enable it in Settings after unlocking with PIN.');
+          }
+          return;
+        }
         final json = await SecureStorageService.loadEncryptedSeed();
         if (json == null) {
           _snack('Biometric unlock is not set up');
@@ -296,8 +327,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       fadeRoute(const CreateWalletScreen()),
     );
     if (ok == true) {
-      _hasSeed = true;
-      _hasPin = true;
+      await _refreshUnlockMethods();
       await _afterUnlock();
     }
   }
@@ -308,8 +338,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       fadeRoute(const RestoreWalletScreen()),
     );
     if (ok == true) {
-      _hasSeed = true;
-      _hasPin = true;
+      await _refreshUnlockMethods();
       await _afterUnlock();
     }
   }
@@ -351,6 +380,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
       final txs = await walletService.loadHistory(addresses, limit: 20);
       if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
       setState(() {
         _balanceNano = erg;
         _tokens = tokens.values.toList();
@@ -404,8 +437,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   void _go(String route) {
-    if (!_walletUnlocked || _receiveAddress == null) {
+    if (!walletService.isUnlocked || !_walletUnlocked) {
       _snack('Unlock the wallet first');
+      return;
+    }
+    if (_receiveAddress == null) {
+      _snack('Address is still loading');
       return;
     }
     Navigator.pushNamed(context, route, arguments: _args());
@@ -418,20 +455,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  Future<void> _refreshUnlockFlags() async {
-    _hasSeed = await SecureStorageService.hasEncryptedSeed();
-    _hasPin = await SecureStorageService.hasPinWrap();
-    _canBiometric = await SecureStorageService.hasBiometric() &&
-        await SecureStorageService.hasWrapKey();
-    if (mounted) setState(() {});
-  }
-
   Future<void> _openSettings() async {
     await Navigator.push(context, fadeRoute(const SettingsScreen()));
     if (!mounted) return;
     try {
-      await _refreshUnlockFlags();
+      await _refreshUnlockMethods();
     } catch (_) {}
+    if (mounted) setState(() {});
   }
 
   bool get _stale =>
@@ -527,7 +557,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
         const SizedBox(height: 36),
         if (_hasSeed && _hasPin) ...[
-          PinFields(pin: _pinCtrl, label: 'PIN'),
+          PinFields(
+            pin: _pinCtrl,
+            label: 'PIN',
+            onSubmitted: (_) {
+              if (!_unlockBusy) _unlockWithPin();
+            },
+          ),
           const SizedBox(height: 16),
           FilledButton(
             onPressed: _unlockBusy ? null : _unlockWithPin,
