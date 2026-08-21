@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../format.dart';
+import '../services/contacts_service.dart';
 import '../services/network_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -41,6 +42,10 @@ class _SendScreenState extends State<SendScreen> {
     }
     return null;
   }
+
+  bool get _recipientValid =>
+      _recipientCtrl.text.trim().isNotEmpty &&
+      looksLikeErgoAddress(_recipientCtrl.text.trim());
 
   int? _amountNano() => parseErgToNano(_amountCtrl.text);
 
@@ -83,6 +88,41 @@ class _SendScreenState extends State<SendScreen> {
       _amountCtrl.text = pay.amountErg!;
     }
     setState(() {});
+  }
+
+  Future<void> _saveRecipientToContacts() async {
+    final addr = _recipientCtrl.text.trim();
+    if (!looksLikeErgoAddress(addr)) return;
+    final nameCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Save to contacts'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(labelText: 'Name'),
+              textCapitalization: TextCapitalization.words,
+              autofocus: true,
+            ),
+            const SizedBox(height: 8),
+            Text(shorten(addr, head: 10, tail: 10), style: monoStyle(ctx, size: 11)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    final name = nameCtrl.text.trim();
+    nameCtrl.dispose();
+    if (ok != true || name.isEmpty) return;
+    await contactsService.load();
+    await contactsService.add(name, addr);
+    _snack('Contact saved');
   }
 
   Future<void> _send() async {
@@ -192,6 +232,19 @@ class _SendScreenState extends State<SendScreen> {
         title: const Text('Send'),
         actions: [
           IconButton(
+            tooltip: 'Contacts',
+            onPressed: () async {
+              final result =
+                  await Navigator.pushNamed<WalletContact>(context, '/contacts', arguments: true);
+              if (!mounted) return;
+              if (result != null && result.address.isNotEmpty) {
+                _recipientCtrl.text = result.address;
+                setState(() {});
+              }
+            },
+            icon: const Icon(Icons.people_outline),
+          ),
+          IconButton(
             tooltip: 'Scan',
             onPressed: _scan,
             icon: const Icon(Icons.qr_code_scanner),
@@ -230,12 +283,22 @@ class _SendScreenState extends State<SendScreen> {
                       controller: _recipientCtrl,
                       style: monoStyle(context, size: 13),
                       decoration: const InputDecoration(labelText: 'Recipient address'),
+                      onChanged: (_) => setState(() {}),
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) return 'Required';
                         if (!looksLikeErgoAddress(v)) return 'Not an Ergo address';
                         return null;
                       },
                     ),
+                    if (_recipientValid)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _saveRecipientToContacts,
+                          icon: const Icon(Icons.person_add_alt, size: 18),
+                          label: const Text('Save to contacts'),
+                        ),
+                      ),
                     const SizedBox(height: 24),
                     const SectionLabel('Asset'),
                     const SizedBox(height: 12),

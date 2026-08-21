@@ -14,8 +14,13 @@ class TransactionsScreen extends StatefulWidget {
 
 class _TransactionsScreenState extends State<TransactionsScreen> {
   bool _loading = true;
+  bool _loadingMore = false;
   String? _error;
   List<Map<String, dynamic>> _txs = [];
+  static const _pageSize = 50;
+  int _offset = 0;
+  bool _hasMore = true;
+  int _loadGeneration = 0;
 
   @override
   void initState() {
@@ -37,19 +42,61 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       });
       return;
     }
+    _offset = 0;
+    _hasMore = false;
+    _loadingMore = false;
+    _loadGeneration++;
+    final gen = _loadGeneration;
     try {
-      final all = await walletService.loadHistory(addresses, limit: 50);
-      if (!mounted) return;
+      final all = await walletService.loadHistory(addresses, limit: _pageSize, offset: 0);
+      if (!mounted || gen != _loadGeneration) return;
+      _hasMore = all.length >= _pageSize;
       setState(() {
         _txs = all;
         _loading = false;
+        _loadingMore = false;
         _error = null;
       });
     } catch (_) {
-      if (mounted) {
+      if (!mounted || gen != _loadGeneration) return;
+      setState(() {
+        _loading = false;
+        _loadingMore = false;
+        _hasMore = true;
+        _error = 'Could not load activity';
+      });
+    }
+  }
+
+  Future<void> _loadMore() async {
+    if (_loadingMore || !_hasMore) return;
+    final args = _args;
+    final addresses = args.historyAddresses.isNotEmpty
+        ? args.historyAddresses
+        : [if (args.senderAddress.isNotEmpty) args.senderAddress];
+    if (addresses.isEmpty) return;
+    setState(() => _loadingMore = true);
+    final gen = _loadGeneration;
+    try {
+      final nextOffset = _offset + _pageSize;
+      final more = await walletService.loadHistory(addresses, limit: _pageSize, offset: nextOffset);
+      if (!mounted || gen != _loadGeneration) return;
+      _offset = nextOffset;
+      _hasMore = more.length >= _pageSize;
+      final seen = _txs.map((t) => t['tx_id']?.toString() ?? '').toSet();
+      final deduped = more.where((t) {
+        final id = t['tx_id']?.toString() ?? '';
+        return id.isNotEmpty && !seen.contains(id);
+      }).toList();
+      setState(() {
+        _txs = [..._txs, ...deduped];
+        _loadingMore = false;
+      });
+    } catch (_) {
+      if (mounted && gen == _loadGeneration) {
         setState(() {
-          _loading = false;
-          _error = 'Could not load activity';
+          _loadingMore = false;
+          _hasMore = false;
         });
       }
     }
@@ -101,8 +148,17 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   onRefresh: _load,
                   child: ListView.builder(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-                    itemCount: _txs.length,
+                    itemCount: _txs.length + (_loadingMore || _hasMore ? 1 : 0),
                     itemBuilder: (context, i) {
+                      if (i >= _txs.length) {
+                        if (!_loadingMore) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) => _loadMore());
+                        }
+                        return const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 24),
+                          child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                        );
+                      }
                       final tx = _txs[i];
                       final txId = tx['tx_id']?.toString() ?? '';
                       final nano = (tx['value_nano_erg'] as num?)?.toInt();

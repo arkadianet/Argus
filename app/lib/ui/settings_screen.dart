@@ -21,6 +21,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _hasPin = false;
   bool _unlockLoadFailed = false;
   bool _busy = false;
+  int _graceKey = 0;
   final _nodeCtrl = TextEditingController();
   final _explorerCtrl = TextEditingController();
 
@@ -138,6 +139,79 @@ class _SettingsScreenState extends State<SettingsScreen> {
       }
     } catch (_) {
       _snack('Could not enable biometrics');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _changePin() async {
+    final oldPin = TextEditingController();
+    final newPin = TextEditingController();
+    final confirmPin = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Change PIN'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            PinFields(pin: oldPin, label: 'Current PIN'),
+            const SizedBox(height: 12),
+            PinFields(pin: newPin, confirm: confirmPin, label: 'New PIN'),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Change')),
+        ],
+      ),
+    );
+    final old = oldPin.text;
+    final next = newPin.text;
+    final confirm = confirmPin.text;
+    oldPin.dispose();
+    newPin.dispose();
+    confirmPin.dispose();
+    if (ok != true) return;
+    final pinErr = validatePin(next);
+    if (pinErr != null) {
+      _snack(pinErr);
+      return;
+    }
+    if (next != confirm) {
+      _snack('PINs do not match');
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      await sessionLock.run(() async {
+        final pinWrap = await SecureStorageService.loadPinWrap();
+        if (pinWrap == null) {
+          _snack('No PIN-protected wallet found');
+          return;
+        }
+        final blocked = await SecureStorageService.pinBlockedMessage();
+        if (blocked != null) {
+          _snack(blocked);
+          return;
+        }
+        final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, old);
+        final newPinWrap = await walletService.wrapKeyWithPin(wrapKey, next);
+        await SecureStorageService.savePinWrap(newPinWrap);
+        await SecureStorageService.clearPinGate();
+        _snack('PIN changed');
+      });
+    } on ArgusException catch (e) {
+      if (isIncorrectPin(e)) {
+        try {
+          await SecureStorageService.recordPinFailure();
+        } catch (_) {}
+        _snack('Incorrect PIN');
+      } else {
+        _snack('${e.code}: ${e.message}');
+      }
+    } catch (_) {
+      _snack('Could not change PIN');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -315,6 +389,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 );
               }),
               const SizedBox(height: 28),
+              const SectionLabel('Auto-lock'),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                key: ValueKey(_graceKey),
+                initialValue: sessionLock.grace.inSeconds,
+                decoration: const InputDecoration(
+                  labelText: 'Lock when backgrounded',
+                ),
+                items: const [
+                  DropdownMenuItem(value: 0, child: Text('Immediately')),
+                  DropdownMenuItem(value: 2, child: Text('After 2 seconds')),
+                  DropdownMenuItem(value: 30, child: Text('After 30 seconds')),
+                  DropdownMenuItem(value: 60, child: Text('After 1 minute')),
+                  DropdownMenuItem(value: 300, child: Text('After 5 minutes')),
+                ],
+                onChanged: (v) async {
+                  if (v == null) return;
+                  try {
+                    await sessionLock.setGrace(Duration(seconds: v));
+                  } catch (_) {
+                    if (mounted) setState(() => _graceKey++);
+                    _snack('Could not update auto-lock');
+                  }
+                },
+              ),
+              const SizedBox(height: 28),
               const SectionLabel('Unlock'),
               const SizedBox(height: 12),
               if (!walletService.isUnlocked)
@@ -356,6 +456,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'Set a PIN when you create or restore a wallet.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+              if (_hasPin && walletService.isUnlocked) ...[
+                const SizedBox(height: 16),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _busy ? null : _changePin,
+                    icon: const Icon(Icons.lock_reset),
+                    label: const Text('Change PIN'),
+                  ),
+                ),
+              ],
               const SizedBox(height: 28),
               const SectionLabel('Backup'),
               const SizedBox(height: 12),

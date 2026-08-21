@@ -136,7 +136,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
       final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
-      final receive = next == 0 ? _receiveAddress! : await walletService.deriveAddress(next);
+      final receive = next == 0
+          ? (_receiveAddress ?? await walletService.deriveAddress(0))
+          : await walletService.deriveAddress(next);
       if (!mounted) return;
       if (!walletService.isUnlocked) {
         setState(_resetLocked);
@@ -353,9 +355,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _refresh() async {
     networkController.probe();
-    final addresses = _historyAddresses();
-    if (addresses.isEmpty) return;
+    setState(() => _status = 'Syncing addresses…');
     try {
+      final raw = await walletService.discoverAddresses();
+      if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final used = (map['addresses'] as List? ?? [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
+      final receive = next == 0
+          ? (_receiveAddress ?? await walletService.deriveAddress(0))
+          : await walletService.deriveAddress(next);
+      if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
+      setState(() {
+        _usedAddresses = used;
+        _receiveAddress = receive;
+        _changeAddress = receive;
+        _senderAddress = _bestSender(receive);
+      });
+    } catch (_) {
+      // Discovery failed — fall through to balance refresh with known addresses.
+    }
+    final addresses = _historyAddresses();
+    if (addresses.isEmpty) {
+      if (mounted) setState(() => _status = 'Could not find any addresses');
+      return;
+    }
+    try {
+      setState(() => _status = 'Refreshing balances…');
       final maps = await Future.wait(
         addresses.map((address) async {
           try {
@@ -661,6 +698,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           if (_stale) ...[
             const SizedBox(height: 10),
             Text(_status, style: const TextStyle(color: rust, fontSize: 12)),
+          ] else if (_status.contains('Syncing') || _status.contains('Refreshing')) ...[
+            const SizedBox(height: 10),
+            Text(_status, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
           ],
           const SizedBox(height: 28),
           Row(

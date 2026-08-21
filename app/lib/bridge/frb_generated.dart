@@ -106,6 +106,7 @@ abstract class RustLibApi extends BaseApi {
     required String address,
     String? nodeUrl,
     required BigInt limit,
+    required BigInt offset,
   });
 
   Future<void> crateApiInitApp();
@@ -380,6 +381,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String address,
     String? nodeUrl,
     required BigInt limit,
+    required BigInt offset,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -388,6 +390,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(address, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
           sse_encode_u_64(limit, serializer);
+          sse_encode_u_64(offset, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -400,7 +403,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiGetTransactionHistoryConstMeta,
-        argValues: [address, nodeUrl, limit],
+        argValues: [address, nodeUrl, limit, offset],
         apiImpl: this,
       ),
     );
@@ -409,7 +412,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiGetTransactionHistoryConstMeta =>
       const TaskConstMeta(
         debugName: "get_transaction_history",
-        argNames: ["address", "nodeUrl", "limit"],
+        argNames: ["address", "nodeUrl", "limit", "offset"],
       );
 
   @override

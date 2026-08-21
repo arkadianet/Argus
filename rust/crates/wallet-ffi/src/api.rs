@@ -294,11 +294,12 @@ pub async fn get_transaction_history(
     address: String,
     node_url: Option<String>,
     limit: u64,
+    offset: u64,
 ) -> Result<String, String> {
     let client = node_client(node_url).await?;
     let cap = if limit == 0 { 20 } else { limit.min(100) };
     let txs = client
-        .get_transaction_history(&address, cap)
+        .get_transaction_history(&address, cap, offset)
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
     serde_json::to_string(&txs)
