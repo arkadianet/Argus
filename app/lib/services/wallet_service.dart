@@ -252,15 +252,20 @@ class WalletService {
   }
 
   Future<void> lock() async {
-    if (_handleId == null) {
+    final id = _handleId;
+    if (id == null) {
       unlocked.value = false;
       return;
     }
     try {
-      await RustLib.instance.api.crateApiWalletLock(handleId: BigInt.from(_handleId!));
+      await RustLib.instance.api.crateApiWalletLock(handleId: BigInt.from(id));
     } finally {
-      _handleId = null;
-      unlocked.value = false;
+      // Only clear state if no newer unlock replaced the handle while the
+      // lock FFI call was in flight.
+      if (_handleId == id) {
+        _handleId = null;
+        unlocked.value = false;
+      }
     }
   }
 

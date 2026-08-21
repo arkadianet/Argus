@@ -114,8 +114,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
         _senderAddress = receive;
         _status = 'Looking up addresses';
       });
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
+      debugPrint('argus: address derivation failed after unlock: $e');
       setState(() {
         _walletUnlocked = walletService.isUnlocked;
         _receiveAddress = null;
@@ -200,7 +201,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (_unlockBusy) return;
     setState(() => _unlockBusy = true);
     try {
-      await work();
+      // Keep the auto-lock from destroying the handle mid-unlock (the
+      // biometric sheet, or any backgrounding, otherwise re-arms the
+      // grace timer while restore/derive is still in flight).
+      await sessionLock.run(work);
     } finally {
       if (mounted) setState(() => _unlockBusy = false);
     }
@@ -327,8 +331,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       fadeRoute(const CreateWalletScreen()),
     );
     if (ok == true) {
-      await _refreshUnlockMethods();
-      await _afterUnlock();
+      await sessionLock.run(() async {
+        await _refreshUnlockMethods();
+        await _afterUnlock();
+      });
     }
   }
 
@@ -338,8 +344,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       fadeRoute(const RestoreWalletScreen()),
     );
     if (ok == true) {
-      await _refreshUnlockMethods();
-      await _afterUnlock();
+      await sessionLock.run(() async {
+        await _refreshUnlockMethods();
+        await _afterUnlock();
+      });
     }
   }
 
