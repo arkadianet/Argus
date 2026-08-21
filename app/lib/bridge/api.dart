@@ -140,6 +140,9 @@ Future<String> prepareSend({
   nodeUrl: nodeUrl,
 );
 
+/// List all unspent boxes (UTXOs) for the given addresses. Returns a JSON array
+/// of `InputBoxInput`-compatible objects (same shape as the `input_boxes` field
+/// in `prepareSend`).
 Future<String> listUnspentBoxes({
   required BigInt handleId,
   required List<String> addresses,
