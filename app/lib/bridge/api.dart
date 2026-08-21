@@ -100,10 +100,12 @@ Future<String> getTransactionHistory({
   required String address,
   String? nodeUrl,
   required BigInt limit,
+  required BigInt offset,
 }) => RustLib.instance.api.crateApiGetTransactionHistory(
   address: address,
   nodeUrl: nodeUrl,
   limit: limit,
+  offset: offset,
 );
 
 Future<String> discoverAddresses({

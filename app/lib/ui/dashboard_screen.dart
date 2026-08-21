@@ -345,9 +345,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _refresh() async {
     networkController.probe();
+    setState(() => _status = 'Syncing addresses…');
+    try {
+      final raw = await walletService.discoverAddresses();
+      if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final used = (map['addresses'] as List? ?? [])
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+      final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
+      final receive = next == 0 ? _receiveAddress! : await walletService.deriveAddress(next);
+      if (!mounted) return;
+      if (!walletService.isUnlocked) {
+        setState(_resetLocked);
+        return;
+      }
+      setState(() {
+        _usedAddresses = used;
+        _receiveAddress = receive;
+        _changeAddress = receive;
+        _senderAddress = _bestSender(receive);
+      });
+    } catch (_) {
+      // Discovery failed — fall through to balance refresh with known addresses.
+    }
     final addresses = _historyAddresses();
     if (addresses.isEmpty) return;
     try {
+      setState(() => _status = 'Refreshing balances…');
       final maps = await Future.wait(
         addresses.map((address) async {
           try {

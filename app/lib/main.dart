@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 
+import 'services/contacts_service.dart';
 import 'services/session_lock.dart';
 import 'services/wallet_service.dart';
 import 'theme/argus_theme.dart';
 import 'theme/theme_controller.dart';
+import 'ui/contacts_screen.dart';
 import 'ui/create_wallet_screen.dart';
 import 'ui/dashboard_screen.dart';
 import 'ui/receive_screen.dart';
@@ -18,6 +20,8 @@ final navigatorKey = GlobalKey<NavigatorState>();
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   themeController.load().catchError((_) {});
+  sessionLock.loadGrace().catchError((_) {});
+  contactsService.load().catchError((_) {});
   runApp(const ArgusApp());
 }
 
@@ -75,6 +79,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/create' => const CreateWalletScreen(),
               '/restore' => const RestoreWalletScreen(),
               '/settings' => const SettingsScreen(),
+              '/contacts' => const ContactsScreen(),
               '/tx' => const TransactionDetailScreen(),
               _ => null,
             };

@@ -346,13 +346,14 @@ class WalletService {
   Future<List<Map<String, dynamic>>> loadHistory(
     List<String> addresses, {
     int limit = 20,
+    int offset = 0,
   }) async {
     var ok = 0;
     var failed = 0;
     final results = await Future.wait(
-      addresses.take(8).map((address) async {
+      addresses.map((address) async {
         try {
-          final raw = await getTransactionHistory(address, limit: limit);
+          final raw = await getTransactionHistory(address, limit: limit, offset: offset);
           ok++;
           return jsonDecode(raw) as List;
         } catch (_) {
@@ -416,11 +417,12 @@ class WalletService {
     }
   }
 
-  Future<String> getTransactionHistory(String address, {int limit = 20, String? nodeUrl}) {
+  Future<String> getTransactionHistory(String address, {int limit = 20, int offset = 0, String? nodeUrl}) {
     return RustLib.instance.api.crateApiGetTransactionHistory(
       address: address,
       nodeUrl: nodeUrl,
       limit: BigInt.from(limit),
+      offset: BigInt.from(offset),
     );
   }
 

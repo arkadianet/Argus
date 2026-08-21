@@ -358,7 +358,7 @@ impl ErgoNodeClient {
     }
 
     pub async fn address_has_transactions(&self, address: &str) -> Result<bool, String> {
-        Ok(!self.get_transaction_history(address, 1).await?.is_empty())
+        Ok(!self.get_transaction_history(address, 1, 0).await?.is_empty())
     }
 
     /// Fetch total nanoERG and per-token amounts for an address.
@@ -381,10 +381,11 @@ impl ErgoNodeClient {
         Ok((erg_total, tokens.into_iter().collect()))
     }
 
-    /// Fetch transaction history for an address (paginated, max 50).
-    pub async fn get_transaction_history(&self, address: &str, limit: u64) -> Result<Vec<TxSummary>, String> {
+    /// Fetch transaction history for an address (paginated, max 100).
+    pub async fn get_transaction_history(&self, address: &str, limit: u64, offset: u64) -> Result<Vec<TxSummary>, String> {
         let endpoint = format!(
-            "/blockchain/transaction/byAddress?offset=0&limit={}",
+            "/blockchain/transaction/byAddress?offset={}&limit={}",
+            offset,
             limit.min(100)
         );
         let body = serde_json::to_string(address)

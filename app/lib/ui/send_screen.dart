@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../format.dart';
+import '../services/contacts_service.dart';
 import '../services/network_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -83,6 +84,40 @@ class _SendScreenState extends State<SendScreen> {
       _amountCtrl.text = pay.amountErg!;
     }
     setState(() {});
+  }
+
+  Future<void> _saveRecipientToContacts() async {
+    final addr = _recipientCtrl.text.trim();
+    final nameCtrl = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Save to contacts'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(labelText: 'Name'),
+              textCapitalization: TextCapitalization.words,
+              autofocus: true,
+            ),
+            const SizedBox(height: 8),
+            Text(shorten(addr, head: 10, tail: 10), style: monoStyle(ctx, size: 11)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    final name = nameCtrl.text.trim();
+    nameCtrl.dispose();
+    if (ok != true || name.isEmpty) return;
+    await contactsService.load();
+    await contactsService.add(name, addr);
+    _snack('Contact saved');
   }
 
   Future<void> _send() async {
@@ -192,6 +227,11 @@ class _SendScreenState extends State<SendScreen> {
         title: const Text('Send'),
         actions: [
           IconButton(
+            tooltip: 'Contacts',
+            onPressed: () => Navigator.pushNamed(context, '/contacts'),
+            icon: const Icon(Icons.people_outline),
+          ),
+          IconButton(
             tooltip: 'Scan',
             onPressed: _scan,
             icon: const Icon(Icons.qr_code_scanner),
@@ -236,6 +276,16 @@ class _SendScreenState extends State<SendScreen> {
                         return null;
                       },
                     ),
+                    if (_recipientCtrl.text.isNotEmpty &&
+                        looksLikeErgoAddress(_recipientCtrl.text))
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _saveRecipientToContacts,
+                          icon: const Icon(Icons.person_add_alt, size: 18),
+                          label: const Text('Save to contacts'),
+                        ),
+                      ),
                     const SizedBox(height: 24),
                     const SectionLabel('Asset'),
                     const SizedBox(height: 12),

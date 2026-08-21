@@ -143,6 +143,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _changePin() async {
+    final oldPin = TextEditingController();
+    final newPin = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Change PIN'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            PinFields(pin: oldPin, label: 'Current PIN'),
+            const SizedBox(height: 12),
+            PinFields(pin: newPin, label: 'New PIN'),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Change')),
+        ],
+      ),
+    );
+    final old = oldPin.text;
+    final next = newPin.text;
+    oldPin.dispose();
+    newPin.dispose();
+    if (ok != true) return;
+    final pinErr = validatePin(next);
+    if (pinErr != null) {
+      _snack(pinErr);
+      return;
+    }
+    setState(() => _busy = true);
+    try {
+      final pinWrap = await SecureStorageService.loadPinWrap();
+      if (pinWrap == null) {
+        _snack('No PIN-protected wallet found');
+        return;
+      }
+      final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, old);
+      final newPinWrap = await walletService.wrapKeyWithPin(wrapKey, next);
+      await SecureStorageService.savePinWrap(newPinWrap);
+      _snack('PIN changed');
+    } on ArgusException catch (e) {
+      _snack('${e.code}: ${e.message}');
+    } catch (_) {
+      _snack('Could not change PIN');
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   void _snack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -315,6 +366,31 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 );
               }),
               const SizedBox(height: 28),
+              const SectionLabel('Auto-lock'),
+              const SizedBox(height: 12),
+              FutureBuilder<Duration>(
+                future: Future.value(sessionLock.grace),
+                builder: (context, snapshot) {
+                  final current = snapshot.data?.inSeconds ?? 2;
+                  return DropdownButtonFormField<int>(
+                    initialValue: current,
+                    decoration: const InputDecoration(
+                      labelText: 'Lock when backgrounded',
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 0, child: Text('Immediately')),
+                      DropdownMenuItem(value: 2, child: Text('After 2 seconds')),
+                      DropdownMenuItem(value: 30, child: Text('After 30 seconds')),
+                      DropdownMenuItem(value: 60, child: Text('After 1 minute')),
+                      DropdownMenuItem(value: 300, child: Text('After 5 minutes')),
+                    ],
+                    onChanged: (v) async {
+                      if (v != null) await sessionLock.setGrace(Duration(seconds: v));
+                    },
+                  );
+                },
+              ),
+              const SizedBox(height: 28),
               const SectionLabel('Unlock'),
               const SizedBox(height: 12),
               if (!walletService.isUnlocked)
@@ -356,6 +432,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'Set a PIN when you create or restore a wallet.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
+              if (_hasPin && walletService.isUnlocked) ...[
+                const SizedBox(height: 16),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _busy ? null : _changePin,
+                    icon: const Icon(Icons.lock_reset),
+                    label: const Text('Change PIN'),
+                  ),
+                ),
+              ],
               const SizedBox(height: 28),
               const SectionLabel('Backup'),
               const SizedBox(height: 12),

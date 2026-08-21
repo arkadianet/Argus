@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/widgets.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'wallet_service.dart';
 
@@ -12,15 +13,29 @@ import 'wallet_service.dart';
 class SessionLock {
   SessionLock({
     required this.onLock,
-    this.grace = const Duration(milliseconds: 1500),
-  });
+    Duration grace = const Duration(milliseconds: 1500),
+  }) : _grace = grace;
 
   final VoidCallback onLock;
-  final Duration grace;
+  Duration _grace = const Duration(milliseconds: 1500);
 
   Timer? _pending;
   int _suppress = 0;
   bool _backgrounded = false;
+
+  Duration get grace => _grace;
+
+  Future<void> loadGrace() async {
+    final prefs = await SharedPreferences.getInstance();
+    final seconds = prefs.getInt('argus_auto_lock_seconds') ?? 2;
+    _grace = Duration(seconds: seconds);
+  }
+
+  Future<void> setGrace(Duration value) async {
+    _grace = value;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('argus_auto_lock_seconds', value.inSeconds);
+  }
 
   void suppress() => _suppress++;
 
@@ -58,7 +73,7 @@ class SessionLock {
 
   void _scheduleLock() {
     _pending?.cancel();
-    _pending = Timer(grace, () {
+    _pending = Timer(_grace, () {
       _pending = null;
       if (_suppress > 0 || !_backgrounded) return;
       onLock();

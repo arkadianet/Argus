@@ -290,6 +290,7 @@ fn wire__crate__api__get_transaction_history_impl(
             let api_address = <String>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             let api_limit = <u64>::sse_decode(&mut deserializer);
+            let api_offset = <u64>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -298,6 +299,7 @@ fn wire__crate__api__get_transaction_history_impl(
                             api_address,
                             api_node_url,
                             api_limit,
+                            api_offset,
                         )
                         .await?;
                         Ok(output_ok)
