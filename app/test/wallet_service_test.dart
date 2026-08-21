@@ -235,10 +235,11 @@ void main() {
   });
 
   group('WalletDatabaseService', () {
-    test('saves and loads cached snapshot and tracked lineages', () async {
+    test('saves and loads encrypted snapshot scoped to wallet identifier', () async {
       SharedPreferences.setMockInitialValues({});
 
       await WalletDatabaseService.saveCachedState(
+        walletId: '9fTestReceiveAddress',
         primaryAddress: '9fTestReceiveAddress',
         usedAddresses: [
           {'index': 0, 'address': '9fTestReceiveAddress', 'balance_nano_erg': 2000000000}
@@ -254,12 +255,22 @@ void main() {
         lastSyncedHeight: 1205000,
       );
 
-      final cached = await WalletDatabaseService.loadCachedState();
+      // Loading with matching walletId succeeds
+      final cached = await WalletDatabaseService.loadCachedState(
+        expectedWalletId: '9fTestReceiveAddress',
+      );
       expect(cached, isNotNull);
-      expect(cached!['primary_address'], '9fTestReceiveAddress');
+      expect(cached!['wallet_id'], '9fTestReceiveAddress');
+      expect(cached['primary_address'], '9fTestReceiveAddress');
       expect(cached['balance_nano_erg'], 2000000000);
       expect(cached['utxo_count'], 5);
       expect((cached['tokens'] as List).length, 1);
+
+      // Loading with mismatched walletId returns null
+      final mismatched = await WalletDatabaseService.loadCachedState(
+        expectedWalletId: '9fOtherWalletAddress',
+      );
+      expect(mismatched, isNull);
 
       await WalletDatabaseService.recordLineage(
         singletonTokenId: 'singleton_sigusd_bank',

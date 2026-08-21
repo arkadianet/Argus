@@ -45,7 +45,7 @@ fn store_preparation(prep: CachedPreparation) -> u64 {
     let mut cache = recover(PREPARATIONS.lock());
     cache.retain(|_, p| p.handle_id != prep.handle_id);
     loop {
-        let id = (rand::rngs::OsRng.next_u64() & 0x001F_FFFF_FFFF_FFFF).max(1);
+        let id = (rand::rngs::OsRng.next_u64() & 0x7FFF_FFFF_FFFF_FFFF).max(1);
         if !cache.contains_key(&id) {
             cache.insert(id, prep);
             return id;
@@ -73,7 +73,7 @@ fn drop_preparations_for(handle_id: u64) {
 fn register_handle(handle: WalletHandle) -> u64 {
     let mut handles = recover(HANDLES.lock());
     loop {
-        let id = (rand::rngs::OsRng.next_u64() & 0x001F_FFFF_FFFF_FFFF).max(1);
+        let id = (rand::rngs::OsRng.next_u64() & 0x7FFF_FFFF_FFFF_FFFF).max(1);
         if !handles.contains_key(&id) {
             handles.insert(id, handle);
             return id;
@@ -137,7 +137,7 @@ fn session_json(
     wrap_key: String,
 ) -> Result<String, String> {
     serde_json::to_string(&serde_json::json!({
-        "handle_id": handle_id,
+        "handle_id": handle_id.to_string(),
         "encrypted_seed_json": encrypted_seed_json,
         "wrap_key": wrap_key,
     }))
@@ -350,8 +350,7 @@ pub async fn discover_addresses(
         while let Some(res) = join_set.join_next().await {
             match res {
                 Ok((idx, addr, has_txs_res)) => {
-                    let has_txs = has_txs_res.map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-                    chunk_results.push((idx, addr, has_txs));
+                    chunk_results.push((idx, addr, has_txs_res));
                 }
                 Err(e) => return Err(ArgusError::NodeError(e.to_string()).to_json_string()),
             }
@@ -359,8 +358,9 @@ pub async fn discover_addresses(
         chunk_results.sort_by_key(|(idx, _, _)| *idx);
 
         let mut stopped = false;
-        for (index, addr, has_txs) in chunk_results {
+        for (index, addr, has_txs_res) in chunk_results {
             scanned_up_to = index;
+            let has_txs = has_txs_res.map_err(|e| ArgusError::NodeError(e).to_json_string())?;
             if has_txs {
                 consecutive_empty = 0;
                 last_used = Some(index);
@@ -424,7 +424,7 @@ pub async fn walk_singleton_lineage(
 #[flutter_rust_bridge::frb]
 pub fn db_compute_summary(db_json: String) -> Result<String, String> {
     let db = wallet_core::WalletDatabase::from_json(&db_json).map_err(err_str)?;
-    let (erg_nano, tokens) = db.get_total_balances();
+    let (erg_nano, tokens) = db.get_total_balances().map_err(err_str)?;
     let unspent_count = db.get_unspent_boxes().len();
     let receive_0 = db.get_address_0().map(|a| a.address.clone());
     let lineages: Vec<&wallet_core::TrackedLineage> = db.lineages.values().collect();
@@ -718,7 +718,7 @@ mod tests {
     fn create_restore_lock() {
         let session: serde_json::Value =
             serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into()).unwrap()).unwrap();
-        let handle_id = session["handle_id"].as_u64().unwrap();
+        let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
         assert!(wallet_is_unlocked(handle_id).unwrap());
         let addr = derive_address(handle_id, 0).unwrap();
         assert_eq!(addr, "9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8");

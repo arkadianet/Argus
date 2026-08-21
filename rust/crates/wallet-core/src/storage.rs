@@ -131,7 +131,9 @@ impl WalletDatabase {
         for b in new_boxes {
             map.insert(b.box_id.clone(), b);
         }
-        self.boxes = map.into_values().collect();
+        let mut list: Vec<StoredBox> = map.into_values().collect();
+        list.sort_by(|a, b| a.box_id.cmp(&b.box_id));
+        self.boxes = list;
     }
 
     /// Mark a box as spent by a given transaction ID.
@@ -148,22 +150,29 @@ impl WalletDatabase {
     }
 
     /// Calculate total nanoERG and token balances from unspent boxes.
-    pub fn get_total_balances(&self) -> (u64, Vec<StoredToken>) {
+    pub fn get_total_balances(&self) -> Result<(u64, Vec<StoredToken>), CoreError> {
         let unspent = self.get_unspent_boxes();
-        let total_erg: u64 = unspent.iter().map(|b| b.value_nano_erg).sum();
+        let mut total_erg = 0u64;
+        for b in &unspent {
+            total_erg = total_erg
+                .checked_add(b.value_nano_erg)
+                .ok_or_else(|| CoreError::Overflow("Total ERG amount overflow".into()))?;
+        }
 
         let mut tokens_map: HashMap<String, (u64, Option<String>, u32)> = HashMap::new();
         for b in unspent {
             for t in &b.tokens {
                 let entry = tokens_map.entry(t.id.clone()).or_insert((0, t.name.clone(), t.decimals));
-                entry.0 += t.amount;
+                entry.0 = entry.0
+                    .checked_add(t.amount)
+                    .ok_or_else(|| CoreError::Overflow(format!("Token {} amount overflow", t.id)))?;
                 if entry.1.is_none() && t.name.is_some() {
                     entry.1 = t.name.clone();
                 }
             }
         }
 
-        let tokens = tokens_map
+        let mut tokens: Vec<StoredToken> = tokens_map
             .into_iter()
             .map(|(id, (amount, name, decimals))| StoredToken {
                 id,
@@ -173,7 +182,9 @@ impl WalletDatabase {
             })
             .collect();
 
-        (total_erg, tokens)
+        tokens.sort_by(|a, b| a.id.cmp(&b.id));
+
+        Ok((total_erg, tokens))
     }
 
     /// Upsert transactions.
@@ -249,7 +260,7 @@ mod tests {
         let parsed = WalletDatabase::from_json(&json).expect("deserialize");
         assert_eq!(db, parsed);
 
-        let (erg, tokens) = parsed.get_total_balances();
+        let (erg, tokens) = parsed.get_total_balances().expect("total balances");
         assert_eq!(erg, 1_000_000_000);
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].amount, 50);

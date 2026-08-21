@@ -515,6 +515,28 @@ impl ErgoNodeClient {
 
         loop {
             let box_json = self.get_blockchain_box_by_id(&cur_box_id).await?;
+
+            let has_token = box_json
+                .get("assets")
+                .or_else(|| box_json.get("tokens"))
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter().any(|a| {
+                        a.get("tokenId")
+                            .or_else(|| a.get("id"))
+                            .and_then(|s| s.as_str())
+                            == Some(singleton_token_id)
+                    })
+                })
+                .unwrap_or(false);
+
+            if !has_token {
+                return Err(format!(
+                    "Box {} does not contain singleton token {}",
+                    cur_box_id, singleton_token_id
+                ));
+            }
+
             let spent_tx = box_json
                 .get("spentTransactionId")
                 .and_then(|v| v.as_str())
