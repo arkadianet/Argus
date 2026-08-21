@@ -90,6 +90,24 @@ void main() {
       final preview = SendPreview.fromJson(valid);
       expect(preview.inputBoxes, isEmpty);
     });
+
+    test('InputBoxInput.fromErgoBox parses camelCase node box response', () {
+      final box = InputBoxInput.fromErgoBox({
+        'boxId': 'node_box_id_123',
+        'value': '3500000000',
+        'creationHeight': 1050200,
+        'assets': [
+          {'tokenId': 'token_abc', 'amount': '500'},
+        ],
+      }, address: '9addr');
+      expect(box.boxId, 'node_box_id_123');
+      expect(box.valueNanoErg, BigInt.parse('3500000000'));
+      expect(box.creationHeight, 1050200);
+      expect(box.assets.length, 1);
+      expect(box.assets.single.tokenId, 'token_abc');
+      expect(box.assets.single.amount, BigInt.from(500));
+      expect(box.address, '9addr');
+    });
   });
 
   group('parseErgToNano', () {

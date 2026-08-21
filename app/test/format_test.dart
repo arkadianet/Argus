@@ -107,12 +107,11 @@ void main() {
     });
 
     test('handles values beyond 64-bit', () {
-      // A box value that is a perfectly ordinary 2.7 ERG, supplied as BigInt
-      // (the type used for on-chain amounts in InputBoxInput).
-      expect(formatNanoErg(BigInt.parse('2700000000')), '2.7 ERG');
+      final bigValue = BigInt.parse('10000000000000000000000000000');
+      expect(formatNanoErg(bigValue), '10000000000000000000 ERG');
       expect(
-        formatNanoErg(BigInt.parse('2700000000'), unit: false),
-        '2.7',
+        formatNanoErg(bigValue, unit: false),
+        '10000000000000000000',
       );
     });
   });

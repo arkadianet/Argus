@@ -165,54 +165,56 @@ class _SendScreenState extends State<SendScreen> {
       if (!mounted) return;
       final ok = await showDialog<bool>(
         context: context,
-        builder: (ctx) => StatefulBuilder(
-          builder: (context, setState) {
-            var showUtxos = false;
-            return AlertDialog(
-              title: const Text('Confirm send'),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('To', style: Theme.of(ctx).textTheme.titleSmall),
-                      const SizedBox(height: 4),
-                      Text(preview.recipient, style: monoStyle(ctx, size: 12)),
-                      const SizedBox(height: 12),
-                      Text('Amount  ${formatErg(preview.amountNanoErg)}'),
-                      Text('Fee  ${formatErg(preview.minerFee)}'),
-                      Text('Change  ${formatErg(preview.changeNanoErg)}'),
-                      if (preview.tokenId != null && preview.tokenId!.isNotEmpty)
-                        Text('Token  ${token?.label ?? preview.tokenId}  × ${preview.tokenAmount}'),
-                      if (preview.inputBoxes.isNotEmpty) ...[
+        builder: (ctx) {
+          var showUtxos = false;
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              return AlertDialog(
+                title: const Text('Confirm send'),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('To', style: Theme.of(ctx).textTheme.titleSmall),
+                        const SizedBox(height: 4),
+                        Text(preview.recipient, style: monoStyle(ctx, size: 12)),
                         const SizedBox(height: 12),
-                        CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          value: showUtxos,
-                          onChanged: (v) => setState(() => showUtxos = v ?? false),
-                          title: const Text('Show UTXOs'),
-                          controlAffinity: ListTileControlAffinity.leading,
+                        Text('Amount  ${formatErg(preview.amountNanoErg)}'),
+                        Text('Fee  ${formatErg(preview.minerFee)}'),
+                        Text('Change  ${formatErg(preview.changeNanoErg)}'),
+                        if (preview.tokenId != null && preview.tokenId!.isNotEmpty)
+                          Text('Token  ${token?.label ?? preview.tokenId}  × ${preview.tokenAmount}'),
+                        if (preview.inputBoxes.isNotEmpty) ...[
+                          const SizedBox(height: 12),
+                          CheckboxListTile(
+                            contentPadding: EdgeInsets.zero,
+                            value: showUtxos,
+                            onChanged: (v) => setDialogState(() => showUtxos = v ?? false),
+                            title: const Text('Show UTXOs'),
+                            controlAffinity: ListTileControlAffinity.leading,
+                          ),
+                          if (showUtxos) _InputBoxList(preview.inputBoxes, token),
+                        ],
+                        const SizedBox(height: 12),
+                        Text(
+                          networkController.activeUrl ?? 'Node not chosen yet',
+                          style: Theme.of(ctx).textTheme.bodySmall,
                         ),
-                        if (showUtxos) _InputBoxList(preview.inputBoxes, token),
                       ],
-                      const SizedBox(height: 12),
-                      Text(
-                        networkController.activeUrl ?? 'Node not chosen yet',
-                        style: Theme.of(ctx).textTheme.bodySmall,
-                      ),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign & broadcast')),
-              ],
-            );
-          },
-        ),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                  FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign & broadcast')),
+                ],
+              );
+            },
+          );
+        },
       );
       if (!mounted) return;
       if (ok != true) {
@@ -401,7 +403,7 @@ class _InputBoxList extends StatelessWidget {
     final label = known != null
         ? known.label
         : shorten(asset.tokenId, head: 8, tail: 8);
-    if (known != null && known.decimals >= 0) {
+    if (known != null) {
       return '$label  ${formatTokenAmountBigInt(asset.amount, known.decimals)}';
     }
     return '$label  ${asset.amount.toString()}';

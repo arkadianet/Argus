@@ -71,6 +71,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _recentTxs = [];
     _usedAddresses = [];
     _tokens = [];
+    _utxoCount = 0;
     _status = _hasSeed ? 'Locked' : 'No wallet. Create or restore one.';
   }
 
@@ -439,7 +440,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!mounted) return;
       setState(() => _status = 'Could not refresh balances');
     }
-    _refreshUtxos();
+    await _refreshUtxos();
   }
 
   List<String> _historyAddresses() {
@@ -456,7 +457,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _refreshUtxos() async {
     final addr = _historyAddresses();
-    if (addr.isEmpty || _senderAddress == null) return;
+    if (addr.isEmpty) return;
     try {
       final boxes = await walletService.listUnspentBoxes(addr,
           nodeUrl: networkController.activeUrl);
@@ -469,11 +470,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Future<void> _organize() async {
     if (_organizeBusy) return;
+    final change = _senderAddress ?? _receiveAddress;
+    if (change == null || change.isEmpty) {
+      _snack('A valid address is required for consolidation');
+      return;
+    }
     setState(() => _organizeBusy = true);
     try {
       final txIds = await walletService.consolidateErg(
         addresses: _historyAddresses(),
-        changeAddress: _senderAddress ?? _receiveAddress ?? '',
+        changeAddress: change,
         nodeUrl: networkController.activeUrl,
       );
       if (!mounted) return;
@@ -734,7 +740,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             const SizedBox(height: 10),
             Text(_status, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
           ],
-          if (_utxoCount > 80) ...[
+          if (_utxoCount > utxoFragmentationThreshold) ...[
             const SizedBox(height: 8),
             Row(
               children: [

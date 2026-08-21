@@ -171,62 +171,66 @@ class InputBoxInput {
   final BigInt valueNanoErg;
   final int creationHeight;
   final List<InputAsset> assets;
+  final String? address;
 
   InputBoxInput({
     required this.boxId,
     required this.valueNanoErg,
     required this.creationHeight,
     required this.assets,
+    this.address,
   });
 
   factory InputBoxInput.fromJson(Map<String, dynamic> json) {
-    final boxId = json['box_id'];
-    if (boxId is! String || boxId.isEmpty) {
-      throw const FormatException('InputBoxInput missing or invalid box_id');
-    }
-    final valueRaw = json['value_nano_erg'];
-    final value = _parseBigInt(valueRaw);
-    final height = (json['creation_height'] as num?)?.toInt() ?? 0;
-    final assets = <InputAsset>[];
-    final rawAssets = json['assets'];
-    if (rawAssets is List) {
-      for (final a in rawAssets) {
-        if (a is! Map) continue;
-        final aMap = a as Map<String, dynamic>;
-        final id = aMap['token_id'] as String? ?? '';
-        final amt = _parseBigInt(aMap['amount']);
-        if (id.isNotEmpty) {
-          assets.add(InputAsset(tokenId: id, amount: amt));
-        }
-      }
-    }
-    return InputBoxInput(
-      boxId: boxId,
-      valueNanoErg: value,
-      creationHeight: height,
-      assets: assets,
+    return _parseBoxHelper(
+      json,
+      boxIdKey: 'box_id',
+      valueKey: 'value_nano_erg',
+      heightKey: 'creation_height',
+      tokenIdKey: 'token_id',
+      amountKey: 'amount',
     );
   }
 
   /// Parse from an ErgoBox JSON object returned by the node REST API
   /// (`/blockchain/box/unspent/byAddress`), whose keys use camelCase
   /// (e.g. `boxId`, `value`, `creationHeight`, `tokenId`, `amount`).
-  factory InputBoxInput.fromErgoBox(Map<String, dynamic> json) {
-    final boxId = json['boxId'] as String? ?? '';
-    if (boxId.isEmpty) {
-      throw const FormatException('InputBoxInput.fromErgoBox missing boxId');
+  factory InputBoxInput.fromErgoBox(Map<String, dynamic> json, {String? address}) {
+    return _parseBoxHelper(
+      json,
+      boxIdKey: 'boxId',
+      valueKey: 'value',
+      heightKey: 'creationHeight',
+      tokenIdKey: 'tokenId',
+      amountKey: 'amount',
+      address: address,
+    );
+  }
+
+  static InputBoxInput _parseBoxHelper(
+    Map<String, dynamic> json, {
+    required String boxIdKey,
+    required String valueKey,
+    required String heightKey,
+    required String tokenIdKey,
+    required String amountKey,
+    String? address,
+  }) {
+    final boxId = json[boxIdKey];
+    if (boxId is! String || boxId.isEmpty) {
+      throw FormatException('InputBoxInput missing or invalid $boxIdKey');
     }
-    final valueRaw = json['value'];
+    final valueRaw = json[valueKey];
     final value = _parseBigInt(valueRaw);
-    final height = (json['creationHeight'] as num?)?.toInt() ?? 0;
+    final height = (json[heightKey] as num?)?.toInt() ?? 0;
     final assets = <InputAsset>[];
     final rawAssets = json['assets'];
     if (rawAssets is List) {
       for (final a in rawAssets) {
         if (a is! Map) continue;
         final aMap = a as Map<String, dynamic>;
-        final id = aMap['tokenId'] as String? ?? '';
-        final amt = _parseBigInt(aMap['amount']);
+        final id = aMap[tokenIdKey] as String? ?? '';
+        final amt = _parseBigInt(aMap[amountKey]);
         if (id.isNotEmpty) {
           assets.add(InputAsset(tokenId: id, amount: amt));
         }
@@ -237,6 +241,7 @@ class InputBoxInput {
       valueNanoErg: value,
       creationHeight: height,
       assets: assets,
+      address: address ?? (json['address'] as String?),
     );
   }
 }
@@ -287,6 +292,8 @@ int? parseDecimalToBase(String raw, int decimals) {
 
 const minerFeeNano = 1100000;
 const minBoxNano = 1000000;
+const maxInputsPerTx = 200;
+const utxoFragmentationThreshold = 80;
 
 String? validatePin(String pin) {
   final n = pin.runes.length;
@@ -557,15 +564,19 @@ class WalletService {
     int limit = 100,
   }) async {
     if (nodeUrl == null || nodeUrl.isEmpty) return [];
+    final normalizedUrl = nodeUrl.endsWith('/')
+        ? nodeUrl.substring(0, nodeUrl.length - 1)
+        : nodeUrl;
     final client = http.Client();
     try {
       final all = <InputBoxInput>[];
       final seen = <String>{};
       for (final addr in addresses) {
         if (addr.isEmpty) continue;
+        if (all.length >= 500) break;
         var offset = 0;
         while (all.length < 500) {
-          final endpoint = '$nodeUrl/blockchain/box/unspent/byAddress'
+          final endpoint = '$normalizedUrl/blockchain/box/unspent/byAddress'
               '?offset=$offset&limit=$limit';
           final response = await client
               .post(Uri.parse(endpoint),
@@ -583,15 +594,19 @@ class WalletService {
           for (final item in items) {
             if (item is! Map) continue;
             try {
-              final b = InputBoxInput.fromErgoBox(item as Map<String, dynamic>);
+              final b = InputBoxInput.fromErgoBox(
+                item as Map<String, dynamic>,
+                address: addr,
+              );
               if (seen.add(b.boxId)) {
                 all.add(b);
+                if (all.length >= 500) break;
               }
             } catch (_) {
               // skip malformed entries
             }
           }
-          if (items.length < limit) break;
+          if (items.length < limit || all.length >= 500) break;
           offset += limit;
         }
       }
@@ -620,30 +635,39 @@ class WalletService {
   }) async {
     _requireUnlocked();
     if (addresses.isEmpty) return [];
-    final boxes = await listUnspentBoxes(addresses, nodeUrl: nodeUrl);
-    // Only ERG-only boxes — leave token-bearing boxes alone.
-    var ergOnly = boxes.where((b) => b.assets.isEmpty).toList();
-    if (ergOnly.length < 2) return [];
 
-    // Sort largest first so each batch hits the most value with the fewest inputs.
-    ergOnly.sort((a, b) => b.valueNanoErg.compareTo(a.valueNanoErg));
-
-    const maxInputsPerTx = 200;
+    final reserve = BigInt.from(minerFeeNano + minBoxNano);
     final txIds = <String>[];
 
-    for (var i = 0; i < ergOnly.length; i += maxInputsPerTx) {
-      final batch = ergOnly.sublist(i, (i + maxInputsPerTx).clamp(0, ergOnly.length));
-      if (batch.length < 2) break; // single-box batches can't consolidate
+    while (true) {
+      final boxes = await listUnspentBoxes(addresses, nodeUrl: nodeUrl);
+      // Only ERG-only boxes — leave token-bearing boxes alone.
+      var ergOnly = boxes.where((b) => b.assets.isEmpty).toList();
+      if (ergOnly.length < 2) break;
+
+      // Sort largest first so each batch hits the most value with the fewest inputs.
+      ergOnly.sort((a, b) => b.valueNanoErg.compareTo(a.valueNanoErg));
+      final batch = ergOnly.take(maxInputsPerTx).toList();
+      if (batch.length < 2) break;
 
       final totalNano = batch.fold(BigInt.zero, (s, b) => s + b.valueNanoErg);
-      final fee = BigInt.from(minerFeeNano);
-      final amountToSend = totalNano - fee;
+      if (totalNano <= reserve + BigInt.from(minBoxNano)) break;
+
+      final amountToSend = totalNano - reserve;
       if (amountToSend <= BigInt.from(minBoxNano)) break;
+
+      final batchOwners = batch
+          .map((b) => b.address)
+          .whereType<String>()
+          .where((a) => a.isNotEmpty)
+          .toSet()
+          .toList();
+      final spendAddrs = batchOwners.isNotEmpty ? batchOwners : addresses;
 
       try {
         final preview = await prepareSend(
           senderAddress: changeAddress,
-          spendAddresses: addresses,
+          spendAddresses: spendAddrs,
           changeAddress: changeAddress,
           recipientAddress: changeAddress,
           amountNanoErg: amountToSend.toInt(),
@@ -651,6 +675,7 @@ class WalletService {
         );
         final txId = await sendErg(preparationId: preview.preparationId);
         txIds.add(txId);
+        if (ergOnly.length <= maxInputsPerTx) break;
       } catch (_) {
         // If one batch fails (e.g. node reject), skip remaining.
         break;

@@ -576,19 +576,6 @@ pub async fn prepare_send(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
-#[flutter_rust_bridge::frb]
-pub async fn list_unspent_boxes(
-    handle_id: u64,
-    addresses: Vec<String>,
-    node_url: Option<String>,
-) -> Result<String, String> {
-    let client = node_client(node_url).await?;
-    let (_, eip12) = gather_unspent(handle_id, &client, &addresses).await?;
-    let json = input_boxes_json(&eip12);
-    serde_json::to_string(&json)
-        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
-}
-
 /// List all unspent boxes (UTXOs) for the given addresses. Returns a JSON array
 /// of `InputBoxInput`-compatible objects (same shape as the `input_boxes` field
 /// in `prepareSend`).
@@ -607,6 +594,7 @@ pub async fn list_unspent_boxes(
 
 #[flutter_rust_bridge::frb]
 pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, String> {
+    let prep = take_preparation(handle_id, preparation_id)?;
     let client = node_client(prep.node_url).await?;
 
     let state_context = client

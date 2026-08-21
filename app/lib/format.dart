@@ -1,6 +1,6 @@
 String formatScaled(int amount, int decimals, {int? maxFrac}) {
   final sign = amount < 0 ? '-' : '';
-  return _format_scaled(BigInt.from(amount.abs()), decimals, maxFrac, sign);
+  return _formatScaled(BigInt.from(amount.abs()), decimals, maxFrac, sign);
 }
 
 /// BigInt overload of [formatScaled] for on-chain amounts that may exceed
@@ -8,10 +8,10 @@ String formatScaled(int amount, int decimals, {int? maxFrac}) {
 String formatScaledBigInt(BigInt amount, int decimals, {int? maxFrac}) {
   final sign = amount < BigInt.zero ? '-' : '';
   final abs = amount < BigInt.zero ? BigInt.zero - amount : amount;
-  return _format_scaled(abs, decimals, maxFrac, sign);
+  return _formatScaled(abs, decimals, maxFrac, sign);
 }
 
-String _format_scaled(BigInt abs, int decimals, int? maxFrac, String sign) {
+String _formatScaled(BigInt abs, int decimals, int? maxFrac, String sign) {
   if (decimals <= 0) return '$sign$abs';
   var scale = BigInt.one;
   for (var i = 0; i < decimals; i++) {

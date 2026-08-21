@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `drop_preparations_for`, `err_str`, `gather_unspent`, `node_client`, `open_wallet`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `session_json`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
+// These functions are ignored because they are not marked as `pub`: `drop_preparations_for`, `err_str`, `gather_unspent`, `input_boxes_json`, `node_client`, `open_wallet`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `session_json`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`
 
 Future<void> setNetwork({
@@ -137,6 +137,16 @@ Future<String> prepareSend({
   amountNanoErg: amountNanoErg,
   tokenId: tokenId,
   tokenAmount: tokenAmount,
+  nodeUrl: nodeUrl,
+);
+
+Future<String> listUnspentBoxes({
+  required BigInt handleId,
+  required List<String> addresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiListUnspentBoxes(
+  handleId: handleId,
+  addresses: addresses,
   nodeUrl: nodeUrl,
 );
 
