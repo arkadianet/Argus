@@ -93,7 +93,9 @@ class _ContactsScreenState extends State<ContactsScreen> {
               child: Padding(
                 padding: const EdgeInsets.all(28),
                 child: Text(
-                  'No saved contacts yet.\nTap + to add one.',
+                  _selectMode
+                      ? 'No saved contacts yet.'
+                      : 'No saved contacts yet.\nTap + to add one.',
                   style: Theme.of(context).textTheme.bodyMedium,
                   textAlign: TextAlign.center,
                 ),
@@ -114,7 +116,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                     _addOrEdit(c);
                   }
                 },
-                onLongPress: () async {
+                onLongPress: _selectMode ? null : () async {
                   final ok = await showDialog<bool>(
                     context: context,
                     builder: (ctx) => AlertDialog(

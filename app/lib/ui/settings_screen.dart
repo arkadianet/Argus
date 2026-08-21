@@ -21,6 +21,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _hasPin = false;
   bool _unlockLoadFailed = false;
   bool _busy = false;
+  int _graceKey = 0;
   final _nodeCtrl = TextEditingController();
   final _explorerCtrl = TextEditingController();
 
@@ -183,24 +184,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     setState(() => _busy = true);
     try {
-      final pinWrap = await SecureStorageService.loadPinWrap();
-      if (pinWrap == null) {
-        _snack('No PIN-protected wallet found');
-        return;
-      }
-      final blocked = await SecureStorageService.pinBlockedMessage();
-      if (blocked != null) {
-        _snack(blocked);
-        return;
-      }
-      final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, old);
-      final newPinWrap = await walletService.wrapKeyWithPin(wrapKey, next);
-      await SecureStorageService.savePinWrap(newPinWrap);
-      await SecureStorageService.clearPinGate();
-      _snack('PIN changed');
+      await sessionLock.run(() async {
+        final pinWrap = await SecureStorageService.loadPinWrap();
+        if (pinWrap == null) {
+          _snack('No PIN-protected wallet found');
+          return;
+        }
+        final blocked = await SecureStorageService.pinBlockedMessage();
+        if (blocked != null) {
+          _snack(blocked);
+          return;
+        }
+        final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, old);
+        final newPinWrap = await walletService.wrapKeyWithPin(wrapKey, next);
+        await SecureStorageService.savePinWrap(newPinWrap);
+        await SecureStorageService.clearPinGate();
+        _snack('PIN changed');
+      });
     } on ArgusException catch (e) {
       if (isIncorrectPin(e)) {
-        await SecureStorageService.recordPinFailure();
+        try {
+          await SecureStorageService.recordPinFailure();
+        } catch (_) {}
         _snack('Incorrect PIN');
       } else {
         _snack('${e.code}: ${e.message}');
@@ -386,26 +391,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
               const SizedBox(height: 28),
               const SectionLabel('Auto-lock'),
               const SizedBox(height: 12),
-              FutureBuilder<Duration>(
-                future: Future.value(sessionLock.grace),
-                builder: (context, snapshot) {
-                  final current = snapshot.data?.inSeconds ?? 2;
-                  return DropdownButtonFormField<int>(
-                    initialValue: current,
-                    decoration: const InputDecoration(
-                      labelText: 'Lock when backgrounded',
-                    ),
-                    items: const [
-                      DropdownMenuItem(value: 0, child: Text('Immediately')),
-                      DropdownMenuItem(value: 2, child: Text('After 2 seconds')),
-                      DropdownMenuItem(value: 30, child: Text('After 30 seconds')),
-                      DropdownMenuItem(value: 60, child: Text('After 1 minute')),
-                      DropdownMenuItem(value: 300, child: Text('After 5 minutes')),
-                    ],
-                    onChanged: (v) async {
-                      if (v != null) await sessionLock.setGrace(Duration(seconds: v));
-                    },
-                  );
+              DropdownButtonFormField<int>(
+                key: ValueKey(_graceKey),
+                initialValue: sessionLock.grace.inSeconds,
+                decoration: const InputDecoration(
+                  labelText: 'Lock when backgrounded',
+                ),
+                items: const [
+                  DropdownMenuItem(value: 0, child: Text('Immediately')),
+                  DropdownMenuItem(value: 2, child: Text('After 2 seconds')),
+                  DropdownMenuItem(value: 30, child: Text('After 30 seconds')),
+                  DropdownMenuItem(value: 60, child: Text('After 1 minute')),
+                  DropdownMenuItem(value: 300, child: Text('After 5 minutes')),
+                ],
+                onChanged: (v) async {
+                  if (v == null) return;
+                  try {
+                    await sessionLock.setGrace(Duration(seconds: v));
+                  } catch (_) {
+                    if (mounted) setState(() => _graceKey++);
+                    _snack('Could not update auto-lock');
+                  }
                 },
               ),
               const SizedBox(height: 28),

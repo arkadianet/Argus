@@ -32,9 +32,9 @@ class SessionLock {
   }
 
   Future<void> setGrace(Duration value) async {
-    _grace = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('argus_auto_lock_seconds', value.inSeconds);
+    _grace = value;
   }
 
   void suppress() => _suppress++;

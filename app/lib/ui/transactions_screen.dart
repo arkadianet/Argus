@@ -42,26 +42,29 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       });
       return;
     }
+    _offset = 0;
+    _hasMore = false;
+    _loadingMore = false;
+    _loadGeneration++;
+    final gen = _loadGeneration;
     try {
-      _offset = 0;
-      _hasMore = true;
-      _loadGeneration++;
-      final gen = _loadGeneration;
       final all = await walletService.loadHistory(addresses, limit: _pageSize, offset: 0);
       if (!mounted || gen != _loadGeneration) return;
       _hasMore = all.length >= _pageSize;
       setState(() {
         _txs = all;
         _loading = false;
+        _loadingMore = false;
         _error = null;
       });
     } catch (_) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = 'Could not load activity';
-        });
-      }
+      if (!mounted || gen != _loadGeneration) return;
+      setState(() {
+        _loading = false;
+        _loadingMore = false;
+        _hasMore = true;
+        _error = 'Could not load activity';
+      });
     }
   }
 
@@ -90,7 +93,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         _loadingMore = false;
       });
     } catch (_) {
-      if (mounted) {
+      if (mounted && gen == _loadGeneration) {
         setState(() {
           _loadingMore = false;
           _hasMore = false;

@@ -234,7 +234,9 @@ class _SendScreenState extends State<SendScreen> {
           IconButton(
             tooltip: 'Contacts',
             onPressed: () async {
-              final result = await Navigator.pushNamed<WalletContact>(context, '/contacts');
+              final result =
+                  await Navigator.pushNamed<WalletContact>(context, '/contacts', arguments: true);
+              if (!mounted) return;
               if (result != null && result.address.isNotEmpty) {
                 _recipientCtrl.text = result.address;
                 setState(() {});

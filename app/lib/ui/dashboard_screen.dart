@@ -379,7 +379,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       // Discovery failed — fall through to balance refresh with known addresses.
     }
     final addresses = _historyAddresses();
-    if (addresses.isEmpty) return;
+    if (addresses.isEmpty) {
+      if (mounted) setState(() => _status = 'Could not find any addresses');
+      return;
+    }
     try {
       setState(() => _status = 'Refreshing balances…');
       final maps = await Future.wait(

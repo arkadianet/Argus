@@ -17,6 +17,7 @@ class ReceiveScreen extends StatefulWidget {
 class _ReceiveScreenState extends State<ReceiveScreen> {
   final _amountCtrl = TextEditingController();
   String _qrData = '';
+  String? _amountError;
 
   @override
   void initState() {
@@ -41,13 +42,22 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     final args = WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
     final address = args.receiveAddress;
     final amount = _amountCtrl.text.trim();
+    String data;
+    String? error;
     if (amount.isEmpty) {
-      if (address != _qrData) setState(() => _qrData = address);
-      return;
+      data = address;
+    } else if (RegExp(r'^\d+(\.\d+)?$').hasMatch(amount)) {
+      data = 'ergo:$address?amount=$amount';
+    } else {
+      data = address;
+      error = 'Amount must be a decimal number, like 0.001';
     }
-    if (!RegExp(r'^\d+(\.\d+)?$').hasMatch(amount)) return;
-    final data = 'ergo:$address?amount=$amount';
-    if (data != _qrData) setState(() => _qrData = data);
+    if (data != _qrData || error != _amountError) {
+      setState(() {
+        _qrData = data;
+        _amountError = error;
+      });
+    }
   }
 
   String get _address =>
@@ -71,10 +81,11 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
           const SizedBox(height: 20),
           TextField(
             controller: _amountCtrl,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Optional amount (ERG)',
               hintText: '0.001',
-              suffixIcon: Icon(Icons.tag),
+              errorText: _amountError,
+              suffixIcon: const Icon(Icons.tag),
             ),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
           ),
