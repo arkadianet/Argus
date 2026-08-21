@@ -48,7 +48,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       _loadGeneration++;
       final gen = _loadGeneration;
       final all = await walletService.loadHistory(addresses, limit: _pageSize, offset: 0);
-      if (!mounted) return;
+      if (!mounted || gen != _loadGeneration) return;
       _hasMore = all.length >= _pageSize;
       setState(() {
         _txs = all;
