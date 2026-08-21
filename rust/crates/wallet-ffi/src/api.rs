@@ -45,8 +45,8 @@ fn store_preparation(prep: CachedPreparation) -> u64 {
     let mut cache = recover(PREPARATIONS.lock());
     cache.retain(|_, p| p.handle_id != prep.handle_id);
     loop {
-        let id = rand::rngs::OsRng.next_u64();
-        if id != 0 && !cache.contains_key(&id) {
+        let id = (rand::rngs::OsRng.next_u64() & 0x001F_FFFF_FFFF_FFFF).max(1);
+        if !cache.contains_key(&id) {
             cache.insert(id, prep);
             return id;
         }
@@ -73,8 +73,8 @@ fn drop_preparations_for(handle_id: u64) {
 fn register_handle(handle: WalletHandle) -> u64 {
     let mut handles = recover(HANDLES.lock());
     loop {
-        let id = rand::rngs::OsRng.next_u64();
-        if id != 0 && !handles.contains_key(&id) {
+        let id = (rand::rngs::OsRng.next_u64() & 0x001F_FFFF_FFFF_FFFF).max(1);
+        if !handles.contains_key(&id) {
             handles.insert(id, handle);
             return id;
         }
@@ -322,37 +322,74 @@ pub async fn discover_addresses(
     let mut consecutive_empty = 0u32;
     let mut scanned_up_to = 0u32;
 
-    for index in 0..MAX_DISCOVERY {
-        scanned_up_to = index;
-        let addr = with_handle(handle_id, "discover_addresses", |h| {
-            h.derive_address(index).map_err(err_str)
-        })?;
-        let has_txs = client
-            .address_has_transactions(&addr)
-            .await
-            .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-        if has_txs {
-            consecutive_empty = 0;
-            last_used = Some(index);
-            with_handle(handle_id, "discover_addresses", |h| {
-                h.ensure_index(index).map_err(err_str)
+    const CHUNK_SIZE: u32 = 10;
+    let mut current_start = 0u32;
+
+    while current_start < MAX_DISCOVERY {
+        let chunk_end = (current_start + CHUNK_SIZE).min(MAX_DISCOVERY);
+        let mut chunk_addrs = Vec::new();
+
+        for index in current_start..chunk_end {
+            let addr = with_handle(handle_id, "discover_addresses", |h| {
+                h.derive_address(index).map_err(err_str)
             })?;
-            let balances = client
-                .get_address_balances(&addr)
-                .await
-                .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-            used.push(serde_json::json!({
-                "index": index,
-                "address": addr,
-                "balance_nano_erg": balances.0,
-                "tokens": tokens_json(&balances.1),
-            }));
-        } else {
-            consecutive_empty += 1;
-            if consecutive_empty >= gap {
-                break;
+            chunk_addrs.push((index, addr));
+        }
+
+        // Query tx status for all addresses in this chunk concurrently
+        let mut join_set = tokio::task::JoinSet::new();
+        for (index, addr) in chunk_addrs {
+            let client_c = client.clone();
+            join_set.spawn(async move {
+                let has_txs = client_c.address_has_transactions(&addr).await;
+                (index, addr, has_txs)
+            });
+        }
+
+        let mut chunk_results = Vec::new();
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok((idx, addr, has_txs_res)) => {
+                    let has_txs = has_txs_res.map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+                    chunk_results.push((idx, addr, has_txs));
+                }
+                Err(e) => return Err(ArgusError::NodeError(e.to_string()).to_json_string()),
             }
         }
+        chunk_results.sort_by_key(|(idx, _, _)| *idx);
+
+        let mut stopped = false;
+        for (index, addr, has_txs) in chunk_results {
+            scanned_up_to = index;
+            if has_txs {
+                consecutive_empty = 0;
+                last_used = Some(index);
+                with_handle(handle_id, "discover_addresses", |h| {
+                    h.ensure_index(index).map_err(err_str)
+                })?;
+                let balances = client
+                    .get_address_balances(&addr)
+                    .await
+                    .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+                used.push(serde_json::json!({
+                    "index": index,
+                    "address": addr,
+                    "balance_nano_erg": balances.0,
+                    "tokens": tokens_json(&balances.1),
+                }));
+            } else {
+                consecutive_empty += 1;
+                if consecutive_empty >= gap {
+                    stopped = true;
+                    break;
+                }
+            }
+        }
+
+        if stopped {
+            break;
+        }
+        current_start = chunk_end;
     }
 
     let next_unused = last_used.map(|i| i + 1).unwrap_or(0);
@@ -360,6 +397,45 @@ pub async fn discover_addresses(
         "addresses": used,
         "scanned_up_to": scanned_up_to,
         "next_unused_index": next_unused,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Follow a singleton token forward through spent transactions to locate the current unspent box.
+///
+/// Designed to work on standard nodes without extraIndex or explorer indexing.
+#[flutter_rust_bridge::frb]
+pub async fn walk_singleton_lineage(
+    singleton_token_id: String,
+    starting_box_id: String,
+    node_url: Option<String>,
+    max_hops: Option<u32>,
+) -> Result<String, String> {
+    let client = node_client(node_url).await?;
+    let res = client
+        .track_singleton_lineage(&singleton_token_id, &starting_box_id, max_hops.unwrap_or(50))
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    serde_json::to_string(&res)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Compute total balances and summary from a local WalletDatabase JSON snapshot.
+#[flutter_rust_bridge::frb]
+pub fn db_compute_summary(db_json: String) -> Result<String, String> {
+    let db = wallet_core::WalletDatabase::from_json(&db_json).map_err(err_str)?;
+    let (erg_nano, tokens) = db.get_total_balances();
+    let unspent_count = db.get_unspent_boxes().len();
+    let receive_0 = db.get_address_0().map(|a| a.address.clone());
+    let lineages: Vec<&wallet_core::TrackedLineage> = db.lineages.values().collect();
+
+    serde_json::to_string(&serde_json::json!({
+        "balance_nano_erg": erg_nano,
+        "tokens": tokens,
+        "unspent_box_count": unspent_count,
+        "receive_address_0": receive_0,
+        "last_synced_height": db.sync.last_synced_height,
+        "tracked_lineages": lineages,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }

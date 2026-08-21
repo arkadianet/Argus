@@ -184,6 +184,16 @@ pub struct TxSummary {
     pub num_outputs: u32,
 }
 
+/// Result of following a singleton token lineage through spent transaction chains.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LineageHopResult {
+    pub singleton_token_id: String,
+    pub current_box_id: String,
+    pub is_unspent: bool,
+    pub hops_traversed: u32,
+    pub box_json: serde_json::Value,
+}
+
 impl ErgoNodeClient {
     pub async fn new(config: NodeConfig) -> Result<Self, String> {
         let node = NodeInterface::from_url_str(&config.api_key, &config.url)
@@ -440,6 +450,139 @@ impl ErgoNodeClient {
             })
         }).collect();
         Ok(summaries)
+    }
+
+    pub async fn get_blockchain_box_by_id(&self, box_id: &str) -> Result<serde_json::Value, String> {
+        let endpoint = format!("/blockchain/box/byId/{}", box_id);
+        let response = self
+            .inner
+            .send_get_req(&endpoint)
+            .await
+            .map_err(|e| format!("Node request: {}", e))?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| format!("Read: {}", e))?;
+        if status.is_success() && !text.is_empty() {
+            serde_json::from_str(&text).map_err(|e| format!("Parse box: {}", e))
+        } else {
+            // Fallback to /utxo/byId if /blockchain/box/byId is not indexed
+            let utxo_endpoint = format!("/utxo/byId/{}", box_id);
+            let utxo_resp = self
+                .inner
+                .send_get_req(&utxo_endpoint)
+                .await
+                .map_err(|e| format!("Node utxo request: {}", e))?;
+            let utxo_text = utxo_resp.text().await.map_err(|e| format!("Read: {}", e))?;
+            serde_json::from_str(&utxo_text).map_err(|e| format!("Parse utxo box (status {}): {}", status, e))
+        }
+    }
+
+    pub async fn get_transaction_by_id(&self, tx_id: &str) -> Result<serde_json::Value, String> {
+        let endpoint = format!("/blockchain/transaction/byId/{}", tx_id);
+        let response = self
+            .inner
+            .send_get_req(&endpoint)
+            .await
+            .map_err(|e| format!("Node request: {}", e))?;
+        let status = response.status();
+        let text = response.text().await.map_err(|e| format!("Read: {}", e))?;
+        if status.is_success() && !text.is_empty() {
+            serde_json::from_str(&text).map_err(|e| format!("Parse tx: {}", e))
+        } else {
+            // Fallback to /transactions/
+            let fallback_endpoint = format!("/transactions/{}", tx_id);
+            let fb_resp = self
+                .inner
+                .send_get_req(&fallback_endpoint)
+                .await
+                .map_err(|e| format!("Node tx request: {}", e))?;
+            let fb_text = fb_resp.text().await.map_err(|e| format!("Read: {}", e))?;
+            serde_json::from_str(&fb_text).map_err(|e| format!("Parse tx (status {}): {}", status, e))
+        }
+    }
+
+    /// Track a singleton token (NFT / contract state) forward through spent transaction outputs.
+    ///
+    /// Works without extraIndex or explorer indexing by relying on standard box and tx lookups.
+    pub async fn track_singleton_lineage(
+        &self,
+        singleton_token_id: &str,
+        starting_box_id: &str,
+        max_hops: u32,
+    ) -> Result<LineageHopResult, String> {
+        let mut cur_box_id = starting_box_id.trim().to_string();
+        let mut hops = 0u32;
+        let limit = max_hops.max(1).min(200);
+
+        loop {
+            let box_json = self.get_blockchain_box_by_id(&cur_box_id).await?;
+            let spent_tx = box_json
+                .get("spentTransactionId")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty() && *s != "null");
+
+            match spent_tx {
+                None => {
+                    // Head of lineage is unspent!
+                    return Ok(LineageHopResult {
+                        singleton_token_id: singleton_token_id.to_string(),
+                        current_box_id: cur_box_id,
+                        is_unspent: true,
+                        hops_traversed: hops,
+                        box_json,
+                    });
+                }
+                Some(tx_id) => {
+                    if hops >= limit {
+                        return Ok(LineageHopResult {
+                            singleton_token_id: singleton_token_id.to_string(),
+                            current_box_id: cur_box_id,
+                            is_unspent: false,
+                            hops_traversed: hops,
+                            box_json,
+                        });
+                    }
+
+                    let tx = self.get_transaction_by_id(tx_id).await?;
+                    let outputs = tx
+                        .get("outputs")
+                        .and_then(|v| v.as_array())
+                        .ok_or_else(|| format!("Spending tx {} has no outputs array", tx_id))?;
+
+                    let next_box = outputs.iter().find(|out| {
+                        out.get("assets")
+                            .or_else(|| out.get("tokens"))
+                            .and_then(|v| v.as_array())
+                            .map(|arr| {
+                                arr.iter().any(|a| {
+                                    a.get("tokenId")
+                                        .or_else(|| a.get("id"))
+                                        .and_then(|s| s.as_str())
+                                        == Some(singleton_token_id)
+                                })
+                            })
+                            .unwrap_or(false)
+                    });
+
+                    match next_box {
+                        Some(out) => {
+                            let next_id = out
+                                .get("boxId")
+                                .or_else(|| out.get("id"))
+                                .and_then(|s| s.as_str())
+                                .ok_or_else(|| "Output box missing boxId".to_string())?;
+                            cur_box_id = next_id.to_string();
+                            hops += 1;
+                        }
+                        None => {
+                            return Err(format!(
+                                "Singleton token {} not found in outputs of spending tx {}",
+                                singleton_token_id, tx_id
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub async fn submit_transaction(&self, tx_json: &serde_json::Value) -> Result<String, String> {

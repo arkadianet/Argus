@@ -1,6 +1,8 @@
 import 'package:argus_wallet/services/network_controller.dart';
+import 'package:argus_wallet/services/wallet_database_service.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('SendPreview.fromJson', () {
@@ -216,6 +218,62 @@ void main() {
       expect(next.tokens.single.id, 't');
       expect(next.spendableNano, 9);
       expect(next.transaction?['tx_id'], 'x');
+    });
+  });
+
+  group('WalletSession handleId precision', () {
+    test('supports large 64-bit integer handleIds without overflow', () {
+      final largeId = BigInt.parse('14285714285714285714');
+      final session = WalletSession(
+        handleId: largeId,
+        encryptedSeedJson: '{"test": true}',
+        wrapKey: 'deadbeef',
+      );
+      expect(session.handleId, largeId);
+      expect(session.handleId.toString(), '14285714285714285714');
+    });
+  });
+
+  group('WalletDatabaseService', () {
+    test('saves and loads cached snapshot and tracked lineages', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      await WalletDatabaseService.saveCachedState(
+        primaryAddress: '9fTestReceiveAddress',
+        usedAddresses: [
+          {'index': 0, 'address': '9fTestReceiveAddress', 'balance_nano_erg': 2000000000}
+        ],
+        balanceNano: 2000000000,
+        tokens: [
+          {'id': 'token123', 'amount': 100, 'name': 'SigUSD', 'decimals': 2}
+        ],
+        transactions: [
+          {'tx_id': 'tx123', 'value_nano_erg': 2000000000, 'timestamp': 1700000000}
+        ],
+        utxoCount: 5,
+        lastSyncedHeight: 1205000,
+      );
+
+      final cached = await WalletDatabaseService.loadCachedState();
+      expect(cached, isNotNull);
+      expect(cached!['primary_address'], '9fTestReceiveAddress');
+      expect(cached['balance_nano_erg'], 2000000000);
+      expect(cached['utxo_count'], 5);
+      expect((cached['tokens'] as List).length, 1);
+
+      await WalletDatabaseService.recordLineage(
+        singletonTokenId: 'singleton_sigusd_bank',
+        protocolName: 'SigmaUSD Bank',
+        rootBoxId: 'root_box_001',
+        currentBoxId: 'curr_box_009',
+        lastUpdatedHeight: 1205000,
+        boxJson: {'value': 50000000000},
+      );
+
+      final lineages = await WalletDatabaseService.getTrackedLineages();
+      expect(lineages.containsKey('singleton_sigusd_bank'), isTrue);
+      expect(lineages['singleton_sigusd_bank']['protocol_name'], 'SigmaUSD Bank');
+      expect(lineages['singleton_sigusd_bank']['current_box_id'], 'curr_box_009');
     });
   });
 }
