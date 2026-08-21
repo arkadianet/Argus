@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 
 import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
@@ -193,6 +194,38 @@ class InputBoxInput {
         if (a is! Map) continue;
         final aMap = a as Map<String, dynamic>;
         final id = aMap['token_id'] as String? ?? '';
+        final amt = _parseBigInt(aMap['amount']);
+        if (id.isNotEmpty) {
+          assets.add(InputAsset(tokenId: id, amount: amt));
+        }
+      }
+    }
+    return InputBoxInput(
+      boxId: boxId,
+      valueNanoErg: value,
+      creationHeight: height,
+      assets: assets,
+    );
+  }
+
+  /// Parse from an ErgoBox JSON object returned by the node REST API
+  /// (`/blockchain/box/unspent/byAddress`), whose keys use camelCase
+  /// (e.g. `boxId`, `value`, `creationHeight`, `tokenId`, `amount`).
+  factory InputBoxInput.fromErgoBox(Map<String, dynamic> json) {
+    final boxId = json['boxId'] as String? ?? '';
+    if (boxId.isEmpty) {
+      throw const FormatException('InputBoxInput.fromErgoBox missing boxId');
+    }
+    final valueRaw = json['value'];
+    final value = _parseBigInt(valueRaw);
+    final height = (json['creationHeight'] as num?)?.toInt() ?? 0;
+    final assets = <InputAsset>[];
+    final rawAssets = json['assets'];
+    if (rawAssets is List) {
+      for (final a in rawAssets) {
+        if (a is! Map) continue;
+        final aMap = a as Map<String, dynamic>;
+        final id = aMap['tokenId'] as String? ?? '';
         final amt = _parseBigInt(aMap['amount']);
         if (id.isNotEmpty) {
           assets.add(InputAsset(tokenId: id, amount: amt));
@@ -514,6 +547,99 @@ class WalletService {
       limit: BigInt.from(limit),
       offset: BigInt.from(offset),
     );
+  }
+
+  /// Fetch all unspent boxes (UTXOs) for the given addresses by calling the
+  /// node's REST API directly. Returns parsed [InputBoxInput] objects.
+  Future<List<InputBoxInput>> listUnspentBoxes(
+    List<String> addresses, {
+    required String? nodeUrl,
+    int limit = 100,
+  }) async {
+    if (nodeUrl == null || nodeUrl.isEmpty) return [];
+    final client = http.Client();
+    try {
+      final all = <InputBoxInput>[];
+      final seen = <String>{};
+      for (final addr in addresses) {
+        if (addr.isEmpty) continue;
+        var offset = 0;
+        while (all.length < 500) {
+          final endpoint = '$nodeUrl/blockchain/box/unspent/byAddress'
+              '?offset=$offset&limit=$limit';
+          final response = await client
+              .post(Uri.parse(endpoint),
+                  headers: {'Content-Type': 'application/json'},
+                  body: jsonEncode(addr))
+              .timeout(const Duration(seconds: 15));
+          if (response.statusCode != 200) break;
+          final body = response.body;
+          if (body.isEmpty) break;
+          final value = jsonDecode(body);
+          final items = (value is List)
+              ? value
+              : (value is Map ? (value['items'] as List? ?? []) : []);
+          if (items.isEmpty) break;
+          for (final item in items) {
+            if (item is! Map) continue;
+            try {
+              final b = InputBoxInput.fromErgoBox(item as Map<String, dynamic>);
+              if (seen.add(b.boxId)) {
+                all.add(b);
+              }
+            } catch (_) {
+              // skip malformed entries
+            }
+          }
+          if (items.length < limit) break;
+          offset += limit;
+        }
+      }
+      return all;
+    } finally {
+      client.close();
+    }
+  }
+
+  /// Consolidate ERG by sending-to-self. This triggers coin selection which
+  /// picks boxes and produces change, naturally merging fragmented UTXOs.
+  ///
+  /// Returns the transaction ID on success, or null if consolidation is not
+  /// needed or fails. Only consolidates ERG (no tokens moved).
+  Future<String?> consolidateErg({
+    required List<String> addresses,
+    required String changeAddress,
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    if (addresses.isEmpty) return null;
+    final boxes = await listUnspentBoxes(addresses, nodeUrl: nodeUrl);
+    final ergOnly = boxes.where((b) => b.assets.isEmpty).toList();
+    if (ergOnly.length < 2) return null; // nothing to consolidate
+
+    // Compute total nanoERG from ERG-only boxes plus fee allowance.
+    final totalNano = ergOnly.fold(BigInt.zero,
+        (sum, b) => sum + b.valueNanoErg);
+    final fee = BigInt.from(minerFeeNano);
+    final amountToSend = totalNano - fee;
+    if (amountToSend <= BigInt.from(minBoxNano)) return null;
+
+    try {
+      // Send the minimum reasonable amount to self, which pastures all
+      // applicable boxes and produces one change output (the consolidation).
+      final preview = await prepareSend(
+        senderAddress: changeAddress,
+        spendAddresses: addresses,
+        changeAddress: changeAddress,
+        recipientAddress: changeAddress,
+        amountNanoErg: amountToSend.toInt(),
+        nodeUrl: nodeUrl,
+      );
+      final txId = await sendErg(preparationId: preview.preparationId);
+      return txId;
+    } catch (_) {
+      return null;
+    }
   }
 
   void _setHandle(int id) {
