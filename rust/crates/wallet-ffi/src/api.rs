@@ -427,6 +427,21 @@ async fn gather_unspent(
     Ok((boxes, eip12))
 }
 
+fn input_boxes_json(boxes: &[ergo_tx::Eip12InputBox]) -> Vec<serde_json::Value> {
+    boxes
+        .iter()
+        .map(|b| serde_json::json!({
+            "box_id": b.box_id,
+            "value_nano_erg": b.value,
+            "creation_height": b.creation_height,
+            "assets": b.assets.iter().map(|a| serde_json::json!({
+                "token_id": a.token_id,
+                "amount": a.amount,
+            })).collect::<Vec<_>>(),
+        }))
+        .collect()
+}
+
 async fn prepare(
     handle_id: u64,
     sender_address: &str,
@@ -437,7 +452,7 @@ async fn prepare(
     token_id: Option<String>,
     token_amount: Option<u64>,
     node_url: Option<String>,
-) -> Result<(Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>, ergo_tx::SendBuildResult), String> {
+) -> Result<(Vec<serde_json::Value>, Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>, ergo_tx::SendBuildResult), String> {
     if amount_nano_erg < MIN_BOX_VALUE_NANO {
         return Err(ArgusError::TxBuildFailed(format!(
             "amount must be at least {MIN_BOX_VALUE_NANO} nanoERG"
@@ -503,7 +518,9 @@ async fn prepare(
         return Err(ArgusError::TxBuildFailed("UTXO set mismatch".into()).to_json_string());
     }
 
-    Ok((ergo_boxes, built))
+    let input_boxes = input_boxes_json(&selected.boxes);
+
+    Ok((input_boxes, ergo_boxes, built))
 }
 
 #[flutter_rust_bridge::frb]
@@ -518,7 +535,7 @@ pub async fn prepare_send(
     token_amount: Option<u64>,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    let (ergo_boxes, built) = prepare(
+    let (input_boxes, ergo_boxes, built) = prepare(
         handle_id,
         &sender_address,
         &spend_addresses,
@@ -554,6 +571,7 @@ pub async fn prepare_send(
         "citadel_fee_nano": citadel_fee_nano,
         "token_id": preview_token_id,
         "token_amount": preview_token_amount,
+        "input_boxes": input_boxes,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -705,5 +723,38 @@ mod tests {
         let json = wrap_key_with_pin(key.clone(), "123456".into()).unwrap();
         assert_eq!(unwrap_key_with_pin(json.clone(), "123456".into()).unwrap(), key);
         assert!(unwrap_key_with_pin(json, "654321".into()).is_err());
+    }
+
+    fn test_input_box(box_id: &str, value: &str, assets: Vec<(&str, &str)>) -> ergo_tx::Eip12InputBox {
+        serde_json::from_str(
+            &serde_json::json!({
+                "boxId": box_id,
+                "transactionId": "t",
+                "index": 0,
+                "value": value,
+                "ergoTree": "00",
+                "assets": assets.iter().map(|(id, amt)| serde_json::json!({"tokenId": id, "amount": amt})).collect::<Vec<_>>(),
+                "creationHeight": 100,
+                "additionalRegisters": {},
+                "extension": {},
+            })
+            .to_string(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn input_boxes_json_serializes_value_and_assets() {
+        let plain = test_input_box("b1", "2700000000", vec![]);
+        let nft = test_input_box("b2", "1000000", vec![("nft", "1")]);
+        let arr = input_boxes_json(&[plain, nft]);
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["box_id"], "b1");
+        assert_eq!(arr[0]["value_nano_erg"], "2700000000");
+        assert_eq!(arr[0]["creation_height"], 100);
+        assert_eq!(arr[0]["assets"].as_array().unwrap().len(), 0);
+        assert_eq!(arr[1]["box_id"], "b2");
+        assert_eq!(arr[1]["assets"][0]["token_id"], "nft");
+        assert_eq!(arr[1]["assets"][0]["amount"], "1");
     }
 }

@@ -1,6 +1,17 @@
 String formatScaled(int amount, int decimals, {int? maxFrac}) {
   final sign = amount < 0 ? '-' : '';
-  final abs = BigInt.from(amount.abs());
+  return _format_scaled(BigInt.from(amount.abs()), decimals, maxFrac, sign);
+}
+
+/// BigInt overload of [formatScaled] for on-chain amounts that may exceed
+/// 64-bit range (e.g. box values, token amounts).
+String formatScaledBigInt(BigInt amount, int decimals, {int? maxFrac}) {
+  final sign = amount < BigInt.zero ? '-' : '';
+  final abs = amount < BigInt.zero ? BigInt.zero - amount : amount;
+  return _format_scaled(abs, decimals, maxFrac, sign);
+}
+
+String _format_scaled(BigInt abs, int decimals, int? maxFrac, String sign) {
   if (decimals <= 0) return '$sign$abs';
   var scale = BigInt.one;
   for (var i = 0; i < decimals; i++) {
@@ -21,7 +32,15 @@ String formatErg(int? nano, {int maxFrac = 9, bool unit = true}) {
   return unit ? '$n ERG' : n;
 }
 
+String formatNanoErg(BigInt nano, {int maxFrac = 9, bool unit = true}) {
+  final n = formatScaledBigInt(nano, 9, maxFrac: maxFrac);
+  return unit ? '$n ERG' : n;
+}
+
 String formatTokenAmount(int amount, int decimals) => formatScaled(amount, decimals);
+
+String formatTokenAmountBigInt(BigInt amount, int decimals) =>
+    formatScaledBigInt(amount, decimals);
 
 String shorten(String value, {int head = 8, int tail = 6}) {
   if (value.length <= head + tail + 1) return value;
