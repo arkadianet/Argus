@@ -44,15 +44,18 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
   }
 
   Future<void> _loadBoxes() async {
+    if (!mounted) return;
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
       final addresses = await _getWalletAddresses();
+      if (!mounted) return;
       if (addresses.isEmpty) {
         setState(() {
           _boxes = [];
+          _selectedBoxIds.clear();
           _loading = false;
         });
         return;
@@ -189,7 +192,6 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
         isScrollControlled: true,
         builder: (ctx) => _ConsolidatePreviewSheet(
           preview: preview,
-          targetCount: targets.length,
           changeAddress: changeAddress,
         ),
       );
@@ -764,12 +766,10 @@ class _UtxoCard extends StatelessWidget {
 class _ConsolidatePreviewSheet extends StatelessWidget {
   const _ConsolidatePreviewSheet({
     required this.preview,
-    required this.targetCount,
     required this.changeAddress,
   });
 
   final ConsolidatePreview preview;
-  final int targetCount;
   final String changeAddress;
 
   @override
@@ -787,7 +787,7 @@ class _ConsolidatePreviewSheet extends StatelessWidget {
           const SizedBox(height: 12),
           const Hairline(),
           const SizedBox(height: 16),
-          _row('Inputs Merged', '$targetCount boxes'),
+          _row('Inputs Merged', '${preview.inputCount} boxes'),
           _row('Total Value In', formatErg(preview.totalErgIn)),
           _row('Tokens Included', '${preview.tokenCount} token types'),
           _row('Miner Fee', formatErg(preview.minerFee)),
@@ -867,7 +867,10 @@ class _SplitConfigSheetState extends State<_SplitConfigSheet> {
   String? _selectedTokenId;
 
   List<String> get _availableTokenIds {
-    final ids = widget.boxes
+    final source = widget.selectedBoxIds.isNotEmpty
+        ? widget.boxes.where((b) => widget.selectedBoxIds.contains(b.boxId))
+        : widget.boxes;
+    final ids = source
         .expand((box) => box.assets.map((asset) => asset.tokenId))
         .toSet()
         .toList();

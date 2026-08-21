@@ -326,7 +326,7 @@ class InputAsset {
 
 int _requireInt(Map<String, dynamic> json, String key) {
   final value = json[key];
-  if (value is! num) {
+  if (value is! num || !value.isFinite || value != value.truncate()) {
     throw FormatException('SendPreview missing or invalid $key');
   }
   return value.toInt();
