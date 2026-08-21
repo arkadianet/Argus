@@ -331,8 +331,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       fadeRoute(const CreateWalletScreen()),
     );
     if (ok == true) {
-      await _refreshUnlockMethods();
-      await sessionLock.run(_afterUnlock);
+      await sessionLock.run(() async {
+        await _refreshUnlockMethods();
+        await _afterUnlock();
+      });
     }
   }
 
@@ -342,8 +344,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
       fadeRoute(const RestoreWalletScreen()),
     );
     if (ok == true) {
-      await _refreshUnlockMethods();
-      await sessionLock.run(_afterUnlock);
+      await sessionLock.run(() async {
+        await _refreshUnlockMethods();
+        await _afterUnlock();
+      });
     }
   }
 
