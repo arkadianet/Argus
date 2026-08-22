@@ -26,16 +26,19 @@ class AssetsScreen extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
         children: [
           _section(context, 'ERG'),
-          _card(
-            context,
-            _row(
+          ListenableBuilder(
+            listenable: networkController,
+            builder: (context, _) => _card(
               context,
-              ticker: 'ERG',
-              name: 'Ergo',
-              amount: formatErg(args.spendableNano, unit: false, maxFrac: 4),
-              fiat: _ergFiat(args.spendableNano),
-              muted: muted,
-              isErg: true,
+              _row(
+                context,
+                ticker: 'ERG',
+                name: 'Ergo',
+                amount: formatErg(args.spendableNano, unit: false, maxFrac: 4),
+                fiat: _ergFiat(args.spendableNano),
+                muted: muted,
+                isErg: true,
+              ),
             ),
           ),
           if (fungible.isNotEmpty) ...[
@@ -168,16 +171,20 @@ class AssetsScreen extends StatelessWidget {
               ],
             ),
           ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Text('$amount $ticker',
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w500, fontSize: 14.5)),
-              const SizedBox(height: 2),
-              Text(fiat ?? '',
-                  style: TextStyle(fontSize: 12, color: muted)),
-            ],
+          Flexible(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text('$amount $ticker',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w500, fontSize: 14.5)),
+                const SizedBox(height: 2),
+                Text(fiat ?? '',
+                    style: TextStyle(fontSize: 12, color: muted)),
+              ],
+            ),
           ),
         ],
       ),

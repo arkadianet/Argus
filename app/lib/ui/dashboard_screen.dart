@@ -978,112 +978,117 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // ── Ledger (unlocked home) ─────────────────────────────────────────────
 
   Widget _ledger() {
-    final fungible = _tokens.where((t) => !t.isNft).toList();
-    final nfts = _tokens.where((t) => t.isNft).toList();
-    final fragmented = _utxoCount > utxoFragmentationThreshold;
-    final assets = [
-      _AssetRow.erg(balanceNano: _balanceNano),
-      ...fungible.map(_AssetRow.token),
-      ...nfts.map(_AssetRow.token),
-    ];
-
-    return RefreshIndicator(
+    return ListenableBuilder(
       key: const ValueKey('ledger'),
-      onRefresh: _refresh,
-      child: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-        children: [
-          if (networkController.activeUrl == null && !networkController.probing)
-            _offlineBanner(),
-          _walletCard(fragmented),
-          const SizedBox(height: 28),
-          _sectionHeader('Assets',
-              action: 'View all',
-              onTap: () => Navigator.push(context,
-                  fadeRoute(AssetsScreen(args: _args())))),
-          const SizedBox(height: 10),
-          _card(
-            padding: EdgeInsets.zero,
-            child: Column(
-              children: [
-                for (var i = 0; i < assets.length; i++) ...[
-                  if (i > 0) const Divider(height: 1, indent: 68),
-                  _assetTile(assets[i]),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(height: 28),
-          _sectionHeader('Recent activity',
-              action: _recentTxs.isNotEmpty ? 'View all' : null,
-              onTap: () => _go('/transactions')),
-          const SizedBox(height: 10),
-          _recentTxs.isEmpty
-              ? _card(
-                  child: Text(
-                    'No activity yet. Receive to your address to get started.',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                )
-              : _card(
-                  padding: EdgeInsets.zero,
-                  child: Column(
-                    children: [
-                      for (var i = 0; i < _recentTxs.length; i++) ...[
-                        if (i > 0) const Divider(height: 1, indent: 68),
-                        _activityTile(_recentTxs[i]),
-                      ],
-                    ],
-                  ),
-                ),
-          const SizedBox(height: 28),
-          _sectionHeader('Discover',
-              action: 'Explore all', onTap: () => _go('/dexy')),
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 168,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              children: [
-                _discoverCard(
-                  title: 'Dexy',
-                  subtitle: 'Trade, provide liquidity, and mint on Ergo.',
-                  icon: Icons.all_inclusive,
-                  onTap: () => _go('/dexy'),
-                ),
-                _discoverCard(
-                  title: 'AgeUSD',
-                  subtitle: 'The decentralized stablecoin on Ergo.',
-                  icon: Icons.attach_money,
-                  comingSoon: true,
-                ),
-                _discoverCard(
-                  title: 'DEX',
-                  subtitle: 'Permissionless token swaps on Ergo.',
-                  icon: Icons.swap_horiz,
-                  comingSoon: true,
-                ),
-              ],
-            ),
-          ),
-          if (_usedAddresses.isNotEmpty) ...[
+      listenable: networkController,
+      builder: (context, _) {
+        final fungible = _tokens.where((t) => !t.isNft).toList();
+        final nfts = _tokens.where((t) => t.isNft).toList();
+        final fragmented = _utxoCount > utxoFragmentationThreshold;
+        final assets = [
+          _AssetRow.erg(balanceNano: _balanceNano),
+          ...fungible.map(_AssetRow.token),
+          ...nfts.map(_AssetRow.token),
+        ];
+
+        return RefreshIndicator(
+          onRefresh: _refresh,
+          child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+          children: [
+            if (networkController.activeUrl == null && !networkController.probing)
+              _offlineBanner(),
+            _walletCard(fragmented),
             const SizedBox(height: 28),
-            _sectionHeader('Addresses'),
+            _sectionHeader('Assets',
+                action: 'View all',
+                onTap: () => Navigator.push(context,
+                    fadeRoute(AssetsScreen(args: _args())))),
             const SizedBox(height: 10),
             _card(
               padding: EdgeInsets.zero,
               child: Column(
                 children: [
-                  for (var i = 0; i < _usedAddresses.length; i++) ...[
-                    if (i > 0) const Divider(height: 1, indent: 16),
-                    _addressTile(_usedAddresses[i]),
+                  for (var i = 0; i < assets.length; i++) ...[
+                    if (i > 0) const Divider(height: 1, indent: 68),
+                    _assetTile(assets[i]),
                   ],
                 ],
               ),
             ),
+            const SizedBox(height: 28),
+            _sectionHeader('Recent activity',
+                action: _recentTxs.isNotEmpty ? 'View all' : null,
+                onTap: () => _go('/transactions')),
+            const SizedBox(height: 10),
+            _recentTxs.isEmpty
+                ? _card(
+                    child: Text(
+                      'No activity yet. Receive to your address to get started.',
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  )
+                : _card(
+                    padding: EdgeInsets.zero,
+                    child: Column(
+                      children: [
+                        for (var i = 0; i < _recentTxs.length; i++) ...[
+                          if (i > 0) const Divider(height: 1, indent: 68),
+                          _activityTile(_recentTxs[i]),
+                        ],
+                      ],
+                    ),
+                  ),
+            const SizedBox(height: 28),
+            _sectionHeader('Discover',
+                action: 'Explore all', onTap: () => _go('/dexy')),
+            const SizedBox(height: 10),
+            SizedBox(
+              height: 168,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                children: [
+                  _discoverCard(
+                    title: 'Dexy',
+                    subtitle: 'Trade, provide liquidity, and mint on Ergo.',
+                    icon: Icons.all_inclusive,
+                    onTap: () => _go('/dexy'),
+                  ),
+                  _discoverCard(
+                    title: 'AgeUSD',
+                    subtitle: 'The decentralized stablecoin on Ergo.',
+                    icon: Icons.attach_money,
+                    comingSoon: true,
+                  ),
+                  _discoverCard(
+                    title: 'DEX',
+                    subtitle: 'Permissionless token swaps on Ergo.',
+                    icon: Icons.swap_horiz,
+                    comingSoon: true,
+                  ),
+                ],
+              ),
+            ),
+            if (_usedAddresses.isNotEmpty) ...[
+              const SizedBox(height: 28),
+              _sectionHeader('Addresses'),
+              const SizedBox(height: 10),
+              _card(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  children: [
+                    for (var i = 0; i < _usedAddresses.length; i++) ...[
+                      if (i > 0) const Divider(height: 1, indent: 16),
+                      _addressTile(_usedAddresses[i]),
+                    ],
+                  ],
+                ),
+              ),
+            ],
           ],
-        ],
-      ),
+          ),
+        );
+      },
     );
   }
 
@@ -1279,7 +1284,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           size: 13, color: muted),
                       const SizedBox(width: 4),
                       Text(
-                        'Block ${formatWithCommas(networkController.height ?? 0)}',
+                        networkController.height == null
+                            ? 'Block —'
+                            : 'Block ${formatWithCommas(networkController.height!)}',
                         style: TextStyle(fontSize: 12.5, color: muted),
                       ),
                       _dotSep(muted),
@@ -1424,7 +1431,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ? watchfulMuted
         : ledgerMuted;
     return InkWell(
-      onTap: () {},
+      onTap: () =>
+          Navigator.push(context, fadeRoute(AssetsScreen(args: _args()))),
       borderRadius: BorderRadius.circular(20),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),

@@ -141,11 +141,14 @@ String formatActivityTime(int? timestampMs) {
   final minute = dt.minute.toString().padLeft(2, '0');
   final period = dt.hour < 12 ? 'am' : 'pm';
   final time = '$hour12:$minute $period';
-  final todayStart = DateTime(now.year, now.month, now.day);
-  final dayStart = DateTime(dt.year, dt.month, dt.day);
+  final todayStart = DateTime.utc(now.year, now.month, now.day);
+  final dayStart = DateTime.utc(dt.year, dt.month, dt.day);
   final dayDiff = todayStart.difference(dayStart).inDays;
   if (dayDiff == 0) return 'Today, $time';
   if (dayDiff == 1) return 'Yesterday, $time';
+  if (dt.year != now.year) {
+    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
+  }
   return '${months[dt.month - 1]} ${dt.day}, $time';
 }
 

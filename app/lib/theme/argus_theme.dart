@@ -278,7 +278,6 @@ class _WarningStripState extends State<WarningStrip> {
           IconButton(
             icon: const Icon(Icons.close, size: 18),
             tooltip: 'Dismiss',
-            visualDensity: VisualDensity.compact,
             onPressed: () => setState(() => _dismissed = true),
           ),
         ],
