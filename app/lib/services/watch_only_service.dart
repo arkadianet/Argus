@@ -37,13 +37,17 @@ class WatchOnlyService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> add(String address) async {
+  /// Adds [address] after checksum-aware validation and deduplication.
+  /// Returns `true` if the address was saved, `false` if it was invalid or a
+  /// duplicate.
+  Future<bool> add(String address) async {
     final trimmed = address.trim();
-    if (trimmed.isEmpty) return;
-    if (!await api.validateErgoAddress(address: trimmed)) return;
-    if (_addresses.contains(trimmed)) return;
+    if (trimmed.isEmpty) return false;
+    if (!await api.validateErgoAddress(address: trimmed)) return false;
+    if (_addresses.contains(trimmed)) return false;
     _addresses.add(trimmed);
     await _save();
+    return true;
   }
 
   Future<void> remove(String address) async {

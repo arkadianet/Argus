@@ -304,8 +304,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _snack('Not a valid Ergo address');
       return;
     }
-    await watchOnlyService.add(addr);
-    _snack('Address added');
+    final saved = await watchOnlyService.add(addr);
+    _snack(saved ? 'Address added' : 'Not a valid Ergo address');
   }
 
   Future<void> _pinAddressIndex() async {

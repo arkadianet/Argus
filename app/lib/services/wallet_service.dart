@@ -1242,24 +1242,35 @@ class WalletService {
     String? address0,
     int? pinnedAddressIndex,
   }) => _withMetaWrite(() async {
-    final all = await _loadAllWalletMeta();
-    all[walletId] = {
+    final prior = await _loadAllWalletMeta();
+    final next = Map<String, dynamic>.from(prior);
+    next[walletId] = {
       'walletId': walletId,
       'name': name,
       'createdAt': createdAt.toIso8601String(),
       'address0': address0,
       'pinnedAddressIndex': pinnedAddressIndex,
     };
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_walletMetaKey, jsonEncode(all));
+    await _persistMetaCache(next);
   });
 
   Future<void> _removeWalletMeta(String walletId) => _withMetaWrite(() async {
-    final all = await _loadAllWalletMeta();
-    all.remove(walletId);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_walletMetaKey, jsonEncode(all));
+    final prior = await _loadAllWalletMeta();
+    final next = Map<String, dynamic>.from(prior);
+    next.remove(walletId);
+    await _persistMetaCache(next);
   });
+
+  /// Persists [next], swapping the in-memory cache only after the write
+  /// succeeds. Propagates write failures and leaves the prior cache intact.
+  Future<void> _persistMetaCache(Map<String, dynamic> next) async {
+    final prefs = await SharedPreferences.getInstance();
+    final ok = await prefs.setString(_walletMetaKey, jsonEncode(next));
+    if (ok != true) {
+      throw StateError('Failed to persist wallet metadata');
+    }
+    _metaCache = next;
+  }
 }
 
 final walletService = WalletService();

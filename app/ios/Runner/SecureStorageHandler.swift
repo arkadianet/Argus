@@ -49,7 +49,10 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
       }
       save(json, account: seedAccount(for: walletId), biometric: false) { [weak self] res in
         if (res as? Bool) == true, let wid = walletId {
-          self?.addWalletId(wid)
+          if let self, self.addWalletId(wid) == false {
+            result(FlutterError(code: "STORAGE_ERROR", message: "Failed to update wallet registry", details: nil))
+            return
+          }
         }
         result(res)
       }
@@ -80,18 +83,23 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
       load(account: pinAccount(for: walletId), result: result)
 
     case "deleteWrapKey":
-      delete(account: wrapAccount(for: walletId))
-      result(nil)
+      let status = delete(account: wrapAccount(for: walletId))
+      if status == errSecSuccess || status == errSecItemNotFound {
+        result(nil)
+      } else {
+        result(FlutterError(code: "STORAGE_ERROR", message: "Failed to delete wrap key", details: nil))
+      }
 
     case "deleteEncryptedSeed":
-      delete(account: seedAccount(for: walletId))
+      if !deleteWalletSecrets([seedAccount(for: walletId), wrapAccount(for: walletId), pinAccount(for: walletId)]) {
+        result(FlutterError(code: "STORAGE_ERROR", message: "Failed to delete wallet secrets", details: nil))
+        return
+      }
       if walletId != nil {
-        delete(account: wrapAccount(for: walletId))
-        delete(account: pinAccount(for: walletId))
-        removeWalletId(walletId!)
-      } else {
-        delete(account: wrapAccount(for: walletId))
-        delete(account: pinAccount(for: walletId))
+        if !removeWalletId(walletId!) {
+          result(FlutterError(code: "STORAGE_ERROR", message: "Failed to update wallet registry", details: nil))
+          return
+        }
       }
       result(nil)
 
@@ -101,10 +109,14 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
         result(FlutterError(code: "INVALID_ARGS", message: "Missing walletId", details: nil))
         return
       }
-      delete(account: seedAccount(for: wid))
-      delete(account: wrapAccount(for: wid))
-      delete(account: pinAccount(for: wid))
-      removeWalletId(wid)
+      if !deleteWalletSecrets([seedAccount(for: wid), wrapAccount(for: wid), pinAccount(for: wid)]) {
+        result(FlutterError(code: "STORAGE_ERROR", message: "Failed to delete wallet secrets", details: nil))
+        return
+      }
+      if !removeWalletId(wid) {
+        result(FlutterError(code: "STORAGE_ERROR", message: "Failed to update wallet registry", details: nil))
+        return
+      }
       result(nil)
 
     case "hasEncryptedSeed":
@@ -192,29 +204,31 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     return ids
   }
 
-  private func setWalletIds(_ ids: [String]) {
-    guard let data = try? JSONEncoder().encode(ids) else { return }
-    delete(account: registryAccount)
+  private func setWalletIds(_ ids: [String]) -> Bool {
+    guard let data = try? JSONEncoder().encode(ids) else { return false }
+    _ = delete(account: registryAccount)
     var query = baseQuery(account: registryAccount)
     query[kSecValueData as String] = data
     query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-    SecItemAdd(query as CFDictionary, nil)
+    return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
   }
 
-  private func addWalletId(_ walletId: String) {
+  private func addWalletId(_ walletId: String) -> Bool {
     var ids = getWalletIds()
     if !ids.contains(walletId) {
       ids.append(walletId)
-      setWalletIds(ids)
+      return setWalletIds(ids)
     }
+    return true
   }
 
-  private func removeWalletId(_ walletId: String) {
+  private func removeWalletId(_ walletId: String) -> Bool {
     var ids = getWalletIds()
     if ids.contains(walletId) {
       ids.removeAll { $0 == walletId }
-      setWalletIds(ids)
+      return setWalletIds(ids)
     }
+    return true
   }
 
   private func migrateLegacyWallet(newWalletId: String) -> Bool {
@@ -256,10 +270,12 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
       }
     }
     if success {
-      delete(account: "encrypted_seed")
-      delete(account: "wrap_key")
-      delete(account: "pin_wrap")
-      addWalletId(newWalletId)
+      if !deleteWalletSecrets(["encrypted_seed", "wrap_key", "pin_wrap"]) {
+        return false
+      }
+      if !addWalletId(newWalletId) {
+        return false
+      }
     }
     return success
   }
@@ -408,8 +424,20 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     }
   }
 
-  private func delete(account: String) {
+  private func delete(account: String) -> OSStatus {
     SecItemDelete(baseQuery(account: account) as CFDictionary)
+  }
+
+  /// Deletes every account in [accounts], treating `errSecItemNotFound` as a
+  /// success (the item is already gone). Returns `false` if any delete fails.
+  private func deleteWalletSecrets(_ accounts: [String]) -> Bool {
+    for account in accounts {
+      let status = delete(account: account)
+      if status != errSecSuccess && status != errSecItemNotFound {
+        return false
+      }
+    }
+    return true
   }
 
   private func hasItem(account: String) -> Bool {

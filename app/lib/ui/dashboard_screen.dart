@@ -45,6 +45,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   DateTime? _lastSynced;
   int _watchOnlyTotal = 0;
   bool _watchOnlyLoading = false;
+  int _watchOnlyGeneration = 0;
   final _pinCtrl = TextEditingController();
   List<WalletInfo> _wallets = [];
   String? _walletId;
@@ -89,8 +90,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _refreshWatchOnly() async {
+    final generation = ++_watchOnlyGeneration;
     final addrs = watchOnlyService.addresses;
-    if (addrs.isEmpty) return;
+    if (addrs.isEmpty) {
+      if (mounted) setState(() {
+        _watchOnlyTotal = 0;
+        _watchOnlyLoading = false;
+      });
+      return;
+    }
     if (!mounted) return;
     setState(() => _watchOnlyLoading = true);
     final futures = addrs.map((addr) async {
@@ -102,6 +110,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       }
     }).toList();
     final results = await Future.wait(futures);
+    if (generation != _watchOnlyGeneration) return;
     final total = results.fold<int>(0, (sum, bal) => sum + bal);
     if (mounted) setState(() {
       _watchOnlyTotal = total;

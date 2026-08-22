@@ -1182,8 +1182,13 @@ pub async fn prepare_send_multi(
             rcpt["token_id"].as_str().map(|id| id.to_string()),
             rcpt["token_amount"].as_u64(),
         )?;
-        let mut amount = rcpt["amount_nano_erg"].as_i64()
-            .ok_or_else(|| ArgusError::TxBuildFailed("recipient missing amount_nano_erg".into()).to_json_string())?;
+        let mut amount = match rcpt.get("amount_nano_erg") {
+            None | Some(serde_json::Value::Null) => 0,
+            Some(value) => value.as_i64().ok_or_else(|| {
+                ArgusError::TxBuildFailed("recipient amount_nano_erg must be an integer".into())
+                    .to_json_string()
+            })?,
+        };
         if token.is_some() {
             if amount < MIN_BOX_VALUE_NANO {
                 amount = MIN_BOX_VALUE_NANO;
