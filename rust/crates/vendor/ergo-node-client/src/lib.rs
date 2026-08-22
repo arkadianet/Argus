@@ -550,13 +550,28 @@ impl NodeClient {
         capabilities: &NodeCapabilities,
         token_id: &citadel_core::TokenId,
     ) -> Result<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox> {
+        // NFT lookups can return user boxes that happen to hold the token.
+        // DexyUSD buyback currently has a P2PK box with amount=2 alongside the
+        // real protocol box (amount=1). Prefer the singleton.
         let boxes = self
-            .get_boxes_by_token_id(capabilities, token_id, 1)
+            .get_boxes_by_token_id(capabilities, token_id, 10)
             .await?;
 
+        let wanted = token_id.as_str();
+        let is_singleton = |b: &ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox| {
+            b.tokens.as_ref().is_some_and(|tokens| {
+                tokens.iter().any(|t| {
+                    let id: String = t.token_id.into();
+                    id == wanted && *t.amount.as_u64() == 1
+                })
+            })
+        };
+
         boxes
-            .into_iter()
-            .next()
+            .iter()
+            .find(|b| is_singleton(b))
+            .cloned()
+            .or_else(|| boxes.into_iter().next())
             .ok_or_else(|| NodeError::BoxNotFound {
                 box_id: format!("box with token {}", token_id),
             })
