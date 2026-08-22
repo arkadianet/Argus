@@ -70,25 +70,23 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
     setState(() => _step = 2);
   }
 
-  Future<void> _finish() async {
+  Future<String?> _finish() async {
     final phrase = _mnemonic;
-    if (phrase == null) return;
+    if (phrase == null) return null;
     final pinErr = pinError(_pinCtrl.text, _pinConfirmCtrl.text);
     if (pinErr != null) {
       _snack(pinErr);
-      return;
+      return null;
     }
     setState(() => _busy = true);
     try {
-      if (!await confirmReplaceExistingWallet(context)) return;
-      final session = await walletService.createWallet(phrase);
-      final pinWrap = await walletService.wrapKeyWithPin(session.wrapKey, _pinCtrl.text);
-      await SecureStorageService.saveWalletWithPin(
-        encryptedSeedJson: session.encryptedSeedJson,
-        pinWrapJson: pinWrap,
+      final walletId = await walletService.provisionWallet(
+        phrase: phrase,
+        passphrase: '',
+        pin: _pinCtrl.text,
       );
-      if (!mounted) return;
-      Navigator.pop(context, true);
+      if (!mounted) return null;
+      Navigator.pop(context, walletId);
     } on ArgusException catch (e) {
       _snack('${e.code}: ${e.message}');
     } on SecureStorageException catch (e) {
@@ -98,6 +96,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    return null;
   }
 
   void _snack(String msg) {

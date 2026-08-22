@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../format.dart';
 import '../services/wallet_service.dart';
@@ -113,10 +117,61 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
   }
 
+  String _toCsv(List<Map<String, dynamic>> txs) {
+    final buffer = StringBuffer();
+    buffer.writeln('Tx ID,Value (ERG),Height,Time,Type');
+    for (final tx in txs) {
+      final txId = tx['tx_id']?.toString() ?? '';
+      final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
+      final erg = formatErg(nano, unit: false);
+      final height = (tx['height'] as num?)?.toInt();
+      final ts = (tx['timestamp'] as num?)?.toInt();
+      final time = formatTxTime(ts).isNotEmpty ? formatTxTime(ts) : 'Unknown';
+      final outgoing = nano < 0;
+      final type = outgoing ? 'Outgoing' : 'Incoming';
+      buffer.writeln('$txId,$erg,$height,$time,$type');
+    }
+    return buffer.toString();
+  }
+
+  Future<void> _exportCsv() async {
+    if (_txs.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No transactions to export')),
+      );
+      return;
+    }
+    final csv = _toCsv(_txs);
+    try {
+      await SharePlus.instance.share(ShareParams(
+        files: [XFile.fromData(
+          Uint8List.fromList(utf8.encode(csv)),
+          mimeType: 'text/csv',
+          name: 'argus_transactions.csv',
+        )],
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Activity')),
+      appBar: AppBar(
+        title: const Text('Activity'),
+        actions: [
+          if (_txs.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.file_download),
+              tooltip: 'Export CSV',
+              onPressed: _exportCsv,
+            ),
+        ],
+      ),
       body: _loading && _txs.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : _error != null && _txs.isEmpty

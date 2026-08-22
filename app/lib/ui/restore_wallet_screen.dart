@@ -55,32 +55,27 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
     setState(() => _step = 1);
   }
 
-  Future<void> _restore() async {
+  Future<String?> _restore() async {
     final words = mnemonicWords(_phraseCtrl.text);
     final phrase = words.join(' ');
     if (phrase.isEmpty) {
       _snack('Enter a recovery phrase');
-      return;
+      return null;
     }
     final pinErr = pinError(_pinCtrl.text, _pinConfirmCtrl.text);
     if (pinErr != null) {
       _snack(pinErr);
-      return;
+      return null;
     }
     setState(() => _busy = true);
     try {
-      if (!await confirmReplaceExistingWallet(context)) return;
-      final session = await walletService.createWallet(
-        phrase,
+      final walletId = await walletService.provisionWallet(
+        phrase: phrase,
         passphrase: _passCtrl.text,
+        pin: _pinCtrl.text,
       );
-      final pinWrap = await walletService.wrapKeyWithPin(session.wrapKey, _pinCtrl.text);
-      await SecureStorageService.saveWalletWithPin(
-        encryptedSeedJson: session.encryptedSeedJson,
-        pinWrapJson: pinWrap,
-      );
-      if (!mounted) return;
-      Navigator.pop(context, true);
+      if (!mounted) return null;
+      Navigator.pop(context, walletId);
     } on ArgusException catch (e) {
       _snack('${e.code}: ${e.message}');
     } on SecureStorageException catch (e) {
@@ -90,6 +85,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+    return null;
   }
 
   void _snack(String msg) {

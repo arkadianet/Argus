@@ -115,4 +115,59 @@ void main() {
       );
     });
   });
+
+  group('formatRelativeTime', () {
+    test('null returns empty', () {
+      expect(formatRelativeTime(null), '');
+    });
+
+    test('within a few seconds is just now', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now, now: now), 'Just now');
+      expect(formatRelativeTime(now.subtract(const Duration(seconds: 3)), now: now), 'Just now');
+    });
+
+    test('seconds are reported individually', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now.subtract(const Duration(seconds: 10)), now: now), '10s ago');
+      expect(formatRelativeTime(now.subtract(const Duration(seconds: 59)), now: now), '59s ago');
+    });
+
+    test('minutes and hours', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now.subtract(const Duration(minutes: 5)), now: now), '5 min ago');
+      expect(formatRelativeTime(now.subtract(const Duration(minutes: 45)), now: now), '45 min ago');
+      expect(formatRelativeTime(now.subtract(const Duration(hours: 2)), now: now), '2h ago');
+    });
+
+    test('days', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now.subtract(const Duration(days: 1)), now: now), 'Yesterday');
+      expect(formatRelativeTime(now.subtract(const Duration(days: 3)), now: now), '3 days ago');
+    });
+
+    test('future timestamps are not reported as ago', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now.add(const Duration(seconds: 30)), now: now), 'Just now');
+      expect(formatRelativeTime(now.add(const Duration(seconds: 59)), now: now), 'Just now');
+    });
+
+    test('day labels use calendar days across midnight', () {
+      final now = DateTime(2025, 6, 15, 0, 30, 0);
+      expect(formatRelativeTime(DateTime(2025, 6, 13, 23, 0, 0), now: now), '2 days ago');
+      expect(formatRelativeTime(DateTime(2025, 6, 14, 23, 30, 0), now: now), '1h ago');
+      expect(formatRelativeTime(DateTime(2025, 6, 13, 12, 0, 0), now: now), '2 days ago');
+    });
+
+    test('day labels survive a spring-forward DST transition', () {
+      final now = DateTime(2026, 3, 10, 0, 30, 0);
+      expect(formatRelativeTime(DateTime(2026, 3, 8, 0, 30, 0), now: now), '2 days ago');
+      expect(formatRelativeTime(DateTime(2026, 3, 9, 0, 30, 0), now: now), 'Yesterday');
+    });
+
+    test('old dates fall back to date format', () {
+      final now = DateTime(2025, 6, 15, 12, 0, 0);
+      expect(formatRelativeTime(now.subtract(const Duration(days: 30)), now: now), '5/16/2025');
+    });
+  });
 }

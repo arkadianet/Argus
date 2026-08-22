@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
+import '../format.dart';
+import '../services/address_label_service.dart';
 import '../services/session_lock.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -66,12 +68,45 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     }
   }
 
-  String get _address =>
-      WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments).receiveAddress;
+  Future<void> _editLabel(String address) async {
+    final existing = addressLabelService.labelFor(address) ?? '';
+    final ctrl = TextEditingController(text: existing);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Address label'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SelectableText(
+              shorten(address, head: 10, tail: 8),
+              style: monoStyle(ctx, size: 11),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: ctrl,
+              decoration: const InputDecoration(labelText: 'Label (optional)'),
+              autofocus: true,
+              textCapitalization: TextCapitalization.words,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    final label = ctrl.text;
+    ctrl.dispose();
+    if (ok != true) return;
+    await addressLabelService.setLabel(address, label);
+  }
 
   @override
   Widget build(BuildContext context) {
-    final address = _address;
+    final args = WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+    final address = args.receiveAddress;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Receive')),
@@ -115,16 +150,44 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                     dataModuleShape: QrDataModuleShape.square,
                     color: ink,
                   ),
-                ),
-              ),
+          ),
             ),
+          ),
           const SizedBox(height: 28),
+          if (address.isNotEmpty)
+            ListenableBuilder(
+              listenable: addressLabelService,
+              builder: (context, _) {
+                final label = addressLabelService.labelFor(address);
+                return Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    if (label != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: iris.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(label, style: const TextStyle(color: iris, fontSize: 12)),
+                      ),
+                    if (label != null) const SizedBox(width: 8),
+                    TextButton.icon(
+                      onPressed: () => _editLabel(address),
+                      icon: const Icon(Icons.edit, size: 14),
+                      label: Text(label == null ? 'Add label' : 'Edit label'),
+                    ),
+                  ],
+                );
+              },
+            ),
+          const SizedBox(height: 20),
           SelectableText(
             address,
             style: monoStyle(context, size: 13),
             textAlign: TextAlign.center,
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 12),
           FilledButton(
             onPressed: address.isEmpty
                 ? null
@@ -145,6 +208,36 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                     ),
             child: const Text('Share'),
           ),
+          if (args.historyAddresses.length > 1) ...[
+            const SizedBox(height: 28),
+            const SectionLabel('Used addresses'),
+            const SizedBox(height: 8),
+            ...args.historyAddresses.map((a) {
+              if (a == address) return const SizedBox.shrink();
+              final label = addressLabelService.labelFor(a);
+              return InkWell(
+                onTap: () async {
+                  await sessionLock.run(() => Clipboard.setData(ClipboardData(text: a)));
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('${shorten(a, head: 8, tail: 6)} copied')),
+                    );
+                  }
+                },
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(shorten(a, head: 10, tail: 8), style: monoStyle(context, size: 11)),
+                      if (label != null)
+                        Text(label, style: TextStyle(color: iris, fontSize: 12)),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ],
         ],
       ),
     );

@@ -17,12 +17,19 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     registrar.addMethodCallDelegate(instance, channel: channel)
   }
 
-  private let serviceName = "com.argus.wallet.seed"
-  private let seedAccount = "encrypted_seed"
-  private let wrapAccount = "wrap_key"
-  private let pinAccount = "pin_wrap"
-  private let pinFailKey = "argus_pin_fail_count"
-  private let pinLockKey = "argus_pin_lock_until"
+  private let service = "com.argus.wallet.seed"
+  private let registryAccount = "wallet_registry"
+
+  private func seedAccount(for walletId: String?) -> String {
+    walletId != nil ? "seed_\(walletId!)" : "encrypted_seed"
+  }
+  private func wrapAccount(for walletId: String?) -> String {
+    walletId != nil ? "wrap_\(walletId!)" : "wrap_key"
+  }
+  private func pinAccount(for walletId: String?) -> String {
+    walletId != nil ? "pin_\(walletId!)" : "pin_wrap"
+  }
+
   private var secure = false
   private var cover: UIView?
   private var observing = false
@@ -32,6 +39,7 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
   }
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    let walletId = (call.arguments as? [String: Any])?["walletId"] as? String
     switch call.method {
     case "saveEncryptedSeed":
       guard let args = call.arguments as? [String: Any],
@@ -39,10 +47,18 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
         result(FlutterError(code: "INVALID_ARGS", message: "Missing encryptedSeedJson", details: nil))
         return
       }
-      save(json, account: seedAccount, biometric: false, result: result)
+      save(json, account: seedAccount(for: walletId), biometric: false) { [weak self] res in
+        if (res as? Bool) == true, let wid = walletId {
+          if let self, self.addWalletId(wid) == false {
+            result(FlutterError(code: "STORAGE_ERROR", message: "Failed to update wallet registry", details: nil))
+            return
+          }
+        }
+        result(res)
+      }
 
     case "loadEncryptedSeed":
-      load(account: seedAccount, result: result)
+      load(account: seedAccount(for: walletId), result: result)
 
     case "saveWrapKey":
       guard let args = call.arguments as? [String: Any],
@@ -50,10 +66,10 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
         result(FlutterError(code: "INVALID_ARGS", message: "Missing wrapKey", details: nil))
         return
       }
-      save(key, account: wrapAccount, biometric: true, result: result)
+      save(key, account: wrapAccount(for: walletId), biometric: true, result: result)
 
     case "loadWrapKey":
-      load(account: wrapAccount, result: result)
+      load(account: wrapAccount(for: walletId), result: result)
 
     case "savePinWrap":
       guard let args = call.arguments as? [String: Any],
@@ -61,29 +77,67 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
         result(FlutterError(code: "INVALID_ARGS", message: "Missing pinWrapJson", details: nil))
         return
       }
-      save(json, account: pinAccount, biometric: false, result: result)
+      save(json, account: pinAccount(for: walletId), biometric: false, result: result)
 
     case "loadPinWrap":
-      load(account: pinAccount, result: result)
+      load(account: pinAccount(for: walletId), result: result)
 
     case "deleteWrapKey":
-      delete(account: wrapAccount)
-      result(nil)
+      let status = delete(account: wrapAccount(for: walletId))
+      if status == errSecSuccess || status == errSecItemNotFound {
+        result(nil)
+      } else {
+        result(FlutterError(code: "STORAGE_ERROR", message: "Failed to delete wrap key", details: nil))
+      }
 
     case "deleteEncryptedSeed":
-      delete(account: seedAccount)
-      delete(account: wrapAccount)
-      delete(account: pinAccount)
+      if !deleteWalletSecrets([seedAccount(for: walletId), wrapAccount(for: walletId), pinAccount(for: walletId)]) {
+        result(FlutterError(code: "STORAGE_ERROR", message: "Failed to delete wallet secrets", details: nil))
+        return
+      }
+      if walletId != nil {
+        if !removeWalletId(walletId!) {
+          result(FlutterError(code: "STORAGE_ERROR", message: "Failed to update wallet registry", details: nil))
+          return
+        }
+      }
+      result(nil)
+
+    case "deleteWallet":
+      guard let args = call.arguments as? [String: Any],
+            let wid = args["walletId"] as? String else {
+        result(FlutterError(code: "INVALID_ARGS", message: "Missing walletId", details: nil))
+        return
+      }
+      if !deleteWalletSecrets([seedAccount(for: wid), wrapAccount(for: wid), pinAccount(for: wid)]) {
+        result(FlutterError(code: "STORAGE_ERROR", message: "Failed to delete wallet secrets", details: nil))
+        return
+      }
+      if !removeWalletId(wid) {
+        result(FlutterError(code: "STORAGE_ERROR", message: "Failed to update wallet registry", details: nil))
+        return
+      }
       result(nil)
 
     case "hasEncryptedSeed":
-      result(hasItem(account: seedAccount))
+      if walletId != nil {
+        result(hasItem(account: seedAccount(for: walletId)))
+      } else {
+        result(hasItem(account: "encrypted_seed") || hasItem(account: registryAccount))
+      }
 
     case "hasPinWrap":
-      result(hasItem(account: pinAccount))
+      result(hasItem(account: pinAccount(for: walletId)))
 
     case "hasWrapKey":
-      result(hasItem(account: wrapAccount))
+      result(hasItem(account: wrapAccount(for: walletId)))
+
+    case "listWalletIds":
+      var ids = getWalletIds()
+      if hasItem(account: "encrypted_seed") && !ids.contains("legacy") {
+        ids.append("legacy")
+      }
+      result(ids)
 
     case "hasBiometric":
       let ctx = LAContext()
@@ -98,7 +152,7 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
       }
 
     case "authenticateBiometric":
-      loadProtected(account: wrapAccount, result: result)
+      loadProtected(account: wrapAccount(for: walletId), result: result)
 
     case "setSecureFlag":
       let args = call.arguments as? [String: Any]
@@ -109,21 +163,124 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     case "loadPinGate":
       let defaults = UserDefaults.standard
       result([
-        "count": defaults.integer(forKey: pinFailKey),
-        "until": defaults.object(forKey: pinLockKey) as? Int ?? 0,
+        "count": defaults.integer(forKey: "argus_pin_fail_count"),
+        "until": defaults.object(forKey: "argus_pin_lock_until") as? Int ?? 0,
       ])
 
     case "savePinGate":
       let args = call.arguments as? [String: Any]
       let defaults = UserDefaults.standard
-      defaults.set(args?["count"] as? Int ?? 0, forKey: pinFailKey)
-      defaults.set(args?["until"] as? Int ?? 0, forKey: pinLockKey)
+      defaults.set(args?["count"] as? Int ?? 0, forKey: "argus_pin_fail_count")
+      defaults.set(args?["until"] as? Int ?? 0, forKey: "argus_pin_lock_until")
       result(nil)
+
+    case "migrateLegacyWallet":
+      guard let args = call.arguments as? [String: Any],
+            let newId = args["newWalletId"] as? String else {
+        result(FlutterError(code: "INVALID_ARGS", message: "Missing newWalletId", details: nil))
+        return
+      }
+      let migrated = migrateLegacyWallet(newWalletId: newId)
+      result(migrated)
 
     default:
       result(FlutterMethodNotImplemented)
     }
   }
+
+  // MARK: - Wallet registry
+
+  private func getWalletIds() -> [String] {
+    var query = baseQuery(account: registryAccount)
+    query[kSecReturnData as String] = true
+    query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+    var found: CFTypeRef?
+    let status = SecItemCopyMatching(query as CFDictionary, &found)
+    guard status == errSecSuccess, let data = found as? Data,
+          let ids = try? JSONDecoder().decode([String].self, from: data) else {
+      return []
+    }
+    return ids
+  }
+
+  private func setWalletIds(_ ids: [String]) -> Bool {
+    guard let data = try? JSONEncoder().encode(ids) else { return false }
+    _ = delete(account: registryAccount)
+    var query = baseQuery(account: registryAccount)
+    query[kSecValueData as String] = data
+    query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+    return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
+  }
+
+  private func addWalletId(_ walletId: String) -> Bool {
+    var ids = getWalletIds()
+    if !ids.contains(walletId) {
+      ids.append(walletId)
+      return setWalletIds(ids)
+    }
+    return true
+  }
+
+  private func removeWalletId(_ walletId: String) -> Bool {
+    var ids = getWalletIds()
+    if ids.contains(walletId) {
+      ids.removeAll { $0 == walletId }
+      return setWalletIds(ids)
+    }
+    return true
+  }
+
+  private func migrateLegacyWallet(newWalletId: String) -> Bool {
+    guard hasItem(account: "encrypted_seed") else { return false }
+    if getWalletIds().contains(newWalletId) { return false }
+    let seedData = loadData(account: "encrypted_seed")
+    let wrapData = loadData(account: "wrap_key")
+    let pinData = loadData(account: "pin_wrap")
+    var success = true
+    if let seed = seedData, !seed.isEmpty {
+      var seedSaved = false
+      save(seed, account: seedAccount(for: newWalletId), biometric: false) { res in
+        seedSaved = (res as? Bool) == true
+      }
+      if !seedSaved { success = false }
+    } else {
+      success = false
+    }
+    if hasItem(account: "wrap_key") {
+      if let wrap = wrapData, !wrap.isEmpty {
+        var wrapSaved = false
+        save(wrap, account: wrapAccount(for: newWalletId), biometric: true) { res in
+          wrapSaved = (res as? Bool) == true
+        }
+        if !wrapSaved { success = false }
+      } else {
+        success = false
+      }
+    }
+    if hasItem(account: "pin_wrap") {
+      if let pin = pinData, !pin.isEmpty {
+        var pinSaved = false
+        save(pin, account: pinAccount(for: newWalletId), biometric: false) { res in
+          pinSaved = (res as? Bool) == true
+        }
+        if !pinSaved { success = false }
+      } else {
+        success = false
+      }
+    }
+    if success {
+      if !deleteWalletSecrets(["encrypted_seed", "wrap_key", "pin_wrap"]) {
+        return false
+      }
+      if !addWalletId(newWalletId) {
+        return false
+      }
+    }
+    return success
+  }
+
+  // MARK: - Biometric / lifecycle
 
   private func isAbsentBiometry(_ error: NSError) -> Bool {
     let code = LAError.Code(rawValue: error.code)
@@ -172,6 +329,16 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     }
   }
 
+  // MARK: - Keychain ops
+
+  private func baseQuery(account: String) -> [String: Any] {
+    return [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
+    ]
+  }
+
   private func save(_ value: String, account: String, biometric: Bool, result: @escaping FlutterResult) {
     guard let data = value.data(using: .utf8) else {
       result(FlutterError(code: "ENCODE_ERROR", message: "Failed to encode data", details: nil))
@@ -206,12 +373,8 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     }
   }
 
-  private func load(account: String, result: @escaping FlutterResult) {
-    loadProtected(account: account, result: result)
-  }
-
-  private func loadProtected(account: String, result: @escaping FlutterResult) {
-    var item = query(account)
+  private func loadData(account: String) -> String? {
+    var item = baseQuery(account: account)
     item[kSecReturnData as String] = true
     item[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -219,20 +382,66 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     let status = SecItemCopyMatching(item as CFDictionary, &found)
 
     if status == errSecSuccess, let data = found as? Data {
-      result(String(data: data, encoding: .utf8))
-    } else if status == errSecItemNotFound || status == errSecUserCanceled {
+      return String(data: data, encoding: .utf8)
+    }
+    return nil
+  }
+
+  private func load(account: String, result: @escaping FlutterResult) {
+    let (status, value) = loadDataWithStatus(account: account)
+    if let value {
+      result(value)
+    } else if status == errSecItemNotFound {
       result(nil)
     } else {
-      result(FlutterError(code: "KEYCHAIN_ERROR", message: "Failed to load: \(status)", details: nil))
+      result(FlutterError(code: "KEYCHAIN_ERROR", message: "Failed to load item: \(status)", details: nil))
     }
   }
 
-  private func delete(account: String) {
-    SecItemDelete(query(account) as CFDictionary)
+  private func loadDataWithStatus(account: String) -> (OSStatus, String?) {
+    var item = baseQuery(account: account)
+    item[kSecReturnData as String] = true
+    item[kSecMatchLimit as String] = kSecMatchLimitOne
+
+    var found: CFTypeRef?
+    let status = SecItemCopyMatching(item as CFDictionary, &found)
+
+    if status == errSecSuccess, let data = found as? Data {
+      let value = String(data: data, encoding: .utf8)
+      return (status, value)
+    }
+    return (status, nil)
+  }
+
+  private func loadProtected(account: String, result: @escaping FlutterResult) {
+    let (status, value) = loadDataWithStatus(account: account)
+    if let value {
+      result(value)
+    } else if status == errSecItemNotFound || status == errSecUserCancelled {
+      result(nil)
+    } else {
+      result(FlutterError(code: "KEYCHAIN_ERROR", message: "Failed to load protected item: \(status)", details: nil))
+    }
+  }
+
+  private func delete(account: String) -> OSStatus {
+    SecItemDelete(baseQuery(account: account) as CFDictionary)
+  }
+
+  /// Deletes every account in [accounts], treating `errSecItemNotFound` as a
+  /// success (the item is already gone). Returns `false` if any delete fails.
+  private func deleteWalletSecrets(_ accounts: [String]) -> Bool {
+    for account in accounts {
+      let status = delete(account: account)
+      if status != errSecSuccess && status != errSecItemNotFound {
+        return false
+      }
+    }
+    return true
   }
 
   private func hasItem(account: String) -> Bool {
-    var item = query(account)
+    var item = baseQuery(account: account)
     item[kSecReturnData as String] = false
     item[kSecMatchLimit as String] = kSecMatchLimitOne
     item[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail
@@ -245,7 +454,7 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
   private func query(_ account: String) -> [String: Any] {
     return [
       kSecClass as String: kSecClassGenericPassword,
-      kSecAttrService as String: serviceName,
+      kSecAttrService as String: service,
       kSecAttrAccount as String: account,
     ]
   }

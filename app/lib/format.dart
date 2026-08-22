@@ -98,3 +98,21 @@ String dayKey(int? timestampMs) {
   final dt = DateTime.fromMillisecondsSinceEpoch(timestampMs, isUtc: true).toLocal();
   return '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
 }
+
+/// Human-readable relative time (e.g. "2 min ago", "1h ago", "yesterday").
+String formatRelativeTime(DateTime? when, {DateTime? now}) {
+  if (when == null) return '';
+  final reference = now ?? DateTime.now();
+  final diff = reference.difference(when);
+  if (diff.isNegative) return 'Just now';
+  if (diff.inSeconds < 5) return 'Just now';
+  if (diff.inMinutes < 1) return '${diff.inSeconds}s ago';
+  if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
+  if (diff.inHours < 24) return '${diff.inHours}h ago';
+  final dayDiff = DateTime.utc(reference.year, reference.month, reference.day)
+      .difference(DateTime.utc(when.year, when.month, when.day))
+      .inDays;
+  if (dayDiff == 1) return 'Yesterday';
+  if (dayDiff < 7) return '${dayDiff} days ago';
+  return '${when.month}/${when.day}/${when.year}';
+}

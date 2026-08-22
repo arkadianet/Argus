@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../format.dart';
 import '../services/contacts_service.dart';
@@ -27,8 +31,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
           children: [
             TextField(
               controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Name'),
-              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(labelText: 'Name'),              textCapitalization: TextCapitalization.words,
             ),
             const SizedBox(height: 12),
             TextField(
@@ -68,86 +71,128 @@ class _ContactsScreenState extends State<ContactsScreen> {
     });
   }
 
+  Future<void> _exportContacts() async {
+    final contacts = contactsService.contacts;
+    if (contacts.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No contacts to export')),
+      );
+      return;
+    }
+    final json = '[${contacts.map((c) => jsonEncode({'name': c.name, 'address': c.address})).join(',')}]';
+    try {
+      await SharePlus.instance.share(ShareParams(
+        files: [XFile.fromData(
+          Uint8List.fromList(utf8.encode(json)),
+          mimeType: 'application/json',
+          name: 'argus_contacts.json',
+        )],
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Export failed: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(_selectMode ? 'Select contact' : 'Contacts')),
-      floatingActionButton: _selectMode
-          ? null
-          : FloatingActionButton(
-              onPressed: () => _addOrEdit(),
-              child: const Icon(Icons.person_add),
-            ),
-      body: ListenableBuilder(
-        listenable: contactsService,
-        builder: (context, _) {
-          final contacts = contactsService.contacts;
-          if (contacts.isEmpty) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(28),
-                child: Text(
-                  _selectMode
-                      ? 'No saved contacts yet.'
-                      : 'No saved contacts yet.\nTap + to add one.',
-                  style: Theme.of(context).textTheme.bodyMedium,
-                  textAlign: TextAlign.center,
+    return ListenableBuilder(
+      listenable: contactsService,
+      builder: (context, _) {
+        return Scaffold(
+          appBar: AppBar(
+            title: Text(_selectMode ? 'Select contact' : 'Contacts'),
+            actions: _selectMode
+                ? null
+                : [
+                    if (contactsService.contacts.isNotEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.file_download),
+                        tooltip: 'Export contacts',
+                        onPressed: _exportContacts,
+                      ),
+                  ],
+          ),
+          floatingActionButton: _selectMode
+              ? null
+              : FloatingActionButton(
+                  onPressed: () => _addOrEdit(),
+                  child: const Icon(Icons.person_add),
                 ),
+          body: _contactList(),
+        );
+      },
+    );
+  }
+
+  Widget _contactList() {
+    final contacts = contactsService.contacts;
+    if (contacts.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Text(
+            _selectMode
+                ? 'No saved contacts yet.'
+                : 'No saved contacts yet.\nTap + to add one.',
+            style: Theme.of(context).textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 80),
+      itemCount: contacts.length,
+      separatorBuilder: (_, __) => const Hairline(),
+      itemBuilder: (context, i) {
+        final c = contacts[i];
+        return InkWell(
+          onTap: () {
+            if (_selectMode) {
+              Navigator.pop(context, c);
+            } else {
+              _addOrEdit(c);
+            }
+          },
+          onLongPress: _selectMode ? null : () async {
+            final ok = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Delete contact?'),
+                content: Text(c.name),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                  FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+                ],
               ),
             );
-          }
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 80),
-            itemCount: contacts.length,
-            separatorBuilder: (_, __) => const Hairline(),
-            itemBuilder: (context, i) {
-              final c = contacts[i];
-              return InkWell(
-                onTap: () {
-                  if (_selectMode) {
-                    Navigator.pop(context, c);
-                  } else {
-                    _addOrEdit(c);
-                  }
-                },
-                onLongPress: _selectMode ? null : () async {
-                  final ok = await showDialog<bool>(
-                    context: context,
-                    builder: (ctx) => AlertDialog(
-                      title: const Text('Delete contact?'),
-                      content: Text(c.name),
-                      actions: [
-                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-                        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
-                      ],
-                    ),
-                  );
-                  if (ok == true) await contactsService.remove(c.id);
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  child: Row(
+            if (ok == true) await contactsService.remove(c.id);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 14),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(c.name, style: Theme.of(context).textTheme.titleMedium),
-                            const SizedBox(height: 4),
-                            Text(shorten(c.address, head: 10, tail: 10), style: monoStyle(context, size: 11)),
-                          ],
-                        ),
-                      ),
-                      if (!_selectMode)
-                        const Icon(Icons.chevron_right, color: Colors.grey),
+                      Text(c.name, style: Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height: 4),
+                      Text(shorten(c.address, head: 10, tail: 10), style: monoStyle(context, size: 11)),
                     ],
                   ),
                 ),
-              );
-            },
-          );
-        },
-      ),
+                if (!_selectMode)
+                  const Icon(Icons.chevron_right, color: Colors.grey),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -918512305;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 211507777;
 
 // Section: executor
 
@@ -447,6 +447,7 @@ fn wire__crate__api__prepare_consolidate_impl(
             let api_selected_box_ids = <Vec<String>>::sse_decode(&mut deserializer);
             let api_change_address = <String>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
+            let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -457,6 +458,7 @@ fn wire__crate__api__prepare_consolidate_impl(
                             api_selected_box_ids,
                             api_change_address,
                             api_node_url,
+                            api_fee_nano,
                         )
                         .await?;
                         Ok(output_ok)
@@ -495,6 +497,7 @@ fn wire__crate__api__prepare_restructure_impl(
             let api_outputs_json = <String>::sse_decode(&mut deserializer);
             let api_change_address = <String>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
+            let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -506,6 +509,7 @@ fn wire__crate__api__prepare_restructure_impl(
                             api_outputs_json,
                             api_change_address,
                             api_node_url,
+                            api_fee_nano,
                         )
                         .await?;
                         Ok(output_ok)
@@ -547,6 +551,7 @@ fn wire__crate__api__prepare_send_impl(
             let api_token_id = <Option<String>>::sse_decode(&mut deserializer);
             let api_token_amount = <Option<u64>>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
+            let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -561,6 +566,58 @@ fn wire__crate__api__prepare_send_impl(
                             api_token_id,
                             api_token_amount,
                             api_node_url,
+                            api_fee_nano,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__prepare_send_multi_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "prepare_send_multi",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_handle_id = <u64>::sse_decode(&mut deserializer);
+            let api_sender_address = <String>::sse_decode(&mut deserializer);
+            let api_spend_addresses = <Vec<String>>::sse_decode(&mut deserializer);
+            let api_change_address = <String>::sse_decode(&mut deserializer);
+            let api_recipients_json = <String>::sse_decode(&mut deserializer);
+            let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
+            let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::prepare_send_multi(
+                            api_handle_id,
+                            api_sender_address,
+                            api_spend_addresses,
+                            api_change_address,
+                            api_recipients_json,
+                            api_node_url,
+                            api_fee_nano,
                         )
                         .await?;
                         Ok(output_ok)
@@ -600,6 +657,7 @@ fn wire__crate__api__prepare_split_erg_impl(
             let api_amount_per_box_nano = <i64>::sse_decode(&mut deserializer);
             let api_change_address = <String>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
+            let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -612,6 +670,7 @@ fn wire__crate__api__prepare_split_erg_impl(
                             api_amount_per_box_nano,
                             api_change_address,
                             api_node_url,
+                            api_fee_nano,
                         )
                         .await?;
                         Ok(output_ok)
@@ -653,6 +712,7 @@ fn wire__crate__api__prepare_split_token_impl(
             let api_erg_per_box_nano = <i64>::sse_decode(&mut deserializer);
             let api_change_address = <String>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
+            let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -667,6 +727,7 @@ fn wire__crate__api__prepare_split_token_impl(
                             api_erg_per_box_nano,
                             api_change_address,
                             api_node_url,
+                            api_fee_nano,
                         )
                         .await?;
                         Ok(output_ok)
@@ -786,6 +847,44 @@ fn wire__crate__api__set_network_impl(
         },
     )
 }
+fn wire__crate__api__sign_preparation_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "sign_preparation",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_handle_id = <u64>::sse_decode(&mut deserializer);
+            let api_preparation_id = <u64>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok =
+                            crate::api::sign_preparation(api_handle_id, api_preparation_id).await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
 fn wire__crate__api__sign_reduced_transaction_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -849,6 +948,40 @@ fn wire__crate__api__unwrap_key_with_pin_impl(
             move |context| {
                 transform_result_sse::<_, String>((move || {
                     let output_ok = crate::api::unwrap_key_with_pin(api_pin_wrap_json, api_pin)?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
+fn wire__crate__api__validate_ergo_address_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "validate_ergo_address",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_address = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::validate_ergo_address(api_address))?;
                     Ok(output_ok)
                 })())
             }
@@ -1129,6 +1262,17 @@ impl SseDecode for Option<String> {
     }
 }
 
+impl SseDecode for Option<i64> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<i64>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for Option<u32> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1206,19 +1350,22 @@ fn pde_ffi_dispatcher_primary_impl(
         11 => wire__crate__api__prepare_consolidate_impl(port, ptr, rust_vec_len, data_len),
         12 => wire__crate__api__prepare_restructure_impl(port, ptr, rust_vec_len, data_len),
         13 => wire__crate__api__prepare_send_impl(port, ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__prepare_split_erg_impl(port, ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__prepare_split_token_impl(port, ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__probe_network_impl(port, ptr, rust_vec_len, data_len),
-        17 => wire__crate__api__send_erg_impl(port, ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__set_network_impl(port, ptr, rust_vec_len, data_len),
-        19 => wire__crate__api__sign_reduced_transaction_impl(port, ptr, rust_vec_len, data_len),
-        20 => wire__crate__api__unwrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__walk_singleton_lineage_impl(port, ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__wallet_create_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__wallet_is_unlocked_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__wallet_lock_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__wallet_restore_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__wrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__prepare_send_multi_impl(port, ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__prepare_split_erg_impl(port, ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__prepare_split_token_impl(port, ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__probe_network_impl(port, ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__send_erg_impl(port, ptr, rust_vec_len, data_len),
+        19 => wire__crate__api__set_network_impl(port, ptr, rust_vec_len, data_len),
+        20 => wire__crate__api__sign_preparation_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__sign_reduced_transaction_impl(port, ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__unwrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__validate_ergo_address_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__walk_singleton_lineage_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__wallet_create_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__wallet_is_unlocked_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__wallet_lock_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__wallet_restore_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__wrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -1284,6 +1431,16 @@ impl SseEncode for Option<String> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <String>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<i64> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <i64>::sse_encode(value, serializer);
         }
     }
 }
