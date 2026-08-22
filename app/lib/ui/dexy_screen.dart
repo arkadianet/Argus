@@ -133,6 +133,8 @@ class _DexyScreenState extends State<DexyScreen> {
       isScrollControlled: true,
       builder: (ctx) => _DexyMintSheet(
         variant: _variant,
+        state: _state!,
+        spendableNano: _args.spendableNano,
         onBuild: (amount) => dexService.buildMint(
           variant: _variant,
           amount: amount,
@@ -167,6 +169,7 @@ class _DexyScreenState extends State<DexyScreen> {
       isScrollControlled: true,
       builder: (ctx) => _DexySwapSheet(
         variant: _variant,
+        state: _state!,
         tokenBalance: _tokenBalance,
         spendableNano: _args.spendableNano,
         onBuild: (direction, amount, minOutput) => dexService.buildSwap(
@@ -608,9 +611,16 @@ class _DexyScreenState extends State<DexyScreen> {
 
 /// Mint flow: enter an amount, see the live cost, then review.
 class _DexyMintSheet extends StatefulWidget {
-  const _DexyMintSheet({required this.variant, required this.onBuild});
+  const _DexyMintSheet({
+    required this.variant,
+    required this.state,
+    this.spendableNano,
+    required this.onBuild,
+  });
 
   final DexyVariant variant;
+  final DexyState state;
+  final int? spendableNano;
   final Future<DexyBuildResult> Function(int amount) onBuild;
 
   @override
@@ -618,27 +628,69 @@ class _DexyMintSheet extends StatefulWidget {
 }
 
 class _DexyMintSheetState extends State<_DexyMintSheet> {
-  final _amountCtrl = TextEditingController();
+  final _ergCtrl = TextEditingController();
+  final _tokenCtrl = TextEditingController();
   Timer? _debounce;
   DexyMintPreview? _preview;
   bool _previewing = false;
   String? _previewError;
   bool _building = false;
 
+  double get _effectiveRate => widget.state.rates.ergPerToken;
+
   @override
   void dispose() {
     _debounce?.cancel();
-    _amountCtrl.dispose();
+    _ergCtrl.dispose();
+    _tokenCtrl.dispose();
     super.dispose();
   }
 
-  void _onAmountChanged() {
+  void _onErgChanged() {
+    final parsed = double.tryParse(_ergCtrl.text.trim());
+    if (parsed != null && parsed > 0 && _effectiveRate > 0) {
+      final decimals = widget.variant.decimals;
+      final tokenVal = parsed / _effectiveRate;
+      var scale = 1;
+      for (var i = 0; i < decimals; i++) {
+        scale *= 10;
+      }
+      final baseUnits = (tokenVal * scale).floor();
+      _tokenCtrl.text = formatScaled(baseUnits, decimals);
+    } else {
+      _tokenCtrl.clear();
+    }
+    _triggerPreview();
+  }
+
+  void _onTokenChanged() {
+    final parsed = double.tryParse(_tokenCtrl.text.trim());
+    if (parsed != null && parsed > 0 && _effectiveRate > 0) {
+      final ergVal = parsed * _effectiveRate;
+      _ergCtrl.text = ergVal.toStringAsFixed(4);
+    } else {
+      _ergCtrl.clear();
+    }
+    _triggerPreview();
+  }
+
+  void _applyMax() {
+    final spendable = widget.spendableNano;
+    if (spendable == null || _effectiveRate <= 0) return;
+    final maxNano = spendable - minerFeeNano - minBoxNano;
+    if (maxNano > 0) {
+      _ergCtrl.text = formatErg(maxNano, unit: false, maxFrac: 4);
+      _onErgChanged();
+    }
+  }
+
+  void _triggerPreview() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 350), _refresh);
   }
 
   Future<void> _refresh() async {
-    final raw = int.tryParse(_amountCtrl.text.trim());
+    final raw = parseDecimalToBase(_tokenCtrl.text.trim(), widget.variant.decimals);
     if (raw == null || raw <= 0) {
       setState(() {
         _preview = null;
@@ -666,7 +718,7 @@ class _DexyMintSheetState extends State<_DexyMintSheet> {
   }
 
   Future<void> _review() async {
-    final raw = int.tryParse(_amountCtrl.text.trim());
+    final raw = parseDecimalToBase(_tokenCtrl.text.trim(), widget.variant.decimals);
     if (raw == null || raw <= 0) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('Enter an amount')));
@@ -701,14 +753,25 @@ class _DexyMintSheetState extends State<_DexyMintSheet> {
           Text(variant.peg, style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 18),
           TextField(
-            controller: _amountCtrl,
-            keyboardType:
-                const TextInputType.numberWithOptions(decimal: true),
-            onChanged: (_) => _onAmountChanged(),
+            controller: _ergCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            onChanged: (_) => _onErgChanged(),
             decoration: InputDecoration(
-              labelText: 'Tokens to mint (${variant.shortName})',
-              hintText: '100',
-              helperText: 'Oracle rate determines the ERG cost.',
+              labelText: 'You pay (ERG)',
+              suffixIcon: TextButton(
+                onPressed: _applyMax,
+                child: const Text('MAX'),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _tokenCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            onChanged: (_) => _onTokenChanged(),
+            decoration: InputDecoration(
+              labelText: 'You receive (${variant.shortName})',
+              helperText: 'Fixed oracle rate: ${_effectiveRate.toStringAsFixed(4)} ERG / ${variant.shortName}',
             ),
           ),
           const SizedBox(height: 12),
@@ -750,16 +813,19 @@ class _DexyMintSheetState extends State<_DexyMintSheet> {
   }
 }
 
+
 /// Swap sheet with live quotes in both directions.
 class _DexySwapSheet extends StatefulWidget {
   const _DexySwapSheet({
     required this.variant,
+    required this.state,
     required this.onBuild,
     this.tokenBalance,
     this.spendableNano,
   });
 
   final DexyVariant variant;
+  final DexyState state;
   final Future<DexyBuildResult> Function(String direction, int amount, int minOutput)
       onBuild;
   final int? tokenBalance;
@@ -935,6 +1001,13 @@ class _DexySwapSheetState extends State<_DexySwapSheet> {
                 child: const Text('MAX'),
               ),
             ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'AMM pool rate (differs from oracle mint rate)',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.outline,
+                ),
           ),
           const SizedBox(height: 8),
           if (_quoting)
