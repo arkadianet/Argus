@@ -39,6 +39,23 @@ String formatNanoErg(BigInt nano, {int maxFrac = 9, bool unit = true}) {
 
 String formatTokenAmount(int amount, int decimals) => formatScaled(amount, decimals);
 
+/// Token amount with thousands separators in the whole part,
+/// e.g. "61,630.618".
+String formatTokenAmountGrouped(int amount, int decimals) {
+  final raw = formatScaled(amount, decimals);
+  final dot = raw.indexOf('.');
+  final whole = dot == -1 ? raw : raw.substring(0, dot);
+  final frac = dot == -1 ? '' : raw.substring(dot);
+  final neg = whole.startsWith('-');
+  final digits = neg ? whole.substring(1) : whole;
+  final buf = StringBuffer(neg ? '-' : '');
+  for (var i = 0; i < digits.length; i++) {
+    if (i > 0 && (digits.length - i) % 3 == 0) buf.write(',');
+    buf.write(digits[i]);
+  }
+  return '$buf$frac';
+}
+
 String formatTokenAmountBigInt(BigInt amount, int decimals) =>
     formatScaledBigInt(amount, decimals);
 
@@ -82,6 +99,17 @@ String formatHeight(int? height) {
   return '#$height';
 }
 
+/// "1856438" → "1,856,438".
+String formatWithCommas(int value) {
+  final s = value.abs().toString();
+  final buffer = StringBuffer(value < 0 ? '-' : '');
+  for (var i = 0; i < s.length; i++) {
+    if (i > 0 && (s.length - i) % 3 == 0) buffer.write(',');
+    buffer.write(s[i]);
+  }
+  return buffer.toString();
+}
+
 String formatTxTime(int? timestampMs) {
   if (timestampMs == null || timestampMs <= 0) return '';
   final dt = DateTime.fromMillisecondsSinceEpoch(timestampMs, isUtc: true).toLocal();
@@ -97,6 +125,28 @@ String dayKey(int? timestampMs) {
   if (timestampMs == null || timestampMs <= 0) return 'Unknown day';
   final dt = DateTime.fromMillisecondsSinceEpoch(timestampMs, isUtc: true).toLocal();
   return '${dt.year.toString().padLeft(4, '0')}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}';
+}
+
+/// Activity-list timestamp, e.g. "Today, 8:21 am", "Yesterday, 3:47 pm",
+/// "Aug 20, 11:02 am".
+String formatActivityTime(int? timestampMs) {
+  if (timestampMs == null || timestampMs <= 0) return '';
+  final dt = DateTime.fromMillisecondsSinceEpoch(timestampMs, isUtc: true).toLocal();
+  final now = DateTime.now();
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  final hour12 = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+  final minute = dt.minute.toString().padLeft(2, '0');
+  final period = dt.hour < 12 ? 'am' : 'pm';
+  final time = '$hour12:$minute $period';
+  final todayStart = DateTime(now.year, now.month, now.day);
+  final dayStart = DateTime(dt.year, dt.month, dt.day);
+  final dayDiff = todayStart.difference(dayStart).inDays;
+  if (dayDiff == 0) return 'Today, $time';
+  if (dayDiff == 1) return 'Yesterday, $time';
+  return '${months[dt.month - 1]} ${dt.day}, $time';
 }
 
 /// Human-readable relative time (e.g. "2 min ago", "1h ago", "yesterday").

@@ -7,11 +7,16 @@ const ink = Color(0xFF0E1110);
 const watchfulSurface = Color(0xFF171C1A);
 const bone = Color(0xFFE8E4D9);
 const watchfulMuted = Color(0xFF8A867A);
-const paper = Color(0xFFF3EBE0);
-const ledgerSurface = Color(0xFFFBF6EE);
+const paper = Color(0xFFF5F1E8);
+const ledgerSurface = Color(0xFFFEFCF7);
 const ledgerInk = Color(0xFF1C1914);
 const ledgerMuted = Color(0xFF6B6458);
 const rust = Color(0xFFB54A3C);
+const moss = Color(0xFF3E7A55);
+const bannerTint = Color(0xFFF0E6D2);
+
+const cardRadius = 20.0;
+const buttonRadius = 14.0;
 
 ThemeData argusTheme({required bool watchful}) {
   final scheme = ColorScheme(
@@ -96,24 +101,28 @@ ThemeData argusTheme({required bool watchful}) {
       color: watchful ? watchfulSurface : ledgerSurface,
       elevation: 0,
       margin: EdgeInsets.zero,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(cardRadius),
+      ),
     ),
     dividerTheme: DividerThemeData(
-      color: watchful ? const Color(0xFF2C3330) : const Color(0xFFD4C8B4),
+      color: watchful ? const Color(0xFF2C3330) : const Color(0xFFE9E1D2),
       thickness: 1,
       space: 1,
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: watchful ? watchfulSurface : ledgerSurface,
-      border: const OutlineInputBorder(borderRadius: BorderRadius.zero),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(buttonRadius),
+      ),
       enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
+        borderRadius: BorderRadius.circular(buttonRadius),
         borderSide: BorderSide(color: scheme.outline),
       ),
-      focusedBorder: const OutlineInputBorder(
-        borderRadius: BorderRadius.zero,
-        borderSide: BorderSide(color: iris, width: 1.2),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(buttonRadius),
+        borderSide: const BorderSide(color: iris, width: 1.2),
       ),
       labelStyle: TextStyle(color: watchful ? watchfulMuted : ledgerMuted),
     ),
@@ -122,8 +131,10 @@ ThemeData argusTheme({required bool watchful}) {
         backgroundColor: iris,
         foregroundColor: ink,
         elevation: 0,
-        minimumSize: const Size.fromHeight(48),
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        minimumSize: const Size.fromHeight(52),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(buttonRadius),
+        ),
         textStyle: const TextStyle(
           fontFamily: 'Karla',
           fontWeight: FontWeight.w500,
@@ -134,9 +145,11 @@ ThemeData argusTheme({required bool watchful}) {
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
         foregroundColor: watchful ? bone : ledgerInk,
-        minimumSize: const Size.fromHeight(48),
+        minimumSize: const Size.fromHeight(52),
         side: const BorderSide(color: iris),
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(buttonRadius),
+        ),
       ),
     ),
     textButtonTheme: TextButtonThemeData(
@@ -158,7 +171,9 @@ ThemeData argusTheme({required bool watchful}) {
     progressIndicatorTheme: const ProgressIndicatorThemeData(color: iris),
     dialogTheme: DialogThemeData(
       backgroundColor: watchful ? watchfulSurface : ledgerSurface,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(cardRadius),
+      ),
     ),
   );
 }
@@ -202,20 +217,71 @@ class SectionLabel extends StatelessWidget {
   }
 }
 
-class WarningStrip extends StatelessWidget {
+class WarningStrip extends StatefulWidget {
   const WarningStrip({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
-      decoration: const BoxDecoration(
-        border: Border(bottom: BorderSide(color: rust, width: 1)),
+  State<WarningStrip> createState() => _WarningStripState();
+}
+
+class _WarningStripState extends State<WarningStrip> {
+  bool _dismissed = false;
+
+  void _learnMore() {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Prototype software'),
+        content: const Text(
+          'Argus is an unaudited prototype. Transactions on Ergo are '
+          'irreversible — use only funds you can afford to lose.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Got it'),
+          ),
+        ],
       ),
-      child: Text(
-        'Unaudited prototype. Use only funds you can afford to lose.',
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rust),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 6, 16, 0),
+      padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
+      decoration: BoxDecoration(
+        color: dark ? watchfulSurface : bannerTint,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.shield_outlined, size: 18, color: iris),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Unaudited prototype. Use only funds you can afford to lose.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+          TextButton(
+            onPressed: _learnMore,
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              minimumSize: const Size(0, 32),
+            ),
+            child: const Text('Learn more'),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            tooltip: 'Dismiss',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => setState(() => _dismissed = true),
+          ),
+        ],
       ),
     );
   }

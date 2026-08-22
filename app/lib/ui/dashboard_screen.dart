@@ -13,6 +13,7 @@ import '../services/watch_only_service.dart';
 import '../services/wallet_database_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
+import 'assets_screen.dart';
 import 'create_wallet_screen.dart';
 import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
@@ -43,7 +44,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   bool _canBiometric = false;
   bool _unlockBusy = false;
   int _utxoCount = 0;
-  DateTime? _lastSynced;
   int _watchOnlyTotal = 0;
   bool _watchOnlyLoading = false;
   int _watchOnlyGeneration = 0;
@@ -600,7 +600,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() => _status = 'Could not refresh balances');
     }
     await _refreshUtxos();
-    _lastSynced = DateTime.now();
 
     // Persist latest state to local mini-db cache for instant load next time
     if (_receiveAddress != null) {
@@ -753,6 +752,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return 'Wallet';
   }
 
+  bool _balanceHidden = false;
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -764,7 +765,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Argus'),
+        title: Text(
+          'Argus',
+          style: Theme.of(context).textTheme.headlineSmall,
+        ),
         actions: [
           if (_walletUnlocked)
             IconButton(
@@ -778,7 +782,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             onPressed: _openWalletOverview,
           ),
           IconButton(
-            icon: const Icon(Icons.tune),
+            icon: const Icon(Icons.settings_outlined),
             tooltip: 'Settings',
             onPressed: _openSettings,
           ),
@@ -804,15 +808,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ? NavigationBar(
               selectedIndex: 0,
               onDestinationSelected: (i) {
-                if (i == 1) _go('/send');
-                if (i == 2) _go('/receive');
-                if (i == 3) _go('/transactions');
+                if (i == 1) _go('/transactions');
+                if (i == 2) _go('/dexy');
+                if (i == 3) _openSettings();
               },
               destinations: const [
-                NavigationDestination(icon: Icon(Icons.menu_book_outlined), label: 'Wallet'),
-                NavigationDestination(icon: Icon(Icons.north_east), label: 'Send'),
-                NavigationDestination(icon: Icon(Icons.south_west), label: 'Receive'),
-                NavigationDestination(icon: Icon(Icons.history), label: 'History'),
+                NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Wallet'),
+                NavigationDestination(icon: Icon(Icons.schedule_outlined), label: 'Activity'),
+                NavigationDestination(icon: Icon(Icons.grid_view_outlined), label: 'Discover'),
+                NavigationDestination(icon: Icon(Icons.person_outline), label: 'Settings'),
               ],
             )
           : null,
@@ -971,401 +975,702 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  // ── Ledger (unlocked home) ─────────────────────────────────────────────
+
   Widget _ledger() {
     final fungible = _tokens.where((t) => !t.isNft).toList();
     final nfts = _tokens.where((t) => t.isNft).toList();
     final fragmented = _utxoCount > utxoFragmentationThreshold;
+    final assets = [
+      _AssetRow.erg(balanceNano: _balanceNano),
+      ...fungible.map(_AssetRow.token),
+      ...nfts.map(_AssetRow.token),
+    ];
 
     return RefreshIndicator(
       key: const ValueKey('ledger'),
       onRefresh: _refresh,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
         children: [
-           const SizedBox(height: 28),
-           Material(
-             color: Colors.transparent,
-             child: InkWell(
-               onTap: _openWalletOverview,
-               child: Padding(
-                 padding: const EdgeInsets.only(bottom: 12),
-                 child: Row(
-                   children: [
-                     Icon(
-                       Icons.account_balance_wallet_outlined,
-                       size: 18,
-                       color: Theme.of(context).colorScheme.primary,
-                     ),
-                     const SizedBox(width: 8),
-                     Flexible(
-                       child: Text(
-                         _activeWalletName,
-                         maxLines: 1,
-                         overflow: TextOverflow.ellipsis,
-                         style: Theme.of(context).textTheme.titleMedium,
-                       ),
-                     ),
-                     const SizedBox(width: 2),
-                     Icon(
-                       Icons.chevron_right,
-                       size: 18,
-                       color: Theme.of(context).colorScheme.primary,
-                     ),
-                   ],
-                 ),
-               ),
-             ),
-           ),
-           if (networkController.activeUrl == null && !networkController.probing)
-             Padding(
-               padding: const EdgeInsets.only(bottom: 12),
-               child: Material(
-                 color: rust.withValues(alpha: 0.12),
-                 borderRadius: BorderRadius.circular(8),
-                 child: Padding(
-                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                   child: Row(
-                     children: [
-                       const Icon(Icons.wifi_off_outlined, color: rust, size: 16),
-                       const SizedBox(width: 8),
-                       const Expanded(
-                         child: Text(
-                           'No reachable nodes. Tap Retry to check.',
-                           style: TextStyle(color: rust, fontSize: 12),
-                         ),
-                       ),
-                       TextButton(
-                         onPressed: networkController.probing ? null : networkController.probe,
-                         child: const Text('Retry'),
-                       ),
-                     ],
-                   ),
-                 ),
-               ),
-             ),
-           Text(
-             formatErg(_balanceNano, unit: false),
-            style: Theme.of(context).textTheme.displayLarge,
-          ),
-          const SizedBox(height: 6),
-          const SectionLabel('ERG'),
-          ListenableBuilder(
-            listenable: networkController,
-            builder: (context, _) {
-              final usd = networkController.usdPerErg;
-              final nano = _balanceNano;
-              final fiat = usd != null && nano != null
-                  ? '≈ \$${(nano / 1e9 * usd).toStringAsFixed(2)}'
-                  : null;
-              return Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  [
-                    if (fiat != null) fiat,
-                    networkController.statusLabel,
-                  ].join('  ·  '),
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              );
-            },
-          ),
-          if (_stale) ...[
-            const SizedBox(height: 10),
-            Text(_status, style: const TextStyle(color: rust, fontSize: 12)),
-          ] else if (_status.contains('Syncing') || _status.contains('Refreshing') || _status.contains('Looking up addresses')) ...[
-            const SizedBox(height: 10),
-            Text(_status, style: TextStyle(color: Theme.of(context).colorScheme.primary, fontSize: 12)),
-          ],
-          if (!_stale && !_status.contains('Syncing') && _lastSynced != null && (networkController.activeUrl != null)) ...[
-            const SizedBox(height: 10),
-            Text(
-              'Synced ${formatRelativeTime(_lastSynced!)}',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11),
-            ),
-          ],
+          if (networkController.activeUrl == null && !networkController.probing)
+            _offlineBanner(),
+          _walletCard(fragmented),
+          const SizedBox(height: 28),
+          _sectionHeader('Assets',
+              action: 'View all',
+              onTap: () => Navigator.push(context,
+                  fadeRoute(AssetsScreen(args: _args())))),
           const SizedBox(height: 10),
-          InkWell(
-            onTap: () => _go('/utxos'),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.layers_outlined,
-                    size: 14,
-                    color: fragmented
-                        ? rust
-                        : Theme.of(context).colorScheme.primary,
+          _card(
+            padding: EdgeInsets.zero,
+            child: Column(
+              children: [
+                for (var i = 0; i < assets.length; i++) ...[
+                  if (i > 0) const Divider(height: 1, indent: 68),
+                  _assetTile(assets[i]),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 28),
+          _sectionHeader('Recent activity',
+              action: _recentTxs.isNotEmpty ? 'View all' : null,
+              onTap: () => _go('/transactions')),
+          const SizedBox(height: 10),
+          _recentTxs.isEmpty
+              ? _card(
+                  child: Text(
+                    'No activity yet. Receive to your address to get started.',
+                    style: Theme.of(context).textTheme.bodyMedium,
                   ),
-                  const SizedBox(width: 6),
-                  Text(
-                    '$_utxoCount UTXOs${fragmented ? ' (Fragmented)' : ''}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: fragmented ? rust : null,
-                          fontWeight: fragmented
-                              ? FontWeight.w600
-                              : null,
-                        ),
-                  ),
-                  const Spacer(),
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
+                )
+              : _card(
+                  padding: EdgeInsets.zero,
+                  child: Column(
                     children: [
-                      Text(
-                        fragmented ? 'Organize' : 'Manage',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: fragmented
-                              ? rust
-                              : Theme.of(context).colorScheme.primary,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(width: 2),
-                      Icon(
-                        Icons.chevron_right,
-                        size: 14,
-                        color: fragmented
-                            ? rust
-                            : Theme.of(context).colorScheme.primary,
-                      ),
+                      for (var i = 0; i < _recentTxs.length; i++) ...[
+                        if (i > 0) const Divider(height: 1, indent: 68),
+                        _activityTile(_recentTxs[i]),
+                      ],
                     ],
                   ),
+                ),
+          const SizedBox(height: 28),
+          _sectionHeader('Discover',
+              action: 'Explore all', onTap: () => _go('/dexy')),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 168,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                _discoverCard(
+                  title: 'Dexy',
+                  subtitle: 'Trade, provide liquidity, and mint on Ergo.',
+                  icon: Icons.all_inclusive,
+                  onTap: () => _go('/dexy'),
+                ),
+                _discoverCard(
+                  title: 'AgeUSD',
+                  subtitle: 'The decentralized stablecoin on Ergo.',
+                  icon: Icons.attach_money,
+                  comingSoon: true,
+                ),
+                _discoverCard(
+                  title: 'DEX',
+                  subtitle: 'Permissionless token swaps on Ergo.',
+                  icon: Icons.swap_horiz,
+                  comingSoon: true,
+                ),
+              ],
+            ),
+          ),
+          if (_usedAddresses.isNotEmpty) ...[
+            const SizedBox(height: 28),
+            _sectionHeader('Addresses'),
+            const SizedBox(height: 10),
+            _card(
+              padding: EdgeInsets.zero,
+              child: Column(
+                children: [
+                  for (var i = 0; i < _usedAddresses.length; i++) ...[
+                    if (i > 0) const Divider(height: 1, indent: 16),
+                    _addressTile(_usedAddresses[i]),
+                  ],
                 ],
               ),
             ),
-          ),
-          const SizedBox(height: 28),
-          Row(
-            children: [
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => _go('/send'),
-                  child: const Text('Send'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => _go('/receive'),
-                  child: const Text('Receive'),
-                ),
-              ),
-            ],
-          ),
-          if (_receiveAddress != null) ...[
-            const SizedBox(height: 28),
-            const SectionLabel('Receive'),
-            const SizedBox(height: 8),
-            GestureDetector(
-              onTap: () => _go('/receive'),
-              child: Text(_receiveAddress!, style: monoStyle(context, size: 12)),
-            ),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton(
-                onPressed: () => Clipboard.setData(ClipboardData(text: _receiveAddress!)),
-                child: const Text('Copy address'),
-              ),
-            ),
-          ],
-          const SizedBox(height: 28),
-          const SectionLabel('Protocols'),
-          const SizedBox(height: 8),
-          _protocolTile(
-            context,
-            title: 'Dexy',
-            subtitle: 'Oracle-pegged assets · mint, swap, liquidity',
-            icon: Icons.all_inclusive,
-            onTap: () => _go('/dexy'),
-          ),
-          _protocolTile(
-            context,
-            title: 'AgeUSD',
-            subtitle: 'Coming soon',
-            icon: Icons.paid_outlined,
-            enabled: false,
-          ),
-          _protocolTile(
-            context,
-            title: 'DEX',
-            subtitle: 'Coming soon',
-            icon: Icons.sync_alt,
-            enabled: false,
-          ),
-          if (fungible.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            const Hairline(),
-            const SizedBox(height: 20),
-            const SectionLabel('Tokens'),
-            const SizedBox(height: 8),
-            ...fungible.map(
-              (t) => _line(
-                title: t.label,
-                trailing: formatTokenAmount(t.amount, t.decimals),
-                subtitle: shorten(t.id, head: 10, tail: 6),
-              ),
-            ),
-          ],
-          if (nfts.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            const Hairline(),
-            const SizedBox(height: 20),
-            const SectionLabel('NFTs'),
-            const SizedBox(height: 8),
-            ...nfts.map(
-              (t) => _line(title: t.label, subtitle: shorten(t.id, head: 10, tail: 6)),
-            ),
-          ],
-          const SizedBox(height: 16),
-          const Hairline(),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              const Expanded(child: SectionLabel('Activity')),
-              if (_recentTxs.isNotEmpty)
-                TextButton(
-                  onPressed: () => _go('/transactions'),
-                  child: const Text('All'),
-                ),
-            ],
-          ),
-          if (_recentTxs.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 20),
-              child: Text(
-                'No activity yet. Receive to the address above.',
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-            )
-          else
-            ..._groupedActivity(_recentTxs),
-          if (_usedAddresses.isNotEmpty) ...[
-            const SizedBox(height: 16),
-            const Hairline(),
-            const SizedBox(height: 20),
-            const SectionLabel('Used addresses'),
-            const SizedBox(height: 8),
-            ..._usedAddresses.map((a) {
-              final addr = a['address']?.toString() ?? '';
-              final nano = (a['balance_nano_erg'] as num?)?.toInt();
-              final label = addressLabelService.labelFor(addr);
-              return _line(
-                title: shorten(addr, head: 10, tail: 8),
-                subtitle: label,
-                trailing: formatErg(nano),
-                monoTitle: true,
-                onTap: () => _labelAddress(addr),
-              );
-            }),
           ],
         ],
       ),
     );
   }
 
-  List<Widget> _groupedActivity(List<Map<String, dynamic>> txs) {
-    final out = <Widget>[];
-    String? lastDay;
-    for (final tx in txs) {
-      final day = dayKey((tx['timestamp'] as num?)?.toInt());
-      if (day != lastDay) {
-        lastDay = day;
-        out.add(Padding(
-          padding: const EdgeInsets.only(top: 12, bottom: 4),
-          child: Text(day, style: Theme.of(context).textTheme.bodySmall),
-        ));
-      }
-      final nano = (tx['value_nano_erg'] as num?)?.toInt();
-      final txId = tx['tx_id']?.toString() ?? '';
-      final height = (tx['height'] as num?)?.toInt();
-      out.add(_line(
-        title: formatErg(nano),
-        subtitle: shorten(txId, head: 10, tail: 8),
-        trailing: formatHeight(height),
-        onTap: () => _openTx(tx),
-      ));
-    }
-    return out;
+  Widget _card({required Widget child, EdgeInsets? padding}) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      width: double.infinity,
+      padding: padding ?? const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: dark ? const Color(0xFF262C29) : const Color(0xFFEDE4D3),
+        ),
+      ),
+      child: child,
+    );
   }
 
-  Widget _line({
-    required String title,
-    String? subtitle,
-    String? trailing,
-    bool monoTitle = false,
-    VoidCallback? onTap,
-  }) {
+  Widget _sectionHeader(String title, {String? action, VoidCallback? onTap}) {
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(
+              fontFamily: 'Newsreader',
+              fontWeight: FontWeight.w600,
+              fontSize: 20,
+            ),
+          ),
+        ),
+        if (action != null)
+          InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(action,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyMedium
+                          ?.copyWith(color: iris)),
+                  const SizedBox(width: 2),
+                  const Icon(Icons.chevron_right, size: 18, color: iris),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _walletCard(bool fragmented) {
+    final muted = Theme.of(context).brightness == Brightness.dark
+        ? watchfulMuted
+        : ledgerMuted;
+    final online = networkController.activeUrl != null;
+    final synced = !_stale &&
+        !_status.contains('Syncing') &&
+        !_status.contains('Refreshing') &&
+        online;
+
+    return _card(
+      padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              InkWell(
+                onTap: _openWalletOverview,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _activeWalletName,
+                        style: const TextStyle(
+                          fontFamily: 'Newsreader',
+                          fontWeight: FontWeight.w600,
+                          fontSize: 17,
+                        ),
+                      ),
+                      Icon(Icons.keyboard_arrow_down, size: 20, color: muted),
+                    ],
+                  ),
+                ),
+              ),
+              const Spacer(),
+              _iconCircle(
+                _balanceHidden
+                    ? Icons.visibility_off_outlined
+                    : Icons.visibility_outlined,
+                onTap: () =>
+                    setState(() => _balanceHidden = !_balanceHidden),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Flexible(
+                child: Text(
+                  _balanceHidden
+                      ? '••••••'
+                      : formatErg(_balanceNano, unit: false, maxFrac: 4),
+                  style: Theme.of(context)
+                      .textTheme
+                      .displayLarge
+                      ?.copyWith(fontSize: 44),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  'ERG',
+                  style: TextStyle(
+                    fontFamily: 'Newsreader',
+                    fontSize: 18,
+                    color: muted,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
+          ListenableBuilder(
+            listenable: networkController,
+            builder: (context, _) {
+              final aud = networkController.audPerErg;
+              final nano = _balanceNano;
+              if (_balanceHidden) {
+                return Text('≈ \$•••• AUD',
+                    style: TextStyle(fontSize: 14, color: muted));
+              }
+              final fiat = aud != null && nano != null
+                  ? '≈ \$${(nano / 1e9 * aud).toStringAsFixed(2)} AUD'
+                  : null;
+              return Text(
+                fiat ?? '',
+                style: TextStyle(fontSize: 14, color: muted),
+              );
+            },
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? ink
+                  : paper,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                InkWell(
+                  onTap: () => _go('/utxos'),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.circle,
+                          size: 8,
+                          color: synced ? moss : (_stale ? rust : iris)),
+                      const SizedBox(width: 6),
+                      Text(
+                        synced
+                            ? 'Synced'
+                            : (_stale
+                                ? 'Out of sync'
+                                : (_status.contains('Syncing') ||
+                                        _status.contains('Refreshing')
+                                    ? 'Syncing…'
+                                    : 'Offline')),
+                        style: TextStyle(
+                            fontSize: 12.5,
+                            color: muted,
+                            fontWeight: FontWeight.w500),
+                      ),
+                      _dotSep(muted),
+                      Icon(Icons.inventory_2_outlined,
+                          size: 13, color: muted),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Block ${formatWithCommas(networkController.height ?? 0)}',
+                        style: TextStyle(fontSize: 12.5, color: muted),
+                      ),
+                      _dotSep(muted),
+                      Text(
+                        '$_utxoCount UTXOs${fragmented ? ' · Fragmented' : ''}',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          color: fragmented ? rust : muted,
+                          fontWeight:
+                              fragmented ? FontWeight.w600 : FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Spacer(),
+                InkWell(
+                  onTap: _openSettings,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 4, vertical: 2),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('Network',
+                            style:
+                                TextStyle(fontSize: 12.5, color: muted)),
+                        Icon(Icons.chevron_right, size: 16, color: muted),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _actionButton(
+                    icon: Icons.north_east, label: 'Send', onTap: () => _go('/send')),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _actionButton(
+                    icon: Icons.south_west,
+                    label: 'Receive',
+                    onTap: () => _go('/receive')),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: _actionButton(
+                    icon: Icons.swap_horiz,
+                    label: 'Swap',
+                    onTap: () => _go('/dexy')),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dotSep(Color muted) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 7),
+        child: Text('·',
+            style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
+      );
+
+  Widget _iconCircle(IconData icon, {VoidCallback? onTap}) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(22),
+      child: Container(
+        width: 40,
+        height: 40,
+        decoration: BoxDecoration(
+          color: dark ? watchfulSurface : bannerTint,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Icon(icon,
+            size: 19,
+            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7)),
+      ),
+    );
+  }
+
+  Widget _actionButton(
+      {required IconData icon,
+      required String label,
+      required VoidCallback onTap}) {
+    return FilledButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 17),
+      label: Text(label),
+      style: FilledButton.styleFrom(
+        minimumSize: const Size(0, 50),
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        textStyle: const TextStyle(
+          fontFamily: 'Karla',
+          fontWeight: FontWeight.w500,
+          fontSize: 14.5,
+        ),
+      ),
+    );
+  }
+
+  Widget _offlineBanner() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: rust.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(14),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Row(
+            children: [
+              const Icon(Icons.wifi_off_outlined, color: rust, size: 16),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'No reachable nodes. Tap Retry to check.',
+                  style: TextStyle(color: rust, fontSize: 12),
+                ),
+              ),
+              TextButton(
+                onPressed:
+                    networkController.probing ? null : networkController.probe,
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _assetTile(_AssetRow asset) {
+    final muted = Theme.of(context).brightness == Brightness.dark
+        ? watchfulMuted
+        : ledgerMuted;
+    return InkWell(
+      onTap: () {},
+      borderRadius: BorderRadius.circular(20),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            _tokenAvatar(asset),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    title,
-                    style: monoTitle
-                        ? monoStyle(context, size: 13)
-                        : Theme.of(context).textTheme.titleMedium,
+                    asset.ticker,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 15),
                   ),
-                  if (subtitle != null) ...[
-                    const SizedBox(height: 3),
-                    Text(subtitle, style: monoStyle(context, size: 11)),
-                  ],
+                  const SizedBox(height: 2),
+                  Text(
+                    asset.name,
+                    style: TextStyle(fontSize: 12.5, color: muted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ],
               ),
             ),
-            if (trailing != null)
-              Text(trailing, style: Theme.of(context).textTheme.bodyMedium),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  _balanceHidden
+                      ? '••••'
+                      : '${asset.amountText} ${asset.ticker}',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w500, fontSize: 14.5),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _balanceHidden ? '≈ \$•••• AUD' : asset.fiatText ?? '',
+                  style: TextStyle(fontSize: 12, color: muted),
+                ),
+              ],
+            ),
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right, size: 18, color: muted),
           ],
         ),
       ),
     );
   }
 
-  Widget _protocolTile(
-    BuildContext context, {
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    VoidCallback? onTap,
-    bool enabled = true,
-  }) {
+  Widget _tokenAvatar(_AssetRow asset) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final label = asset.ticker.isNotEmpty ? asset.ticker[0].toUpperCase() : '?';
+    return CircleAvatar(
+      radius: 20,
+      backgroundColor:
+          asset.isErg ? iris.withValues(alpha: dark ? 0.25 : 0.2) : (dark ? watchfulSurface : bannerTint),
+      child: Text(
+        asset.isErg ? 'Σ' : label,
+        style: TextStyle(
+          fontFamily: 'Newsreader',
+          fontWeight: FontWeight.w600,
+          fontSize: 16,
+          color: asset.isErg ? (dark ? bone : ledgerInk) : (dark ? bone : ledgerMuted),
+        ),
+      ),
+    );
+  }
+
+  Widget _activityTile(Map<String, dynamic> tx) {
+    final muted = Theme.of(context).brightness == Brightness.dark
+        ? watchfulMuted
+        : ledgerMuted;
+    final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
+    final outgoing = nano < 0;
+    final ts = (tx['timestamp'] as num?)?.toInt();
+    final confirmed = ((tx['height'] as num?)?.toInt() ?? 0) > 0;
+    final icon = outgoing ? Icons.arrow_upward : Icons.arrow_downward;
+    final tint = outgoing ? rust : moss;
+
     return InkWell(
-      onTap: enabled ? onTap : null,
+      onTap: () => _openTx(tx),
+      borderRadius: BorderRadius.circular(20),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-            Icon(
-              icon,
-              size: 22,
-              color: enabled
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.outline,
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: tint.withValues(alpha: 0.12),
+              child: Icon(icon, size: 17, color: tint),
             ),
-            const SizedBox(width: 14),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    outgoing ? 'Sent' : 'Received',
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 15),
+                  ),
                   const SizedBox(height: 2),
-                  Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+                  Text(
+                    _balanceHidden
+                        ? '••••'
+                        : formatErg(nano.abs(), unit: true, maxFrac: 4),
+                    style: TextStyle(fontSize: 12.5, color: muted),
+                  ),
                 ],
               ),
             ),
-            Icon(
-              enabled ? Icons.chevron_right : Icons.lock_clock_outlined,
-              size: 18,
-              color: enabled
-                  ? Theme.of(context).colorScheme.primary
-                  : Theme.of(context).colorScheme.outline,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(
+                  formatActivityTime(ts),
+                  style: TextStyle(fontSize: 12, color: muted),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  confirmed ? 'Confirmed' : 'Pending',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: confirmed ? moss : iris,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _discoverCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    VoidCallback? onTap,
+    bool comingSoon = false,
+  }) {
+    final muted = Theme.of(context).brightness == Brightness.dark
+        ? watchfulMuted
+        : ledgerMuted;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      width: 168,
+      margin: const EdgeInsets.only(right: 12),
+      child: InkWell(
+        onTap: comingSoon ? null : onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surface,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: dark ? const Color(0xFF262C29) : const Color(0xFFEDE4D3),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: dark ? watchfulSurface : bannerTint,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, size: 19, color: iris),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontFamily: 'Newsreader',
+                  fontWeight: FontWeight.w600,
+                  fontSize: 16,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Expanded(
+                child: Text(
+                  subtitle,
+                  style: TextStyle(fontSize: 12, height: 1.3, color: muted),
+                ),
+              ),
+              if (comingSoon)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: dark ? watchfulSurface : bannerTint,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    'Coming soon',
+                    style: TextStyle(fontSize: 10.5, color: muted),
+                  ),
+                )
+              else
+                const Icon(Icons.arrow_forward, size: 16, color: iris),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _addressTile(Map<String, dynamic> a) {
+    final muted = Theme.of(context).brightness == Brightness.dark
+        ? watchfulMuted
+        : ledgerMuted;
+    final addr = a['address']?.toString() ?? '';
+    final nano = (a['balance_nano_erg'] as num?)?.toInt();
+    final label = addressLabelService.labelFor(addr);
+    return InkWell(
+      onTap: () => _labelAddress(addr),
+      borderRadius: BorderRadius.circular(20),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    shorten(addr, head: 10, tail: 8),
+                    style: monoStyle(context, size: 12.5),
+                  ),
+                  if (label != null && label.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(label,
+                        style: TextStyle(fontSize: 12, color: muted)),
+                  ],
+                ],
+              ),
+            ),
+            Text(
+              _balanceHidden ? '••••' : formatErg(nano, maxFrac: 4),
+              style: Theme.of(context).textTheme.bodyMedium,
             ),
           ],
         ),
@@ -1373,3 +1678,49 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 }
+
+class _AssetRow {
+  final String ticker;
+  final String name;
+  final String amountText;
+  final String? fiatText;
+  final bool isErg;
+
+  const _AssetRow({
+    required this.ticker,
+    required this.name,
+    required this.amountText,
+    this.fiatText,
+    this.isErg = false,
+  });
+
+  factory _AssetRow.erg({int? balanceNano}) {
+    final aud = networkController.audPerErg;
+    final fiat = aud != null && balanceNano != null
+        ? '≈ \$${(balanceNano / 1e9 * aud).toStringAsFixed(2)} AUD'
+        : null;
+    return _AssetRow(
+      ticker: 'ERG',
+      name: 'Ergo',
+      amountText: formatErg(balanceNano, unit: false, maxFrac: 4),
+      fiatText: fiat,
+      isErg: true,
+    );
+  }
+
+  factory _AssetRow.token(TokenBalance t) {
+    final name = t.name?.trim();
+    final hasName = name != null && name.isNotEmpty;
+    // Derive a short ticker from the name (first word) so the bold title and
+    // the muted subtitle don't repeat the same string.
+    final ticker = hasName
+        ? (name.contains(' ') ? name.split(' ').first : name)
+        : (t.id.length > 6 ? t.id.substring(0, 6).toUpperCase() : t.id);
+    return _AssetRow(
+      ticker: ticker,
+      name: hasName ? name : shorten(t.id, head: 10, tail: 6),
+      amountText: formatTokenAmountGrouped(t.amount, t.decimals),
+    );
+  }
+}
+
