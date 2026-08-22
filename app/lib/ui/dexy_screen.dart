@@ -209,13 +209,14 @@ class _DexyScreenState extends State<DexyScreen> {
     if (confirmed) await _broadcast(build);
   }
 
-  Future<void> _openLiquidity() async {
+  Future<void> _openLiquidity({String initialAction = 'deposit'}) async {
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
       isScrollControlled: true,
       builder: (ctx) => _DexyLiquiditySheet(
         variant: _variant,
+        initialAction: initialAction,
         tokenBalance: _tokenBalance,
         lpBalance: _lpBalance,
         spendableBalance: _args.spendableNano,
@@ -247,15 +248,19 @@ class _DexyScreenState extends State<DexyScreen> {
       rows: isDeposit
           ? [
               ConfirmTxRow('Deposit ERG', formatErg(build.ergAmount)),
-              ConfirmTxRow('Deposit ${_variant.shortName}',
-                  '${build.dexyAmount} ${_variant.shortName}'),
+              ConfirmTxRow(
+                  'Deposit ${_variant.shortName}',
+                  '${formatTokenAmount(build.dexyAmount, _variant.decimals)} '
+                  '${_variant.shortName}'),
               ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
             ]
           : [
               ConfirmTxRow('LP tokens burned', '${build.lpTokens}'),
               ConfirmTxRow(
                   'Receive',
-                  '${formatErg(build.ergAmount)} + ${build.dexyAmount} ${_variant.shortName}'),
+                  '${formatErg(build.ergAmount)} + '
+                  '${formatTokenAmount(build.dexyAmount, _variant.decimals)} '
+                  '${_variant.shortName}'),
               ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
             ],
       detail: isDeposit
@@ -491,8 +496,9 @@ class _DexyScreenState extends State<DexyScreen> {
             children: [
               _stat('Bank reserves', formatErg(st.bankErgNano)),
               _stat('Circulating',
-                  '${_fmt(st.dexyCirculating)} ${_variant.shortName}'),
-              _stat('Pooled', '${_fmt(st.lpDexyReserves)} ${_variant.shortName}'),
+                  '${formatTokenAmount(st.dexyCirculating, _variant.decimals)} ${_variant.shortName}'),
+              _stat('Pooled',
+                  '${formatTokenAmount(st.lpDexyReserves, _variant.decimals)} ${_variant.shortName}'),
               _stat('Free mint today', _fmt(st.freeMintAvailable)),
               _stat('LP supply', _fmt(st.lpCirculating)),
             ],
@@ -520,10 +526,10 @@ class _DexyScreenState extends State<DexyScreen> {
               'Trade ERG and ${_variant.shortName}', _openSwap),
           _actionTile(context, Icons.add_circle_outline, 'Add liquidity',
               'Earn pool LP tokens on ERG + ${_variant.shortName}',
-              _openLiquidity),
+              () => _openLiquidity(initialAction: 'deposit')),
           _actionTile(context, Icons.remove_circle_outline, 'Remove liquidity',
               'Redeem LP tokens for ERG + ${_variant.shortName}',
-              _openLiquidity),
+              () => _openLiquidity(initialAction: 'redeem')),
         ],
       ),
     );
@@ -803,13 +809,23 @@ class _DexySwapSheetState extends State<_DexySwapSheet> {
   }
 
   void _applyMax() {
-    final maxRaw = _ergInput ? widget.spendableNano : widget.tokenBalance;
-    if (maxRaw == null) return;
-    setState(() {
-      _amountCtrl.text = _ergInput
-          ? formatErg(maxRaw, unit: false)
-          : formatTokenAmount(maxRaw, widget.variant.decimals);
-    });
+    if (_ergInput) {
+      final spendable = widget.spendableNano;
+      if (spendable == null) return;
+      final max = spendable - minerFeeNano - minBoxNano;
+      if (max < minBoxNano) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Not enough ERG for fee and change')),
+        );
+        return;
+      }
+      setState(() => _amountCtrl.text = formatErg(max, unit: false));
+    } else {
+      final maxRaw = widget.tokenBalance;
+      if (maxRaw == null) return;
+      setState(
+          () => _amountCtrl.text = formatTokenAmount(maxRaw, widget.variant.decimals));
+    }
     _onChanged();
   }
 
@@ -970,6 +986,7 @@ class _DexyLiquiditySheet extends StatefulWidget {
   const _DexyLiquiditySheet({
     required this.variant,
     required this.onBuild,
+    this.initialAction = 'deposit',
     this.tokenBalance,
     this.lpBalance,
     this.spendableBalance,
@@ -978,6 +995,7 @@ class _DexyLiquiditySheet extends StatefulWidget {
   final DexyVariant variant;
   final Future<DexyBuildResult> Function(
       String action, int ergAmt, int dexyAmt, int lpAmt) onBuild;
+  final String initialAction;
   final int? tokenBalance;
   final int? lpBalance;
   final int? spendableBalance;
@@ -991,11 +1009,17 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
   final _dexyCtrl = TextEditingController();
   final _lpCtrl = TextEditingController();
   Timer? _debounce;
-  String _action = 'deposit';
+  late String _action;
   DexyLpPreview? _preview;
   bool _previewing = false;
   String? _previewError;
   bool _building = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _action = widget.initialAction;
+  }
 
   @override
   void dispose() {
@@ -1145,7 +1169,18 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
                 suffixIcon: TextButton(
                   onPressed: () {
                     final b = widget.spendableBalance;
-                    if (b != null) _ergCtrl.text = formatErg(b, unit: false);
+                    if (b != null) {
+                      final max = b - minerFeeNano - minBoxNano;
+                      if (max < minBoxNano) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Not enough ERG for fee and change'),
+                          ),
+                        );
+                      } else {
+                        _ergCtrl.text = formatErg(max, unit: false);
+                      }
+                    }
                     _onChanged();
                   },
                   child: const Text('MAX'),
@@ -1206,11 +1241,11 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
               _sheetRow('LP tokens received',
                   '${formatTokenAmount(_preview!.lpTokens, 0)}'),
               _sheetRow('Consumed',
-                  '${formatErg(_preview!.consumedErg)} + ${_preview!.consumedDexy} ${variant.shortName}'),
+                  '${formatErg(_preview!.consumedErg)} + ${formatTokenAmount(_preview!.consumedDexy, variant.decimals)} ${variant.shortName}'),
             ] else ...[
               _sheetRow('Receive ERG', formatErg(_preview!.ergOut)),
-              _sheetRow(
-                  'Receive ${variant.shortName}', '${_preview!.dexyOut}'),
+              _sheetRow('Receive ${variant.shortName}',
+                  '${formatTokenAmount(_preview!.dexyOut, variant.decimals)}'),
               _sheetRow(
                   'Redemption fee', '${_preview!.redemptionFeePct}%'),
             ],

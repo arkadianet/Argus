@@ -10,7 +10,9 @@ use dexy::calculator::{
     calculate_lp_deposit, calculate_lp_redeem, calculate_lp_swap_output,
     calculate_lp_swap_price_impact, cost_to_mint_dexy,
 };
-use dexy::constants::{DexyIds, DexyVariant, LP_SWAP_FEE_DENOM, LP_SWAP_FEE_NUM};
+use dexy::constants::{
+    DexyIds, DexyVariant, LP_REDEEM_FEE_PCT, LP_SWAP_FEE_DENOM, LP_SWAP_FEE_NUM,
+};
 use dexy::fetch::{fetch_dexy_state, parse_lp_box};
 use dexy::rates::DexyRates;
 
@@ -48,14 +50,20 @@ pub(crate) async fn dexy_client(
 }
 
 fn parse_variant(variant: &str) -> Result<DexyVariant, String> {
-    variant
-        .parse::<DexyVariant>()
-        .map_err(|_| format!("Invalid Dexy variant: {variant}. Use 'gold' or 'usd'"))
+    variant.parse::<DexyVariant>().map_err(|_| {
+        ArgusError::Generic(format!("Invalid Dexy variant: {variant}. Use 'gold' or 'usd'"))
+            .to_json_string()
+    })
 }
 
 pub(crate) fn ids_for(variant: DexyVariant) -> Result<DexyIds, String> {
-    DexyIds::for_variant(variant, Network::Mainnet)
-        .ok_or_else(|| format!("Dexy {} is not available on this network", variant.token_name()))
+    DexyIds::for_variant(variant, Network::Mainnet).ok_or_else(|| {
+        ArgusError::Generic(format!(
+            "Dexy {} is not available on this network",
+            variant.token_name()
+        ))
+        .to_json_string()
+    })
 }
 
 fn proto_err<T: std::fmt::Display>(e: T) -> String {
@@ -64,6 +72,15 @@ fn proto_err<T: std::fmt::Display>(e: T) -> String {
 
 fn ser_err<T: std::fmt::Display>(e: T) -> String {
     ArgusError::SerializationError(e.to_string()).to_json_string()
+}
+
+/// Clamp slippage to a valid percentage. Non-finite, NaN, or out-of-range
+/// values fall back to the 0.5% default.
+fn clamp_slippage(value: Option<f64>) -> f64 {
+    match value {
+        Some(p) if p.is_finite() && (0.0..=100.0).contains(&p) => p,
+        _ => 0.5,
+    }
 }
 
 /// Live protocol state + derived mint rates for a variant.
@@ -100,6 +117,7 @@ pub(crate) async fn preview_mint(
             dexy_variant,
             amount,
             0,
+            0,
             false,
             Some("Amount must be positive".to_string()),
         ));
@@ -108,6 +126,7 @@ pub(crate) async fn preview_mint(
         return Ok(preview_mint_json(
             dexy_variant,
             amount,
+            0,
             0,
             false,
             Some("Minting is currently unavailable".to_string()),
@@ -118,6 +137,7 @@ pub(crate) async fn preview_mint(
             dexy_variant,
             amount,
             0,
+            0,
             false,
             Some(format!("Amount exceeds available: {}", state.dexy_in_bank)),
         ));
@@ -126,18 +146,26 @@ pub(crate) async fn preview_mint(
     let calc = cost_to_mint_dexy(amount, state.oracle_rate_nano, dexy_variant.decimals());
     let tx_fee = TX_FEE_NANO;
     let total = calc.erg_amount + tx_fee + MIN_BOX_VALUE_NANO;
-    Ok(preview_mint_json(dexy_variant, amount, total, true, None))
+    Ok(preview_mint_json(
+        dexy_variant,
+        amount,
+        calc.erg_amount,
+        total,
+        true,
+        None,
+    ))
 }
 
 fn preview_mint_json(
     variant: DexyVariant,
     amount: i64,
+    erg_cost_nano: i64,
     total_cost_nano: i64,
     can_execute: bool,
     error: Option<String>,
 ) -> String {
     serde_json::json!({
-        "erg_cost_nano": total_cost_nano.to_string(),
+        "erg_cost_nano": erg_cost_nano.to_string(),
         "tx_fee_nano": TX_FEE_NANO.to_string(),
         "total_cost_nano": total_cost_nano.to_string(),
         "token_amount": amount.to_string(),
@@ -158,7 +186,9 @@ pub(crate) async fn preview_swap(
 ) -> Result<String, String> {
     let dexy_variant = parse_variant(variant)?;
     if amount <= 0 {
-        return Err("Amount must be positive".to_string());
+        return Err(
+            ArgusError::Generic("Amount must be positive".to_string()).to_json_string()
+        );
     }
     let ids = ids_for(dexy_variant)?;
     let client = dexy_client(node_url).await?;
@@ -192,13 +222,14 @@ pub(crate) async fn preview_swap(
             state.lp_erg_reserves,
         ),
         _ => {
-            return Err(format!(
+            return Err(ArgusError::Generic(format!(
                 "Invalid direction '{direction}'. Use 'erg_to_dexy' or 'dexy_to_erg'"
             ))
+            .to_json_string())
         }
     };
 
-    let slippage_pct = slippage_pct.unwrap_or(0.5);
+    let slippage_pct = clamp_slippage(slippage_pct);
     let min_output = (output_amount as f64 * (1.0 - slippage_pct / 100.0)) as i64;
     let price_impact = calculate_lp_swap_price_impact(
         amount,
@@ -245,15 +276,23 @@ pub(crate) async fn preview_lp(
         .require_capabilities()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-    let state = fetch_dexy_state(&client, &caps, &ids).await.map_err(proto_err)?;
 
     match action {
         "deposit" if erg_amount <= 0 || dexy_amount <= 0 => {
-            return Err("The LP pool requires both ERG and Dexy amounts".to_string());
+            return Err(ArgusError::Generic(
+                "The LP pool requires both ERG and Dexy amounts".to_string(),
+            )
+            .to_json_string());
         }
-        "redeem" if lp_amount <= 0 => return Err("LP token amount must be positive".to_string()),
+        "redeem" if lp_amount <= 0 => {
+            return Err(ArgusError::Generic("LP token amount must be positive".to_string())
+                .to_json_string());
+        }
         "deposit" | "redeem" => {}
-        _ => return Err(format!("Unknown LP action '{action}'")),
+        _ => {
+            return Err(ArgusError::Generic(format!("Unknown LP action '{action}'"))
+                .to_json_string());
+        }
     }
 
     let lp_box = client
@@ -285,14 +324,15 @@ pub(crate) async fn preview_lp(
         .map_err(ser_err);
     }
 
-    // redeem
+    // redeem — needs the pooled/live state for the depeg-protection gate.
+    let state = fetch_dexy_state(&client, &caps, &ids).await.map_err(proto_err)?;
     if !state.can_redeem_lp {
         return serde_json::to_string(&serde_json::json!({
             "action": "redeem",
             "lp_amount": lp_amount,
             "erg_out": 0,
             "dexy_out": 0,
-            "redemption_fee_pct": 2.0,
+            "redemption_fee_pct": LP_REDEEM_FEE_PCT,
             "can_execute": false,
             "error": "LP redeem blocked: LP rate below 98% of oracle rate (depeg protection)",
             "miner_fee_nano": TX_FEE_NANO,
@@ -312,7 +352,7 @@ pub(crate) async fn preview_lp(
         "lp_amount": lp_amount,
         "erg_out": calc.erg_out,
         "dexy_out": calc.dexy_out,
-        "redemption_fee_pct": 2.0,
+        "redemption_fee_pct": LP_REDEEM_FEE_PCT,
         "can_execute": calc.erg_out > 0 && calc.dexy_out > 0,
         "error": if calc.erg_out <= 0 || calc.dexy_out <= 0 { Some("Redeem too small: would receive 0 ERG or Dexy".to_string()) } else { None },
         "miner_fee_nano": TX_FEE_NANO,

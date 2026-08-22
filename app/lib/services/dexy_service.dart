@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../bridge/api.dart' as api;
+import '../bridge/argus_error.dart';
 import 'network_controller.dart';
 import 'wallet_service.dart';
 
@@ -359,26 +360,33 @@ class DexyBuildResult {
     required this.recipient,
   });
 
-  factory DexyBuildResult.fromJson(Map<String, dynamic> json) =>
-      DexyBuildResult(
-        preparationId: _i(json, 'preparation_id'),
-        action: json['action'] as String? ?? '',
-        direction: json['direction'] as String? ?? '',
-        inputAmount: _i(json, 'input_amount'),
-        outputAmount: _i(json, 'output_amount'),
-        minOutput: _i(json, 'min_output'),
-        minerFee: _i(json, 'miner_fee'),
-        changeNanoErg: _i(json, 'change_nano_erg'),
-        ergCostNano: _i(json, 'erg_cost_nano'),
-        tokenAmount: _i(json, 'token_amount'),
-        tokenName: json['token_name'] as String? ?? '',
-        priceImpactPct: (json['price_impact_pct'] as num?)?.toDouble() ?? 0,
-        feePct: (json['fee_pct'] as num?)?.toDouble() ?? 0,
-        ergAmount: _i(json, 'erg_amount'),
-        dexyAmount: _i(json, 'dexy_amount'),
-        lpTokens: _i(json, 'lp_tokens'),
-        recipient: json['recipient'] as String? ?? '',
-      );
+  factory DexyBuildResult.fromJson(Map<String, dynamic> json) {
+    final rawAction = json['action'] as String? ?? '';
+    final action = rawAction.startsWith('lp_deposit_')
+        ? 'deposit'
+        : rawAction.startsWith('lp_redeem_')
+            ? 'redeem'
+            : rawAction;
+    return DexyBuildResult(
+      preparationId: _i(json, 'preparation_id'),
+      action: action,
+      direction: json['direction'] as String? ?? '',
+      inputAmount: _i(json, 'input_amount'),
+      outputAmount: _i(json, 'output_amount'),
+      minOutput: _i(json, 'min_output'),
+      minerFee: _i(json, 'miner_fee'),
+      changeNanoErg: _i(json, 'change_nano_erg'),
+      ergCostNano: _i(json, 'erg_cost_nano'),
+      tokenAmount: _i(json, 'token_amount'),
+      tokenName: json['token_name'] as String? ?? '',
+      priceImpactPct: (json['price_impact_pct'] as num?)?.toDouble() ?? 0,
+      feePct: (json['fee_pct'] as num?)?.toDouble() ?? 0,
+      ergAmount: _i(json, 'erg_amount'),
+      dexyAmount: _i(json, 'dexy_amount'),
+      lpTokens: _i(json, 'lp_tokens'),
+      recipient: json['recipient'] as String? ?? '',
+    );
+  }
 }
 
 int _i(Map<String, dynamic> json, String key) {
@@ -391,6 +399,17 @@ int _i(Map<String, dynamic> json, String key) {
 /// then [`WalletService.sendErg`] / [`WalletService.signPreparation`].
 class DexyService {
   String? get _node => networkController.activeUrl;
+
+  BigInt _requireHandle() {
+    final handle = walletService.handleId;
+    if (handle == null) {
+      throw ArgusException(
+        code: 'WALLET_LOCKED',
+        message: 'Wallet is locked',
+      );
+    }
+    return handle;
+  }
 
   Future<DexyState> state(DexyVariant variant) async {
     final raw = await api.dexyState(variant: variant.code, nodeUrl: _node);
@@ -447,7 +466,7 @@ class DexyService {
     required List<String> spendAddresses,
   }) async {
     final raw = await api.dexyBuildMint(
-      handleId: walletService.handleId!,
+      handleId: _requireHandle(),
       variant: variant.code,
       amount: amount,
       recipientAddress: recipient,
@@ -466,7 +485,7 @@ class DexyService {
     required List<String> spendAddresses,
   }) async {
     final raw = await api.dexyBuildSwap(
-      handleId: walletService.handleId!,
+      handleId: _requireHandle(),
       variant: variant.code,
       direction: direction,
       amount: amount,
@@ -486,7 +505,7 @@ class DexyService {
     required List<String> spendAddresses,
   }) async {
     final raw = await api.dexyBuildLpDeposit(
-      handleId: walletService.handleId!,
+      handleId: _requireHandle(),
       variant: variant.code,
       depositErg: depositErg,
       depositDexy: depositDexy,
@@ -504,7 +523,7 @@ class DexyService {
     required List<String> spendAddresses,
   }) async {
     final raw = await api.dexyBuildLpRedeem(
-      handleId: walletService.handleId!,
+      handleId: _requireHandle(),
       variant: variant.code,
       lpToBurn: lpToBurn,
       recipientAddress: recipient,

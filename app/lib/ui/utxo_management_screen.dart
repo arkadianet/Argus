@@ -197,8 +197,8 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           ConfirmTxRow('Miner Fee', formatErg(preview.minerFee)),
         ],
         detail:
-            'ERG only — token-bearing boxes are left untouched. Fee is '
-            'computed by the transaction builder.',
+            'Token-bearing inputs may be included in this consolidation. '
+            'Fee is computed by the transaction builder.',
         confirmLabel: 'Sign & broadcast consolidation',
       );
 

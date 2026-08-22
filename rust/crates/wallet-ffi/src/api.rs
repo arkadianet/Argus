@@ -1606,9 +1606,10 @@ pub async fn dexy_build_swap(
         "erg_to_dexy" => dexy::tx_builder::SwapDirection::ErgToDexy,
         "dexy_to_erg" => dexy::tx_builder::SwapDirection::DexyToErg,
         _ => {
-            return Err(format!(
+            return Err(ArgusError::Generic(format!(
                 "Invalid direction '{direction}'. Use 'erg_to_dexy' or 'dexy_to_erg'"
             ))
+            .to_json_string())
         }
     };
     let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
@@ -1897,15 +1898,15 @@ pub async fn dexy_build_lp_redeem(
     let mut ergo_boxes = vec![ctx.lp_box.clone(), ctx.action_box.clone()];
     ergo_boxes.extend(user_boxes);
 
-    // LP redeem spends the oracle as a data input.
+    // LP redeem spends the oracle as a data input; a missing oracle box must
+    // abort preparation rather than silently producing an unreducible tx.
     let mut data_input_boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox> = Vec::new();
     if let Some(data_input) = &ctx.oracle_data_input {
-        if let Ok(oracle_box) = client
+        let oracle_box = client
             .get_box_by_id(&citadel_core::BoxId::new(&data_input.box_id))
             .await
-        {
-            data_input_boxes.push(oracle_box);
-        }
+            .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+        data_input_boxes.push(oracle_box);
     }
 
     let miner_fee = built.summary.miner_fee_nano;

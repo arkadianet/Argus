@@ -41,8 +41,8 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
   }
 
   Future<void> _load() async {
-    await walletService.init();
     try {
+      await walletService.init();
       final wallets = await walletService.listWallets();
       if (!mounted) return;
       setState(() {
@@ -195,6 +195,8 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
 
   Widget _walletTile(WalletInfo w) {
     final selected = w.walletId == widget.selectedWalletId;
+    final isActiveUnlocked = w.walletId == widget.selectedWalletId &&
+        walletService.isUnlocked;
     final bal = _balance(w);
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
@@ -286,9 +288,11 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                   const SizedBox(height: 2),
                   Text(
                     bal == null
-                        ? (w.address0 != null
-                            ? 'Unavailable'
-                            : 'Unlock to view')
+                        ? (isActiveUnlocked
+                            ? 'Syncing'
+                            : (w.address0 != null
+                                ? 'Unavailable'
+                                : 'Unlock to view'))
                         : 'ERG',
                     style: Theme.of(context)
                         .textTheme

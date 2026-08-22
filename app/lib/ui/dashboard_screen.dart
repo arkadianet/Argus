@@ -463,7 +463,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
       setState(() {
         _resetLocked();
-        _status = _hasSeed && !_walletUnlocked
+        _status = _hasSeed
             ? '$_activeWalletName locked. Enter its PIN below.'
             : 'Wallet found. Unlock to continue.';
       });
@@ -1337,7 +1337,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     bool enabled = true,
   }) {
     return InkWell(
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 10),
         child: Row(
