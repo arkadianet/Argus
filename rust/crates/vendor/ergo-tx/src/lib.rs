@@ -6,6 +6,7 @@ pub mod box_selector;
 pub mod burn;
 pub mod dev_fee;
 pub mod eip12;
+pub mod multi_send;
 pub mod send;
 pub mod sigma;
 pub mod tx_helpers;
@@ -38,6 +39,10 @@ pub use dev_fee::{
     DEFAULT_DEV_FEE_ADDRESS, DEFAULT_DEV_FEE_ERGO_TREE,
 };
 pub use eip12::*;
+pub use multi_send::{
+    build_multi_send_tx_with_fee, MultiSendBuildResult, MultiSendError, MultiSendSummary,
+    RecipientSpec,
+};
 pub use send::{build_send_tx, build_send_tx_with_fee, SendBuildResult, SendError, SendSummary};
 pub use sigma::*;
 pub use tx_helpers::{

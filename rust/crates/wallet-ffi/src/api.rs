@@ -1215,11 +1215,15 @@ pub async fn prepare_send_multi(
     }
 
     // Collect all recipient trees
-    let mut recipient_specs: Vec<(String, Option<(String, u64)>)> = Vec::new();
+    let mut recipient_specs: Vec<ergo_tx::RecipientSpec> = Vec::new();
     for rcpt in &parsed {
         let tree = address_to_ergo_tree(&rcpt.address)
             .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-        recipient_specs.push((tree, rcpt.token.clone()));
+        recipient_specs.push(ergo_tx::RecipientSpec {
+            ergo_tree: tree,
+            amount_nano_erg: rcpt.amount_nano_erg,
+            token: rcpt.token.clone(),
+        });
     }
 
     with_handle(handle_id, "prepare_send_multi", |h| {
@@ -1265,96 +1269,16 @@ pub async fn prepare_send_multi(
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
 
-    // Build outputs: recipient outputs + token-change + change + fee
-    let mut outputs: Vec<ergo_tx::Eip12Output> = Vec::new();
-    let mut token_change: HashMap<String, u64> = HashMap::new();
-    // Aggregate input token balances
-    let mut input_tokens: HashMap<String, u64> = HashMap::new();
-    for input in &selected {
-        for asset in &input.assets {
-            *input_tokens.entry(asset.token_id.clone()).or_insert(0) +=
-                asset.amount.parse::<u64>().unwrap_or(0);
-        }
-    }
-    // Subtract sent tokens
-    for rcpt in &parsed {
-        if let Some((id, amt)) = &rcpt.token {
-            if let Some(balance) = input_tokens.get_mut(id) {
-                *balance = balance.saturating_sub(*amt);
-                if *balance == 0 {
-                    input_tokens.remove(id);
-                }
-            }
-        }
-    }
-    // Remaining tokens go to change
-    for (id, amt) in &input_tokens {
-        token_change.insert(id.clone(), *amt);
-    }
-
-    // Total input erg
-    let total_erg: i64 = selected.iter()
-        .map(|b| b.value.parse::<i64>().unwrap_or(0))
-        .sum();
-
-    let has_token_change = !token_change.is_empty();
-    let change_erg = total_erg - total_send_erg - fee_for_required;
-    let need_change = change_erg > 0 || has_token_change;
-
-    if need_change {
-        if has_token_change && change_erg < MIN_BOX_VALUE_NANO {
-            return Err(ArgusError::TxBuildFailed(format!(
-                "token change requires at least {MIN_BOX_VALUE_NANO} nanoERG leftover, have {change_erg}"
-            ))
-            .to_json_string());
-        }
-        if change_erg > 0 && change_erg < MIN_BOX_VALUE_NANO {
-            return Err(ArgusError::TxBuildFailed(format!(
-                "change {change_erg} below min box value {MIN_BOX_VALUE_NANO}"
-            ))
-            .to_json_string());
-        }
-    }
-
-    // Recipient outputs
-    for (idx, (tree, token_opt)) in recipient_specs.iter().enumerate() {
-        let amount = parsed[idx].amount_nano_erg;
-        let assets = match token_opt {
-            Some((id, amt)) => vec![ergo_tx::Eip12Asset::new(id.clone(), *amt as i64)],
-            None => vec![],
-        };
-        outputs.push(ergo_tx::Eip12Output {
-            value: amount.to_string(),
-            ergo_tree: tree.clone(),
-            assets,
-            creation_height: height,
-            additional_registers: std::collections::HashMap::new(),
-        });
-    }
-
-    // Change output
-    let change_assets: Vec<ergo_tx::Eip12Asset> = token_change
-        .iter()
-        .map(|(id, amt)| ergo_tx::Eip12Asset::new(id.clone(), *amt as i64))
-        .collect();
-    if need_change {
-        let change_value = if change_erg > 0 { change_erg } else { MIN_BOX_VALUE_NANO };
-        outputs.push(ergo_tx::Eip12Output {
-            value: change_value.to_string(),
-            ergo_tree: change_tree.clone(),
-            assets: change_assets,
-            creation_height: height,
-            additional_registers: std::collections::HashMap::new(),
-        });
-    }
-
-    outputs.push(ergo_tx::Eip12Output::fee(fee_for_required, height));
-
-    let unsigned_tx = ergo_tx::Eip12UnsignedTx {
-        inputs: selected.clone(),
-        data_inputs: vec![],
-        outputs,
-    };
+    let built = ergo_tx::build_multi_send_tx_with_fee(
+        &selected,
+        &recipient_specs,
+        &change_tree,
+        fee_for_required,
+        height,
+    )
+    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let unsigned_tx = built.unsigned_tx;
+    let change_erg = built.summary.change_erg;
 
     // Get the ErgoBox representations for signing
     let ergo_boxes = selected.iter().filter_map(|eip| {
