@@ -6,8 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `input_boxes_json`, `node_client`, `open_wallet`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `PreparedManagement`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `input_boxes_json`, `node_client`, `open_wallet`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 
 Future<void> setNetwork({
   required List<String> nodeUrls,
@@ -86,6 +86,10 @@ Future<String> signReducedTransaction({
 
 Future<String> generateMnemonic({required int strength}) =>
     RustLib.instance.api.crateApiGenerateMnemonic(strength: strength);
+
+/// Validate an Ergo address (base58) against the checksum and network prefix.
+Future<bool> validateErgoAddress({required String address}) =>
+    RustLib.instance.api.crateApiValidateErgoAddress(address: address);
 
 Future<String> getBalance({required String address, String? nodeUrl}) =>
     RustLib.instance.api.crateApiGetBalance(address: address, nodeUrl: nodeUrl);

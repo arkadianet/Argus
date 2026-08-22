@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1725604841;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 211507777;
 
 // Section: executor
 
@@ -954,6 +954,40 @@ fn wire__crate__api__unwrap_key_with_pin_impl(
         },
     )
 }
+fn wire__crate__api__validate_ergo_address_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "validate_ergo_address",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_address = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok =
+                        Result::<_, ()>::Ok(crate::api::validate_ergo_address(api_address))?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__walk_singleton_lineage_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -1325,12 +1359,13 @@ fn pde_ffi_dispatcher_primary_impl(
         20 => wire__crate__api__sign_preparation_impl(port, ptr, rust_vec_len, data_len),
         21 => wire__crate__api__sign_reduced_transaction_impl(port, ptr, rust_vec_len, data_len),
         22 => wire__crate__api__unwrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__walk_singleton_lineage_impl(port, ptr, rust_vec_len, data_len),
-        24 => wire__crate__api__wallet_create_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__wallet_is_unlocked_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__wallet_lock_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__wallet_restore_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__wrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__validate_ergo_address_impl(port, ptr, rust_vec_len, data_len),
+        24 => wire__crate__api__walk_singleton_lineage_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__wallet_create_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__wallet_is_unlocked_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__wallet_lock_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__wallet_restore_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__wrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

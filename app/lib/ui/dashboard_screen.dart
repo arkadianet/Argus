@@ -93,13 +93,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (addrs.isEmpty) return;
     if (!mounted) return;
     setState(() => _watchOnlyLoading = true);
-    var total = 0;
-    for (final addr in addrs) {
+    final futures = addrs.map((addr) async {
       try {
         final bal = await walletService.getBalance(addr, nodeUrl: networkController.activeUrl);
-        total += (bal['balance_nano_erg'] as num?)?.toInt() ?? 0;
-      } catch (_) {}
-    }
+        return (bal['balance_nano_erg'] as num?)?.toInt() ?? 0;
+      } catch (_) {
+        return 0;
+      }
+    }).toList();
+    final results = await Future.wait(futures);
+    final total = results.fold<int>(0, (sum, bal) => sum + bal);
     if (mounted) setState(() {
       _watchOnlyTotal = total;
       _watchOnlyLoading = false;

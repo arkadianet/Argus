@@ -25,7 +25,6 @@ class _RecipientEntry {
   final amountCtrl = TextEditingController();
   TextEditingController? tokenAmtCtrl;
   String? tokenId;
-  String? get tokenAmountText => tokenAmtCtrl?.text;
 
   String get address => addressCtrl.text.trim();
   String get amount => amountCtrl.text.trim();
@@ -222,15 +221,28 @@ class _SendScreenState extends State<SendScreen> {
         'amount_nano_erg': entryAmount,
       };
       if (entry.tokenId != null && entry.tokenId!.isNotEmpty) {
-        r['token_id'] = entry.tokenId;
-        if (entry.tokenAmountText != null && entry.tokenAmountText!.isNotEmpty) {
-          final parsed = int.tryParse(entry.tokenAmountText!);
-          if (parsed == null || parsed <= 0) {
-            _snack('Validate all token amounts');
-            return;
+        TokenBalance? token;
+        for (final t in _args.tokens) {
+          if (t.id == entry.tokenId) {
+            token = t;
+            break;
           }
-          r['token_amount'] = parsed;
         }
+        if (token == null) {
+          _snack('Validate all token amounts');
+          return;
+        }
+        r['token_id'] = entry.tokenId;
+        if (entry.tokenAmtCtrl == null || entry.tokenAmtCtrl!.text.trim().isEmpty) {
+          _snack('Enter a token amount');
+          return;
+        }
+        final parsed = parseDecimalToBase(entry.tokenAmtCtrl!.text, token.decimals);
+        if (parsed == null || parsed <= 0) {
+          _snack('Validate all token amounts');
+          return;
+        }
+        r['token_amount'] = parsed;
       }
       allRecipients.add(r);
     }
@@ -426,10 +438,15 @@ class _SendScreenState extends State<SendScreen> {
       ...recips.asMap().entries.map((e) {
         final r = e.value;
         final nano = r['amount_nano_erg'] as int? ?? 0;
+        final tokenId = r['token_id'] as String?;
+        final tokenAmt = r['token_amount'] as int?;
+        final suffix = tokenId != null
+            ? ' + ${_tokenLabel(tokenAmt ?? 0, tokenId)}'
+            : '';
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 2),
           child: Text(
-            '${r['address']}: ${formatErg(nano)}',
+            '${r['address']}: ${formatErg(nano)}$suffix',
             style: monoStyle(ctx, size: 12),
           ),
         );
@@ -438,6 +455,13 @@ class _SendScreenState extends State<SendScreen> {
       Text('Total sent  ${formatErg(preview.amountNanoErg)}'),
       const SizedBox(height: 8),
     ];
+  }
+
+  String _tokenLabel(int amount, String tokenId) {
+    for (final t in _args.tokens) {
+      if (t.id == tokenId) return '${formatTokenAmount(amount, t.decimals)} ${t.label}';
+    }
+    return '$tokenId: $amount';
   }
   void _snack(String msg) {
     if (!mounted) return;

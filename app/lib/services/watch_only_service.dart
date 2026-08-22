@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../format.dart';
+import '../bridge/api.dart' as api;
 
 /// Stores addresses to monitor without holding a wallet seed.
 /// Watch-only addresses use getBalance/loadHistory directly — no
@@ -19,16 +19,17 @@ class WatchOnlyService extends ChangeNotifier {
     final raw = prefs.getString(_key);
     if (raw != null) {
       try {
-        final list = jsonDecode(raw) as List;
+        final stored = jsonDecode(raw) as List;
+        final valid = <String>{};
+        for (final item in stored.whereType<String>()) {
+          final trimmed = item.trim();
+          if (trimmed.isNotEmpty && await api.validateErgoAddress(address: trimmed)) {
+            valid.add(trimmed);
+          }
+        }
         _addresses
           ..clear()
-          ..addAll(
-            list
-                .whereType<String>()
-                .map((a) => a.trim())
-                .where((a) => a.isNotEmpty && looksLikeErgoAddress(a))
-                .toSet(),
-          );
+          ..addAll(valid);
       } catch (_) {
         _addresses.clear();
       }
@@ -38,7 +39,8 @@ class WatchOnlyService extends ChangeNotifier {
 
   Future<void> add(String address) async {
     final trimmed = address.trim();
-    if (trimmed.isEmpty || !looksLikeErgoAddress(trimmed)) return;
+    if (trimmed.isEmpty) return;
+    if (!await api.validateErgoAddress(address: trimmed)) return;
     if (_addresses.contains(trimmed)) return;
     _addresses.add(trimmed);
     await _save();

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -642,17 +643,26 @@ class WalletService {
   /// Returns metadata for all stored wallets.
   Future<List<WalletInfo>> listWallets() async {
     final ids = await SecureStorageService.listWalletIds();
+    final all = await _loadAllWalletMeta();
     final List<WalletInfo> infos = [];
     for (final id in ids) {
-      final meta = await _loadWalletMeta(id);
-      infos.add(meta.copyWith(isUnlocked: _handles.containsKey(id)));
+      final meta = all[id];
+      final info = meta != null
+          ? WalletInfo.fromJson(meta)
+          : WalletInfo(
+              walletId: id,
+              name: 'Wallet',
+              createdAt: DateTime.now(),
+            );
+      infos.add(info.copyWith(isUnlocked: _handles.containsKey(id)));
     }
     return infos;
   }
 
-  /// Returns the pinned address index for the active wallet, or 0 if none pinned.
-  Future<int> getPinnedAddressIndex() async {
-    final id = _currentWalletId;
+  /// Returns the pinned address index for [walletId] (defaults to the active
+  /// wallet), or 0 if none pinned.
+  Future<int> getPinnedAddressIndex({String? walletId}) async {
+    final id = walletId ?? _currentWalletId;
     if (id == null) return 0;
     final meta = await _loadWalletMeta(id);
     return meta.pinnedAddressIndex ?? 0;
@@ -1181,12 +1191,23 @@ class WalletService {
 
   /// --- Wallet metadata (stored in [SharedPreferences], unencrypted) ---
 
+  Map<String, dynamic>? _metaCache;
+  Future<void>? _metaWrite;
+
   Future<Map<String, dynamic>> _loadAllWalletMeta() async {
+    final cached = _metaCache;
+    if (cached != null) return cached;
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_walletMetaKey);
-    if (raw == null) return {};
+    if (raw == null) {
+      final empty = <String, dynamic>{};
+      _metaCache = empty;
+      return empty;
+    }
     final decoded = jsonDecode(raw) as Map<String, dynamic>;
-    return decoded.map((k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)));
+    final all = decoded.map((k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)));
+    _metaCache = all;
+    return all;
   }
 
   Future<WalletInfo> _loadWalletMeta(String walletId) async {
@@ -1202,14 +1223,25 @@ class WalletService {
     );
   }
 
+  Future<void> _withMetaWrite(Future<void> Function() body) async {
+    final previous = _metaWrite;
+    final last = Completer<void>();
+    _metaWrite = last.future;
+    if (previous != null) await previous;
+    try {
+      await body();
+    } finally {
+      last.complete();
+    }
+  }
+
   Future<void> _upsertWalletMeta(
     String walletId, {
     required String name,
     required DateTime createdAt,
     String? address0,
     int? pinnedAddressIndex,
-  }) async {
-    final prefs = await SharedPreferences.getInstance();
+  }) => _withMetaWrite(() async {
     final all = await _loadAllWalletMeta();
     all[walletId] = {
       'walletId': walletId,
@@ -1218,15 +1250,16 @@ class WalletService {
       'address0': address0,
       'pinnedAddressIndex': pinnedAddressIndex,
     };
-    await prefs.setString(_walletMetaKey, jsonEncode(all));
-  }
-
-  Future<void> _removeWalletMeta(String walletId) async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_walletMetaKey, jsonEncode(all));
+  });
+
+  Future<void> _removeWalletMeta(String walletId) => _withMetaWrite(() async {
     final all = await _loadAllWalletMeta();
     all.remove(walletId);
+    final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_walletMetaKey, jsonEncode(all));
-  }
+  });
 }
 
 final walletService = WalletService();

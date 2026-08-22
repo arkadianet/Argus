@@ -90,7 +90,7 @@ fn apply_custom_fee(
         o.ergo_tree == citadel_core::constants::MINER_FEE_ERGO_TREE
     }).ok_or_else(|| ArgusError::TxBuildFailed("fee output not found in unsigned tx".into()).to_json_string())?;
 
-    let change_idx = tx.outputs.iter().position(|o| o.ergo_tree == change_ergo_tree)
+    let change_idx = tx.outputs.iter().rposition(|o| o.ergo_tree == change_ergo_tree)
         .ok_or_else(|| ArgusError::TxBuildFailed("change output not found in unsigned tx".into()).to_json_string())?;
 
     let change_val: i64 = tx.outputs[change_idx].value.parse::<i64>()
@@ -103,7 +103,7 @@ fn apply_custom_fee(
     }
     tx.outputs[fee_idx].value = custom_fee.to_string();
     if new_change == 0 {
-        tx.outputs.retain(|o| o.ergo_tree != change_ergo_tree);
+        tx.outputs.remove(change_idx);
     } else if new_change < MIN_BOX_VALUE_NANO {
         return Err(ArgusError::TxBuildFailed(format!(
             "change {new_change} below min box value {MIN_BOX_VALUE_NANO}"
@@ -308,6 +308,12 @@ pub fn generate_mnemonic(strength: u32) -> Result<String, String> {
         .from_entropy(entropy)
         .map_err(|e| ArgusError::InvalidMnemonic(format!("{e:?}")).to_json_string())?;
     Ok(phrase)
+}
+
+/// Validate an Ergo address (base58) against the checksum and network prefix.
+#[flutter_rust_bridge::frb]
+pub fn validate_ergo_address(address: String) -> bool {
+    address_to_ergo_tree(&address).is_ok()
 }
 
 #[flutter_rust_bridge::frb]
@@ -1066,31 +1072,41 @@ pub async fn list_unspent_boxes(
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
-#[flutter_rust_bridge::frb]
-pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, String> {
-    let prep = take_preparation(handle_id, preparation_id)?;
-    let client = node_client(prep.node_url).await?;
-
+/// Reduce a prepared transaction and sign it, returning the signed transaction
+/// as a `serde_json::Value`.
+async fn sign_prepared_tx(
+    handle_id: u64,
+    prep: &CachedPreparation,
+    client: &ErgoNodeClient,
+    op: &'static str,
+) -> Result<serde_json::Value, String> {
     let state_context = client
         .get_state_context()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
     let reduced_bytes = reduce_transaction_with_context(
         &prep.unsigned_tx,
-        prep.ergo_boxes,
+        prep.ergo_boxes.clone(),
         Vec::new(),
         &state_context,
     )
     .map_err(|e| ArgusError::TxReductionFailed(e.to_string()).to_json_string())?;
 
-    let signed_tx = with_handle(handle_id, "send_erg", |handle| {
+    with_handle(handle_id, op, |handle| {
         let reduced = ReducedTransaction::sigma_parse_bytes(&reduced_bytes)
             .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-        handle.sign_reduced(reduced).map_err(err_str)
-    })?;
+        let signed_tx = handle.sign_reduced(reduced).map_err(err_str)?;
+        serde_json::to_value(&signed_tx)
+            .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+    })
+}
 
-    let tx_json = serde_json::to_value(&signed_tx)
-        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+#[flutter_rust_bridge::frb]
+pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, String> {
+    let prep = take_preparation(handle_id, preparation_id)?;
+    let client = node_client(prep.node_url.clone()).await?;
+    let tx_json = sign_prepared_tx(handle_id, &prep, &client, "send_erg").await?;
+
     let tx_id = client
         .submit_transaction(&tx_json)
         .await
@@ -1112,30 +1128,17 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
 #[flutter_rust_bridge::frb]
 pub async fn sign_preparation(handle_id: u64, preparation_id: u64) -> Result<String, String> {
     let prep = take_preparation(handle_id, preparation_id)?;
-    let client = node_client(prep.node_url).await?;
-
-    let state_context = client
-        .get_state_context()
-        .await
-        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-    let reduced_bytes = reduce_transaction_with_context(
-        &prep.unsigned_tx,
-        prep.ergo_boxes,
-        Vec::new(),
-        &state_context,
-    )
-    .map_err(|e| ArgusError::TxReductionFailed(e.to_string()).to_json_string())?;
-
-    let signed_tx = with_handle(handle_id, "sign_preparation", |handle| {
-        let reduced = ReducedTransaction::sigma_parse_bytes(&reduced_bytes)
-            .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-        handle.sign_reduced(reduced).map_err(err_str)
-    })?;
-
-    let tx_json = serde_json::to_value(&signed_tx)
-        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let client = node_client(prep.node_url.clone()).await?;
+    let tx_json = sign_prepared_tx(handle_id, &prep, &client, "sign_preparation").await?;
     serde_json::to_string(&tx_json)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// A single parsed recipient for a multi-recipient send.
+struct ParsedRecipient {
+    address: String,
+    amount_nano_erg: i64,
+    token: Option<(String, u64)>,
 }
 
 /// Prepare a multi-recipient send. Each element of `recipients_json` is a JSON
@@ -1170,7 +1173,7 @@ pub async fn prepare_send_multi(
             .to_json_string());
     }
 
-    let mut parsed: Vec<(String, i64, Option<(String, u64)>)> = Vec::new();
+    let mut parsed: Vec<ParsedRecipient> = Vec::new();
     let mut total_send_erg: i64 = 0;
     for rcpt in recipients {
         let addr = rcpt["address"].as_str()
@@ -1193,20 +1196,25 @@ pub async fn prepare_send_multi(
             .to_json_string());
         }
         total_send_erg += amount;
-        parsed.push((addr.to_string(), amount, token));
+        parsed.push(ParsedRecipient {
+            address: addr.to_string(),
+            amount_nano_erg: amount,
+            token,
+        });
     }
 
-    if total_send_erg <= 0 {
-        return Err(ArgusError::TxBuildFailed("at least one recipient must receive ERG".into())
+    let has_sent_tokens = parsed.iter().any(|rcpt| rcpt.token.is_some());
+    if total_send_erg <= 0 && !has_sent_tokens {
+        return Err(ArgusError::TxBuildFailed("at least one recipient must receive ERG or tokens".into())
             .to_json_string());
     }
 
     // Collect all recipient trees
     let mut recipient_specs: Vec<(String, Option<(String, u64)>)> = Vec::new();
-    for (addr, _amount, token) in &parsed {
-        let tree = address_to_ergo_tree(addr)
+    for rcpt in &parsed {
+        let tree = address_to_ergo_tree(&rcpt.address)
             .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-        recipient_specs.push((tree, token.clone()));
+        recipient_specs.push((tree, rcpt.token.clone()));
     }
 
     with_handle(handle_id, "prepare_send_multi", |h| {
@@ -1228,9 +1236,9 @@ pub async fn prepare_send_multi(
 
     // Collect tokens we need to cover
     let mut needed_tokens: HashMap<String, u64> = HashMap::new();
-    for (_, _, token_opt) in &parsed {
-        if let Some((id, amt)) = token_opt {
-            *needed_tokens.entry(id.clone()).or_insert(0) += amt;
+    for rcpt in &parsed {
+        if let Some((id, amt)) = &rcpt.token {
+            *needed_tokens.entry(id.clone()).or_insert(0) += *amt;
         }
     }
 
@@ -1264,8 +1272,8 @@ pub async fn prepare_send_multi(
         }
     }
     // Subtract sent tokens
-    for (_, _, token_opt) in &parsed {
-        if let Some((id, amt)) = token_opt {
+    for rcpt in &parsed {
+        if let Some((id, amt)) = &rcpt.token {
             if let Some(balance) = input_tokens.get_mut(id) {
                 *balance = balance.saturating_sub(*amt);
                 if *balance == 0 {
@@ -1305,7 +1313,7 @@ pub async fn prepare_send_multi(
 
     // Recipient outputs
     for (idx, (tree, token_opt)) in recipient_specs.iter().enumerate() {
-        let amount = parsed[idx].1;
+        let amount = parsed[idx].amount_nano_erg;
         let assets = match token_opt {
             Some((id, amt)) => vec![ergo_tx::Eip12Asset::new(id.clone(), *amt as i64)],
             None => vec![],
@@ -1362,12 +1370,12 @@ pub async fn prepare_send_multi(
         node_url,
     });
 
-    let recipient_summary: Vec<serde_json::Value> = parsed.iter().map(|(addr, amount, token_opt)| {
+    let recipient_summary: Vec<serde_json::Value> = parsed.iter().map(|rcpt| {
         serde_json::json!({
-            "address": addr,
-            "amount_nano_erg": amount,
-            "token_id": token_opt.as_ref().map(|(id, _)| id),
-            "token_amount": token_opt.as_ref().map(|(_, amt)| amt),
+            "address": rcpt.address,
+            "amount_nano_erg": rcpt.amount_nano_erg,
+            "token_id": rcpt.token.as_ref().map(|(id, _)| id),
+            "token_amount": rcpt.token.as_ref().map(|(_, amt)| amt),
         })
     }).collect();
 

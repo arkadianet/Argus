@@ -230,20 +230,30 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
         seedSaved = (res as? Bool) == true
       }
       if !seedSaved { success = false }
-    } else { success = false }
-    if let wrap = wrapData, !wrap.isEmpty {
-      var wrapSaved = false
-      save(wrap, account: wrapAccount(for: newWalletId), biometric: true) { res in
-        wrapSaved = (res as? Bool) == true
-      }
-      if !wrapSaved { success = false }
+    } else {
+      success = false
     }
-    if let pin = pinData, !pin.isEmpty {
-      var pinSaved = false
-      save(pin, account: pinAccount(for: newWalletId), biometric: false) { res in
-        pinSaved = (res as? Bool) == true
+    if hasItem(account: "wrap_key") {
+      if let wrap = wrapData, !wrap.isEmpty {
+        var wrapSaved = false
+        save(wrap, account: wrapAccount(for: newWalletId), biometric: true) { res in
+          wrapSaved = (res as? Bool) == true
+        }
+        if !wrapSaved { success = false }
+      } else {
+        success = false
       }
-      if !pinSaved { success = false }
+    }
+    if hasItem(account: "pin_wrap") {
+      if let pin = pinData, !pin.isEmpty {
+        var pinSaved = false
+        save(pin, account: pinAccount(for: newWalletId), biometric: false) { res in
+          pinSaved = (res as? Bool) == true
+        }
+        if !pinSaved { success = false }
+      } else {
+        success = false
+      }
     }
     if success {
       delete(account: "encrypted_seed")
@@ -372,7 +382,7 @@ public class SecureStorageHandler: NSObject, FlutterPlugin {
     }
   }
 
-  private func loadDataWithStatus(account: String) -> (Int, String?) {
+  private func loadDataWithStatus(account: String) -> (OSStatus, String?) {
     var item = baseQuery(account: account)
     item[kSecReturnData as String] = true
     item[kSecMatchLimit as String] = kSecMatchLimitOne

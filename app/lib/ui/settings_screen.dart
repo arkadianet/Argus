@@ -36,7 +36,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _explorerCtrl.text = networkController.explorer;
     _walletsFuture = walletService.listWallets();
-    _pinnedIndexFuture = walletService.getPinnedAddressIndex();
+    _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: widget.walletId);
     _load();
   }
 
@@ -181,7 +181,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
     if (result != null && result != current && mounted) {
       _walletsFuture = walletService.listWallets();
-      _pinnedIndexFuture = walletService.getPinnedAddressIndex();
+      _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: widget.walletId);
       Navigator.pop(context, result);
     }
   }
@@ -345,10 +345,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _snack('Invalid index');
       return;
     }
-    final wid = walletService.activeWalletId;
+    final wid = widget.walletId;
     if (wid == null) return;
     await walletService.setPinnedAddressIndex(wid, index);
-    _pinnedIndexFuture = walletService.getPinnedAddressIndex();
+    _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: widget.walletId);
     if (mounted) setState(() {});
     _snack('Pinned address index $index');
   }
@@ -699,10 +699,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             icon: const Icon(Icons.clear, size: 18),
                             tooltip: 'Unpin',
                              onPressed: () async {
-                               final wid = walletService.activeWalletId;
+                               final wid = widget.walletId;
                                if (wid == null) return;
                                await walletService.setPinnedAddressIndex(wid, 0);
-                               _pinnedIndexFuture = walletService.getPinnedAddressIndex();
+                               _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: widget.walletId);
                                if (mounted) setState(() {});
                              },
                           )
