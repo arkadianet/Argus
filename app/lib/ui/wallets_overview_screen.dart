@@ -195,7 +195,8 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
 
   Widget _walletTile(WalletInfo w) {
     final selected = w.walletId == widget.selectedWalletId;
-    final isActiveUnlocked = w.walletId == widget.selectedWalletId &&
+    final isActiveUnlocked = w.walletId == walletService.activeWalletId &&
+        w.walletId == widget.selectedWalletId &&
         walletService.isUnlocked;
     final bal = _balance(w);
     return Card(
