@@ -19,7 +19,11 @@ use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
 use crate::error::ArgusError;
 
 #[flutter_rust_bridge::frb(init)]
-pub fn init_app() {}
+pub fn init_app() {
+    // Argus does not levy the Citadel-style app fee. Disable it before any
+    // protocol builder (dexy, etc.) resolves the dev-fee config once.
+    std::env::set_var("CITADEL_DEV_FEE_ENABLED", "false");
+}
 
 fn err_str<E: Into<ArgusError>>(e: E) -> String {
     e.into().to_json_string()
@@ -34,6 +38,7 @@ static HANDLES: Lazy<Mutex<HashMap<u64, WalletHandle>>> = Lazy::new(|| Mutex::ne
 struct CachedPreparation {
     handle_id: u64,
     ergo_boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+    data_input_boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
     unsigned_tx: ergo_tx::Eip12UnsignedTx,
     miner_fee: i64,
     change_erg: i64,
@@ -681,6 +686,7 @@ async fn prepare_management<S>(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         ergo_boxes,
+        data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
         miner_fee: built.miner_fee,
         change_erg: built.change_erg,
@@ -833,6 +839,7 @@ pub async fn prepare_send(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         ergo_boxes,
+        data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
         miner_fee,
         change_erg,
@@ -1087,7 +1094,7 @@ async fn sign_prepared_tx(
     let reduced_bytes = reduce_transaction_with_context(
         &prep.unsigned_tx,
         prep.ergo_boxes.clone(),
-        Vec::new(),
+        prep.data_input_boxes.clone(),
         &state_context,
     )
     .map_err(|e| ArgusError::TxReductionFailed(e.to_string()).to_json_string())?;
@@ -1292,6 +1299,7 @@ pub async fn prepare_send_multi(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         ergo_boxes,
+        data_input_boxes: Vec::new(),
         unsigned_tx,
         miner_fee: fee_for_required,
         change_erg,
@@ -1367,6 +1375,565 @@ fn select_for_multi_send(
     Ok(selected)
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Dexy protocol (mobile): live market state + mint/swap/LP previews, plus
+// build-free broadcasts reusing the prepare → confirm → send flow.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Live Dexy protocol state + mint-path rates for `gold` or `usd`.
+#[flutter_rust_bridge::frb]
+pub async fn dexy_state(variant: String, node_url: Option<String>) -> Result<String, String> {
+    crate::api_dexy_impl::state(&variant, node_url).await
+}
+
+/// Mint cost preview at the live oracle rate.
+#[flutter_rust_bridge::frb]
+pub async fn dexy_preview_mint(
+    variant: String,
+    amount: i64,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    crate::api_dexy_impl::preview_mint(&variant, amount, node_url).await
+}
+
+/// Swap quote using live LP reserves. `direction` is `erg_to_dexy` or `dexy_to_erg`.
+#[flutter_rust_bridge::frb]
+pub async fn dexy_preview_swap(
+    variant: String,
+    direction: String,
+    amount: i64,
+    slippage_pct: Option<f64>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    crate::api_dexy_impl::preview_swap(&variant, &direction, amount, slippage_pct, node_url).await
+}
+
+/// LP deposit/redeem preview. `action` is `"deposit"` or `"redeem"`.
+#[flutter_rust_bridge::frb]
+pub async fn dexy_preview_lp(
+    variant: String,
+    action: String,
+    erg_amount: i64,
+    dexy_amount: i64,
+    lp_amount: i64,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    crate::api_dexy_impl::preview_lp(&variant, &action, erg_amount, dexy_amount, lp_amount, node_url)
+        .await
+}
+
+/// Fetch the selected user input boxes from the wallet, keyed by box id,
+/// validating ownership against the wallet handle.
+async fn gather_wallet_boxes(
+    handle_id: u64,
+    spend_addresses: &[String],
+    node_url: Option<String>,
+) -> Result<
+    (
+        Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+        Vec<ergo_tx::Eip12InputBox>,
+    ),
+    String,
+> {
+    let client = node_client(node_url).await?;
+    let (boxes, eip12) = gather_unspent(handle_id, &client, spend_addresses).await?;
+    Ok((boxes, eip12))
+}
+
+/// Order the user's full ErgoBoxes to match input order after `protocol_count`
+/// protocol inputs, using the selected EIP-12 box ids.
+fn ordered_user_boxes(
+    selected_ids: &[String],
+    all_boxes: &[ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox],
+) -> Result<Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>, String> {
+    let by_id = all_boxes
+        .iter()
+        .map(|b| (b.box_id().to_string(), b.clone()))
+        .collect::<HashMap<_, _>>();
+    let mut out = Vec::with_capacity(selected_ids.len());
+    for id in selected_ids {
+        out.push(
+            by_id
+                .get(id)
+                .cloned()
+                .ok_or_else(|| ArgusError::TxBuildFailed(format!("missing user UTXO {id}")).to_json_string())?,
+        );
+    }
+    Ok(out)
+}
+
+/// Largest output value paid to the user's tree — used as the "change" figure
+/// in confirm flows.
+fn user_change_erg(unsigned_tx: &ergo_tx::Eip12UnsignedTx, user_ergo_tree: &str) -> i64 {
+    unsigned_tx
+        .outputs
+        .iter()
+        .filter(|o| o.ergo_tree == user_ergo_tree)
+        .map(|o| o.value.parse::<i64>().unwrap_or(0))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Prepare a Dexy mint: builds the FreeMint transaction, caches it, and returns
+/// a preview JSON with the `preparation_id` for the shared confirm → broadcast
+/// flow.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn dexy_build_mint(
+    handle_id: u64,
+    variant: String,
+    amount: i64,
+    recipient_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let dexy_variant = variant.parse::<dexy::constants::DexyVariant>().map_err(|_| {
+        ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
+    })?;
+    let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
+
+    with_handle(handle_id, "dexy_build_mint", |handle| {
+        if !handle.owns_address(&recipient_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "recipient is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        Ok(())
+    })?;
+
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    let caps = client
+        .require_capabilities()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    let state = dexy::fetch::fetch_dexy_state(&client, &caps, &ids)
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    let ctx = dexy::fetch::fetch_tx_context(&client, &caps, &ids)
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+
+    let (all_boxes, eip12) =
+        gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
+    if eip12.is_empty() {
+        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+    }
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+
+    let user_tree = address_to_ergo_tree(&recipient_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+
+    let request = dexy::tx_builder::MintDexyRequest {
+        variant: dexy_variant,
+        amount,
+        user_address: recipient_address.clone(),
+        user_ergo_tree: user_tree.clone(),
+        user_inputs: eip12,
+        current_height: height,
+        recipient_ergo_tree: None,
+    };
+
+    let built = dexy::tx_builder::build_mint_dexy_tx(&request, &ctx, &state)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    // Inputs: [free_mint, bank, buyback] + user inputs (in order). Data inputs: oracle + lp.
+    let selected_ids = built
+        .unsigned_tx
+        .inputs
+        .iter()
+        .skip(3)
+        .map(|i| i.box_id.clone())
+        .collect::<Vec<_>>();
+    let user_boxes = ordered_user_boxes(&selected_ids, &all_boxes)?;
+
+    let mut ergo_boxes = vec![
+        ctx.free_mint_box.clone(),
+        ctx.bank_box.clone(),
+        ctx.buyback_box.clone(),
+    ];
+    ergo_boxes.extend(user_boxes);
+    let data_input_boxes = vec![ctx.oracle_box.clone(), ctx.lp_box.clone()];
+
+    let miner_fee = built.summary.tx_fee_nano;
+    let change_erg = user_change_erg(&built.unsigned_tx, &user_tree);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        data_input_boxes,
+        unsigned_tx: built.unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: built.summary.erg_amount_nano,
+        node_url,
+    });
+
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "action": built.summary.action,
+        "token_amount": built.summary.token_amount,
+        "token_name": dexy_variant.token_name(),
+        "erg_cost_nano": built.summary.erg_amount_nano,
+        "bank_fee_nano": built.summary.bank_fee_nano,
+        "buyback_fee_nano": built.summary.buyback_fee_nano,
+        "miner_fee": miner_fee,
+        "change_nano_erg": change_erg,
+        "recipient": recipient_address,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Prepare a Dexy LP swap (both directions) into the standard broadcast flow.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn dexy_build_swap(
+    handle_id: u64,
+    variant: String,
+    direction: String,
+    amount: i64,
+    min_output: i64,
+    recipient_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let dexy_variant = variant.parse::<dexy::constants::DexyVariant>().map_err(|_| {
+        ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
+    })?;
+    let swap_direction = match direction.as_str() {
+        "erg_to_dexy" => dexy::tx_builder::SwapDirection::ErgToDexy,
+        "dexy_to_erg" => dexy::tx_builder::SwapDirection::DexyToErg,
+        _ => {
+            return Err(format!(
+                "Invalid direction '{direction}'. Use 'erg_to_dexy' or 'dexy_to_erg'"
+            ))
+        }
+    };
+    let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
+
+    with_handle(handle_id, "dexy_build_swap", |handle| {
+        if !handle.owns_address(&recipient_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "recipient is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        Ok(())
+    })?;
+
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    let caps = client
+        .require_capabilities()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    let state = dexy::fetch::fetch_dexy_state(&client, &caps, &ids)
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    let ctx = dexy::fetch::fetch_swap_tx_context(&client, &caps, &ids)
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+
+    let (all_boxes, eip12) =
+        gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
+    if eip12.is_empty() {
+        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+    }
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+    let user_tree = address_to_ergo_tree(&recipient_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+
+    let request = dexy::tx_builder::SwapDexyRequest {
+        variant: dexy_variant,
+        direction: swap_direction,
+        input_amount: amount,
+        min_output,
+        user_address: recipient_address.clone(),
+        user_ergo_tree: user_tree.clone(),
+        user_inputs: eip12,
+        current_height: height,
+        recipient_ergo_tree: None,
+    };
+
+    let built = dexy::tx_builder::build_swap_dexy_tx(&request, &ctx, &state)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    let selected_ids = built
+        .unsigned_tx
+        .inputs
+        .iter()
+        .skip(2)
+        .map(|i| i.box_id.clone())
+        .collect::<Vec<_>>();
+    let user_boxes = ordered_user_boxes(&selected_ids, &all_boxes)?;
+
+    let mut ergo_boxes = vec![ctx.lp_box.clone(), ctx.swap_box.clone()];
+    ergo_boxes.extend(user_boxes);
+
+    let miner_fee = built.summary.miner_fee_nano;
+    let change_erg = user_change_erg(&built.unsigned_tx, &user_tree);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        data_input_boxes: Vec::new(),
+        unsigned_tx: built.unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: built.summary.output_amount,
+        node_url,
+    });
+
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "action": "swap",
+        "direction": built.summary.direction,
+        "input_amount": built.summary.input_amount,
+        "output_amount": built.summary.output_amount,
+        "min_output": built.summary.min_output,
+        "price_impact_pct": built.summary.price_impact_pct,
+        "fee_pct": built.summary.fee_pct,
+        "miner_fee": miner_fee,
+        "change_nano_erg": change_erg,
+        "recipient": recipient_address,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Build an LP deposit (add liquidity) transaction and cache it for broadcast.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn dexy_build_lp_deposit(
+    handle_id: u64,
+    variant: String,
+    deposit_erg: i64,
+    deposit_dexy: i64,
+    recipient_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let dexy_variant = variant.parse::<dexy::constants::DexyVariant>().map_err(|_| {
+        ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
+    })?;
+    let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
+
+    with_handle(handle_id, "dexy_build_lp_deposit", |handle| {
+        if !handle.owns_address(&recipient_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "recipient is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        Ok(())
+    })?;
+
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    let caps = client
+        .require_capabilities()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    let ctx = dexy::fetch::fetch_lp_tx_context(
+        &client,
+        &caps,
+        &ids,
+        dexy::fetch::LpAction::Deposit,
+    )
+    .await
+    .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+
+    let (all_boxes, eip12) =
+        gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
+    if eip12.is_empty() {
+        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+    }
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+    let user_tree = address_to_ergo_tree(&recipient_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+
+    let request = dexy::tx_builder::LpDepositRequest {
+        variant: dexy_variant,
+        deposit_erg,
+        deposit_dexy,
+        user_address: recipient_address.clone(),
+        user_ergo_tree: user_tree.clone(),
+        user_inputs: eip12,
+        current_height: height,
+        recipient_ergo_tree: None,
+    };
+
+    let built = dexy::tx_builder::build_lp_deposit_tx(
+        &request,
+        &ctx,
+        &ids.dexy_token,
+        &ids.lp_token_id,
+        dexy_variant.initial_lp(),
+    )
+    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    let selected_ids = built
+        .unsigned_tx
+        .inputs
+        .iter()
+        .skip(2)
+        .map(|i| i.box_id.clone())
+        .collect::<Vec<_>>();
+    let user_boxes = ordered_user_boxes(&selected_ids, &all_boxes)?;
+
+    let mut ergo_boxes = vec![ctx.lp_box.clone(), ctx.action_box.clone()];
+    ergo_boxes.extend(user_boxes);
+
+    let miner_fee = built.summary.miner_fee_nano;
+    let change_erg = user_change_erg(&built.unsigned_tx, &user_tree);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        data_input_boxes: Vec::new(),
+        unsigned_tx: built.unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: built.summary.lp_tokens,
+        node_url,
+    });
+
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "action": built.summary.action,
+        "erg_amount": built.summary.erg_amount,
+        "dexy_amount": built.summary.dexy_amount,
+        "lp_tokens": built.summary.lp_tokens,
+        "miner_fee": miner_fee,
+        "change_nano_erg": change_erg,
+        "recipient": recipient_address,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Build an LP redeem (remove liquidity) transaction and return it for broadcast.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn dexy_build_lp_redeem(
+    handle_id: u64,
+    variant: String,
+    lp_to_burn: i64,
+    recipient_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let dexy_variant = variant.parse::<dexy::constants::DexyVariant>().map_err(|_| {
+        ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
+    })?;
+    let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
+
+    with_handle(handle_id, "dexy_build_lp_redeem", |handle| {
+        if !handle.owns_address(&recipient_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "recipient is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        Ok(())
+    })?;
+
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    let caps = client
+        .require_capabilities()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    let ctx = dexy::fetch::fetch_lp_tx_context(
+        &client,
+        &caps,
+        &ids,
+        dexy::fetch::LpAction::Redeem,
+    )
+    .await
+    .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+
+    let (all_boxes, eip) =
+        gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
+    if eip.is_empty() {
+        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+    }
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+    let user_tree = address_to_ergo_tree(&recipient_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+
+    let request = dexy::tx_builder::LpRedeemRequest {
+        variant: dexy_variant,
+        lp_to_burn,
+        user_address: recipient_address.clone(),
+        user_ergo_tree: user_tree.clone(),
+        user_inputs: eip,
+        current_height: height,
+        recipient_ergo_tree: None,
+    };
+
+    let built = dexy::tx_builder::build_lp_redeem_tx(
+        &request,
+        &ctx,
+        &ids.dexy_token,
+        &ids.lp_token_id,
+        dexy_variant.initial_lp(),
+    )
+    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    let selected_ids: Vec<String> = built
+        .unsigned_tx
+        .inputs
+        .iter()
+        .skip(2)
+        .map(|i| i.box_id.clone())
+        .collect();
+    let user_boxes = ordered_user_boxes(&selected_ids, &all_boxes)?;
+
+    let mut ergo_boxes = vec![ctx.lp_box.clone(), ctx.action_box.clone()];
+    ergo_boxes.extend(user_boxes);
+
+    // LP redeem spends the oracle as a data input.
+    let mut data_input_boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox> = Vec::new();
+    if let Some(data_input) = &ctx.oracle_data_input {
+        if let Ok(oracle_box) = client
+            .get_box_by_id(&citadel_core::BoxId::new(&data_input.box_id))
+            .await
+        {
+            data_input_boxes.push(oracle_box);
+        }
+    }
+
+    let miner_fee = built.summary.miner_fee_nano;
+    let change_erg = user_change_erg(&built.unsigned_tx, &user_tree);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        data_input_boxes,
+        unsigned_tx: built.unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: built.summary.lp_tokens,
+        node_url,
+    });
+
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "action": built.summary.action,
+        "erg_amount": built.summary.erg_amount,
+        "dexy_amount": built.summary.dexy_amount,
+        "lp_tokens": built.summary.lp_tokens,
+        "miner_fee": miner_fee,
+        "change_nano_erg": change_erg,
+        "recipient": recipient_address,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1415,6 +1982,7 @@ mod tests {
         let id = store_preparation(CachedPreparation {
             handle_id: 7,
             ergo_boxes: Vec::new(),
+            data_input_boxes: Vec::new(),
             unsigned_tx: ergo_tx::Eip12UnsignedTx {
                 inputs: vec![],
                 data_inputs: vec![],

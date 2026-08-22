@@ -322,11 +322,44 @@ class _SendScreenState extends State<SendScreen> {
               content: SizedBox(
                 width: double.maxFinite,
                 child: SingleChildScrollView(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      if (isMulti) ..._multiRecipientSummary(ctx, preview) else ...[
+child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: double.infinity,
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: rust.withValues(alpha: 0.1),
+                            border: Border.all(
+                              color: rust.withValues(alpha: 0.5),
+                            ),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(
+                                Icons.gpp_bad_outlined,
+                                color: rust,
+                                size: 20,
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  'This will sign and broadcast a transaction '
+                                  'to the network. It cannot be undone once '
+                                  'confirmed.',
+                                  style: Theme.of(ctx)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(color: rust),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (isMulti) ..._multiRecipientSummary(ctx, preview) else ...[
                         Text('To', style: Theme.of(ctx).textTheme.titleSmall),
                         const SizedBox(height: 4),
                         Text(preview.recipient, style: monoStyle(ctx, size: 12)),

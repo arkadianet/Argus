@@ -6,6 +6,7 @@ import '../format.dart';
 import '../services/network_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
+import 'confirm_transaction_sheet.dart';
 
 enum UtxoFilter { all, ergOnly, withTokens, dust }
 
@@ -186,14 +187,19 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       if (!mounted) return;
       setState(() => _busy = false);
 
-      final confirmed = await showModalBottomSheet<bool>(
-        context: context,
-        backgroundColor: Theme.of(context).colorScheme.surface,
-        isScrollControlled: true,
-        builder: (ctx) => _ConsolidatePreviewSheet(
-          preview: preview,
-          changeAddress: changeAddress,
-        ),
+      final confirmed = await showConfirmTransactionSheet(
+        context,
+        title: 'Consolidate UTXOs',
+        rows: [
+          ConfirmTxRow('Inputs Merged', '${preview.inputCount} boxes'),
+          ConfirmTxRow('Total Value In', formatErg(preview.totalErgIn)),
+          ConfirmTxRow('Tokens Included', '${preview.tokenCount} token types'),
+          ConfirmTxRow('Miner Fee', formatErg(preview.minerFee)),
+        ],
+        detail:
+            'ERG only — token-bearing boxes are left untouched. Fee is '
+            'computed by the transaction builder.',
+        confirmLabel: 'Sign & broadcast consolidation',
       );
 
       if (confirmed == true) {
@@ -273,11 +279,22 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       if (!mounted) return;
       setState(() => _busy = false);
 
-      final confirmed = await showModalBottomSheet<bool>(
-        context: context,
-        backgroundColor: Theme.of(context).colorScheme.surface,
-        builder: (ctx) =>
-            _SplitPreviewSheet(preview: preview, isToken: isToken),
+      final confirmed = await showConfirmTransactionSheet(
+        context,
+        title: 'Split UTXO',
+        rows: [
+          ConfirmTxRow('Outputs Created', '${preview.splitCount} boxes'),
+          ConfirmTxRow(
+            'Amount per Box',
+            isToken
+                ? '${preview.amountPerBox} tokens'
+                : formatErg(preview.amountPerBox.toInt()),
+          ),
+          ConfirmTxRow('Change Returned', formatErg(preview.changeNanoErg)),
+          ConfirmTxRow('Miner Fee', formatErg(preview.minerFee)),
+        ],
+        detail: 'Fee is computed by the transaction builder.',
+        confirmLabel: 'Sign & broadcast split',
       );
 
       if (confirmed == true) {
@@ -337,10 +354,19 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       if (!mounted) return;
       setState(() => _busy = false);
 
-      final confirmed = await showModalBottomSheet<bool>(
-        context: context,
-        backgroundColor: Theme.of(context).colorScheme.surface,
-        builder: (ctx) => _RestructurePreviewSheet(preview: preview),
+      final confirmed = await showConfirmTransactionSheet(
+        context,
+        title: 'Restructure UTXOs',
+        rows: [
+          ConfirmTxRow('Inputs Consumed', '${preview.inputCount} boxes'),
+          ConfirmTxRow('Outputs Generated', '${preview.outputCount} boxes'),
+          ConfirmTxRow('Total Value In', formatErg(preview.totalErgIn)),
+          ConfirmTxRow('Allocated to Outputs', formatErg(preview.allocatedErg)),
+          ConfirmTxRow('Change Output', formatErg(preview.changeNanoErg)),
+          ConfirmTxRow('Miner Fee', formatErg(preview.minerFee)),
+        ],
+        detail: 'Fee is computed by the transaction builder.',
+        confirmLabel: 'Sign & broadcast restructure',
       );
 
       if (confirmed == true) {
@@ -763,103 +789,6 @@ class _UtxoCard extends StatelessWidget {
   }
 }
 
-Widget _feeNote(BuildContext context) {
-  return Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      const SizedBox(height: 4),
-      Text(
-        'Fee is computed by the transaction builder and may be configurable.',
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11, fontStyle: FontStyle.italic),
-      ),
-    ],
-  );
-}
-
-class _ConsolidatePreviewSheet extends StatelessWidget {
-  const _ConsolidatePreviewSheet({
-    required this.preview,
-    required this.changeAddress,
-  });
-
-  final ConsolidatePreview preview;
-  final String changeAddress;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Consolidate UTXOs',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 12),
-          const Hairline(),
-          const SizedBox(height: 16),
-          _row('Inputs Merged', '${preview.inputCount} boxes'),
-          _row('Total Value In', formatErg(preview.totalErgIn)),
-          _row('Tokens Included', '${preview.tokenCount} token types'),
-          _row('Miner Fee', formatErg(preview.minerFee)),
-          _feeNote(context),
-          const Hairline(),
-          const SizedBox(height: 8),
-          _row(
-            'Consolidated Output',
-            formatErg(preview.changeNanoErg),
-            bold: true,
-          ),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('Cancel'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Confirm'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _row(String label, String value, {bool bold = false}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(
-            label,
-            style: TextStyle(
-              fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
-            ),
-          ),
-          Text(
-            value,
-            style: TextStyle(
-              fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _SplitConfigSheet extends StatefulWidget {
   const _SplitConfigSheet({
     required this.boxes,
@@ -1044,71 +973,6 @@ class _SplitConfigSheetState extends State<_SplitConfigSheet> {
   }
 }
 
-class _SplitPreviewSheet extends StatelessWidget {
-  const _SplitPreviewSheet({required this.preview, required this.isToken});
-
-  final SplitPreview preview;
-  final bool isToken;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Confirm Split', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 12),
-          const Hairline(),
-          const SizedBox(height: 12),
-          _row('Outputs Created', '${preview.splitCount} boxes'),
-          _row(
-            'Amount per Box',
-            isToken
-                ? '${preview.amountPerBox} tokens'
-                : formatErg(preview.amountPerBox.toInt()),
-          ),
-          _row('Change Returned', formatErg(preview.changeNanoErg)),
-          _row('Miner Fee', formatErg(preview.minerFee)),
-          _feeNote(context),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('Cancel'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Execute Split'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _row(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
-        ],
-      ),
-    );
-  }
-}
-
 class _RestructureConfigSheet extends StatefulWidget {
   const _RestructureConfigSheet({
     required this.boxes,
@@ -1244,70 +1108,6 @@ class _RestructureConfigSheetState extends State<_RestructureConfigSheet> {
             },
             child: const Text('Preview Restructure'),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _RestructurePreviewSheet extends StatelessWidget {
-  const _RestructurePreviewSheet({required this.preview});
-
-  final RestructurePreview preview;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Confirm Restructure',
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 12),
-          const Hairline(),
-          const SizedBox(height: 12),
-          _row('Inputs Consumed', '${preview.inputCount} boxes'),
-          _row('Outputs Generated', '${preview.outputCount} boxes'),
-          _row('Total Value In', formatErg(preview.totalErgIn)),
-          _row('Allocated to Outputs', formatErg(preview.allocatedErg)),
-          _row('Change Output', formatErg(preview.changeNanoErg)),
-          _row('Miner Fee', formatErg(preview.minerFee)),
-          _feeNote(context),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: const Text('Cancel'),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Execute Restructure'),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _row(String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
         ],
       ),
     );

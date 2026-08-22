@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `input_boxes_json`, `node_client`, `open_wallet`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `with_handle`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `with_handle`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 
 Future<void> setNetwork({
@@ -299,4 +299,127 @@ Future<String> prepareSendMulti({
   recipientsJson: recipientsJson,
   nodeUrl: nodeUrl,
   feeNano: feeNano,
+);
+
+/// Live Dexy protocol state + mint-path rates for `gold` or `usd`.
+Future<String> dexyState({required String variant, String? nodeUrl}) =>
+    RustLib.instance.api.crateApiDexyState(variant: variant, nodeUrl: nodeUrl);
+
+/// Mint cost preview at the live oracle rate.
+Future<String> dexyPreviewMint({
+  required String variant,
+  required PlatformInt64 amount,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDexyPreviewMint(
+  variant: variant,
+  amount: amount,
+  nodeUrl: nodeUrl,
+);
+
+/// Swap quote using live LP reserves. `direction` is `erg_to_dexy` or `dexy_to_erg`.
+Future<String> dexyPreviewSwap({
+  required String variant,
+  required String direction,
+  required PlatformInt64 amount,
+  double? slippagePct,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDexyPreviewSwap(
+  variant: variant,
+  direction: direction,
+  amount: amount,
+  slippagePct: slippagePct,
+  nodeUrl: nodeUrl,
+);
+
+/// LP deposit/redeem preview. `action` is `"deposit"` or `"redeem"`.
+Future<String> dexyPreviewLp({
+  required String variant,
+  required String action,
+  required PlatformInt64 ergAmount,
+  required PlatformInt64 dexyAmount,
+  required PlatformInt64 lpAmount,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDexyPreviewLp(
+  variant: variant,
+  action: action,
+  ergAmount: ergAmount,
+  dexyAmount: dexyAmount,
+  lpAmount: lpAmount,
+  nodeUrl: nodeUrl,
+);
+
+/// Prepare a Dexy mint: builds the FreeMint transaction, caches it, and returns
+/// a preview JSON with the `preparation_id` for the shared confirm → broadcast
+/// flow.
+Future<String> dexyBuildMint({
+  required BigInt handleId,
+  required String variant,
+  required PlatformInt64 amount,
+  required String recipientAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDexyBuildMint(
+  handleId: handleId,
+  variant: variant,
+  amount: amount,
+  recipientAddress: recipientAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
+
+/// Prepare a Dexy LP swap (both directions) into the standard broadcast flow.
+Future<String> dexyBuildSwap({
+  required BigInt handleId,
+  required String variant,
+  required String direction,
+  required PlatformInt64 amount,
+  required PlatformInt64 minOutput,
+  required String recipientAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDexyBuildSwap(
+  handleId: handleId,
+  variant: variant,
+  direction: direction,
+  amount: amount,
+  minOutput: minOutput,
+  recipientAddress: recipientAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
+
+/// Build an LP deposit (add liquidity) transaction and cache it for broadcast.
+Future<String> dexyBuildLpDeposit({
+  required BigInt handleId,
+  required String variant,
+  required PlatformInt64 depositErg,
+  required PlatformInt64 depositDexy,
+  required String recipientAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDexyBuildLpDeposit(
+  handleId: handleId,
+  variant: variant,
+  depositErg: depositErg,
+  depositDexy: depositDexy,
+  recipientAddress: recipientAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
+
+/// Build an LP redeem (remove liquidity) transaction and return it for broadcast.
+Future<String> dexyBuildLpRedeem({
+  required BigInt handleId,
+  required String variant,
+  required PlatformInt64 lpToBurn,
+  required String recipientAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDexyBuildLpRedeem(
+  handleId: handleId,
+  variant: variant,
+  lpToBurn: lpToBurn,
+  recipientAddress: recipientAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
 );
