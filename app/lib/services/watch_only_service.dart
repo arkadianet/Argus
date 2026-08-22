@@ -18,20 +18,34 @@ class WatchOnlyService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_key);
     if (raw != null) {
+      final List<dynamic> stored;
       try {
-        final stored = jsonDecode(raw) as List;
-        final valid = <String>{};
-        for (final item in stored.whereType<String>()) {
-          final trimmed = item.trim();
-          if (trimmed.isNotEmpty && await api.validateErgoAddress(address: trimmed)) {
+        stored = jsonDecode(raw) as List;
+      } catch (_) {
+        _addresses.clear();
+        notifyListeners();
+        return;
+      }
+      final valid = <String>{};
+      var failed = false;
+      for (final item in stored.whereType<String>()) {
+        final trimmed = item.trim();
+        if (trimmed.isEmpty) continue;
+        try {
+          if (await api.validateErgoAddress(address: trimmed)) {
             valid.add(trimmed);
           }
+        } catch (_) {
+          // Validation could not complete (bridge/FFI failure). Preserve the
+          // existing in-memory collection rather than wiping it.
+          failed = true;
+          break;
         }
+      }
+      if (!failed) {
         _addresses
           ..clear()
           ..addAll(valid);
-      } catch (_) {
-        _addresses.clear();
       }
     }
     notifyListeners();
