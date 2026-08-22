@@ -283,16 +283,25 @@ impl ErgoNodeClient {
     }
 
     /// Build an ErgoStateContext by fetching the last 10 block headers from the node.
+    ///
+    /// `/blocks/lastHeaders/N` returns oldest-first. ergo-lib (and Citadel's
+    /// `NodeInterface::get_state_context`) expect newest-first so `HEIGHT` is
+    /// the tip. Using the oldest header makes FreeMint's reset-window R4 check
+    /// fail (`successorR4 <= HEIGHT + T_free + T_buffer` → script = false).
     pub async fn get_state_context(&self) -> Result<ErgoStateContext, String> {
         let inner = &self.inner;
-        let headers: Vec<Header> = inner
+        let mut headers: Vec<Header> = inner
             .get_last_block_headers(HEADERS_COUNT as u32)
             .await
             .map_err(|e| format!("Failed to get headers: {}", e))?;
 
-        if headers.is_empty() {
-            return Err("No headers returned from node".to_string());
+        if headers.len() < HEADERS_COUNT {
+            return Err(format!(
+                "Expected {HEADERS_COUNT} block headers, got {}",
+                headers.len()
+            ));
         }
+        headers.reverse();
 
         let pre_header = PreHeader::from(headers[0].clone());
 
