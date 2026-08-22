@@ -109,8 +109,8 @@ String formatRelativeTime(DateTime? when, {DateTime? now}) {
   if (diff.inMinutes < 1) return '${diff.inSeconds}s ago';
   if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
   if (diff.inHours < 24) return '${diff.inHours}h ago';
-  final dayDiff = DateTime(reference.year, reference.month, reference.day)
-      .difference(DateTime(when.year, when.month, when.day))
+  final dayDiff = DateTime.utc(reference.year, reference.month, reference.day)
+      .difference(DateTime.utc(when.year, when.month, when.day))
       .inDays;
   if (dayDiff == 1) return 'Yesterday';
   if (dayDiff < 7) return '${dayDiff} days ago';

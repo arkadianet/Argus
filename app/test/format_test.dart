@@ -159,6 +159,12 @@ void main() {
       expect(formatRelativeTime(DateTime(2025, 6, 13, 12, 0, 0), now: now), '2 days ago');
     });
 
+    test('day labels survive a spring-forward DST transition', () {
+      final now = DateTime(2026, 3, 10, 0, 30, 0);
+      expect(formatRelativeTime(DateTime(2026, 3, 8, 0, 30, 0), now: now), '2 days ago');
+      expect(formatRelativeTime(DateTime(2026, 3, 9, 0, 30, 0), now: now), 'Yesterday');
+    });
+
     test('old dates fall back to date format', () {
       final now = DateTime(2025, 6, 15, 12, 0, 0);
       expect(formatRelativeTime(now.subtract(const Duration(days: 30)), now: now), '5/16/2025');
