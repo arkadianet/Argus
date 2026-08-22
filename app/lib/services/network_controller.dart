@@ -97,6 +97,7 @@ class NetworkController extends ChangeNotifier {
   int? height;
   bool probing = false;
   double? usdPerErg;
+  double? audPerErg;
   final Map<String, NodeProbe> probes = {};
 
   List<String> get enabledUrls =>
@@ -240,18 +241,19 @@ class NetworkController extends ChangeNotifier {
     if (_priceAt != null && now.difference(_priceAt!) < _priceTtl) return;
     try {
       final res = await http
-          .get(Uri.parse('https://api.coingecko.com/api/v3/simple/price?ids=ergo&vs_currencies=usd'))
+          .get(Uri.parse('https://api.coingecko.com/api/v3/simple/price?ids=ergo&vs_currencies=usd,aud'))
           .timeout(const Duration(seconds: 8));
       if (res.statusCode != 200) {
         notifyListeners();
         return;
       }
       final map = jsonDecode(res.body) as Map<String, dynamic>;
-      final usd = (map['ergo'] as Map?)?['usd'];
-      if (usd is num) {
-        usdPerErg = usd.toDouble();
-        _priceAt = now;
-      }
+      final ergo = map['ergo'] as Map?;
+      final usd = ergo?['usd'];
+      final aud = ergo?['aud'];
+      if (usd is num) usdPerErg = usd.toDouble();
+      if (aud is num) audPerErg = aud.toDouble();
+      if (usd is num || aud is num) _priceAt = now;
     } catch (_) {}
     notifyListeners();
   }
