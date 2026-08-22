@@ -120,6 +120,10 @@ pub const FEE_DENOM: i64 = 1000;
 pub const LP_SWAP_FEE_NUM: i64 = 3;
 pub const LP_SWAP_FEE_DENOM: i64 = 1000;
 
+/// Redemption fee applied to LP removes (user receives 100% − this %).
+/// Matches the 98/100 share in `calculator::calculate_lp_redeem`.
+pub const LP_REDEEM_FEE_PCT: f64 = 2.0;
+
 /// DexyGold mainnet constants
 pub mod gold_mainnet {
     /// DexyGold token ID

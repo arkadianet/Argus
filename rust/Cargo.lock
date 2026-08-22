@@ -3038,7 +3038,9 @@ name = "wallet-ffi"
 version = "0.1.0"
 dependencies = [
  "citadel-core",
+ "dexy",
  "ergo-lib",
+ "ergo-node-client",
  "ergo-tx",
  "ergopay-core",
  "flutter_rust_bridge",

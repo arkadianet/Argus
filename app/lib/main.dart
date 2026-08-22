@@ -10,6 +10,7 @@ import 'theme/theme_controller.dart';
 import 'ui/contacts_screen.dart';
 import 'ui/create_wallet_screen.dart';
 import 'ui/dashboard_screen.dart';
+import 'ui/dexy_screen.dart';
 import 'ui/receive_screen.dart';
 import 'ui/restore_wallet_screen.dart';
 import 'ui/send_screen.dart';
@@ -87,6 +88,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/contacts' => const ContactsScreen(),
               '/tx' => const TransactionDetailScreen(),
               '/utxos' => const UtxoManagementScreen(),
+              '/dexy' => const DexyScreen(),
               _ => null,
             };
             if (page == null) return null;

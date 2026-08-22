@@ -18,6 +18,7 @@ import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
 import 'settings_screen.dart';
 import 'transaction_detail_screen.dart';
+import 'wallets_overview_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -443,24 +444,61 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _switchWallet(String walletId) async {
+    if (!mounted) return;
+    if (walletId == _walletId && walletService.isUnlocked) return;
     setState(() => _status = 'Switching wallet…');
     try {
-      if (walletService.isUnlocked) {
+      if (walletService.isUnlocked && walletService.activeWalletId != walletId) {
         await walletService.lock();
       }
-      await walletService.switchWallet(walletId);
       _walletId = walletId;
       await _refreshUnlockMethods();
-      if (walletService.isUnlocked) {
-        await _afterUnlock();
-      } else {
+      if (!mounted) return;
+
+      // A wallet that still has a stored wrap key (biometric mode) can be
+      // switched into directly. A PIN-only wallet has no raw wrap key, so the
+      // best UX is to land on its unlock gate and let the user unlock as usual.
+      final wrapKeyAvailable = await SecureStorageService.hasWrapKey(
+        walletId: walletId,
+      );
+      setState(() {
+        _resetLocked();
+        _status = _hasSeed
+            ? '$_activeWalletName locked. Enter its PIN below.'
+            : 'Wallet found. Unlock to continue.';
+      });
+      if (wrapKeyAvailable) {
+        await walletService.switchWallet(walletId);
+        if (!mounted) return;
         setState(_resetLocked);
+        if (walletService.isUnlocked) {
+          await _afterUnlock();
+        }
       }
     } on ArgusException catch (e) {
+      if (!mounted) return;
+      setState(_resetLocked);
       _snack('${e.code}: ${e.message}');
     } catch (e) {
+      if (!mounted) return;
+      setState(_resetLocked);
       _snack('Could not switch wallet: $e');
     }
+  }
+
+  Future<void> _openWalletOverview() async {
+    final picked = await Navigator.push<String>(
+      context,
+      fadeRoute(
+        WalletOverviewScreen(
+          selectedWalletId: _walletId,
+          activeBalanceNano: _walletUnlocked ? _balanceNano : null,
+        ),
+      ),
+    );
+    if (!mounted || picked == null) return;
+    if (picked == _walletId) return;
+    await _switchWallet(picked);
   }
 
   Future<void> _refresh() async {
@@ -708,6 +746,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
       _status.contains('Could not') ||
       _status.contains('no address');
 
+  String get _activeWalletName {
+    for (final w in _wallets) {
+      if (w.walletId == _walletId) return w.name;
+    }
+    return 'Wallet';
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -727,6 +772,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               tooltip: 'Lock wallet',
               onPressed: _lock,
             ),
+          IconButton(
+            icon: const Icon(Icons.account_balance_wallet_outlined),
+            tooltip: 'Wallets',
+            onPressed: _openWalletOverview,
+          ),
           IconButton(
             icon: const Icon(Icons.tune),
             tooltip: 'Settings',
@@ -792,6 +842,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyMedium,
         ),
+        if (_wallets.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          Center(
+            child: InkWell(
+              onTap: _openWalletOverview,
+              borderRadius: BorderRadius.zero,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.account_balance_wallet_outlined,
+                      size: 18,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                    const SizedBox(width: 8),
+                    Flexible(
+                      child: Text(
+                        _activeWalletName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ),
+                    const SizedBox(width: 2),
+                    Icon(
+                      Icons.chevron_right,
+                      size: 20,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
         if (_status.startsWith('Error') || _status.contains(':')) ...[
           const SizedBox(height: 12),
           Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: rust)),
@@ -896,6 +983,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 40),
         children: [
            const SizedBox(height: 28),
+           Material(
+             color: Colors.transparent,
+             child: InkWell(
+               onTap: _openWalletOverview,
+               child: Padding(
+                 padding: const EdgeInsets.only(bottom: 12),
+                 child: Row(
+                   children: [
+                     Icon(
+                       Icons.account_balance_wallet_outlined,
+                       size: 18,
+                       color: Theme.of(context).colorScheme.primary,
+                     ),
+                     const SizedBox(width: 8),
+                     Flexible(
+                       child: Text(
+                         _activeWalletName,
+                         maxLines: 1,
+                         overflow: TextOverflow.ellipsis,
+                         style: Theme.of(context).textTheme.titleMedium,
+                       ),
+                     ),
+                     const SizedBox(width: 2),
+                     Icon(
+                       Icons.chevron_right,
+                       size: 18,
+                       color: Theme.of(context).colorScheme.primary,
+                     ),
+                   ],
+                 ),
+               ),
+             ),
+           ),
            if (networkController.activeUrl == null && !networkController.probing)
              Padding(
                padding: const EdgeInsets.only(bottom: 12),
@@ -1049,6 +1169,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
           ],
+          const SizedBox(height: 28),
+          const SectionLabel('Protocols'),
+          const SizedBox(height: 8),
+          _protocolTile(
+            context,
+            title: 'Dexy',
+            subtitle: 'Oracle-pegged assets · mint, swap, liquidity',
+            icon: Icons.all_inclusive,
+            onTap: () => _go('/dexy'),
+          ),
+          _protocolTile(
+            context,
+            title: 'AgeUSD',
+            subtitle: 'Coming soon',
+            icon: Icons.paid_outlined,
+            enabled: false,
+          ),
+          _protocolTile(
+            context,
+            title: 'DEX',
+            subtitle: 'Coming soon',
+            icon: Icons.sync_alt,
+            enabled: false,
+          ),
           if (fungible.isNotEmpty) ...[
             const SizedBox(height: 16),
             const Hairline(),
@@ -1178,6 +1322,51 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
             if (trailing != null)
               Text(trailing, style: Theme.of(context).textTheme.bodyMedium),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _protocolTile(
+    BuildContext context, {
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    VoidCallback? onTap,
+    bool enabled = true,
+  }) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 22,
+              color: enabled
+                  ? Theme.of(context).colorScheme.primary
+                  : Theme.of(context).colorScheme.outline,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 2),
+                  Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+            ),
+            Icon(
+              enabled ? Icons.chevron_right : Icons.lock_clock_outlined,
+              size: 18,
+              color: enabled
+                  ? Theme.of(context).colorScheme.primary
+                  : Theme.of(context).colorScheme.outline,
+            ),
           ],
         ),
       ),
