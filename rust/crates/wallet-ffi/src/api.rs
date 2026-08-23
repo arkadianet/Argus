@@ -1553,6 +1553,7 @@ pub async fn dexy_build_mint(
         user_inputs: eip12,
         current_height: height,
         recipient_ergo_tree: Some(recipient_tree),
+        recipient_held_tokens: 0,
     };
 
     let built = dexy::tx_builder::build_mint_dexy_tx(&request, &ctx, &state)
