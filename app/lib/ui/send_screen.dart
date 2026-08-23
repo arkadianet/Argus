@@ -7,6 +7,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../format.dart';
 import '../services/contacts_service.dart';
+import '../services/dexy_service.dart';
 import '../services/network_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -44,6 +45,7 @@ class _SendScreenState extends State<SendScreen> {
   bool _sending = false;
   String? _resultTxId;
   String? _assetId;
+  List<DexyPathQuote>? _swapQuotes;
   Set<String> _selectedSpendAddresses = {};
   final _feeCtrl = TextEditingController();
   final List<_RecipientEntry> _extraRecipients = [];
@@ -68,6 +70,38 @@ class _SendScreenState extends State<SendScreen> {
       if (t.id == _assetId) return t;
     }
     return null;
+  }
+
+  static const _dexyPrefix = 'dexy:';
+
+  /// A swap-supported asset selected that the wallet does not hold. Sending
+  /// it auto-buys via the cheapest Dexy route (mint or LP swap) first.
+  DexyVariant? get _selectedSwapVariant {
+    final id = _assetId;
+    if (id == null || !id.startsWith(_dexyPrefix)) return null;
+    final code = id.substring(_dexyPrefix.length);
+    for (final v in DexyVariant.values) {
+      if (v.code == code) return v;
+    }
+    return null;
+  }
+
+  Future<void> _refreshQuotes() async {
+    final variant = _selectedSwapVariant;
+    if (variant == null) return;
+    final amount =
+        parseDecimalToBase(_tokenAmtCtrl.text, variant.decimals);
+    if (amount == null || amount <= 0) {
+      if (mounted) setState(() => _swapQuotes = null);
+      return;
+    }
+    try {
+      final quotes = await dexService.quoteTokenSend(variant, amount);
+      if (!mounted) return;
+      setState(() => _swapQuotes = quotes);
+    } catch (_) {
+      if (mounted) setState(() => _swapQuotes = null);
+    }
   }
 
   List<String> get _allSpendAddresses {
@@ -169,6 +203,10 @@ class _SendScreenState extends State<SendScreen> {
 
    Future<void> _send() async {
     if (!_formKey.currentState!.validate()) return;
+    if (_selectedSwapVariant != null) {
+      await _sendViaSwap();
+      return;
+    }
     final args = _args;
     final allAddrs = _allSpendAddresses;
     final spend = _selectedSpendAddresses.isNotEmpty
@@ -301,6 +339,146 @@ class _SendScreenState extends State<SendScreen> {
       if (!mounted) return;
       setState(() => _sending = false);
       _snack('Failed: $e');
+    }
+  }
+
+  /// Auto-buy via the cheapest Dexy route, delivering the tokens straight to
+  /// the recipient; ERG change returns to the wallet's change address.
+  Future<void> _sendViaSwap() async {
+    final variant = _selectedSwapVariant!;
+    final args = _args;
+    final spend = _selectedSpendAddresses.isNotEmpty
+        ? _selectedSpendAddresses.toList()
+        : _allSpendAddresses;
+    if (spend.isEmpty) {
+      _snack('No spendable addresses');
+      return;
+    }
+    final tokenAmount =
+        parseDecimalToBase(_tokenAmtCtrl.text, variant.decimals);
+    if (tokenAmount == null || tokenAmount <= 0) {
+      _snack('Enter a token amount');
+      return;
+    }
+    final changeAddr = args.changeAddress.isNotEmpty
+        ? args.changeAddress
+        : args.senderAddress;
+
+    setState(() => _sending = true);
+    DexyBuildResult build;
+    try {
+      build = await dexService.buildTokenSend(
+        variant: variant,
+        tokenAmount: tokenAmount,
+        recipient: _recipientCtrl.text.trim(),
+        changeAddress: changeAddr,
+        spendAddresses: spend,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sending = false);
+      _snack('Could not build a route: $e');
+      return;
+    }
+    if (!mounted) return;
+
+    final isMint = build.action.startsWith('mint');
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Send ${variant.shortName}'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: rust.withValues(alpha: 0.1),
+                    border: Border.all(color: rust.withValues(alpha: 0.5)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Icon(Icons.gpp_bad_outlined, color: rust, size: 20),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'You don\'t hold ${variant.shortName}, so this buys '
+                          'it first (${isMint ? 'bank mint' : 'LP swap'}) and '
+                          'forwards it. Signed and broadcast in one step.',
+                          style: Theme.of(ctx)
+                              .textTheme
+                              .bodySmall
+                              ?.copyWith(color: rust),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Text('To', style: Theme.of(ctx).textTheme.titleSmall),
+                const SizedBox(height: 4),
+                Text(_recipientCtrl.text.trim(), style: monoStyle(ctx, size: 12)),
+                const SizedBox(height: 12),
+                Text(
+                  'Recipient gets  '
+                  '${formatTokenAmount(build.tokenAmount, variant.decimals)} '
+                  '${variant.shortName}',
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'ERG cost  ${formatErg(isMint ? build.ergCostNano : build.inputAmount)}',
+                ),
+                Text('Miner fee  ${formatErg(build.minerFee)}'),
+                Text('Change to you  ${formatErg(build.changeNanoErg)}'),
+                const SizedBox(height: 8),
+                Text(
+                  networkController.activeUrl ?? 'Node not chosen yet',
+                  style: Theme.of(ctx).textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Buy & send'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (ok != true) {
+      setState(() => _sending = false);
+      return;
+    }
+    try {
+      final raw = await walletService.sendErg(preparationId: build.preparationId);
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final txId = map['tx_id']?.toString() ?? raw;
+      if (!mounted) return;
+      HapticFeedback.mediumImpact();
+      setState(() {
+        _resultTxId = txId;
+        _sending = false;
+      });
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) Navigator.pop(context);
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sending = false);
+      _snack('Broadcast may have failed. Check activity before retrying.');
     }
   }
 
@@ -551,9 +729,71 @@ child: Column(
     );
   }
 
+  Widget _buildSwapSection(DexyVariant variant) {
+    final quotes = _swapQuotes;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _tokenAmtCtrl,
+          decoration: InputDecoration(
+            labelText: '${variant.name} amount to deliver',
+            helperText:
+                'You don\'t hold ${variant.shortName} — it is bought automatically at the best rate.',
+          ),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          onChanged: (_) => _refreshQuotes(),
+          validator: (v) {
+            final n = parseDecimalToBase(v ?? '', variant.decimals);
+            if (n == null || n <= 0) return 'Enter an amount';
+            return null;
+          },
+        ),
+        const SizedBox(height: 12),
+        if (quotes == null)
+          Text(
+            'Enter an amount to see the ERG cost.',
+            style: Theme.of(context).textTheme.bodySmall,
+          )
+        else if (quotes.isEmpty)
+          Text(
+            'No route available for this amount right now.',
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: rust),
+          )
+        else
+          for (final (i, q) in quotes.indexed)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                children: [
+                  Icon(
+                    i == 0 ? Icons.star : Icons.alt_route,
+                    size: 16,
+                    color: i == 0 ? iris : null,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '≈ ${formatErg(q.ergCostNano)} ERG via ${q.path}'
+                      '${i == 0 ? '  ·  cheapest' : ''}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final token = _selectedToken;
+    final swapVariant = _selectedSwapVariant;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Send'),
@@ -653,46 +893,60 @@ child: Column(
                         ..._args.tokens.map(
                           (t) => DropdownMenuItem(value: t.id, child: Text(t.label)),
                         ),
+                        ...DexyVariant.values
+                            .where((v) =>
+                                !_args.tokens.any((t) => t.id == v.tokenId))
+                            .map(
+                              (v) => DropdownMenuItem(
+                                value: '$_dexyPrefix${v.code}',
+                                child: Text('${v.name} · buy & send'),
+                              ),
+                            ),
                       ],
                       onChanged: (v) => setState(() {
                         _assetId = v;
                         _tokenAmtCtrl.clear();
+                        _swapQuotes = null;
                       }),
                     ),
-                    const SizedBox(height: 12),
-                    TextFormField(
-                      controller: _amountCtrl,
-                      decoration: InputDecoration(
-                        labelText: token == null ? 'Amount (ERG)' : 'ERG for the output box',
-                        hintText: '0.001',
-                        suffixIcon: TextButton(onPressed: _applyMaxErg, child: const Text('MAX')),
-                      ),
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      validator: (v) {
-                        final n = parseErgToNano(v ?? '');
-                        if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
-                        return null;
-                      },
-                    ),
-                    if (token != null && !token.isNft) ...[
+                    if (swapVariant != null)
+                      _buildSwapSection(swapVariant)
+                    else ...[
                       const SizedBox(height: 12),
                       TextFormField(
-                        controller: _tokenAmtCtrl,
+                        controller: _amountCtrl,
                         decoration: InputDecoration(
-                          labelText: '${token.label} amount',
-                          suffixIcon: TextButton(onPressed: _applyMaxToken, child: const Text('MAX')),
+                          labelText: token == null ? 'Amount (ERG)' : 'ERG for the output box',
+                          hintText: '0.001',
+                          suffixIcon: TextButton(onPressed: _applyMaxErg, child: const Text('MAX')),
                         ),
                         keyboardType: const TextInputType.numberWithOptions(decimal: true),
                         validator: (v) {
-                          final n = parseDecimalToBase(v ?? '', token.decimals);
-                          if (n == null || n <= 0) return 'Enter an amount';
+                          final n = parseErgToNano(v ?? '');
+                          if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
                           return null;
                         },
                       ),
-                    ],
-                    if (token != null && token.isNft) ...[
-                      const SizedBox(height: 12),
-                      Text('Sends 1 ${token.label}', style: Theme.of(context).textTheme.bodySmall),
+                      if (token != null && !token.isNft) ...[
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: _tokenAmtCtrl,
+                          decoration: InputDecoration(
+                            labelText: '${token.label} amount',
+                            suffixIcon: TextButton(onPressed: _applyMaxToken, child: const Text('MAX')),
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          validator: (v) {
+                            final n = parseDecimalToBase(v ?? '', token.decimals);
+                            if (n == null || n <= 0) return 'Enter an amount';
+                            return null;
+                          },
+                        ),
+                      ],
+                      if (token != null && token.isNft) ...[
+                        const SizedBox(height: 12),
+                        Text('Sends 1 ${token.label}', style: Theme.of(context).textTheme.bodySmall),
+                      ],
                     ],
                     const SizedBox(height: 16),
                     if (_multiRecipient)
@@ -801,7 +1055,7 @@ child: Column(
                           ),
                         ],
                       )
-                    else
+                    else if (swapVariant == null)
                       TextButton.icon(
                         onPressed: () {
                           setState(() {

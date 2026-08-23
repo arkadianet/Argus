@@ -45,9 +45,14 @@ class _DexyScreenState extends State<DexyScreen> {
     return null;
   }
 
-  String get _recipient => _args.receiveAddress.isNotEmpty
-      ? _args.receiveAddress
-      : _args.senderAddress;
+  // Mint outputs (tokens + ERG change) land on the change-policy address:
+  // first derived by default, next unused when privacy mode is on.
+  String get _recipient =>
+      _args.changeAddress.isNotEmpty
+          ? _args.changeAddress
+          : _args.receiveAddress.isNotEmpty
+              ? _args.receiveAddress
+              : _args.senderAddress;
 
   List<String> get _spendAddresses {
     final args = _args;
@@ -139,6 +144,7 @@ class _DexyScreenState extends State<DexyScreen> {
           variant: _variant,
           amount: amount,
           recipient: _recipient,
+          changeAddress: _recipient,
           spendAddresses: _spendAddresses,
         ),
       ),
@@ -178,6 +184,7 @@ class _DexyScreenState extends State<DexyScreen> {
           amount: amount,
           minOutput: minOutput,
           recipient: _recipient,
+          changeAddress: _recipient,
           spendAddresses: _spendAddresses,
         ),
       ),
@@ -230,6 +237,7 @@ class _DexyScreenState extends State<DexyScreen> {
               depositErg: ergAmt,
               depositDexy: dexyAmt,
               recipient: _recipient,
+              changeAddress: _recipient,
               spendAddresses: _spendAddresses,
             );
           }
@@ -237,6 +245,7 @@ class _DexyScreenState extends State<DexyScreen> {
             variant: _variant,
             lpToBurn: lpAmt,
             recipient: _recipient,
+            changeAddress: _recipient,
             spendAddresses: _spendAddresses,
           );
         },

@@ -1474,9 +1474,35 @@ fn user_change_erg(unsigned_tx: &ergo_tx::Eip12UnsignedTx, user_ergo_tree: &str)
         .unwrap_or(0)
 }
 
+/// Validate dexy destinations: `recipient_address` may be any valid Ergo
+/// address (external token sends), `change_address` must belong to the wallet.
+/// Returns `(recipient_tree, change_tree)`.
+fn resolve_dexy_destinations(
+    handle_id: u64,
+    op: &'static str,
+    recipient_address: &str,
+    change_address: &str,
+) -> Result<(String, String), String> {
+    let recipient_tree = address_to_ergo_tree(recipient_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    let change_tree = address_to_ergo_tree(change_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    with_handle(handle_id, op, |handle| {
+        if !handle.owns_address(change_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "change address is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        Ok(())
+    })?;
+    Ok((recipient_tree, change_tree))
+}
+
 /// Prepare a Dexy mint: builds the FreeMint transaction, caches it, and returns
 /// a preview JSON with the `preparation_id` for the shared confirm → broadcast
-/// flow.
+/// flow. `recipient_address` receives the minted tokens (any valid Ergo
+/// address); ERG change returns to wallet-owned `change_address`.
 #[flutter_rust_bridge::frb]
 #[allow(clippy::too_many_arguments)]
 pub async fn dexy_build_mint(
@@ -1484,6 +1510,7 @@ pub async fn dexy_build_mint(
     variant: String,
     amount: i64,
     recipient_address: String,
+    change_address: String,
     spend_addresses: Vec<String>,
     node_url: Option<String>,
 ) -> Result<String, String> {
@@ -1492,15 +1519,8 @@ pub async fn dexy_build_mint(
     })?;
     let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
 
-    with_handle(handle_id, "dexy_build_mint", |handle| {
-        if !handle.owns_address(&recipient_address).map_err(err_str)? {
-            return Err(ArgusError::InvalidAddress(
-                "recipient is not an address of this wallet".into(),
-            )
-            .to_json_string());
-        }
-        Ok(())
-    })?;
+    let (recipient_tree, change_tree) =
+        resolve_dexy_destinations(handle_id, "dexy_build_mint", &recipient_address, &change_address)?;
 
     let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
     let caps = client
@@ -1524,17 +1544,15 @@ pub async fn dexy_build_mint(
         .await
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
 
-    let user_tree = address_to_ergo_tree(&recipient_address)
-        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-
+    let user_tree = change_tree.clone();
     let request = dexy::tx_builder::MintDexyRequest {
         variant: dexy_variant,
         amount,
-        user_address: recipient_address.clone(),
+        user_address: change_address.clone(),
         user_ergo_tree: user_tree.clone(),
         user_inputs: eip12,
         current_height: height,
-        recipient_ergo_tree: None,
+        recipient_ergo_tree: Some(recipient_tree),
     };
 
     let built = dexy::tx_builder::build_mint_dexy_tx(&request, &ctx, &state)
@@ -1559,7 +1577,7 @@ pub async fn dexy_build_mint(
     let data_input_boxes = vec![ctx.oracle_box.clone(), ctx.lp_box.clone()];
 
     let miner_fee = built.summary.tx_fee_nano;
-    let change_erg = user_change_erg(&built.unsigned_tx, &user_tree);
+    let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         ergo_boxes,
@@ -1582,11 +1600,14 @@ pub async fn dexy_build_mint(
         "miner_fee": miner_fee,
         "change_nano_erg": change_erg,
         "recipient": recipient_address,
+        "change_address": change_address,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
 /// Prepare a Dexy LP swap (both directions) into the standard broadcast flow.
+/// `recipient_address` receives the swapped output (any valid Ergo address);
+/// ERG/token change returns to wallet-owned `change_address`.
 #[flutter_rust_bridge::frb]
 #[allow(clippy::too_many_arguments)]
 pub async fn dexy_build_swap(
@@ -1596,6 +1617,7 @@ pub async fn dexy_build_swap(
     amount: i64,
     min_output: i64,
     recipient_address: String,
+    change_address: String,
     spend_addresses: Vec<String>,
     node_url: Option<String>,
 ) -> Result<String, String> {
@@ -1614,15 +1636,8 @@ pub async fn dexy_build_swap(
     };
     let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
 
-    with_handle(handle_id, "dexy_build_swap", |handle| {
-        if !handle.owns_address(&recipient_address).map_err(err_str)? {
-            return Err(ArgusError::InvalidAddress(
-                "recipient is not an address of this wallet".into(),
-            )
-            .to_json_string());
-        }
-        Ok(())
-    })?;
+    let (recipient_tree, change_tree) =
+        resolve_dexy_destinations(handle_id, "dexy_build_swap", &recipient_address, &change_address)?;
 
     let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
     let caps = client
@@ -1645,19 +1660,17 @@ pub async fn dexy_build_swap(
         .current_height()
         .await
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
-    let user_tree = address_to_ergo_tree(&recipient_address)
-        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-
+    let user_tree = change_tree.clone();
     let request = dexy::tx_builder::SwapDexyRequest {
         variant: dexy_variant,
         direction: swap_direction,
         input_amount: amount,
         min_output,
-        user_address: recipient_address.clone(),
+        user_address: change_address.clone(),
         user_ergo_tree: user_tree.clone(),
         user_inputs: eip12,
         current_height: height,
-        recipient_ergo_tree: None,
+        recipient_ergo_tree: Some(recipient_tree),
     };
 
     let built = dexy::tx_builder::build_swap_dexy_tx(&request, &ctx, &state)
@@ -1676,7 +1689,7 @@ pub async fn dexy_build_swap(
     ergo_boxes.extend(user_boxes);
 
     let miner_fee = built.summary.miner_fee_nano;
-    let change_erg = user_change_erg(&built.unsigned_tx, &user_tree);
+    let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         ergo_boxes,
@@ -1700,6 +1713,7 @@ pub async fn dexy_build_swap(
         "miner_fee": miner_fee,
         "change_nano_erg": change_erg,
         "recipient": recipient_address,
+        "change_address": change_address,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -1713,6 +1727,7 @@ pub async fn dexy_build_lp_deposit(
     deposit_erg: i64,
     deposit_dexy: i64,
     recipient_address: String,
+    change_address: String,
     spend_addresses: Vec<String>,
     node_url: Option<String>,
 ) -> Result<String, String> {
@@ -1721,15 +1736,12 @@ pub async fn dexy_build_lp_deposit(
     })?;
     let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
 
-    with_handle(handle_id, "dexy_build_lp_deposit", |handle| {
-        if !handle.owns_address(&recipient_address).map_err(err_str)? {
-            return Err(ArgusError::InvalidAddress(
-                "recipient is not an address of this wallet".into(),
-            )
-            .to_json_string());
-        }
-        Ok(())
-    })?;
+    let (recipient_tree, change_tree) = resolve_dexy_destinations(
+        handle_id,
+        "dexy_build_lp_deposit",
+        &recipient_address,
+        &change_address,
+    )?;
 
     let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
     let caps = client
@@ -1754,18 +1766,16 @@ pub async fn dexy_build_lp_deposit(
         .current_height()
         .await
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
-    let user_tree = address_to_ergo_tree(&recipient_address)
-        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-
+    let user_tree = change_tree.clone();
     let request = dexy::tx_builder::LpDepositRequest {
         variant: dexy_variant,
         deposit_erg,
         deposit_dexy,
-        user_address: recipient_address.clone(),
+        user_address: change_address.clone(),
         user_ergo_tree: user_tree.clone(),
         user_inputs: eip12,
         current_height: height,
-        recipient_ergo_tree: None,
+        recipient_ergo_tree: Some(recipient_tree),
     };
 
     let built = dexy::tx_builder::build_lp_deposit_tx(
@@ -1790,7 +1800,7 @@ pub async fn dexy_build_lp_deposit(
     ergo_boxes.extend(user_boxes);
 
     let miner_fee = built.summary.miner_fee_nano;
-    let change_erg = user_change_erg(&built.unsigned_tx, &user_tree);
+    let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         ergo_boxes,
@@ -1811,6 +1821,7 @@ pub async fn dexy_build_lp_deposit(
         "miner_fee": miner_fee,
         "change_nano_erg": change_erg,
         "recipient": recipient_address,
+        "change_address": change_address,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -1823,6 +1834,7 @@ pub async fn dexy_build_lp_redeem(
     variant: String,
     lp_to_burn: i64,
     recipient_address: String,
+    change_address: String,
     spend_addresses: Vec<String>,
     node_url: Option<String>,
 ) -> Result<String, String> {
@@ -1831,15 +1843,12 @@ pub async fn dexy_build_lp_redeem(
     })?;
     let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
 
-    with_handle(handle_id, "dexy_build_lp_redeem", |handle| {
-        if !handle.owns_address(&recipient_address).map_err(err_str)? {
-            return Err(ArgusError::InvalidAddress(
-                "recipient is not an address of this wallet".into(),
-            )
-            .to_json_string());
-        }
-        Ok(())
-    })?;
+    let (recipient_tree, change_tree) = resolve_dexy_destinations(
+        handle_id,
+        "dexy_build_lp_redeem",
+        &recipient_address,
+        &change_address,
+    )?;
 
     let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
     let caps = client
@@ -1864,17 +1873,15 @@ pub async fn dexy_build_lp_redeem(
         .current_height()
         .await
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
-    let user_tree = address_to_ergo_tree(&recipient_address)
-        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-
+    let user_tree = change_tree.clone();
     let request = dexy::tx_builder::LpRedeemRequest {
         variant: dexy_variant,
         lp_to_burn,
-        user_address: recipient_address.clone(),
+        user_address: change_address.clone(),
         user_ergo_tree: user_tree.clone(),
         user_inputs: eip,
         current_height: height,
-        recipient_ergo_tree: None,
+        recipient_ergo_tree: Some(recipient_tree),
     };
 
     let built = dexy::tx_builder::build_lp_redeem_tx(
@@ -1910,7 +1917,7 @@ pub async fn dexy_build_lp_redeem(
     }
 
     let miner_fee = built.summary.miner_fee_nano;
-    let change_erg = user_change_erg(&built.unsigned_tx, &user_tree);
+    let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         ergo_boxes,
@@ -1931,6 +1938,7 @@ pub async fn dexy_build_lp_redeem(
         "miner_fee": miner_fee,
         "change_nano_erg": change_erg,
         "recipient": recipient_address,
+        "change_address": change_address,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }

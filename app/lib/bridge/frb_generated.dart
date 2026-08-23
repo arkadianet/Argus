@@ -95,6 +95,7 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 depositErg,
     required PlatformInt64 depositDexy,
     required String recipientAddress,
+    required String changeAddress,
     required List<String> spendAddresses,
     String? nodeUrl,
   });
@@ -104,6 +105,7 @@ abstract class RustLibApi extends BaseApi {
     required String variant,
     required PlatformInt64 lpToBurn,
     required String recipientAddress,
+    required String changeAddress,
     required List<String> spendAddresses,
     String? nodeUrl,
   });
@@ -113,6 +115,7 @@ abstract class RustLibApi extends BaseApi {
     required String variant,
     required PlatformInt64 amount,
     required String recipientAddress,
+    required String changeAddress,
     required List<String> spendAddresses,
     String? nodeUrl,
   });
@@ -124,6 +127,7 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 amount,
     required PlatformInt64 minOutput,
     required String recipientAddress,
+    required String changeAddress,
     required List<String> spendAddresses,
     String? nodeUrl,
   });
@@ -419,6 +423,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required PlatformInt64 depositErg,
     required PlatformInt64 depositDexy,
     required String recipientAddress,
+    required String changeAddress,
     required List<String> spendAddresses,
     String? nodeUrl,
   }) {
@@ -431,6 +436,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_i_64(depositErg, serializer);
           sse_encode_i_64(depositDexy, serializer);
           sse_encode_String(recipientAddress, serializer);
+          sse_encode_String(changeAddress, serializer);
           sse_encode_list_String(spendAddresses, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
           pdeCallFfi(
@@ -451,6 +457,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           depositErg,
           depositDexy,
           recipientAddress,
+          changeAddress,
           spendAddresses,
           nodeUrl,
         ],
@@ -467,6 +474,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "depositErg",
       "depositDexy",
       "recipientAddress",
+      "changeAddress",
       "spendAddresses",
       "nodeUrl",
     ],
@@ -478,6 +486,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String variant,
     required PlatformInt64 lpToBurn,
     required String recipientAddress,
+    required String changeAddress,
     required List<String> spendAddresses,
     String? nodeUrl,
   }) {
@@ -489,6 +498,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(variant, serializer);
           sse_encode_i_64(lpToBurn, serializer);
           sse_encode_String(recipientAddress, serializer);
+          sse_encode_String(changeAddress, serializer);
           sse_encode_list_String(spendAddresses, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
           pdeCallFfi(
@@ -508,6 +518,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           variant,
           lpToBurn,
           recipientAddress,
+          changeAddress,
           spendAddresses,
           nodeUrl,
         ],
@@ -523,6 +534,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "variant",
       "lpToBurn",
       "recipientAddress",
+      "changeAddress",
       "spendAddresses",
       "nodeUrl",
     ],
@@ -534,6 +546,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String variant,
     required PlatformInt64 amount,
     required String recipientAddress,
+    required String changeAddress,
     required List<String> spendAddresses,
     String? nodeUrl,
   }) {
@@ -545,6 +558,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(variant, serializer);
           sse_encode_i_64(amount, serializer);
           sse_encode_String(recipientAddress, serializer);
+          sse_encode_String(changeAddress, serializer);
           sse_encode_list_String(spendAddresses, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
           pdeCallFfi(
@@ -564,6 +578,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           variant,
           amount,
           recipientAddress,
+          changeAddress,
           spendAddresses,
           nodeUrl,
         ],
@@ -579,6 +594,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "variant",
       "amount",
       "recipientAddress",
+      "changeAddress",
       "spendAddresses",
       "nodeUrl",
     ],
@@ -592,6 +608,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required PlatformInt64 amount,
     required PlatformInt64 minOutput,
     required String recipientAddress,
+    required String changeAddress,
     required List<String> spendAddresses,
     String? nodeUrl,
   }) {
@@ -605,6 +622,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_i_64(amount, serializer);
           sse_encode_i_64(minOutput, serializer);
           sse_encode_String(recipientAddress, serializer);
+          sse_encode_String(changeAddress, serializer);
           sse_encode_list_String(spendAddresses, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
           pdeCallFfi(
@@ -626,6 +644,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           amount,
           minOutput,
           recipientAddress,
+          changeAddress,
           spendAddresses,
           nodeUrl,
         ],
@@ -643,6 +662,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "amount",
       "minOutput",
       "recipientAddress",
+      "changeAddress",
       "spendAddresses",
       "nodeUrl",
     ],

@@ -395,6 +395,14 @@ int _i(Map<String, dynamic> json, String key) {
   return int.tryParse(v?.toString() ?? '') ?? 0;
 }
 
+/// An estimated ERG cost for delivering tokens through one route.
+class DexyPathQuote {
+  final String path;
+  final int ergCostNano;
+
+  const DexyPathQuote({required this.path, required this.ergCostNano});
+}
+
 /// Talk to the FFI; every broadcast goes through the shared confirm sheet and
 /// then [`WalletService.sendErg`] / [`WalletService.signPreparation`].
 class DexyService {
@@ -463,6 +471,7 @@ class DexyService {
     required DexyVariant variant,
     required int amount,
     required String recipient,
+    required String changeAddress,
     required List<String> spendAddresses,
   }) async {
     final raw = await api.dexyBuildMint(
@@ -470,6 +479,7 @@ class DexyService {
       variant: variant.code,
       amount: amount,
       recipientAddress: recipient,
+      changeAddress: changeAddress,
       spendAddresses: spendAddresses,
       nodeUrl: _node,
     );
@@ -482,6 +492,7 @@ class DexyService {
     required int amount,
     required int minOutput,
     required String recipient,
+    required String changeAddress,
     required List<String> spendAddresses,
   }) async {
     final raw = await api.dexyBuildSwap(
@@ -491,6 +502,7 @@ class DexyService {
       amount: amount,
       minOutput: minOutput,
       recipientAddress: recipient,
+      changeAddress: changeAddress,
       spendAddresses: spendAddresses,
       nodeUrl: _node,
     );
@@ -502,6 +514,7 @@ class DexyService {
     required int depositErg,
     required int depositDexy,
     required String recipient,
+    required String changeAddress,
     required List<String> spendAddresses,
   }) async {
     final raw = await api.dexyBuildLpDeposit(
@@ -510,6 +523,7 @@ class DexyService {
       depositErg: depositErg,
       depositDexy: depositDexy,
       recipientAddress: recipient,
+      changeAddress: changeAddress,
       spendAddresses: spendAddresses,
       nodeUrl: _node,
     );
@@ -520,6 +534,7 @@ class DexyService {
     required DexyVariant variant,
     required int lpToBurn,
     required String recipient,
+    required String changeAddress,
     required List<String> spendAddresses,
   }) async {
     final raw = await api.dexyBuildLpRedeem(
@@ -527,10 +542,148 @@ class DexyService {
       variant: variant.code,
       lpToBurn: lpToBurn,
       recipientAddress: recipient,
+      changeAddress: changeAddress,
       spendAddresses: spendAddresses,
       nodeUrl: _node,
     );
     return DexyBuildResult.fromJson((jsonDecode(raw) as Map).cast());
+  }
+
+  /// ERG needed as LP-swap input to receive at least [tokenOut] tokens.
+  /// Inverts the contract formula out = Y·in·f / (X·d + in·f).
+  int ergInForLpSwapOutput(DexyState st, int tokenOut) {
+    final x = st.lpErgReserves;
+    final y = st.lpDexyReserves;
+    const d = 1000;
+    const f = 997; // pass-through portion of the 0.3% fee
+    if (tokenOut <= 0 || y <= 0 || tokenOut >= y || x <= 0) return 0;
+    final num = tokenOut * x * d;
+    final den = f * (y - tokenOut);
+    return (num + den - 1) ~/ den;
+  }
+
+  /// Estimated total ERG cost to deliver [tokenAmount] via each executable
+  /// path, cheapest first. FreeMint pays bank+buyback at the oracle rate;
+  /// LP swap uses pool reserves. No transaction is built.
+  Future<List<DexyPathQuote>> quoteTokenSend(
+    DexyVariant variant,
+    int tokenAmount,
+  ) async {
+    final st = await state(variant);
+    final quotes = <DexyPathQuote>[];
+    final free = st.rates.freeMint;
+    final limit = [
+      free.maxTokens,
+      free.remainingToday,
+      st.freeMintAvailable,
+    ].whereType<int>().fold<int>(0x7fffffffffffffff, (a, b) => a < b ? a : b);
+    if (free.available && tokenAmount <= limit && tokenAmount <= st.dexyInBank) {
+      quotes.add(DexyPathQuote(
+        path: 'FreeMint',
+        // Oracle rate per token + miner fee (protocol fees included in rate).
+        ergCostNano:
+            ((free.effectiveRate ?? st.rates.ergPerToken) * tokenAmount)
+                    .ceil() +
+                1100000,
+      ));
+    }
+    if (st.lpErgReserves > 0 && st.lpDexyReserves > tokenAmount) {
+      final ergIn = ergInForLpSwapOutput(st, tokenAmount);
+      if (ergIn > 0) {
+        quotes.add(DexyPathQuote(
+          path: 'LP Swap',
+          ergCostNano: ergIn + 1100000,
+        ));
+      }
+    }
+    quotes.sort((a, b) => a.ergCostNano.compareTo(b.ergCostNano));
+    return quotes;
+  }
+
+  /// Deliver exactly [tokenAmount] of [variant] tokens to [recipient] —
+  /// external addresses allowed — paying from [spendAddresses] and returning
+  /// ERG change to wallet-owned [changeAddress]. Picks the cheapest available
+  /// path and falls back to the next on build failure.
+  Future<DexyBuildResult> buildTokenSend({
+    required DexyVariant variant,
+    required int tokenAmount,
+    required String recipient,
+    required String changeAddress,
+    required List<String> spendAddresses,
+  }) async {
+    final st = await state(variant);
+    final errors = <String>[];
+
+    // 1. FreeMint: oracle-priced mint from the bank.
+    final free = st.rates.freeMint;
+    final limit = [
+      free.maxTokens,
+      free.remainingToday,
+      st.freeMintAvailable,
+    ].whereType<int>().fold<int>(0x7fffffffffffffff, (a, b) => a < b ? a : b);
+    final freeOk =
+        free.available && tokenAmount <= limit && tokenAmount <= st.dexyInBank;
+
+    // 2. LP swap ERG → token, sized to yield at least tokenAmount.
+    var swapErgIn = 0;
+    if (st.lpErgReserves > 0 && st.lpDexyReserves > tokenAmount) {
+      swapErgIn = ergInForLpSwapOutput(st, tokenAmount);
+    }
+    final freeEstimate = freeOk
+        ? ((free.effectiveRate ?? st.rates.ergPerToken) * tokenAmount).ceil()
+        : null;
+    final tryFreeFirst =
+        freeOk && (swapErgIn == 0 || (freeEstimate ?? 0) <= swapErgIn);
+
+    Future<DexyBuildResult> doMint() async {
+      return buildMint(
+        variant: variant,
+        amount: tokenAmount,
+        recipient: recipient,
+        changeAddress: changeAddress,
+        spendAddresses: spendAddresses,
+      );
+    }
+
+    Future<DexyBuildResult> doSwap() async {
+      return buildSwap(
+        variant: variant,
+        direction: 'erg_to_dexy',
+        amount: swapErgIn,
+        minOutput: tokenAmount,
+        recipient: recipient,
+        changeAddress: changeAddress,
+        spendAddresses: spendAddresses,
+      );
+    }
+
+    if (tryFreeFirst) {
+      try {
+        return await doMint();
+      } catch (e) {
+        errors.add('FreeMint: $e');
+      }
+    }
+    if (swapErgIn > 0) {
+      try {
+        return await doSwap();
+      } catch (e) {
+        errors.add('LP Swap: $e');
+      }
+    }
+    if (!tryFreeFirst && freeOk) {
+      try {
+        return await doMint();
+      } catch (e) {
+        errors.add('FreeMint: $e');
+      }
+    }
+    throw ArgusException(
+      code: 'NO_ROUTE',
+      message: errors.isEmpty
+          ? 'No route can supply $tokenAmount ${variant.shortName}'
+          : errors.join('; '),
+    );
   }
 }
 

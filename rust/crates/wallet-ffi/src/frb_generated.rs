@@ -174,6 +174,7 @@ fn wire__crate__api__dexy_build_lp_deposit_impl(
             let api_deposit_erg = <i64>::sse_decode(&mut deserializer);
             let api_deposit_dexy = <i64>::sse_decode(&mut deserializer);
             let api_recipient_address = <String>::sse_decode(&mut deserializer);
+            let api_change_address = <String>::sse_decode(&mut deserializer);
             let api_spend_addresses = <Vec<String>>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -186,6 +187,7 @@ fn wire__crate__api__dexy_build_lp_deposit_impl(
                             api_deposit_erg,
                             api_deposit_dexy,
                             api_recipient_address,
+                            api_change_address,
                             api_spend_addresses,
                             api_node_url,
                         )
@@ -224,6 +226,7 @@ fn wire__crate__api__dexy_build_lp_redeem_impl(
             let api_variant = <String>::sse_decode(&mut deserializer);
             let api_lp_to_burn = <i64>::sse_decode(&mut deserializer);
             let api_recipient_address = <String>::sse_decode(&mut deserializer);
+            let api_change_address = <String>::sse_decode(&mut deserializer);
             let api_spend_addresses = <Vec<String>>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -235,6 +238,7 @@ fn wire__crate__api__dexy_build_lp_redeem_impl(
                             api_variant,
                             api_lp_to_burn,
                             api_recipient_address,
+                            api_change_address,
                             api_spend_addresses,
                             api_node_url,
                         )
@@ -273,6 +277,7 @@ fn wire__crate__api__dexy_build_mint_impl(
             let api_variant = <String>::sse_decode(&mut deserializer);
             let api_amount = <i64>::sse_decode(&mut deserializer);
             let api_recipient_address = <String>::sse_decode(&mut deserializer);
+            let api_change_address = <String>::sse_decode(&mut deserializer);
             let api_spend_addresses = <Vec<String>>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -284,6 +289,7 @@ fn wire__crate__api__dexy_build_mint_impl(
                             api_variant,
                             api_amount,
                             api_recipient_address,
+                            api_change_address,
                             api_spend_addresses,
                             api_node_url,
                         )
@@ -324,6 +330,7 @@ fn wire__crate__api__dexy_build_swap_impl(
             let api_amount = <i64>::sse_decode(&mut deserializer);
             let api_min_output = <i64>::sse_decode(&mut deserializer);
             let api_recipient_address = <String>::sse_decode(&mut deserializer);
+            let api_change_address = <String>::sse_decode(&mut deserializer);
             let api_spend_addresses = <Vec<String>>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -337,6 +344,7 @@ fn wire__crate__api__dexy_build_swap_impl(
                             api_amount,
                             api_min_output,
                             api_recipient_address,
+                            api_change_address,
                             api_spend_addresses,
                             api_node_url,
                         )
