@@ -109,16 +109,30 @@ pub(crate) fn pool_token_ids(pool: &AmmPool) -> Vec<String> {
     ids
 }
 
-/// Pick the pool with the deepest output-side reserves for a pair.
+/// Pick the pool returning the most output for `amount`, with its quote.
+///
+/// Ranks by quoted output rather than reserve depth. Depth is not comparable
+/// across T2T candidates — `token_y` holds whichever token that pool put in the
+/// slot, so comparing raw amounts compares different tokens with different
+/// decimals. Quoted output is the same token for every candidate of a pair, and
+/// it also folds in each pool's own fee tier (`fee_num`/`fee_denom`), which a
+/// reserve comparison ignores entirely.
+///
+/// Quoting during selection also means a candidate that cannot serve the swap
+/// is skipped rather than chosen and then failed on, which previously reported
+/// tradeable pairs as untradeable.
 pub(crate) fn best_pool_for<'a>(
     pools: &'a [AmmPool],
     from_token: Option<&str>,
     to_token: Option<&str>,
-) -> Option<&'a AmmPool> {
+    amount: u64,
+) -> Option<(&'a AmmPool, amm::state::SwapQuote)> {
+    let input = swap_input(from_token, amount);
     pools
         .iter()
         .filter(|p| pool_supports(p, from_token, to_token))
-        .max_by_key(|p| p.erg_reserves.unwrap_or(p.token_y.amount))
+        .filter_map(|p| amm::calculator::quote_swap(p, &input).map(|q| (p, q)))
+        .max_by_key(|(_, q)| q.output.amount)
 }
 
 fn pool_supports(pool: &AmmPool, from_token: Option<&str>, to_token: Option<&str>) -> bool {
@@ -275,6 +289,67 @@ mod tests {
         // Rounds down: never demand a minimum the pool cannot satisfy.
         assert_eq!(min_output_for(3), 2);
         assert_eq!(min_output_for(0), 0);
+    }
+
+    fn tok(id: &str, amount: u64) -> amm::state::TokenAmount {
+        amm::state::TokenAmount {
+            token_id: id.to_string(),
+            amount,
+            decimals: Some(0),
+            name: None,
+        }
+    }
+
+    fn t2t(pool_id: &str, x: amm::state::TokenAmount, y: amm::state::TokenAmount) -> AmmPool {
+        AmmPool {
+            pool_id: pool_id.to_string(),
+            pool_type: amm::state::PoolType::T2T,
+            box_id: format!("box_{pool_id}"),
+            erg_reserves: None,
+            token_x: Some(x),
+            token_y: y,
+            lp_token_id: format!("lp_{pool_id}"),
+            lp_circulating: 1,
+            fee_num: 997,
+            fee_denom: 1000,
+        }
+    }
+
+    /// Ranking T2T pools by `token_y.amount` compares raw counts of whichever
+    /// token sits in that slot — different tokens, different decimals. Rank by
+    /// the quoted output instead, which is the same token across candidates.
+    #[test]
+    fn t2t_ranks_by_quoted_output_not_raw_reserves() {
+        // Deep in A, shallow in B: 1000 A in yields ~99 B.
+        let big_y = t2t("big", tok("A", 10_000_000), tok("B", 1_000_000));
+        // Shallow in A, mid in B: same input yields ~249_624 B.
+        let better = t2t("better", tok("A", 1_000), tok("B", 500_000));
+        let pools = vec![big_y, better];
+
+        let (pool, quote) = best_pool_for(&pools, Some("A"), Some("B"), 1_000)
+            .expect("a T2T pool trades A/B");
+
+        assert_eq!(
+            pool.pool_id, "better",
+            "must pick the pool that actually returns more, not the larger token_y"
+        );
+        assert!(quote.output.amount > 200_000, "got {}", quote.output.amount);
+    }
+
+    /// Selecting before quoting reports a tradeable pair as untradeable
+    /// whenever the top-ranked candidate cannot serve the swap.
+    #[test]
+    fn unquotable_pools_are_skipped_not_fatal() {
+        // Ranks highest by token_y, but has 1 unit of A out — quotes to zero.
+        let dead_end = t2t("dead", tok("A", 1), tok("B", 1_000_000_000));
+        let usable = t2t("usable", tok("A", 500_000), tok("B", 1_000_000));
+        let pools = vec![dead_end, usable];
+
+        let (pool, quote) = best_pool_for(&pools, Some("B"), Some("A"), 1_000)
+            .expect("the usable pool must be found even though a deeper one cannot quote");
+
+        assert_eq!(pool.pool_id, "usable");
+        assert!(quote.output.amount > 0);
     }
 
     /// A built swap must never pay the Citadel address. Pinned to that tree

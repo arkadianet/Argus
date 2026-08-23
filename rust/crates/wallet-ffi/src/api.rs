@@ -2194,18 +2194,17 @@ pub async fn amm_quote(
         return Err(ArgusError::Generic("Amount must be positive".into()).to_json_string());
     }
     let set = crate::api_amm_impl::load_pools(node_url, false).await?;
-    let pool = crate::api_amm_impl::best_pool_for(
+    // Selection quotes every candidate, so an unquotable pool is skipped rather
+    // than chosen and then failed on.
+    let (pool, quote) = crate::api_amm_impl::best_pool_for(
         &set.pools,
         from_token.as_deref(),
         to_token.as_deref(),
+        amount as u64,
     )
     .ok_or_else(|| {
-        ArgusError::Generic("NO_POOL: no Spectrum pool trades this pair".into()).to_json_string()
-    })?;
-
-    let input = crate::api_amm_impl::swap_input(from_token.as_deref(), amount as u64);
-    let quote = amm::calculator::quote_swap(pool, &input).ok_or_else(|| {
-        ArgusError::Generic("Pool cannot quote this swap".into()).to_json_string()
+        ArgusError::Generic("NO_POOL: no Spectrum pool can trade this pair at this size".into())
+            .to_json_string()
     })?;
 
     serde_json::to_string(&serde_json::json!({
