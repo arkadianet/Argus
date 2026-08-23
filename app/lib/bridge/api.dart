@@ -474,3 +474,55 @@ Future<String> sigmausdBuild({
   spendAddresses: spendAddresses,
   nodeUrl: nodeUrl,
 );
+
+/// Discovered Spectrum pools with token metadata. Read-only; never touches the
+/// wallet handle. `truncated` is true when discovery hit its 1000-box cap and
+/// some pools may be missing.
+Future<String> ammPools({String? nodeUrl, required bool forceRefresh}) =>
+    RustLib.instance.api.crateApiAmmPools(
+      nodeUrl: nodeUrl,
+      forceRefresh: forceRefresh,
+    );
+
+/// Quote a single-hop swap. `from_token`/`to_token` are `None` for ERG,
+/// matching how the Send screen encodes ERG as a null asset id.
+Future<String> ammQuote({
+  String? fromToken,
+  String? toToken,
+  required PlatformInt64 amount,
+  double? slippagePct,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmQuote(
+  fromToken: fromToken,
+  toToken: toToken,
+  amount: amount,
+  slippagePct: slippagePct,
+  nodeUrl: nodeUrl,
+);
+
+/// Prepare a Spectrum direct swap: builds the transaction, caches it, and
+/// returns a preview JSON with the `preparation_id` for the shared confirm →
+/// broadcast flow.
+Future<String> ammBuildSwap({
+  required BigInt handleId,
+  String? fromToken,
+  String? toToken,
+  required PlatformInt64 amount,
+  required PlatformInt64 minOutput,
+  required String poolId,
+  required String recipientAddress,
+  required String changeAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmBuildSwap(
+  handleId: handleId,
+  fromToken: fromToken,
+  toToken: toToken,
+  amount: amount,
+  minOutput: minOutput,
+  poolId: poolId,
+  recipientAddress: recipientAddress,
+  changeAddress: changeAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
