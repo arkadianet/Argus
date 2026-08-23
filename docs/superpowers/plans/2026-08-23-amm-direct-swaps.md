@@ -200,6 +200,15 @@ pub(crate) struct PoolSet {
     pub pools: Vec<AmmPool>,
     pub truncated: bool,
     pub fetched_at: Instant,
+    /// Node the pools came from. Box ids are only meaningful for that node, so
+    /// a cache entry must not survive a node switch.
+    pub node_url: String,
+}
+
+impl PoolSet {
+    fn is_fresh_for(&self, node_url: &str) -> bool {
+        self.node_url == node_url && self.fetched_at.elapsed() < POOL_CACHE_TTL
+    }
 }
 
 static POOL_CACHE: Lazy<RwLock<Option<PoolSet>>> = Lazy::new(|| RwLock::new(None));
@@ -380,7 +389,7 @@ git commit -m "feat: cache Spectrum token metadata by id"
 
 **Interfaces:**
 - Consumes: `load_pools`, `token_meta`, `TokenMeta` (Tasks 2–3); `amm::calculator::quote_swap(pool: &AmmPool, input: &SwapInput) -> Option<SwapQuote>`; `amm::state::{SwapInput, PoolType}`
-- Produces: `pub async fn amm_pools(node_url: Option<String>, force_refresh: bool) -> Result<String, String>`, `pub async fn amm_quote(from_token: Option<String>, to_token: Option<String>, amount: i64, slippage_pct: Option<f64>, node_url: Option<String>) -> Result<String, String>`
+- Produces: `pub async fn amm_pools(node_url: Option<String>, force_refresh: bool) -> Result<String, String>`, `pub async fn amm_quote(from_token: Option<String>, to_token: Option<String>, amount: i64, node_url: Option<String>) -> Result<String, String>`
 
 `from_token`/`to_token` use `None` to mean ERG, matching how the Send screen already encodes ERG as a null asset id (`send_screen.dart:905`).
 
@@ -431,16 +440,22 @@ pub(crate) fn min_output_for(output: u64, slippage_pct: f64) -> u64 {
     (output as f64 * keep).floor() as u64
 }
 
-/// Pick the pool with the deepest output-side reserves for a pair.
+/// Pick the pool returning the most output for `amount`, with its quote.
+/// Ranks by quoted output, not reserve depth: depth is not comparable across
+/// T2T candidates, and quoting during selection means a pool that cannot serve
+/// the swap is skipped rather than chosen and then failed on.
 pub(crate) fn best_pool_for<'a>(
     pools: &'a [AmmPool],
     from_token: Option<&str>,
     to_token: Option<&str>,
-) -> Option<&'a AmmPool> {
+    amount: u64,
+) -> Option<(&'a AmmPool, amm::state::SwapQuote)> {
+    let input = swap_input(from_token, amount);
     pools
         .iter()
         .filter(|p| pool_supports(p, from_token, to_token))
-        .max_by_key(|p| p.erg_reserves.unwrap_or(p.token_y.amount))
+        .filter_map(|p| amm::calculator::quote_swap(p, &input).map(|q| (p, q)))
+        .max_by_key(|(_, q)| q.output.amount)
 }
 
 fn pool_supports(pool: &AmmPool, from_token: Option<&str>, to_token: Option<&str>) -> bool {

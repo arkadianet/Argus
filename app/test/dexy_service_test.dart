@@ -93,6 +93,21 @@ void main() {
     });
   });
 
+  group('route planning guards', () {
+    test('a non-positive amount yields no routes', () {
+      final st = _useState(
+        effectiveRate: 3.7185,
+        lpErgReserves: 3700000000000,
+        lpDexyReserves: 1000000,
+      );
+
+      expect(dexService.quotesForState(st, 0), isEmpty);
+      expect(dexService.quotesForState(st, -1), isEmpty);
+      // Positive amounts are unaffected.
+      expect(dexService.quotesForState(st, oneUse), isNotEmpty);
+    });
+  });
+
   group('LP deposit pairing', () {
     // Pool holds 3700 ERG against 1000 USE, so one whole USE pairs with 3.7 ERG.
     DexyState pool() => _useState(
@@ -125,6 +140,41 @@ void main() {
       );
       expect(ergForDexyDeposit(empty, 260), 0);
       expect(dexyForErgDeposit(empty, 962000000), 0);
+    });
+  });
+
+  group('LP deposit MAX clamping', () {
+    DexyState pool() => _useState(
+          effectiveRate: 3.7185,
+          lpErgReserves: 3700000000000,
+          lpDexyReserves: 1000000,
+        );
+
+    // MAX on either side must not propose a pair the other side cannot cover,
+    // otherwise the sheet fills in an amount the user does not hold.
+    test('token MAX is capped by the ERG the wallet can pair with it', () {
+      // 1000 raw USE would need 3.7 ERG, but only 1.85 ERG is spendable.
+      final capped = maxPairableDexy(pool(), tokenBalance: 1000, ergAvailable: 1850000000);
+      expect(capped, 500);
+      expect(ergForDexyDeposit(pool(), capped), lessThanOrEqualTo(1850000000));
+    });
+
+    test('token MAX keeps the full balance when ERG covers it', () {
+      expect(
+        maxPairableDexy(pool(), tokenBalance: 260, ergAvailable: 5000000000),
+        260,
+      );
+    });
+
+    test('ERG MAX is capped by the tokens the wallet can pair with it', () {
+      // 3.7 ERG would need 1000 raw USE, but only 260 are held.
+      final capped = maxPairableErg(pool(), ergAvailable: 3700000000, tokenBalance: 260);
+      expect(capped, 962000000);
+    });
+
+    test('nothing is pairable without a balance on both sides', () {
+      expect(maxPairableDexy(pool(), tokenBalance: 0, ergAvailable: 5000000000), 0);
+      expect(maxPairableErg(pool(), ergAvailable: 0, tokenBalance: 260), 0);
     });
   });
 

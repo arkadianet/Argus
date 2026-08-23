@@ -71,6 +71,15 @@ pub(crate) struct PoolSet {
     pub pools: Vec<AmmPool>,
     pub truncated: bool,
     pub fetched_at: Instant,
+    /// Node the pools were discovered from. Box ids and reserves are only
+    /// meaningful for that node, so a cache entry cannot outlive a node switch.
+    pub node_url: String,
+}
+
+impl PoolSet {
+    fn is_fresh_for(&self, node_url: &str) -> bool {
+        self.node_url == node_url && self.fetched_at.elapsed() < POOL_CACHE_TTL
+    }
 }
 
 static POOL_CACHE: Lazy<RwLock<Option<PoolSet>>> = Lazy::new(|| RwLock::new(None));
@@ -135,7 +144,7 @@ pub(crate) fn best_pool_for<'a>(
         .max_by_key(|(_, q)| q.output.amount)
 }
 
-fn pool_supports(pool: &AmmPool, from_token: Option<&str>, to_token: Option<&str>) -> bool {
+pub(crate) fn pool_supports(pool: &AmmPool, from_token: Option<&str>, to_token: Option<&str>) -> bool {
     let ids: Vec<&str> = match pool.pool_type {
         amm::state::PoolType::N2T => vec![pool.token_y.token_id.as_str()],
         amm::state::PoolType::T2T => pool
@@ -180,9 +189,10 @@ pub(crate) async fn load_pools(
     node_url: Option<String>,
     force_refresh: bool,
 ) -> Result<PoolSet, String> {
+    let resolved = crate::api_dexy_impl::resolve_node_url(node_url.clone());
     if !force_refresh {
         if let Some(cached) = recover(POOL_CACHE.read()).clone() {
-            if cached.fetched_at.elapsed() < POOL_CACHE_TTL {
+            if cached.is_fresh_for(&resolved) {
                 return Ok(cached);
             }
         }
@@ -212,6 +222,7 @@ pub(crate) async fn load_pools(
         pools,
         truncated,
         fetched_at: Instant::now(),
+        node_url: resolved,
     };
     *recover(POOL_CACHE.write()) = Some(set.clone());
     Ok(set)
@@ -350,6 +361,38 @@ mod tests {
 
         assert_eq!(pool.pool_id, "usable");
         assert!(quote.output.amount > 0);
+    }
+
+    /// `build_direct_swap_eip12` derives the output from the pool box alone —
+    /// the N2T builder destructures `SwapInput::Token { amount, .. }` and never
+    /// checks the token id against the pool. A caller passing a pool_id that
+    /// does not trade the requested pair must be rejected before a transaction
+    /// is built, not silently built against the wrong pool.
+    #[test]
+    fn a_pool_must_trade_the_requested_pair() {
+        let pool = t2t("p", tok("A", 1_000), tok("B", 1_000));
+
+        assert!(pool_supports(&pool, Some("A"), Some("B")));
+        assert!(!pool_supports(&pool, Some("A"), Some("C")));
+        assert!(!pool_supports(&pool, None, Some("B")));
+    }
+
+    /// A cached pool set belongs to the node it was discovered from. Switching
+    /// nodes must not serve pools from the previous one.
+    #[test]
+    fn cached_pools_are_scoped_to_their_node() {
+        let set = PoolSet {
+            pools: vec![],
+            truncated: false,
+            fetched_at: Instant::now(),
+            node_url: "https://node-a.example".to_string(),
+        };
+
+        assert!(set.is_fresh_for("https://node-a.example"));
+        assert!(
+            !set.is_fresh_for("https://node-b.example"),
+            "a different node must miss the cache"
+        );
     }
 
     /// A built swap must never pay the Citadel address. Pinned to that tree

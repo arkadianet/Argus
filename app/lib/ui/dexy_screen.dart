@@ -1301,7 +1301,21 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
                           ),
                         );
                       } else {
-                        _ergCtrl.text = formatErg(max, unit: false);
+                        final pairable = maxPairableErg(
+                          widget.state,
+                          ergAvailable: max,
+                          tokenBalance: widget.tokenBalance ?? 0,
+                        );
+                        if (pairable <= 0) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                  'No ${variant.shortName} to pair with ERG'),
+                            ),
+                          );
+                        } else {
+                          _ergCtrl.text = formatErg(pairable, unit: false);
+                        }
                       }
                     }
                     _onErgChanged();
@@ -1321,8 +1335,25 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
                 suffixIcon: TextButton(
                   onPressed: () {
                     final b = widget.tokenBalance;
-                    if (b != null)
-                      _dexyCtrl.text = formatTokenAmount(b, variant.decimals);
+                    if (b != null) {
+                      final spendable = widget.spendableBalance ?? 0;
+                      final ergAvailable = spendable - minerFeeNano - minBoxNano;
+                      final pairable = maxPairableDexy(
+                        widget.state,
+                        tokenBalance: b,
+                        ergAvailable: ergAvailable,
+                      );
+                      if (pairable <= 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Not enough ERG to pair a deposit'),
+                          ),
+                        );
+                      } else {
+                        _dexyCtrl.text =
+                            formatTokenAmount(pairable, variant.decimals);
+                      }
+                    }
                     _onDexyChanged();
                   },
                   child: const Text('MAX'),

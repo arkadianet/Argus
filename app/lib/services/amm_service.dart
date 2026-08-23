@@ -15,10 +15,6 @@ import 'wallet_service.dart';
 /// build time. Fixed deliberately: there is nothing here a user could tune.
 const double kQuoteTolerancePct = 0.5;
 
-/// Minimum acceptable output. Floors, so the built minimum is never above what
-/// was quoted.
-int minOutputFor(int output) =>
-    (output * (100 - kQuoteTolerancePct) / 100).floor();
 
 class AmmTokenMeta {
   final String name;

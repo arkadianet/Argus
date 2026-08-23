@@ -110,6 +110,14 @@ class _SwapScreenState extends State<SwapScreen> {
   bool get _extraIndexMissing =>
       (_error ?? '').contains('EXTRA_INDEX_REQUIRED');
 
+  /// The pair changed, so any amount already entered needs re-quoting. This is
+  /// also where the POOL_MOVED retry cap resets — a new pair is a new attempt,
+  /// whereas repeated presses of Swap on the same pair are not.
+  void _onPairChanged() {
+    _movedRetried = false;
+    _scheduleQuote();
+  }
+
   void _scheduleQuote() {
     _quoteDebounce?.cancel();
     _quoteDebounce =
@@ -144,10 +152,7 @@ class _SwapScreenState extends State<SwapScreen> {
     final quote = _quote;
     final amount = _parsedAmount;
     if (quote == null || amount == null || amount <= 0 || _busy) return;
-    setState(() {
-      _busy = true;
-      _movedRetried = false;
-    });
+    setState(() => _busy = true);
     try {
       final build = await ammService.buildSwap(
         fromToken: _fromToken,
@@ -171,7 +176,8 @@ class _SwapScreenState extends State<SwapScreen> {
           ),
           ConfirmTxRow(
             'Minimum received',
-            formatTokenAmount(build.minOutput, _decimals(_toToken)),
+            '${formatTokenAmount(build.minOutput, _decimals(_toToken))} '
+            '${_symbol(_toToken)}',
           ),
           ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
           ConfirmTxRow('Total cost', formatErg(build.totalErgCost)),
@@ -288,24 +294,33 @@ class _SwapScreenState extends State<SwapScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(child: _dropdown('From', _fromToken, _assetItems(true),
-                (v) => setState(() {
-                      _fromToken = v;
-                      _quote = null;
-                    }))),
+                (v) {
+                  setState(() {
+                    _fromToken = v;
+                    _quote = null;
+                  });
+                  _onPairChanged();
+                })),
             IconButton(
-              onPressed: () => setState(() {
-                final from = _fromToken;
-                _fromToken = _toToken;
-                _toToken = from;
-                _quote = null;
-              }),
+              onPressed: () {
+                setState(() {
+                  final from = _fromToken;
+                  _fromToken = _toToken;
+                  _toToken = from;
+                  _quote = null;
+                });
+                _onPairChanged();
+              },
               icon: const Icon(Icons.swap_vert),
             ),
             Expanded(child: _dropdown('To', _toToken, _assetItems(false),
-                (v) => setState(() {
-                      _toToken = v;
-                      _quote = null;
-                    }))),
+                (v) {
+                  setState(() {
+                    _toToken = v;
+                    _quote = null;
+                  });
+                  _onPairChanged();
+                })),
           ],
         ),
         const SizedBox(height: 12),

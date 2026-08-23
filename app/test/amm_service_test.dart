@@ -4,18 +4,6 @@ import 'package:argus_wallet/services/amm_service.dart';
 import 'package:argus_wallet/ui/swap_screen.dart';
 
 void main() {
-  group('minOutputFor', () {
-    // Not slippage: a direct swap fixes the output in the tx and references the
-    // pool box by id, so it either fills at the quoted price or is invalid. This
-    // only absorbs pool movement between the cached quote and the refreshed
-    // build, so the tolerance is fixed rather than caller-supplied.
-    test('absorbs quote staleness and rounds down', () {
-      expect(minOutputFor(1000000), 995000);
-      expect(minOutputFor(3), 2);
-      expect(minOutputFor(0), 0);
-    });
-  });
-
   group('AmmQuote.fromJson', () {
     test('parses a quote and keeps the pool box it was built from', () {
       final q = AmmQuote.fromJson({

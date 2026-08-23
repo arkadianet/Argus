@@ -73,6 +73,31 @@ int dexyForErgDeposit(DexyState st, int ergNano) {
   return (n ~/ BigInt.from(st.lpErgReserves)).toInt();
 }
 
+/// Largest token amount the wallet can actually deposit: its whole balance,
+/// unless pairing that much would need more ERG than [ergAvailable].
+int maxPairableDexy(
+  DexyState st, {
+  required int tokenBalance,
+  required int ergAvailable,
+}) {
+  if (tokenBalance <= 0 || ergAvailable <= 0) return 0;
+  final needed = ergForDexyDeposit(st, tokenBalance);
+  if (needed <= ergAvailable) return tokenBalance;
+  return dexyForErgDeposit(st, ergAvailable).clamp(0, tokenBalance);
+}
+
+/// Largest ERG amount the wallet can actually deposit, capped by the tokens it
+/// holds to pair against.
+int maxPairableErg(
+  DexyState st, {
+  required int ergAvailable,
+  required int tokenBalance,
+}) {
+  if (tokenBalance <= 0 || ergAvailable <= 0) return 0;
+  final needed = ergForDexyDeposit(st, tokenBalance);
+  return needed < ergAvailable ? needed : ergAvailable;
+}
+
 /// Pricing for a Dexy mint path (ArbMint / FreeMint / LP swap).
 class DexyMintPath {
   final String name;
@@ -620,6 +645,11 @@ class DexyService {
   /// Route eligibility and cost estimates shared by [quoteTokenSend] and
   /// [buildTokenSend], so displayed quotes and built routes always agree.
   _RoutePlan _planRoutes(DexyState st, int tokenAmount) {
+    // Guard centrally: callers that skip their own validation must not get a
+    // zero-cost quote or a buildable route out of a non-positive amount.
+    if (tokenAmount <= 0) {
+      return const _RoutePlan(freeOk: false, freeEstimateNano: 0, swapErgIn: 0);
+    }
     final free = st.rates.freeMint;
     final limit = [
       free.maxTokens,

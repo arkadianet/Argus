@@ -37,7 +37,7 @@ build functions later without a rewrite.
 
 ## Architecture
 
-```
+```text
 amm crate (vendored, unchanged)
   └─ wallet-ffi/src/api_amm_impl.rs        new — thin wrapper
        └─ api.rs: amm_pools / amm_quote / amm_build_swap
@@ -56,7 +56,7 @@ Three calls, matching the existing `state` / `preview` / `build` shape:
 | Function | Returns |
 |---|---|
 | `amm_pools(node_url, force_refresh)` | Discovered pools + token metadata + `truncated` flag |
-| `amm_quote(from_token, to_token, amount, slippage_pct, node_url)` | `output_amount`, `min_output`, `price_impact_pct`, `pool_id`, `box_id` |
+| `amm_quote(from_token, to_token, amount, node_url)` | `output_amount`, `min_output`, `price_impact_pct`, `pool_id`, `box_id` |
 | `amm_build_swap(...)` | Cached preparation, returns `preparation_id` |
 
 `amm_build_swap` returns a preparation id, so signing and broadcast reuse
@@ -85,7 +85,7 @@ tokens actually displayed, then cached.
 
 1. Swap screen opens → `amm_pools` → cached pool set (+ truncation flag)
 2. User picks from/to token and enters an amount
-3. `amm_quote` → output, min output at 0.5% slippage, price impact, pool box id
+3. `amm_quote` → output, min output at the internal tolerance, price impact, pool box id
 4. Review → `amm_build_swap` → preparation id
 5. `showConfirmTransactionSheet` → `sendErg(preparationId:)`
 
@@ -110,9 +110,12 @@ same block invalidates the transaction. Each quote carries the `box_id` it was
 built from. On broadcast failure the service refetches and re-quotes once, then
 surfaces "pool moved — re-quote" rather than retrying blind.
 
-**Slippage.** `min_output` derives from a 0.5% default, matching the existing
-convention in `dexy_service.dart:453`, with an override field following the
-custom-miner-fee pattern already in the Send screen.
+**Quote staleness.** `min_output` derives from a fixed internal tolerance
+(`QUOTE_TOLERANCE_PCT`, 0.5%). It is deliberately not user-facing and not
+slippage protection: a direct swap fixes the output amount in the transaction
+and references the pool box by id, so it either fills at the quoted price or is
+invalid. The tolerance only stops a quote served from the TTL cache becoming a
+smaller build.
 
 ## Dev fee
 
@@ -153,7 +156,7 @@ passing tests of its own; none are modified.
 **Dart** (`amm_service`):
 
 - Pool and quote JSON parsing
-- Slippage → `min_output` arithmetic
+- Quote tolerance → `min_output` arithmetic
 - Label helpers, following `test/dexy_service_test.dart`
 
 ## Build
@@ -161,7 +164,7 @@ passing tests of its own; none are modified.
 This is the first change in this branch that requires regenerating bindings and
 rebuilding the native library:
 
-```
+```bash
 flutter_rust_bridge_codegen generate
 scripts/build_android.sh
 ```

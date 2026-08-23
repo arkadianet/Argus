@@ -2158,19 +2158,25 @@ pub async fn amm_pools(node_url: Option<String>, force_refresh: bool) -> Result<
     let set = crate::api_amm_impl::load_pools(node_url.clone(), force_refresh).await?;
     let client = crate::api_dexy_impl::dexy_client(node_url).await?;
 
-    let mut tokens = serde_json::Map::new();
+    // Collect the distinct ids first: pools share tokens heavily, so this cuts
+    // the number of lookups well below one per pool side.
+    let mut unique_ids: Vec<String> = Vec::new();
     for pool in &set.pools {
         for id in crate::api_amm_impl::pool_token_ids(pool) {
-            if !tokens.contains_key(&id) {
-                let meta = crate::api_amm_impl::token_meta(&client, &id).await;
-                tokens.insert(
-                    id,
-                    serde_json::to_value(meta).map_err(|e| {
-                        ArgusError::SerializationError(e.to_string()).to_json_string()
-                    })?,
-                );
+            if !unique_ids.contains(&id) {
+                unique_ids.push(id);
             }
         }
+    }
+
+    let mut tokens = serde_json::Map::new();
+    for id in unique_ids {
+        let meta = crate::api_amm_impl::token_meta(&client, &id).await;
+        tokens.insert(
+            id,
+            serde_json::to_value(meta)
+                .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?,
+        );
     }
 
     serde_json::to_string(&serde_json::json!({
@@ -2252,6 +2258,17 @@ pub async fn amm_build_swap(
             ArgusError::Generic("POOL_MOVED: pool no longer available, re-quote".into())
                 .to_json_string()
         })?;
+
+    // The builders derive the output from the pool box alone — the N2T path
+    // destructures `SwapInput::Token { amount, .. }` and never checks the token
+    // id — so a pool_id that does not trade this pair would build a swap
+    // delivering the wrong asset. Reject before building.
+    if !crate::api_amm_impl::pool_supports(pool, from_token.as_deref(), to_token.as_deref()) {
+        return Err(ArgusError::Generic(
+            "PAIR_MISMATCH: the selected pool does not trade this pair — re-quote".into(),
+        )
+        .to_json_string());
+    }
 
     let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
     // One node fetch serves both the builder (EIP-12) and the preparation
