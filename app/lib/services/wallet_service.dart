@@ -983,7 +983,16 @@ class WalletService {
       final ta = (a['timestamp'] as num?)?.toInt() ?? 0;
       return tb.compareTo(ta);
     });
-    return all;
+    // Unconfirmed transactions ride ahead of confirmed history. A mempool
+    // failure must never break the activity list, so it degrades to confirmed.
+    var pending = const <dynamic>[];
+    try {
+      final raw = await RustLib.instance.api
+          .crateApiGetPendingTransactions(addresses: addresses);
+      pending = jsonDecode(raw) as List;
+    } catch (_) {}
+
+    return mergePending(pending, all);
   }
 
   Future<TokenBalance> tokenMeta(String id, int amount) async {
@@ -1274,3 +1283,31 @@ class WalletService {
 }
 
 final walletService = WalletService();
+
+/// Pending transactions ahead of confirmed history, deduplicated by id.
+///
+/// The mempool is queried once per wallet address, so a transaction touching
+/// two of our addresses — spending from one, change to another — arrives
+/// twice. A transaction that has since confirmed wins over its pending copy.
+List<Map<String, dynamic>> mergePending(
+  List<dynamic> pending,
+  List<dynamic> confirmed,
+) {
+  String idOf(Map m) => m['tx_id']?.toString() ?? '';
+  final confirmedIds = <String>{
+    for (final c in confirmed) idOf((c as Map).cast<String, dynamic>()),
+  };
+  final seen = <String>{};
+  final out = <Map<String, dynamic>>[];
+
+  for (final p in pending) {
+    final m = (p as Map).cast<String, dynamic>();
+    final id = idOf(m);
+    if (id.isEmpty || confirmedIds.contains(id) || !seen.add(id)) continue;
+    out.add(m);
+  }
+  for (final c in confirmed) {
+    out.add((c as Map).cast<String, dynamic>());
+  }
+  return out;
+}

@@ -112,6 +112,21 @@ Future<String> getTransactionHistory({
   offset: offset,
 );
 
+/// Unconfirmed transactions for the wallet's addresses, as activity entries.
+///
+/// Same shape as confirmed history entries (`TxSummary`) plus `confirmed:
+/// false`, so the dashboard renders them through the same tile — `height: 0`
+/// is what drives its Pending badge. The queried node endpoint needs no extra
+/// index; any per-address failure simply yields no entries from that address.
+/// A transaction touching several wallet addresses is returned once.
+Future<String> getPendingTransactions({
+  required List<String> addresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiGetPendingTransactions(
+  addresses: addresses,
+  nodeUrl: nodeUrl,
+);
+
 Future<String> discoverAddresses({
   required BigInt handleId,
   String? nodeUrl,

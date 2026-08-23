@@ -383,6 +383,103 @@ pub async fn get_transaction_history(
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+/// Unconfirmed transactions for the wallet's addresses, as activity entries.
+///
+/// Same shape as confirmed history entries (`TxSummary`) plus `confirmed:
+/// false`, so the dashboard renders them through the same tile — `height: 0`
+/// is what drives its Pending badge. The queried node endpoint needs no extra
+/// index; any per-address failure simply yields no entries from that address.
+/// A transaction touching several wallet addresses is returned once.
+#[flutter_rust_bridge::frb]
+pub async fn get_pending_transactions(
+    addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let client = node_client(node_url).await?;
+
+    let mut join_set = tokio::task::JoinSet::new();
+    for addr in addresses {
+        if addr.is_empty() {
+            continue;
+        }
+        let client_c = client.clone();
+        join_set.spawn(async move {
+            let tree = match address_to_ergo_tree(&addr) {
+                Ok(t) => t,
+                Err(_) => return Vec::new(),
+            };
+            let txs = match client_c.mempool_txs_for(&tree).await {
+                Ok(t) => t,
+                Err(_) => return Vec::new(),
+            };
+            if txs.is_empty() {
+                return txs;
+            }
+            // Inputs carry no value; resolve leaving amounts against the
+            // address's confirmed UTXOs for an outgoing/incoming direction.
+            let confirmed_values: std::collections::HashMap<String, i64> = client_c
+                .get_unspent(&addr)
+                .await
+                .map(|(boxes, _)| {
+                    boxes
+                        .iter()
+                        .map(|b| (b.box_id().to_string(), b.value.as_i64()))
+                        .collect()
+                })
+                .unwrap_or_default();
+            txs.into_iter()
+                .map(|mut tx| {
+                    let v = wallet_net::mempool::balance_delta(
+                        std::slice::from_ref(&tx),
+                        &tree,
+                        &confirmed_values,
+                    );
+                    tx["value_nano_erg"] = serde_json::json!(v);
+                    tx
+                })
+                .collect()
+        });
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    while let Some(res) = join_set.join_next().await {
+        let txs = res.unwrap_or_default();
+        for tx in txs {
+            let id = match tx["id"].as_str() {
+                Some(i) => i.to_string(),
+                None => continue,
+            };
+            if !seen.insert(id.clone()) {
+                continue;
+            }
+            let token_ids: Vec<String> = tx["outputs"]
+                .as_array()
+                .map(|outs| {
+                    outs.iter()
+                        .filter_map(|o| o["assets"].as_array())
+                        .flatten()
+                        .filter_map(|a| a["tokenId"].as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push(serde_json::json!({
+                "tx_id": id,
+                "height": 0u64,
+                "timestamp": 0u64,
+                "value_nano_erg": tx["value_nano_erg"].as_i64().unwrap_or(0),
+                "token_ids": token_ids,
+                "num_inputs": tx["inputs"].as_array().map(|a| a.len() as u32).unwrap_or(0),
+                "num_outputs": tx["outputs"].as_array().map(|a| a.len() as u32).unwrap_or(0),
+                "confirmed": false,
+            }));
+        }
+    }
+
+    serde_json::to_string(&out)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 const MAX_DISCOVERY: u32 = 256;
 
 #[flutter_rust_bridge::frb]
