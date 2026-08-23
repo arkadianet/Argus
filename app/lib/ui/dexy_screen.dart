@@ -10,6 +10,13 @@ import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
 
+/// Mint card and confirm-sheet title for a variant. Names the token (USE), not
+/// the protocol implementation (DexyUSD).
+String dexyMintTitle(DexyVariant variant) => 'Mint ${variant.shortName}';
+
+/// Holdings header for a variant.
+String dexyHoldingsTitle(DexyVariant variant) => 'Your ${variant.shortName}';
+
 /// Mobile-first Dexy hub. Every action builds a transaction through the shared
 /// confirm sheet ("Sign & broadcast") and submits via the cached-preparation
 /// flow — the same guard rails as every other send in Argus.
@@ -150,7 +157,7 @@ class _DexyScreenState extends State<DexyScreen> {
     final build = result['build'] as DexyBuildResult;
     final confirmed = await showConfirmTransactionSheet(
       context,
-      title: 'Mint ${_variant.name}',
+      title: dexyMintTitle(_variant),
       rows: [
         ConfirmTxRow(
             'Received',
@@ -396,7 +403,7 @@ class _DexyScreenState extends State<DexyScreen> {
         children: [
           Row(
             children: [
-              Text('Your ${_variant.name}',
+              Text(dexyHoldingsTitle(_variant),
                   style: Theme.of(context).textTheme.titleMedium),
               const Spacer(),
               _tag(st.canMint ? 'Mint open' : 'Mint paused',
@@ -753,7 +760,7 @@ class _DexyMintSheetState extends State<_DexyMintSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Mint ${variant.name}',
+          Text(dexyMintTitle(variant),
               style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 6),
           Text(variant.peg, style: Theme.of(context).textTheme.bodySmall),
