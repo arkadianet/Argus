@@ -31,6 +31,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
   Timer? _previewDebounce;
   int _previewGeneration = 0;
   SigmaUsdPreview? _preview;
+  String? _previewError;
 
   WalletRouteArgs get _args =>
       WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
@@ -121,17 +122,26 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
         parseDecimalToBase(_amountCtrl.text, _action.decimals);
     if (amount == null || amount <= 0) {
       if (mounted && gen == _previewGeneration) {
-        setState(() => _preview = null);
+        setState(() {
+          _preview = null;
+          _previewError = null;
+        });
       }
       return;
     }
     try {
       final preview = await sigmaUsdService.preview(_action, amount);
       if (!mounted || gen != _previewGeneration) return;
-      setState(() => _preview = preview);
-    } catch (_) {
+      setState(() {
+        _preview = preview;
+        _previewError = null;
+      });
+    } catch (e) {
       if (mounted && gen == _previewGeneration) {
-        setState(() => _preview = null);
+        setState(() {
+          _preview = null;
+          _previewError = 'Could not fetch quote: $e';
+        });
       }
     }
   }
@@ -142,6 +152,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
       _action = action;
       _amountCtrl.clear();
       _preview = null;
+      _previewError = null;
     });
     _schedulePreview();
   }
@@ -149,21 +160,13 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
   void _applyMax() {
     final st = _state;
     if (st == null) return;
-    double maxBase;
-    if (_action.isRedeem) {
-      final bal = _selectedBalance ?? 0;
-      maxBase = bal.toDouble();
-    } else {
-      maxBase = st.maxFor(_action).toDouble();
-    }
+    final maxBase =
+        _action.isRedeem ? (_selectedBalance ?? 0) : st.maxFor(_action);
     if (maxBase <= 0) {
       _snack('Nothing available for this action');
       return;
     }
-    _amountCtrl.text = formatTokenAmount(
-      maxBase.toInt(),
-      _action.decimals,
-    );
+    _amountCtrl.text = formatTokenAmount(maxBase, _action.decimals);
     _schedulePreview();
   }
 
@@ -319,7 +322,9 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
                       _previewPanel(),
                       const SizedBox(height: 24),
                       FilledButton(
-                        onPressed: _busy ? null : _review,
+                        onPressed: _busy || !st.can(_action)
+                            ? null
+                            : _review,
                         child: _busy
                             ? const SizedBox(
                                 width: 20,
@@ -412,11 +417,13 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     return Row(
       children: [
         Expanded(
-          child: _balanceCard('SigUSD', _sigUsdBalance, 2),
+          child: _balanceCard('SigUSD', _sigUsdBalance,
+              SigmaUsdAction.mintSigUsd.decimals),
         ),
         const SizedBox(width: 10),
         Expanded(
-          child: _balanceCard('SigRSV', _sigRsvBalance, 0),
+          child: _balanceCard('SigRSV', _sigRsvBalance,
+              SigmaUsdAction.mintSigRsv.decimals),
         ),
       ],
     );
@@ -452,6 +459,12 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
   }
 
   Widget _previewPanel() {
+    if (_previewError != null) {
+      return Text(
+        _previewError!,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rust),
+      );
+    }
     final p = _preview;
     if (p == null) {
       return Text(

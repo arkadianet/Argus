@@ -1977,7 +1977,9 @@ pub async fn sigmausd_build(
     spend_addresses: Vec<String>,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    use sigmausd::fetch::{fetch_sigmausd_state, fetch_tx_context};
+    use citadel_core::BoxId;
+    use sigmausd::fetch::fetch_tx_context;
+    use sigmausd::state::{BankBoxData, OracleBoxData, SigmaUsdState};
     use sigmausd::tx_builder::{
         build_mint_sigusd_tx, build_mint_sigrsv_tx, build_redeem_sigusd_tx,
         build_redeem_sigrsv_tx, validate_mint_sigusd, validate_mint_sigrsv,
@@ -2002,17 +2004,6 @@ pub async fn sigmausd_build(
         .require_capabilities()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-    let state = fetch_sigmausd_state(&client, &caps, &ids)
-        .await
-        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
-
-    let check = match parsed_action {
-        SigmaUsdAction::MintSigUsd => validate_mint_sigusd(amount, &state),
-        SigmaUsdAction::RedeemSigUsd => validate_redeem_sigusd(amount, &state),
-        SigmaUsdAction::MintSigRsv => validate_mint_sigrsv(amount, &state),
-        SigmaUsdAction::RedeemSigRsv => validate_redeem_sigrsv(amount, &state),
-    };
-    check.map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
 
     let (all_boxes, eip12) =
         gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
@@ -2027,6 +2018,29 @@ pub async fn sigmausd_build(
     let fetched = fetch_tx_context(&client, &caps, &ids)
         .await
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+
+    // Derive the validation state from the SAME bank/oracle boxes the builder
+    // will consume, so ratio checks can never pass on a stale snapshot.
+    let state = SigmaUsdState::from_boxes(
+        &BankBoxData {
+            box_id: BoxId::new(fetched.bank_box.box_id().to_string()),
+            value_nano: fetched.bank_erg_nano,
+            sigusd_circulating: fetched.sigusd_circulating,
+            sigrsv_circulating: fetched.sigrsv_circulating,
+        },
+        &OracleBoxData {
+            box_id: BoxId::new(fetched.oracle_box.box_id().to_string()),
+            nanoerg_per_usd: fetched.oracle_rate,
+        },
+    );
+
+    let check = match parsed_action {
+        SigmaUsdAction::MintSigUsd => validate_mint_sigusd(amount, &state),
+        SigmaUsdAction::RedeemSigUsd => validate_redeem_sigusd(amount, &state),
+        SigmaUsdAction::MintSigRsv => validate_mint_sigrsv(amount, &state),
+        SigmaUsdAction::RedeemSigRsv => validate_redeem_sigrsv(amount, &state),
+    };
+    check.map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
 
     let user_tree = change_tree.clone();
     let ctx = sigmausd::tx_builder::TxContext {
