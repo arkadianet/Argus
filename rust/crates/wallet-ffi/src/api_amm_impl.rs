@@ -4,6 +4,7 @@
 //! never touch the wallet handle; the build function reuses the existing
 //! prepare → confirm → sign & broadcast flow.
 
+use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
@@ -12,6 +13,52 @@ use amm::state::AmmPool;
 use once_cell::sync::Lazy;
 
 use crate::error::ArgusError;
+
+#[derive(Clone, serde::Serialize)]
+pub(crate) struct TokenMeta {
+    pub name: String,
+    pub decimals: u8,
+}
+
+impl TokenMeta {
+    /// A node that cannot describe a token must not cause a wrong amount.
+    /// Falling back to 0 decimals keeps raw units visible rather than scaling
+    /// by a guess.
+    fn fallback(token_id: &str) -> Self {
+        let head: String = token_id.chars().take(8).collect();
+        Self {
+            name: format!("{head}…"),
+            decimals: 0,
+        }
+    }
+}
+
+/// Token ids are immutable, so this cache only ever grows — no TTL.
+static TOKEN_CACHE: Lazy<RwLock<HashMap<String, TokenMeta>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+pub(crate) async fn token_meta(
+    client: &ergo_node_client::NodeClient,
+    token_id: &str,
+) -> TokenMeta {
+    if let Some(hit) = recover(TOKEN_CACHE.read()).get(token_id) {
+        return hit.clone();
+    }
+    let meta = match client.get_token_info(token_id).await {
+        Ok(info) => TokenMeta {
+            // Node returns Options; an unnamed or nonsense-decimals token
+            // degrades to the safe fallback instead of a wrong amount.
+            name: info
+                .name
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| TokenMeta::fallback(token_id).name),
+            decimals: info.decimals.and_then(|d| u8::try_from(d).ok()).unwrap_or(0),
+        },
+        Err(_) => TokenMeta::fallback(token_id),
+    };
+    recover(TOKEN_CACHE.write()).insert(token_id.to_string(), meta.clone());
+    meta
+}
 
 /// Per-call cap inside `discover_*_pools`. Hitting it means pools were dropped.
 const DISCOVERY_CAP: usize = 1000;
@@ -131,5 +178,12 @@ mod tests {
             err.contains("EXTRA_INDEX_REQUIRED"),
             "capability failure needs its own code, got: {err}"
         );
+    }
+
+    #[test]
+    fn unknown_tokens_fall_back_to_a_short_id_label() {
+        let meta = TokenMeta::fallback("a55b8735ed1a99e46c2c89f8994aacdf4b1109bdcf682f1e5b34479c6e392669");
+        assert_eq!(meta.name, "a55b8735…");
+        assert_eq!(meta.decimals, 0, "unknown decimals must not silently scale amounts");
     }
 }
