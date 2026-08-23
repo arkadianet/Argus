@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -108,10 +107,8 @@ class _DexyScreenState extends State<DexyScreen> {
   Future<void> _broadcast(DexyBuildResult build) async {
     setState(() => _busy = true);
     try {
-      final raw =
+      final txId =
           await walletService.sendErg(preparationId: build.preparationId);
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final txId = map['tx_id']?.toString() ?? raw;
       if (!mounted) return;
       _snack('Broadcast! ${shorten(txId, head: 8, tail: 6)}');
       HapticFeedback.mediumImpact();
