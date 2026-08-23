@@ -434,3 +434,43 @@ Future<String> dexyBuildLpRedeem({
   spendAddresses: spendAddresses,
   nodeUrl: nodeUrl,
 );
+
+/// Live SigmaUSD (AgeUSD) protocol state: bank reserves, oracle rate, reserve
+/// ratio, token prices, liabilities/equity, and per-action availability.
+Future<String> sigmausdState({String? nodeUrl}) =>
+    RustLib.instance.api.crateApiSigmausdState(nodeUrl: nodeUrl);
+
+/// Cost/proceeds preview for one of the four SigmaUSD bank actions at the
+/// live oracle rate. `action` is `mint_sigusd`, `redeem_sigusd`, `mint_sigrsv`,
+/// or `redeem_sigrsv`.
+Future<String> sigmausdPreview({
+  required String action,
+  required PlatformInt64 amount,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiSigmausdPreview(
+  action: action,
+  amount: amount,
+  nodeUrl: nodeUrl,
+);
+
+/// Build a SigmaUSD bank transaction into the standard broadcast flow. The
+/// primary output (minted tokens, or redeemed ERG with leftover tokens) goes
+/// to `recipient_address` — any valid Ergo address; ERG change returns to
+/// wallet-owned `change_address`.
+Future<String> sigmausdBuild({
+  required BigInt handleId,
+  required String action,
+  required PlatformInt64 amount,
+  required String recipientAddress,
+  required String changeAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiSigmausdBuild(
+  handleId: handleId,
+  action: action,
+  amount: amount,
+  recipientAddress: recipientAddress,
+  changeAddress: changeAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
