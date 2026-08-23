@@ -108,6 +108,21 @@ void main() {
     });
   });
 
+  group('shortfall top-up', () {
+    test('only the missing amount is acquired', () {
+      expect(shortfallFor(wanted: 1000, held: 266), 734);
+    });
+
+    test('holding enough needs no acquisition', () {
+      expect(shortfallFor(wanted: 1000, held: 1000), 0);
+      expect(shortfallFor(wanted: 1000, held: 5000), 0);
+    });
+
+    test('holding none acquires the whole amount', () {
+      expect(shortfallFor(wanted: 1000, held: 0), 1000);
+    });
+  });
+
   group('LP deposit pairing', () {
     // Pool holds 3700 ERG against 1000 USE, so one whole USE pairs with 3.7 ERG.
     DexyState pool() => _useState(

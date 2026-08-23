@@ -90,6 +90,15 @@ class _SendScreenState extends State<SendScreen> {
 
   static const _dexyPrefix = 'dexy:';
 
+  /// Raw balance already held for [variant], which the auto-buy route delivers
+  /// alongside whatever it acquires.
+  int _heldFor(DexyVariant variant) {
+    for (final t in _args.tokens) {
+      if (t.id == variant.tokenId) return t.amount;
+    }
+    return 0;
+  }
+
   /// A swap-supported asset selected that the wallet does not hold. Sending
   /// it auto-buys via the cheapest Dexy route (mint or LP swap) first.
   DexyVariant? get _selectedSwapVariant {
@@ -123,7 +132,11 @@ class _SendScreenState extends State<SendScreen> {
       return;
     }
     try {
-      final quotes = await dexService.quoteTokenSend(variant, amount);
+      final quotes = await dexService.quoteTokenSend(
+        variant,
+        amount,
+        heldTokens: _heldFor(variant),
+      );
       if (!mounted || gen != _quoteGeneration) return;
       setState(() => _swapQuotes = quotes);
     } catch (_) {
@@ -389,6 +402,20 @@ class _SendScreenState extends State<SendScreen> {
       _snack('Enter a token amount');
       return;
     }
+    // Nothing to acquire: the auto-buy routes have no shortfall to price and
+    // would fail with NO_ROUTE. Hand the user the ordinary token send instead,
+    // which spends the balance they already hold.
+    if (shortfallFor(wanted: tokenAmount, held: _heldFor(variant)) == 0) {
+      final outputErg = _amountNano();
+      if (outputErg == null || outputErg < minBoxNano) {
+        _amountCtrl.text = formatErg(minBoxNano, unit: false);
+      }
+      setState(() => _assetId = variant.tokenId);
+      _snack('You already hold enough ${variant.shortName} — '
+          'sending it directly. Review to continue.');
+      return;
+    }
+
     final changeAddr = args.changeAddress.isNotEmpty
         ? args.changeAddress
         : args.senderAddress;
@@ -402,6 +429,7 @@ class _SendScreenState extends State<SendScreen> {
         recipient: _recipientCtrl.text.trim(),
         changeAddress: changeAddr,
         spendAddresses: spend,
+        heldTokens: _heldFor(variant),
       );
     } catch (e) {
       if (!mounted) return;
@@ -766,8 +794,10 @@ child: Column(
           controller: _tokenAmtCtrl,
           decoration: InputDecoration(
             labelText: dexyAmountLabel(variant),
-            helperText:
-                'You don\'t hold ${variant.shortName} — it is bought automatically at the best rate.',
+            helperText: _heldFor(variant) > 0
+                ? 'You hold ${formatTokenAmount(_heldFor(variant), variant.decimals)} '
+                    '${variant.shortName} — only the shortfall is bought.'
+                : 'You don\'t hold ${variant.shortName} — it is bought automatically at the best rate.',
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           onChanged: (_) => _scheduleQuotes(),
@@ -919,15 +949,16 @@ child: Column(
                         ..._args.tokens.map(
                           (t) => DropdownMenuItem(value: t.id, child: Text(t.label)),
                         ),
-                        ...DexyVariant.values
-                            .where((v) =>
-                                !_args.tokens.any((t) => t.id == v.tokenId))
-                            .map(
-                              (v) => DropdownMenuItem(
-                                value: '$_dexyPrefix${v.code}',
-                                child: Text(dexyAssetLabel(v)),
-                              ),
-                            ),
+                        // Offered even when a balance exists: holding some but
+                        // not enough used to hide this route and dead-end the
+                        // send. Any shortfall is topped up, so the held balance
+                        // rides along rather than being ignored.
+                        ...DexyVariant.values.map(
+                          (v) => DropdownMenuItem(
+                            value: '$_dexyPrefix${v.code}',
+                            child: Text(dexyAssetLabel(v)),
+                          ),
+                        ),
                       ],
                       onChanged: (v) => setState(() {
                         _assetId = v;

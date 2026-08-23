@@ -73,6 +73,15 @@ int dexyForErgDeposit(DexyState st, int ergNano) {
   return (n ~/ BigInt.from(st.lpErgReserves)).toInt();
 }
 
+/// Tokens that must be acquired to deliver [wanted] while holding [held].
+///
+/// A partial balance tops up rather than being ignored: the held tokens ride
+/// along in the same transaction, so only the difference is bought.
+int shortfallFor({required int wanted, required int held}) {
+  final missing = wanted - held;
+  return missing > 0 ? missing : 0;
+}
+
 /// Largest token amount the wallet can actually deposit: its whole balance,
 /// unless pairing that much would need more ERG than [ergAvailable].
 int maxPairableDexy(
@@ -538,9 +547,11 @@ class DexyService {
     required String recipient,
     required String changeAddress,
     required List<String> spendAddresses,
+    int heldTokens = 0,
   }) async {
     final raw = await api.dexyBuildMint(
       handleId: _requireHandle(),
+      heldTokens: heldTokens,
       variant: variant.code,
       amount: amount,
       recipientAddress: recipient,
@@ -559,9 +570,11 @@ class DexyService {
     required String recipient,
     required String changeAddress,
     required List<String> spendAddresses,
+    int heldTokens = 0,
   }) async {
     final raw = await api.dexyBuildSwap(
       handleId: _requireHandle(),
+      heldTokens: heldTokens,
       variant: variant.code,
       direction: direction,
       amount: amount,
@@ -673,11 +686,15 @@ class DexyService {
   /// Estimated total ERG cost to deliver [tokenAmount] via each executable
   /// path, cheapest first. FreeMint pays bank+buyback at the oracle rate;
   /// LP swap uses pool reserves. No transaction is built.
+  /// Cost of delivering [tokenAmount] while already holding [heldTokens] —
+  /// only the shortfall is priced, so the quote matches what is built.
   Future<List<DexyPathQuote>> quoteTokenSend(
     DexyVariant variant,
-    int tokenAmount,
-  ) async {
-    return quotesForState(await state(variant), tokenAmount);
+    int tokenAmount, {
+    int heldTokens = 0,
+  }) async {
+    final acquire = shortfallFor(wanted: tokenAmount, held: heldTokens);
+    return quotesForState(await state(variant), acquire);
   }
 
   /// [quoteTokenSend] against an already-fetched snapshot.
@@ -705,15 +722,19 @@ class DexyService {
   /// external addresses allowed — paying from [spendAddresses] and returning
   /// ERG change to wallet-owned [changeAddress]. Picks the cheapest available
   /// path and falls back to the next on build failure.
+  /// Deliver [tokenAmount] to [recipient], acquiring only what the wallet is
+  /// short of. [heldTokens] ride along in the same transaction.
   Future<DexyBuildResult> buildTokenSend({
     required DexyVariant variant,
     required int tokenAmount,
     required String recipient,
     required String changeAddress,
     required List<String> spendAddresses,
+    int heldTokens = 0,
   }) async {
     final st = await state(variant);
-    final plan = _planRoutes(st, tokenAmount);
+    final acquire = shortfallFor(wanted: tokenAmount, held: heldTokens);
+    final plan = _planRoutes(st, acquire);
     final errors = <String>[];
 
     final tryFreeFirst = plan.freeOk &&
@@ -722,10 +743,11 @@ class DexyService {
     Future<DexyBuildResult> doMint() async {
       return buildMint(
         variant: variant,
-        amount: tokenAmount,
+        amount: acquire,
         recipient: recipient,
         changeAddress: changeAddress,
         spendAddresses: spendAddresses,
+        heldTokens: heldTokens,
       );
     }
 
@@ -734,10 +756,11 @@ class DexyService {
         variant: variant,
         direction: 'erg_to_dexy',
         amount: plan.swapErgIn,
-        minOutput: tokenAmount,
+        minOutput: acquire,
         recipient: recipient,
         changeAddress: changeAddress,
         spendAddresses: spendAddresses,
+        heldTokens: heldTokens,
       );
     }
 
@@ -765,7 +788,7 @@ class DexyService {
     throw ArgusException(
       code: 'NO_ROUTE',
       message: errors.isEmpty
-          ? 'No route can supply $tokenAmount ${variant.shortName}'
+          ? 'No route can supply $acquire ${variant.shortName}'
           : errors.join('; '),
     );
   }

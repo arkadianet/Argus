@@ -416,6 +416,7 @@ fn wire__crate__api__dexy_build_mint_impl(
             let api_handle_id = <u64>::sse_decode(&mut deserializer);
             let api_variant = <String>::sse_decode(&mut deserializer);
             let api_amount = <i64>::sse_decode(&mut deserializer);
+            let api_held_tokens = <i64>::sse_decode(&mut deserializer);
             let api_recipient_address = <String>::sse_decode(&mut deserializer);
             let api_change_address = <String>::sse_decode(&mut deserializer);
             let api_spend_addresses = <Vec<String>>::sse_decode(&mut deserializer);
@@ -428,6 +429,7 @@ fn wire__crate__api__dexy_build_mint_impl(
                             api_handle_id,
                             api_variant,
                             api_amount,
+                            api_held_tokens,
                             api_recipient_address,
                             api_change_address,
                             api_spend_addresses,
@@ -469,6 +471,7 @@ fn wire__crate__api__dexy_build_swap_impl(
             let api_direction = <String>::sse_decode(&mut deserializer);
             let api_amount = <i64>::sse_decode(&mut deserializer);
             let api_min_output = <i64>::sse_decode(&mut deserializer);
+            let api_held_tokens = <i64>::sse_decode(&mut deserializer);
             let api_recipient_address = <String>::sse_decode(&mut deserializer);
             let api_change_address = <String>::sse_decode(&mut deserializer);
             let api_spend_addresses = <Vec<String>>::sse_decode(&mut deserializer);
@@ -483,6 +486,7 @@ fn wire__crate__api__dexy_build_swap_impl(
                             api_direction,
                             api_amount,
                             api_min_output,
+                            api_held_tokens,
                             api_recipient_address,
                             api_change_address,
                             api_spend_addresses,
