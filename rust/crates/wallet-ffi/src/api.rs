@@ -1509,6 +1509,7 @@ pub async fn dexy_build_mint(
     handle_id: u64,
     variant: String,
     amount: i64,
+    held_tokens: i64,
     recipient_address: String,
     change_address: String,
     spend_addresses: Vec<String>,
@@ -1518,6 +1519,12 @@ pub async fn dexy_build_mint(
         ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
     })?;
     let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
+
+    if held_tokens < 0 {
+        return Err(
+            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string()
+        );
+    }
 
     let (recipient_tree, change_tree) =
         resolve_dexy_destinations(handle_id, "dexy_build_mint", &recipient_address, &change_address)?;
@@ -1553,7 +1560,7 @@ pub async fn dexy_build_mint(
         user_inputs: eip12,
         current_height: height,
         recipient_ergo_tree: Some(recipient_tree),
-        recipient_held_tokens: 0,
+        recipient_held_tokens: held_tokens,
     };
 
     let built = dexy::tx_builder::build_mint_dexy_tx(&request, &ctx, &state)
@@ -1593,7 +1600,9 @@ pub async fn dexy_build_mint(
     serde_json::to_string(&serde_json::json!({
         "preparation_id": preparation_id,
         "action": built.summary.action,
-        "token_amount": built.summary.token_amount,
+        "token_amount": built.summary.token_amount + held_tokens,
+        "minted_amount": built.summary.token_amount,
+        "held_amount": held_tokens,
         "token_name": dexy_variant.token_name(),
         "erg_cost_nano": built.summary.erg_amount_nano,
         "bank_fee_nano": built.summary.bank_fee_nano,
@@ -1617,6 +1626,7 @@ pub async fn dexy_build_swap(
     direction: String,
     amount: i64,
     min_output: i64,
+    held_tokens: i64,
     recipient_address: String,
     change_address: String,
     spend_addresses: Vec<String>,
@@ -1636,6 +1646,12 @@ pub async fn dexy_build_swap(
         }
     };
     let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
+
+    if held_tokens < 0 {
+        return Err(
+            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string()
+        );
+    }
 
     let (recipient_tree, change_tree) =
         resolve_dexy_destinations(handle_id, "dexy_build_swap", &recipient_address, &change_address)?;
@@ -1672,7 +1688,7 @@ pub async fn dexy_build_swap(
         user_inputs: eip12,
         current_height: height,
         recipient_ergo_tree: Some(recipient_tree),
-        recipient_held_tokens: 0,
+        recipient_held_tokens: held_tokens,
     };
 
     let built = dexy::tx_builder::build_swap_dexy_tx(&request, &ctx, &state)

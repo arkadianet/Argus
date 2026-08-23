@@ -139,6 +139,7 @@ abstract class RustLibApi extends BaseApi {
     required BigInt handleId,
     required String variant,
     required PlatformInt64 amount,
+    required PlatformInt64 heldTokens,
     required String recipientAddress,
     required String changeAddress,
     required List<String> spendAddresses,
@@ -151,6 +152,7 @@ abstract class RustLibApi extends BaseApi {
     required String direction,
     required PlatformInt64 amount,
     required PlatformInt64 minOutput,
+    required PlatformInt64 heldTokens,
     required String recipientAddress,
     required String changeAddress,
     required List<String> spendAddresses,
@@ -732,6 +734,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required BigInt handleId,
     required String variant,
     required PlatformInt64 amount,
+    required PlatformInt64 heldTokens,
     required String recipientAddress,
     required String changeAddress,
     required List<String> spendAddresses,
@@ -744,6 +747,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_u_64(handleId, serializer);
           sse_encode_String(variant, serializer);
           sse_encode_i_64(amount, serializer);
+          sse_encode_i_64(heldTokens, serializer);
           sse_encode_String(recipientAddress, serializer);
           sse_encode_String(changeAddress, serializer);
           sse_encode_list_String(spendAddresses, serializer);
@@ -764,6 +768,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           handleId,
           variant,
           amount,
+          heldTokens,
           recipientAddress,
           changeAddress,
           spendAddresses,
@@ -780,6 +785,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "handleId",
       "variant",
       "amount",
+      "heldTokens",
       "recipientAddress",
       "changeAddress",
       "spendAddresses",
@@ -794,6 +800,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String direction,
     required PlatformInt64 amount,
     required PlatformInt64 minOutput,
+    required PlatformInt64 heldTokens,
     required String recipientAddress,
     required String changeAddress,
     required List<String> spendAddresses,
@@ -808,6 +815,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(direction, serializer);
           sse_encode_i_64(amount, serializer);
           sse_encode_i_64(minOutput, serializer);
+          sse_encode_i_64(heldTokens, serializer);
           sse_encode_String(recipientAddress, serializer);
           sse_encode_String(changeAddress, serializer);
           sse_encode_list_String(spendAddresses, serializer);
@@ -830,6 +838,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           direction,
           amount,
           minOutput,
+          heldTokens,
           recipientAddress,
           changeAddress,
           spendAddresses,
@@ -848,6 +857,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "direction",
       "amount",
       "minOutput",
+      "heldTokens",
       "recipientAddress",
       "changeAddress",
       "spendAddresses",
