@@ -19,6 +19,7 @@ citadel-core = { workspace = true }
 ergo-node-client = { workspace = true }
 dexy = { workspace = true }
 sigmausd = { workspace = true }
+amm = { workspace = true }
 rand = { workspace = true }
 flutter_rust_bridge = "=2.11.1"
 once_cell = "1"
