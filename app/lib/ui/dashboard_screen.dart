@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -53,17 +54,35 @@ class _DashboardScreenState extends State<DashboardScreen>
   List<WalletInfo> _wallets = [];
   String? _walletId;
 
+  /// Poll for mempool changes (pending activity, balance, spendable UTXOs)
+  /// while the dashboard is open. Paused while backgrounded; a tick is
+  /// skipped if the previous refresh is still in flight.
+  Timer? _pollTimer;
+  bool _pollBackgrounded = false;
+  bool _refreshInFlight = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     walletService.unlocked.addListener(_syncLock);
     watchOnlyService.addListener(_onWatchOnlyChanged);
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 20),
+      (_) => _pollTick(),
+    );
     _init();
+  }
+
+  void _pollTick() {
+    if (!mounted || _pollBackgrounded || _refreshInFlight) return;
+    _refreshInFlight = true;
+    _refresh().whenComplete(() => _refreshInFlight = false);
   }
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     walletService.unlocked.removeListener(_syncLock);
     watchOnlyService.removeListener(_onWatchOnlyChanged);
@@ -77,6 +96,9 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Pause mempool polling while backgrounded; resume on return.
+    _pollBackgrounded =
+        state == AppLifecycleState.paused || state == AppLifecycleState.hidden;
     if (state != AppLifecycleState.resumed) return;
     // Re-prompt biometrics when the session lock fired while backgrounded.
     // If the user returned within the grace window the wallet is still
