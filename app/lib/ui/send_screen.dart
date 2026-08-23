@@ -90,6 +90,15 @@ class _SendScreenState extends State<SendScreen> {
 
   static const _dexyPrefix = 'dexy:';
 
+  /// Raw balance already held for [variant], which the auto-buy route delivers
+  /// alongside whatever it acquires.
+  int _heldFor(DexyVariant variant) {
+    for (final t in _args.tokens) {
+      if (t.id == variant.tokenId) return t.amount;
+    }
+    return 0;
+  }
+
   /// A swap-supported asset selected that the wallet does not hold. Sending
   /// it auto-buys via the cheapest Dexy route (mint or LP swap) first.
   DexyVariant? get _selectedSwapVariant {
@@ -123,7 +132,11 @@ class _SendScreenState extends State<SendScreen> {
       return;
     }
     try {
-      final quotes = await dexService.quoteTokenSend(variant, amount);
+      final quotes = await dexService.quoteTokenSend(
+        variant,
+        amount,
+        heldTokens: _heldFor(variant),
+      );
       if (!mounted || gen != _quoteGeneration) return;
       setState(() => _swapQuotes = quotes);
     } catch (_) {
@@ -402,6 +415,7 @@ class _SendScreenState extends State<SendScreen> {
         recipient: _recipientCtrl.text.trim(),
         changeAddress: changeAddr,
         spendAddresses: spend,
+        heldTokens: _heldFor(variant),
       );
     } catch (e) {
       if (!mounted) return;
@@ -919,15 +933,16 @@ child: Column(
                         ..._args.tokens.map(
                           (t) => DropdownMenuItem(value: t.id, child: Text(t.label)),
                         ),
-                        ...DexyVariant.values
-                            .where((v) =>
-                                !_args.tokens.any((t) => t.id == v.tokenId))
-                            .map(
-                              (v) => DropdownMenuItem(
-                                value: '$_dexyPrefix${v.code}',
-                                child: Text(dexyAssetLabel(v)),
-                              ),
-                            ),
+                        // Offered even when a balance exists: holding some but
+                        // not enough used to hide this route and dead-end the
+                        // send. Any shortfall is topped up, so the held balance
+                        // rides along rather than being ignored.
+                        ...DexyVariant.values.map(
+                          (v) => DropdownMenuItem(
+                            value: '$_dexyPrefix${v.code}',
+                            child: Text(dexyAssetLabel(v)),
+                          ),
+                        ),
                       ],
                       onChanged: (v) => setState(() {
                         _assetId = v;
