@@ -58,6 +58,10 @@ The wallet holds multiple addresses, so this is N concurrent requests. Use
 `tokio::task::JoinSet`, the pattern already established in `discover_addresses`
 (`api.rs:395`), rather than sequential awaits.
 
+`get_unconfirmed_by_ergo_tree` hardcodes `offset=0&limit=100`, so a tree with
+more than 100 mempool transactions is silently truncated. Acceptable for a
+personal wallet, but it is a silent cap rather than an error.
+
 **Every mempool query degrades to confirmed-only on failure.** A slow or flaky
 mempool must never break the confirmed view. `get_effective_utxos` already
 models this — it logs a warning and returns confirmed UTXOs — and that behaviour
@@ -70,6 +74,21 @@ merged ahead of confirmed history in the dashboard. Entries carry no height, so
 `formatActivityTime` and the existing `confirmed` flag drive the `'Pending'`
 badge that is already implemented.
 
+**Deduplicate by transaction id.** The mempool is queried once per address, and
+a single transaction touching several wallet addresses — spending from A with
+change to B — is returned once per matching tree. Without dedup the pending card
+renders twice.
+
+Note the asymmetry: the **balance** is naturally safe from this, because deltas
+are computed per box and every box belongs to exactly one ergo tree, so summing
+across addresses cannot double count. Only the merged activity list needs the
+dedup.
+
+Mempool transactions carry no timestamp, and `formatActivityTime` returns an
+empty string for a null value (`format.dart:132-133`), so pending entries show
+no time. All pending entries sort above confirmed ones; order among themselves
+is unspecified and not worth defining.
+
 An entry disappears when it either confirms (and reappears from confirmed
 history) or is evicted from the mempool.
 
@@ -78,6 +97,19 @@ history) or is evicted from the mempool.
 `get_balance` adjusts the confirmed figure by mempool deltas: subtract the value
 of inputs the wallet owns, add the value of outputs it owns. Same for per-token
 amounts.
+
+**"Inputs the wallet owns" needs defining**, because mempool JSON inputs carry
+only a `boxId` and no ergo tree. Ownership resolves as: the `boxId` appears in
+that address's confirmed UTXO set. Outputs are the easy direction — they carry
+`ergoTree` directly.
+
+That definition covers a parent transaction, but not a chained one: with 0-conf
+chaining a grandchild's input references an *unconfirmed* output, which is in no
+confirmed UTXO set. The arithmetic still nets out provided **all of an address's
+mempool transactions are collected and resolved in one pass before any deltas
+are applied**, so intermediate outputs are known by the time inputs referencing
+them are examined. Iterating transaction-by-transaction and applying deltas as
+it goes will get this wrong.
 
 A single mempool-aware number is shown rather than a confirmed/pending split.
 
@@ -98,10 +130,26 @@ and `wallet-net`'s `get_unspent` derives EIP-12 *from* `ErgoBox` via
 This is smaller than it first appears: `serde_json::from_value::<ErgoBox>` is
 already used to parse node box JSON in three places
 (`wallet-net/src/client.rs:277`, `ergo-node-client/src/lib.rs:173` and `:221`),
-and mempool transaction outputs arrive in the same shape. The first
-implementation step is to confirm that a mempool output deserialises directly,
-including `boxId`, `transactionId` and `index`; if any are absent they must be
-derived before constructing the box.
+and mempool transaction outputs arrive in a similar shape. But they are not
+identical: `json_output_to_eip12` (`ergo-node-client/src/lib.rs:996`) reads
+`boxId` from the output while taking `tx_id` and `index` as **parameters**,
+supplied by the caller from the enclosing transaction — which means a mempool
+output object carries `boxId` but not `transactionId` or `index`.
+
+The first implementation step is therefore to establish empirically whether
+`from_value::<ErgoBox>` accepts a mempool output as-is, and if not, to inject
+`transactionId` and `index` from the enclosing transaction before deserialising.
+Everything downstream depends on the answer, so it is step one, not an
+assumption.
+
+**Duplicate rather than extend.** `get_effective_utxos` already implements most
+of this — a spent-set filter plus owned-output inclusion — but returns
+`Eip12InputBox`. The choice is to reimplement that logic wrapper-side in
+`wallet-ffi` returning `ErgoBox`, rather than add an `ErgoBox` variant to
+`ergo-node-client`. This duplicates roughly forty lines but keeps the vendored
+crate pristine, following the house rule established by the AMM work. The Dexy
+top-up was a deliberate exception because the recipient output could only be
+built inside the vendored builder; no such constraint applies here.
 
 **Accepted risk:** a transaction chained onto an unconfirmed parent becomes
 invalid if that parent is dropped from the mempool, and any descendants fail
@@ -112,10 +160,19 @@ with it. This was raised and accepted.
 `Timer.periodic` while the dashboard is mounted, cancelled on dispose. Polling
 runs whenever the dashboard is open rather than only while something is pending.
 
-**Assumption to confirm:** polling pauses while the app is locked or
-backgrounded, using the existing `session_lock` signal. Stated here because it
-was offered and not explicitly accepted; it can be removed if unconditional
-polling is preferred.
+Polling pauses while the app is backgrounded, via a `WidgetsBindingObserver`
+observing the `paused` and `hidden` lifecycle states — the same states
+`SessionLock.onLifecycle` already reacts to.
+
+An earlier draft said this would hook "the existing `session_lock` signal".
+That was wrong: `SessionLock` (`services/session_lock.dart`) exposes `onLock` —
+a callback it *invokes* — plus `suppress`/`release`, `run`, `onLifecycle` and
+`grace`. Its `_backgrounded` flag is private and there is no locked-state
+notifier to subscribe to. Observing the lifecycle directly needs no change to
+`SessionLock`.
+
+Still open: whether pausing is wanted at all. It was offered and not explicitly
+accepted, and can be dropped for unconditional polling.
 
 ## Error handling
 
@@ -135,6 +192,8 @@ the Dexy and AMM work:
 - Spent-box filter — a box spent in mempool is not offered
 - Unconfirmed-output inclusion — an owned mempool output becomes spendable
 - Degradation — a failed mempool query yields exactly the confirmed set
+- Dedup — a transaction returned by two addresses appears once in activity, and
+  its balance delta is counted once
 
 Node behaviour itself stays unverified without a device; that gap is real and
 should be closed by manual testing, as with the AMM and shortfall work.
