@@ -1087,7 +1087,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     title: 'DEX',
                     subtitle: 'Permissionless token swaps on Ergo.',
                     icon: Icons.swap_horiz,
-                    comingSoon: true,
+                    onTap: () => _go('/swap'),
                   ),
                 ],
               ),
