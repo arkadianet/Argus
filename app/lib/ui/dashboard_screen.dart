@@ -541,9 +541,9 @@ class _DashboardScreenState extends State<DashboardScreen>
           : await walletService.deriveAddress(next);
       // Privacy off (default): change returns to the first derived address.
       // Privacy on: change goes to the next unused address.
-      final change = privacyService.useUnusedChangeAddress
-          ? receive
-          : await walletService.deriveAddress(pinnedIndex);
+      final change = await walletService.deriveAddress(
+        privacyService.useUnusedChangeAddress ? next : 0,
+      );
       if (!mounted) return;
       if (!walletService.isUnlocked) {
         setState(_resetLocked);

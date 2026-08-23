@@ -403,6 +403,21 @@ class DexyPathQuote {
   const DexyPathQuote({required this.path, required this.ergCostNano});
 }
 
+const _minerFeeReserveNano = 1100000;
+
+/// Eligibility and cost estimates per route, shared by quoting and building.
+class _RoutePlan {
+  final bool freeOk;
+  final int freeEstimateNano;
+  final int swapErgIn;
+
+  const _RoutePlan({
+    required this.freeOk,
+    required this.freeEstimateNano,
+    required this.swapErgIn,
+  });
+}
+
 /// Talk to the FFI; every broadcast goes through the shared confirm sheet and
 /// then [`WalletService.sendErg`] / [`WalletService.signPreparation`].
 class DexyService {
@@ -551,15 +566,43 @@ class DexyService {
 
   /// ERG needed as LP-swap input to receive at least [tokenOut] tokens.
   /// Inverts the contract formula out = Y·in·f / (X·d + in·f).
+  /// Returns 0 when the result cannot be represented as an int.
   int ergInForLpSwapOutput(DexyState st, int tokenOut) {
     final x = st.lpErgReserves;
     final y = st.lpDexyReserves;
     const d = 1000;
     const f = 997; // pass-through portion of the 0.3% fee
     if (tokenOut <= 0 || y <= 0 || tokenOut >= y || x <= 0) return 0;
-    final num = tokenOut * x * d;
-    final den = f * (y - tokenOut);
-    return (num + den - 1) ~/ den;
+    final num = BigInt.from(tokenOut) * BigInt.from(x) * BigInt.from(d);
+    final den = BigInt.from(f) * BigInt.from(y - tokenOut);
+    final ergIn = (num + den - BigInt.one) ~/ den;
+    if (!ergIn.isValidInt) return 0;
+    return ergIn.toInt();
+  }
+
+  /// Route eligibility and cost estimates shared by [quoteTokenSend] and
+  /// [buildTokenSend], so displayed quotes and built routes always agree.
+  _RoutePlan _planRoutes(DexyState st, int tokenAmount) {
+    final free = st.rates.freeMint;
+    final limit = [
+      free.maxTokens,
+      free.remainingToday,
+      st.freeMintAvailable,
+    ].whereType<int>().fold<int>(0x7fffffffffffffff, (a, b) => a < b ? a : b);
+    final freeOk =
+        free.available && tokenAmount <= limit && tokenAmount <= st.dexyInBank;
+    var swapErgIn = 0;
+    if (st.lpErgReserves > 0 && st.lpDexyReserves > tokenAmount) {
+      swapErgIn = ergInForLpSwapOutput(st, tokenAmount);
+    }
+    final freeEstimateNano = freeOk
+        ? ((free.effectiveRate ?? st.rates.ergPerToken) * tokenAmount).ceil()
+        : 0;
+    return _RoutePlan(
+      freeOk: freeOk,
+      freeEstimateNano: freeEstimateNano,
+      swapErgIn: swapErgIn,
+    );
   }
 
   /// Estimated total ERG cost to deliver [tokenAmount] via each executable
@@ -570,31 +613,20 @@ class DexyService {
     int tokenAmount,
   ) async {
     final st = await state(variant);
+    final plan = _planRoutes(st, tokenAmount);
     final quotes = <DexyPathQuote>[];
-    final free = st.rates.freeMint;
-    final limit = [
-      free.maxTokens,
-      free.remainingToday,
-      st.freeMintAvailable,
-    ].whereType<int>().fold<int>(0x7fffffffffffffff, (a, b) => a < b ? a : b);
-    if (free.available && tokenAmount <= limit && tokenAmount <= st.dexyInBank) {
+    // Oracle rate per token + miner fee (protocol fees included in rate).
+    if (plan.freeOk) {
       quotes.add(DexyPathQuote(
         path: 'FreeMint',
-        // Oracle rate per token + miner fee (protocol fees included in rate).
-        ergCostNano:
-            ((free.effectiveRate ?? st.rates.ergPerToken) * tokenAmount)
-                    .ceil() +
-                1100000,
+        ergCostNano: plan.freeEstimateNano + _minerFeeReserveNano,
       ));
     }
-    if (st.lpErgReserves > 0 && st.lpDexyReserves > tokenAmount) {
-      final ergIn = ergInForLpSwapOutput(st, tokenAmount);
-      if (ergIn > 0) {
-        quotes.add(DexyPathQuote(
-          path: 'LP Swap',
-          ergCostNano: ergIn + 1100000,
-        ));
-      }
+    if (plan.swapErgIn > 0) {
+      quotes.add(DexyPathQuote(
+        path: 'LP Swap',
+        ergCostNano: plan.swapErgIn + _minerFeeReserveNano,
+      ));
     }
     quotes.sort((a, b) => a.ergCostNano.compareTo(b.ergCostNano));
     return quotes;
@@ -612,28 +644,11 @@ class DexyService {
     required List<String> spendAddresses,
   }) async {
     final st = await state(variant);
+    final plan = _planRoutes(st, tokenAmount);
     final errors = <String>[];
 
-    // 1. FreeMint: oracle-priced mint from the bank.
-    final free = st.rates.freeMint;
-    final limit = [
-      free.maxTokens,
-      free.remainingToday,
-      st.freeMintAvailable,
-    ].whereType<int>().fold<int>(0x7fffffffffffffff, (a, b) => a < b ? a : b);
-    final freeOk =
-        free.available && tokenAmount <= limit && tokenAmount <= st.dexyInBank;
-
-    // 2. LP swap ERG → token, sized to yield at least tokenAmount.
-    var swapErgIn = 0;
-    if (st.lpErgReserves > 0 && st.lpDexyReserves > tokenAmount) {
-      swapErgIn = ergInForLpSwapOutput(st, tokenAmount);
-    }
-    final freeEstimate = freeOk
-        ? ((free.effectiveRate ?? st.rates.ergPerToken) * tokenAmount).ceil()
-        : null;
-    final tryFreeFirst =
-        freeOk && (swapErgIn == 0 || (freeEstimate ?? 0) <= swapErgIn);
+    final tryFreeFirst = plan.freeOk &&
+        (plan.swapErgIn == 0 || plan.freeEstimateNano <= plan.swapErgIn);
 
     Future<DexyBuildResult> doMint() async {
       return buildMint(
@@ -649,7 +664,7 @@ class DexyService {
       return buildSwap(
         variant: variant,
         direction: 'erg_to_dexy',
-        amount: swapErgIn,
+        amount: plan.swapErgIn,
         minOutput: tokenAmount,
         recipient: recipient,
         changeAddress: changeAddress,
@@ -664,14 +679,14 @@ class DexyService {
         errors.add('FreeMint: $e');
       }
     }
-    if (swapErgIn > 0) {
+    if (plan.swapErgIn > 0) {
       try {
         return await doSwap();
       } catch (e) {
         errors.add('LP Swap: $e');
       }
     }
-    if (!tryFreeFirst && freeOk) {
+    if (!tryFreeFirst && plan.freeOk) {
       try {
         return await doMint();
       } catch (e) {

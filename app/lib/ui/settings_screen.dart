@@ -559,8 +559,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
                 value: privacyService.useUnusedChangeAddress,
-                onChanged: (v) =>
-                    setState(() => privacyService.setUnusedChangeAddress(v)),
+                onChanged: (v) async {
+                  final prev = privacyService.useUnusedChangeAddress;
+                  try {
+                    await privacyService.setUnusedChangeAddress(v);
+                  } catch (_) {
+                    // Service flips in-memory state before persisting; restore.
+                    try {
+                      await privacyService.setUnusedChangeAddress(prev);
+                    } catch (_) {}
+                    if (mounted) _snack('Could not update privacy setting');
+                  }
+                  if (mounted) setState(() {});
+                },
               ),
               const SizedBox(height: 28),
               const SectionLabel('Unlock'),

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -54,6 +55,7 @@ class _SendScreenState extends State<SendScreen> {
 
   @override
   void dispose() {
+    _quoteDebounce?.cancel();
     _recipientCtrl.dispose();
     _amountCtrl.dispose();
     _tokenAmtCtrl.dispose();
@@ -86,21 +88,34 @@ class _SendScreenState extends State<SendScreen> {
     return null;
   }
 
+  Timer? _quoteDebounce;
+  int _quoteGeneration = 0;
+
+  void _scheduleQuotes() {
+    _quoteDebounce?.cancel();
+    _quoteDebounce = Timer(const Duration(milliseconds: 300), _refreshQuotes);
+  }
+
   Future<void> _refreshQuotes() async {
     final variant = _selectedSwapVariant;
     if (variant == null) return;
+    final gen = ++_quoteGeneration;
     final amount =
         parseDecimalToBase(_tokenAmtCtrl.text, variant.decimals);
     if (amount == null || amount <= 0) {
-      if (mounted) setState(() => _swapQuotes = null);
+      if (mounted && gen == _quoteGeneration) {
+        setState(() => _swapQuotes = null);
+      }
       return;
     }
     try {
       final quotes = await dexService.quoteTokenSend(variant, amount);
-      if (!mounted) return;
+      if (!mounted || gen != _quoteGeneration) return;
       setState(() => _swapQuotes = quotes);
     } catch (_) {
-      if (mounted) setState(() => _swapQuotes = null);
+      if (mounted && gen == _quoteGeneration) {
+        setState(() => _swapQuotes = null);
+      }
     }
   }
 
@@ -463,9 +478,7 @@ class _SendScreenState extends State<SendScreen> {
       return;
     }
     try {
-      final raw = await walletService.sendErg(preparationId: build.preparationId);
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final txId = map['tx_id']?.toString() ?? raw;
+      final txId = await walletService.sendErg(preparationId: build.preparationId);
       if (!mounted) return;
       HapticFeedback.mediumImpact();
       setState(() {
@@ -743,7 +756,7 @@ child: Column(
                 'You don\'t hold ${variant.shortName} — it is bought automatically at the best rate.',
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          onChanged: (_) => _refreshQuotes(),
+          onChanged: (_) => _scheduleQuotes(),
           validator: (v) {
             final n = parseDecimalToBase(v ?? '', variant.decimals);
             if (n == null || n <= 0) return 'Enter an amount';
@@ -949,7 +962,7 @@ child: Column(
                       ],
                     ],
                     const SizedBox(height: 16),
-                    if (_multiRecipient)
+                    if (_multiRecipient && swapVariant == null)
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
