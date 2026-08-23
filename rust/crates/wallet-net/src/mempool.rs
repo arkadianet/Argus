@@ -2,7 +2,7 @@
 //! every rule here is unit-testable without a node.
 
 use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Every box id consumed by these transactions. A confirmed UTXO whose id is
 /// in this set is already spent and must not be offered again.
@@ -43,6 +43,50 @@ pub fn owned_outputs(txs: &[serde_json::Value], ergo_tree: &str) -> Vec<ErgoBox>
         }
     }
     owned
+}
+
+/// Net nanoERG change from unconfirmed transactions for `ergo_tree`.
+///
+/// Mempool inputs carry no value — only a `boxId` and a spending proof — so
+/// the leaving amounts are resolved against `confirmed_values`, the map of the
+/// caller's confirmed box ids to their nanoERG values.
+///
+/// Single pass over all transactions: collect every spent id first, then apply
+/// deltas. Applying them transaction by transaction mis-nets a chained spend,
+/// whose input references an unconfirmed output that is in no confirmed set.
+pub fn balance_delta(
+    txs: &[serde_json::Value],
+    ergo_tree: &str,
+    confirmed_values: &HashMap<String, i64>,
+) -> i64 {
+    let spent = spent_box_ids(txs);
+
+    // Confirmed boxes of ours consumed by mempool: leaving.
+    let mut delta: i64 = 0;
+    for id in &spent {
+        if let Some(v) = confirmed_values.get(id) {
+            delta -= v;
+        }
+    }
+
+    // Our unconfirmed outputs that are not themselves already spent: arriving.
+    for tx in txs {
+        let outputs = match tx["outputs"].as_array() {
+            Some(o) => o,
+            None => continue,
+        };
+        for output in outputs {
+            if output["ergoTree"].as_str() != Some(ergo_tree) {
+                continue;
+            }
+            let id = output["boxId"].as_str().unwrap_or_default();
+            if spent.contains(id) {
+                continue;
+            }
+            delta += output["value"].as_i64().unwrap_or(0);
+        }
+    }
+    delta
 }
 
 /// Build an `ErgoBox` from one output of an unconfirmed transaction.
@@ -161,5 +205,28 @@ mod tests {
 
         assert_eq!(owned.len(), 1, "only the output paying our tree is ours");
         assert_eq!(owned[0].value.as_u64(), &1_000_000_000u64);
+    }
+
+    #[test]
+    fn a_chained_spend_nets_out_across_one_pass() {
+        let mut confirmed = std::collections::HashMap::new();
+        confirmed.insert("boxA".to_string(), 1_000_000_000i64);
+
+        // t1 spends confirmed boxA (1 ERG), pays us back 0.6 as boxB.
+        let mut b_out = mempool_output();
+        b_out["boxId"] = serde_json::json!("boxB");
+        b_out["value"] = serde_json::json!(600_000_000u64);
+        let t1 = tx("t1", &["boxA"], vec![b_out]);
+
+        // t2 chains: spends the still-unconfirmed boxB, pays us 0.4 back.
+        let mut c_out = mempool_output();
+        c_out["boxId"] = serde_json::json!("boxC");
+        c_out["value"] = serde_json::json!(400_000_000u64);
+        let t2 = tx("t2", &["boxB"], vec![c_out]);
+
+        // Net: -1 ERG confirmed in, +0.4 ERG still ours. boxB must not be
+        // counted as an asset while also being spent by t2.
+        let delta = balance_delta(&[t1, t2], OWN_TREE, &confirmed);
+        assert_eq!(delta, -600_000_000, "expected -1.0 spent + 0.4 returned");
     }
 }

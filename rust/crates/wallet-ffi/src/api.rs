@@ -328,8 +328,30 @@ pub async fn get_balance(address: String, node_url: Option<String>) -> Result<St
         .get_address_balances(&address)
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+
+    // Mempool delta: unconfirmed sends drop the balance before they confirm.
+    // Any mempool failure degrades to the confirmed figure — never fail here.
+    let mut delta: i64 = 0;
+    if let Ok(tree) = address_to_ergo_tree(&address) {
+        if let Ok(txs) = client.mempool_txs_for(&tree).await {
+            if !txs.is_empty() {
+                if let Ok((boxes, _)) = client.get_unspent(&address).await {
+                    let confirmed_values: std::collections::HashMap<String, i64> = boxes
+                        .iter()
+                        .map(|b| (b.box_id().to_string(), b.value.as_i64()))
+                        .collect();
+                    delta = wallet_net::mempool::balance_delta(
+                        &txs,
+                        &tree,
+                        &confirmed_values,
+                    );
+                }
+            }
+        }
+    }
+
     serde_json::to_string(&serde_json::json!({
-        "balance_nano_erg": nano,
+        "balance_nano_erg": (nano as i64 + delta).max(0),
         "tokens": tokens_json(&tokens),
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
