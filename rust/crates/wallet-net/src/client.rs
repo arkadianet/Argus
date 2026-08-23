@@ -376,6 +376,84 @@ impl ErgoNodeClient {
         Ok(self.get_unspent(address).await?.1)
     }
 
+    /// Unconfirmed transactions touching `ergo_tree`. Mempool is in-memory on
+    /// the node, so this needs no extra index and works against any node.
+    pub async fn mempool_txs_for(&self, ergo_tree: &str) -> Result<Vec<serde_json::Value>, String> {
+        const MEMPOOL_LIMIT: usize = 100;
+        let endpoint = format!(
+            "/transactions/unconfirmed/byErgoTree?offset=0&limit={}",
+            MEMPOOL_LIMIT
+        );
+        let body =
+            serde_json::to_string(ergo_tree).map_err(|e| format!("JSON serialize: {}", e))?;
+        let response = self
+            .inner
+            .send_post_req(&endpoint, body)
+            .await
+            .map_err(|e| format!("Node request: {}", e))?;
+        let text = response.text().await.map_err(|e| format!("Read: {}", e))?;
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("Parse: {}", e))?;
+        let items = match value {
+            serde_json::Value::Array(arr) => arr,
+            serde_json::Value::Object(ref map) => map
+                .get("items")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        if items.len() >= MEMPOOL_LIMIT {
+            tracing::warn!("Mempool page limit hit; some unconfirmed transactions not seen");
+        }
+        Ok(items)
+    }
+
+    /// Mempool-aware UTXOs: confirmed, minus boxes already spent in mempool,
+    /// plus this address's unconfirmed outputs. Enables 0-conf chaining.
+    ///
+    /// Returns the same tuple as [`get_unspent`], so it is a drop-in for
+    /// callers. Any mempool failure degrades to exactly the confirmed set.
+    pub async fn get_effective_unspent(
+        &self,
+        address: &str,
+    ) -> Result<(Vec<ErgoBox>, Vec<ergo_tx::Eip12InputBox>), String> {
+        let confirmed_boxes = self.get_unspent(address).await?;
+
+        let tree = match address_to_ergo_tree(address) {
+            Ok(t) => t,
+            Err(_) => return Ok(confirmed_boxes),
+        };
+        let txs = match self.mempool_txs_for(&tree).await {
+            Ok(t) if !t.is_empty() => t,
+            Ok(_) => return Ok(confirmed_boxes),
+            Err(e) => {
+                tracing::warn!("Mempool query failed, using confirmed UTXOs only: {}", e);
+                return Ok(confirmed_boxes);
+            }
+        };
+
+        let spent = crate::mempool::spent_box_ids(&txs);
+        let (mut boxes, _) = confirmed_boxes;
+
+        // Chained spends: an unconfirmed output may itself already be spent by
+        // a later mempool transaction, so filter the additions by the same set.
+        for b in crate::mempool::owned_outputs(&txs, &tree) {
+            if !spent.contains(&b.box_id().to_string()) {
+                boxes.push(b);
+            }
+        }
+
+        let eip12 = boxes
+            .iter()
+            .map(|b| ergo_tx::Eip12InputBox::from_ergo_box(b, b.transaction_id.to_string(), b.index))
+            .collect();
+        Ok((boxes, eip12))
+    }
+
     pub async fn address_has_transactions(&self, address: &str) -> Result<bool, String> {
         Ok(!self.get_transaction_history(address, 1, 0).await?.is_empty())
     }
