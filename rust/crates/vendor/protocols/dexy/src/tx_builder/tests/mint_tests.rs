@@ -129,3 +129,27 @@ fn test_tx_summary() {
     assert_eq!(summary.action, "mint_dexy_gold");
     assert_eq!(summary.token_name, "DexyGold");
 }
+
+#[test]
+fn mint_sends_exactly_the_requested_amount_to_the_recipient() {
+    let ctx = create_mint_context(1_000_000, 100_000);
+    let state = create_test_state(1_000_000, true);
+
+    let request = MintDexyRequest {
+        variant: DexyVariant::Gold,
+        amount: 1_000,
+        user_address: "user_addr".to_string(),
+        user_ergo_tree: "user_ergo_tree".to_string(),
+        user_inputs: vec![create_test_input(100_000_000_000, vec![])],
+        current_height: 100_000,
+        recipient_ergo_tree: Some("recipient_ergo_tree".to_string()),
+    };
+
+    let build = no_citadel_fee(|| build_mint_dexy_tx(&request, &ctx, &state))
+        .expect("mint should build");
+
+    // outputs: [free_mint, bank, buyback, recipient, change?, fee]
+    let recipient = &build.unsigned_tx.outputs[3];
+    assert_eq!(recipient.ergo_tree, "recipient_ergo_tree");
+    assert_eq!(recipient.assets[0].amount, "1000");
+}
