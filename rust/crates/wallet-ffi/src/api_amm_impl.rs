@@ -80,18 +80,23 @@ fn recover<T>(r: std::sync::LockResult<T>) -> T {
     r.unwrap_or_else(|p| p.into_inner())
 }
 
-/// Clamp slippage to a valid percentage. Non-finite, NaN, or out-of-range
-/// values fall back to the 0.5% default, matching `api_dexy_impl::clamp_slippage`.
-pub(crate) fn clamp_slippage(value: Option<f64>) -> f64 {
-    match value {
-        Some(v) if v.is_finite() && (0.0..=100.0).contains(&v) => v,
-        _ => 0.5,
-    }
-}
+/// Tolerance absorbing pool movement between the cached quote and the
+/// force-refreshed build.
+///
+/// This is **not** slippage protection. A direct swap fixes the output amount
+/// in the transaction it builds and references the pool box by id, so the swap
+/// either executes at exactly the quoted price or the transaction is invalid —
+/// there is no path to a worse on-chain fill. `min_output` is never written to
+/// an output or read by any contract; the builders only compare against it at
+/// build time (`direct_swap/n2t.rs:87`, `t2t.rs:95`). It exists so a quote
+/// served from the TTL cache cannot silently become a smaller build.
+///
+/// Fixed deliberately: there is nothing here a user could meaningfully tune.
+pub(crate) const QUOTE_TOLERANCE_PCT: f64 = 0.5;
 
 /// Floor, so the built minimum is never above what was quoted.
-pub(crate) fn min_output_for(output: u64, slippage_pct: f64) -> u64 {
-    let keep = (100.0 - slippage_pct) / 100.0;
+pub(crate) fn min_output_for(output: u64) -> u64 {
+    let keep = (100.0 - QUOTE_TOLERANCE_PCT) / 100.0;
     (output as f64 * keep).floor() as u64
 }
 
@@ -256,20 +261,20 @@ mod tests {
     }
 
     #[test]
-    fn slippage_clamps_to_the_dexy_default() {
-        assert_eq!(clamp_slippage(None), 0.5);
-        assert_eq!(clamp_slippage(Some(f64::NAN)), 0.5);
-        assert_eq!(clamp_slippage(Some(-1.0)), 0.5);
-        assert_eq!(clamp_slippage(Some(101.0)), 0.5);
-        assert_eq!(clamp_slippage(Some(1.0)), 1.0);
+    fn quote_tolerance_is_fixed_and_not_caller_supplied() {
+        // A direct swap fixes the output in the tx it builds and references the
+        // pool box by id, so there is no on-chain slippage exposure and nothing
+        // for a user to tune. The tolerance only absorbs pool movement between
+        // the cached quote and the force-refreshed build.
+        assert_eq!(QUOTE_TOLERANCE_PCT, 0.5);
     }
 
     #[test]
-    fn min_output_subtracts_slippage() {
-        assert_eq!(min_output_for(1_000_000, 0.5), 995_000);
-        assert_eq!(min_output_for(1_000_000, 0.0), 1_000_000);
-        // Rounds down: never quote a min the pool cannot satisfy.
-        assert_eq!(min_output_for(3, 50.0), 1);
+    fn min_output_absorbs_quote_staleness() {
+        assert_eq!(min_output_for(1_000_000), 995_000);
+        // Rounds down: never demand a minimum the pool cannot satisfy.
+        assert_eq!(min_output_for(3), 2);
+        assert_eq!(min_output_for(0), 0);
     }
 
     /// A built swap must never pay the Citadel address. Pinned to that tree

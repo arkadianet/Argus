@@ -5,13 +5,20 @@ import '../bridge/argus_error.dart';
 import 'network_controller.dart';
 import 'wallet_service.dart';
 
-/// Default slippage, matching the Dexy convention in [DexyService].
-const double kDefaultSlippagePct = 0.5;
+/// Tolerance absorbing pool movement between the cached quote and the
+/// force-refreshed build.
+///
+/// This is **not** slippage protection. A direct swap fixes the output amount
+/// in the transaction it builds and references the pool box by id, so it either
+/// fills at exactly the quoted price or the transaction is invalid. `minOutput`
+/// is never read by any contract — the Rust builders only compare against it at
+/// build time. Fixed deliberately: there is nothing here a user could tune.
+const double kQuoteTolerancePct = 0.5;
 
-/// Minimum acceptable output after slippage. Floors, so the built minimum is
-/// never above what was quoted.
-int minOutputFor(int output, double slippagePct) =>
-    (output * (100 - slippagePct) / 100).floor();
+/// Minimum acceptable output. Floors, so the built minimum is never above what
+/// was quoted.
+int minOutputFor(int output) =>
+    (output * (100 - kQuoteTolerancePct) / 100).floor();
 
 class AmmTokenMeta {
   final String name;
@@ -63,7 +70,7 @@ class AmmQuote {
   final int minOutput;
   final double priceImpactPct;
   final int feeAmount;
-  final double slippagePct;
+  final double quoteTolerancePct;
 
   const AmmQuote({
     required this.poolId,
@@ -73,7 +80,7 @@ class AmmQuote {
     required this.minOutput,
     required this.priceImpactPct,
     required this.feeAmount,
-    required this.slippagePct,
+    required this.quoteTolerancePct,
   });
 
   factory AmmQuote.fromJson(Map<String, dynamic> json) => AmmQuote(
@@ -84,8 +91,8 @@ class AmmQuote {
         minOutput: (json['min_output'] as num?)?.toInt() ?? 0,
         priceImpactPct: (json['price_impact_pct'] as num?)?.toDouble() ?? 0,
         feeAmount: (json['fee_amount'] as num?)?.toInt() ?? 0,
-        slippagePct:
-            (json['slippage_pct'] as num?)?.toDouble() ?? kDefaultSlippagePct,
+        quoteTolerancePct: (json['quote_tolerance_pct'] as num?)?.toDouble() ??
+            kQuoteTolerancePct,
       );
 }
 
@@ -147,13 +154,11 @@ class AmmService {
     String? fromToken,
     String? toToken,
     required int amount,
-    double slippagePct = kDefaultSlippagePct,
   }) async {
     final raw = await api.ammQuote(
       fromToken: fromToken,
       toToken: toToken,
       amount: amount,
-      slippagePct: slippagePct,
       nodeUrl: _node,
     );
     return AmmQuote.fromJson((jsonDecode(raw) as Map).cast());

@@ -99,7 +99,6 @@ abstract class RustLibApi extends BaseApi {
     String? fromToken,
     String? toToken,
     required PlatformInt64 amount,
-    double? slippagePct,
     String? nodeUrl,
   });
 
@@ -472,7 +471,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     String? fromToken,
     String? toToken,
     required PlatformInt64 amount,
-    double? slippagePct,
     String? nodeUrl,
   }) {
     return handler.executeNormal(
@@ -482,7 +480,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_opt_String(fromToken, serializer);
           sse_encode_opt_String(toToken, serializer);
           sse_encode_i_64(amount, serializer);
-          sse_encode_opt_box_autoadd_f_64(slippagePct, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
@@ -496,7 +493,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiAmmQuoteConstMeta,
-        argValues: [fromToken, toToken, amount, slippagePct, nodeUrl],
+        argValues: [fromToken, toToken, amount, nodeUrl],
         apiImpl: this,
       ),
     );
@@ -504,7 +501,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiAmmQuoteConstMeta => const TaskConstMeta(
     debugName: "amm_quote",
-    argNames: ["fromToken", "toToken", "amount", "slippagePct", "nodeUrl"],
+    argNames: ["fromToken", "toToken", "amount", "nodeUrl"],
   );
 
   @override

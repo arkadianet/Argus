@@ -5,10 +5,14 @@ import 'package:argus_wallet/ui/swap_screen.dart';
 
 void main() {
   group('minOutputFor', () {
-    test('applies slippage and rounds down', () {
-      expect(minOutputFor(1000000, 0.5), 995000);
-      expect(minOutputFor(1000000, 0.0), 1000000);
-      expect(minOutputFor(3, 50.0), 1);
+    // Not slippage: a direct swap fixes the output in the tx and references the
+    // pool box by id, so it either fills at the quoted price or is invalid. This
+    // only absorbs pool movement between the cached quote and the refreshed
+    // build, so the tolerance is fixed rather than caller-supplied.
+    test('absorbs quote staleness and rounds down', () {
+      expect(minOutputFor(1000000), 995000);
+      expect(minOutputFor(3), 2);
+      expect(minOutputFor(0), 0);
     });
   });
 
@@ -22,7 +26,7 @@ void main() {
         'min_output': 990025,
         'price_impact_pct': 0.12,
         'fee_amount': 3000,
-        'slippage_pct': 0.5,
+        'quote_tolerance_pct': 0.5,
       });
 
       expect(q.poolId, 'abc');
@@ -60,7 +64,7 @@ void main() {
           minOutput: 990025,
           priceImpactPct: 0.12,
           feeAmount: 3000,
-          slippagePct: 0.5,
+          quoteTolerancePct: 0.5,
         ),
         outputSymbol: 'SigUSD',
         outputDecimals: 2,

@@ -165,7 +165,6 @@ fn wire__crate__api__amm_quote_impl(
             let api_from_token = <Option<String>>::sse_decode(&mut deserializer);
             let api_to_token = <Option<String>>::sse_decode(&mut deserializer);
             let api_amount = <i64>::sse_decode(&mut deserializer);
-            let api_slippage_pct = <Option<f64>>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -175,7 +174,6 @@ fn wire__crate__api__amm_quote_impl(
                             api_from_token,
                             api_to_token,
                             api_amount,
-                            api_slippage_pct,
                             api_node_url,
                         )
                         .await?;

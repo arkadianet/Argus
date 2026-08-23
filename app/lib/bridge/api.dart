@@ -490,13 +490,11 @@ Future<String> ammQuote({
   String? fromToken,
   String? toToken,
   required PlatformInt64 amount,
-  double? slippagePct,
   String? nodeUrl,
 }) => RustLib.instance.api.crateApiAmmQuote(
   fromToken: fromToken,
   toToken: toToken,
   amount: amount,
-  slippagePct: slippagePct,
   nodeUrl: nodeUrl,
 );
 

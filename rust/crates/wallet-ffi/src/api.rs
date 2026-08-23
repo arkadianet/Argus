@@ -2188,7 +2188,6 @@ pub async fn amm_quote(
     from_token: Option<String>,
     to_token: Option<String>,
     amount: i64,
-    slippage_pct: Option<f64>,
     node_url: Option<String>,
 ) -> Result<String, String> {
     if amount <= 0 {
@@ -2209,16 +2208,15 @@ pub async fn amm_quote(
         ArgusError::Generic("Pool cannot quote this swap".into()).to_json_string()
     })?;
 
-    let slippage = crate::api_amm_impl::clamp_slippage(slippage_pct);
     serde_json::to_string(&serde_json::json!({
         "pool_id": pool.pool_id,
         "box_id": pool.box_id,
         "output_amount": quote.output.amount,
         "output_token": quote.output.token_id,
-        "min_output": crate::api_amm_impl::min_output_for(quote.output.amount, slippage),
+        "min_output": crate::api_amm_impl::min_output_for(quote.output.amount),
         "price_impact_pct": quote.price_impact,
         "fee_amount": quote.fee_amount,
-        "slippage_pct": slippage,
+        "quote_tolerance_pct": crate::api_amm_impl::QUOTE_TOLERANCE_PCT,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
