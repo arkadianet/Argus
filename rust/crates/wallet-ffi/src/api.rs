@@ -2150,6 +2150,79 @@ pub async fn sigmausd_build(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+/// Discovered Spectrum pools with token metadata. Read-only; never touches the
+/// wallet handle. `truncated` is true when discovery hit its 1000-box cap and
+/// some pools may be missing.
+#[flutter_rust_bridge::frb]
+pub async fn amm_pools(node_url: Option<String>, force_refresh: bool) -> Result<String, String> {
+    let set = crate::api_amm_impl::load_pools(node_url.clone(), force_refresh).await?;
+    let client = crate::api_dexy_impl::dexy_client(node_url).await?;
+
+    let mut tokens = serde_json::Map::new();
+    for pool in &set.pools {
+        for id in crate::api_amm_impl::pool_token_ids(pool) {
+            if !tokens.contains_key(&id) {
+                let meta = crate::api_amm_impl::token_meta(&client, &id).await;
+                tokens.insert(
+                    id,
+                    serde_json::to_value(meta).map_err(|e| {
+                        ArgusError::SerializationError(e.to_string()).to_json_string()
+                    })?,
+                );
+            }
+        }
+    }
+
+    serde_json::to_string(&serde_json::json!({
+        "truncated": set.truncated,
+        "pools": set.pools,
+        "tokens": tokens,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Quote a single-hop swap. `from_token`/`to_token` are `None` for ERG,
+/// matching how the Send screen encodes ERG as a null asset id.
+#[flutter_rust_bridge::frb]
+pub async fn amm_quote(
+    from_token: Option<String>,
+    to_token: Option<String>,
+    amount: i64,
+    slippage_pct: Option<f64>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    if amount <= 0 {
+        return Err(ArgusError::Generic("Amount must be positive".into()).to_json_string());
+    }
+    let set = crate::api_amm_impl::load_pools(node_url, false).await?;
+    let pool = crate::api_amm_impl::best_pool_for(
+        &set.pools,
+        from_token.as_deref(),
+        to_token.as_deref(),
+    )
+    .ok_or_else(|| {
+        ArgusError::Generic("NO_POOL: no Spectrum pool trades this pair".into()).to_json_string()
+    })?;
+
+    let input = crate::api_amm_impl::swap_input(from_token.as_deref(), amount as u64);
+    let quote = amm::calculator::quote_swap(pool, &input).ok_or_else(|| {
+        ArgusError::Generic("Pool cannot quote this swap".into()).to_json_string()
+    })?;
+
+    let slippage = crate::api_amm_impl::clamp_slippage(slippage_pct);
+    serde_json::to_string(&serde_json::json!({
+        "pool_id": pool.pool_id,
+        "box_id": pool.box_id,
+        "output_amount": quote.output.amount,
+        "output_token": quote.output.token_id,
+        "min_output": crate::api_amm_impl::min_output_for(quote.output.amount, slippage),
+        "price_impact_pct": quote.price_impact,
+        "fee_amount": quote.fee_amount,
+        "slippage_pct": slippage,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

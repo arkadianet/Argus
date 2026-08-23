@@ -80,6 +80,69 @@ fn recover<T>(r: std::sync::LockResult<T>) -> T {
     r.unwrap_or_else(|p| p.into_inner())
 }
 
+/// Clamp slippage to a valid percentage. Non-finite, NaN, or out-of-range
+/// values fall back to the 0.5% default, matching `api_dexy_impl::clamp_slippage`.
+pub(crate) fn clamp_slippage(value: Option<f64>) -> f64 {
+    match value {
+        Some(v) if v.is_finite() && (0.0..=100.0).contains(&v) => v,
+        _ => 0.5,
+    }
+}
+
+/// Floor, so the built minimum is never above what was quoted.
+pub(crate) fn min_output_for(output: u64, slippage_pct: f64) -> u64 {
+    let keep = (100.0 - slippage_pct) / 100.0;
+    (output as f64 * keep).floor() as u64
+}
+
+/// Every token id a pool references, for metadata prefetch.
+pub(crate) fn pool_token_ids(pool: &AmmPool) -> Vec<String> {
+    let mut ids = vec![pool.token_y.token_id.clone()];
+    if let Some(x) = &pool.token_x {
+        ids.push(x.token_id.clone());
+    }
+    ids
+}
+
+/// Pick the pool with the deepest output-side reserves for a pair.
+pub(crate) fn best_pool_for<'a>(
+    pools: &'a [AmmPool],
+    from_token: Option<&str>,
+    to_token: Option<&str>,
+) -> Option<&'a AmmPool> {
+    pools
+        .iter()
+        .filter(|p| pool_supports(p, from_token, to_token))
+        .max_by_key(|p| p.erg_reserves.unwrap_or(p.token_y.amount))
+}
+
+fn pool_supports(pool: &AmmPool, from_token: Option<&str>, to_token: Option<&str>) -> bool {
+    let ids: Vec<&str> = match pool.pool_type {
+        amm::state::PoolType::N2T => vec![pool.token_y.token_id.as_str()],
+        amm::state::PoolType::T2T => pool
+            .token_x
+            .iter()
+            .map(|t| t.token_id.as_str())
+            .chain(std::iter::once(pool.token_y.token_id.as_str()))
+            .collect(),
+    };
+    let side = |t: Option<&str>| match t {
+        None => matches!(pool.pool_type, amm::state::PoolType::N2T),
+        Some(id) => ids.contains(&id),
+    };
+    side(from_token) && side(to_token)
+}
+
+pub(crate) fn swap_input(from_token: Option<&str>, amount: u64) -> amm::state::SwapInput {
+    match from_token {
+        None => amm::state::SwapInput::Erg { amount },
+        Some(id) => amm::state::SwapInput::Token {
+            token_id: id.to_string(),
+            amount,
+        },
+    }
+}
+
 fn is_truncated(n2t_count: usize, t2t_count: usize) -> bool {
     n2t_count >= DISCOVERY_CAP || t2t_count >= DISCOVERY_CAP
 }
@@ -185,5 +248,22 @@ mod tests {
         let meta = TokenMeta::fallback("a55b8735ed1a99e46c2c89f8994aacdf4b1109bdcf682f1e5b34479c6e392669");
         assert_eq!(meta.name, "a55b8735…");
         assert_eq!(meta.decimals, 0, "unknown decimals must not silently scale amounts");
+    }
+
+    #[test]
+    fn slippage_clamps_to_the_dexy_default() {
+        assert_eq!(clamp_slippage(None), 0.5);
+        assert_eq!(clamp_slippage(Some(f64::NAN)), 0.5);
+        assert_eq!(clamp_slippage(Some(-1.0)), 0.5);
+        assert_eq!(clamp_slippage(Some(101.0)), 0.5);
+        assert_eq!(clamp_slippage(Some(1.0)), 1.0);
+    }
+
+    #[test]
+    fn min_output_subtracts_slippage() {
+        assert_eq!(min_output_for(1_000_000, 0.5), 995_000);
+        assert_eq!(min_output_for(1_000_000, 0.0), 1_000_000);
+        // Rounds down: never quote a min the pool cannot satisfy.
+        assert_eq!(min_output_for(3, 50.0), 1);
     }
 }
