@@ -4,6 +4,7 @@ import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/address_label_service.dart';
 import '../services/network_controller.dart';
+import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/watch_only_service.dart';
@@ -546,6 +547,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _snack('Could not update auto-lock');
                   }
                 },
+              ),
+              const SizedBox(height: 28),
+              const SectionLabel('Privacy'),
+              const SizedBox(height: 12),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Fresh change addresses'),
+                subtitle: Text(
+                  'Send transaction change to unused addresses instead of your first address.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+                value: privacyService.useUnusedChangeAddress,
+                onChanged: (v) =>
+                    setState(() => privacyService.setUnusedChangeAddress(v)),
               ),
               const SizedBox(height: 28),
               const SectionLabel('Unlock'),
