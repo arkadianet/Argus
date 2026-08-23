@@ -19,7 +19,7 @@ use dexy::rates::DexyRates;
 use crate::error::ArgusError;
 
 /// Resolve a node URL, preferring the explicit one, then the configured set.
-fn resolve_node_url(node_url: Option<String>) -> String {
+pub(crate) fn resolve_node_url(node_url: Option<String>) -> String {
     if let Some(u) = node_url {
         let clean = u.trim().trim_end_matches('/');
         if !clean.is_empty() {

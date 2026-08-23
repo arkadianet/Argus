@@ -101,7 +101,10 @@ impl DexyVariant {
     pub fn peg_description(&self) -> &'static str {
         match self {
             DexyVariant::Gold => "1 DexyGold = 1 milligram of gold",
-            DexyVariant::Usd => "1 USE = 0.001 USD",
+            // 3 decimals, and `oracle_divisor` yields nanoERG per raw unit, so
+            // one *whole* USE is 1 USD. Every displayed amount is a whole-token
+            // amount, so the peg is stated in those terms.
+            DexyVariant::Usd => "1 USE = 1 USD",
         }
     }
 }

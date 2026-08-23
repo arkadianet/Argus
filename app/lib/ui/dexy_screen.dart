@@ -10,6 +10,13 @@ import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
 
+/// Mint card and confirm-sheet title for a variant. Names the token (USE), not
+/// the protocol implementation (DexyUSD).
+String dexyMintTitle(DexyVariant variant) => 'Mint ${variant.shortName}';
+
+/// Holdings header for a variant.
+String dexyHoldingsTitle(DexyVariant variant) => 'Your ${variant.shortName}';
+
 /// Mobile-first Dexy hub. Every action builds a transaction through the shared
 /// confirm sheet ("Sign & broadcast") and submits via the cached-preparation
 /// flow — the same guard rails as every other send in Argus.
@@ -150,7 +157,7 @@ class _DexyScreenState extends State<DexyScreen> {
     final build = result['build'] as DexyBuildResult;
     final confirmed = await showConfirmTransactionSheet(
       context,
-      title: 'Mint ${_variant.name}',
+      title: dexyMintTitle(_variant),
       rows: [
         ConfirmTxRow(
             'Received',
@@ -223,6 +230,7 @@ class _DexyScreenState extends State<DexyScreen> {
       isScrollControlled: true,
       builder: (ctx) => _DexyLiquiditySheet(
         variant: _variant,
+        state: _state!,
         initialAction: initialAction,
         tokenBalance: _tokenBalance,
         lpBalance: _lpBalance,
@@ -396,7 +404,7 @@ class _DexyScreenState extends State<DexyScreen> {
         children: [
           Row(
             children: [
-              Text('Your ${_variant.name}',
+              Text(dexyHoldingsTitle(_variant),
                   style: Theme.of(context).textTheme.titleMedium),
               const Spacer(),
               _tag(st.canMint ? 'Mint open' : 'Mint paused',
@@ -753,7 +761,7 @@ class _DexyMintSheetState extends State<_DexyMintSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Mint ${variant.name}',
+          Text(dexyMintTitle(variant),
               style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 6),
           Text(variant.peg, style: Theme.of(context).textTheme.bodySmall),
@@ -1064,6 +1072,7 @@ class _DexySwapSheetState extends State<_DexySwapSheet> {
 class _DexyLiquiditySheet extends StatefulWidget {
   const _DexyLiquiditySheet({
     required this.variant,
+    required this.state,
     required this.onBuild,
     this.initialAction = 'deposit',
     this.tokenBalance,
@@ -1072,6 +1081,8 @@ class _DexyLiquiditySheet extends StatefulWidget {
   });
 
   final DexyVariant variant;
+  /// Pool reserves, needed to pair the two deposit sides at the current ratio.
+  final DexyState state;
   final Future<DexyBuildResult> Function(
       String action, int ergAmt, int dexyAmt, int lpAmt) onBuild;
   final String initialAction;
@@ -1112,6 +1123,39 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
   void _onChanged() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), _refresh);
+  }
+
+  /// A deposit must match the pool's reserve ratio, and the ratio is not
+  /// something a user can work out. Typing in either side fills the other.
+  ///
+  /// Guarded by [_pairing] so writing to a controller does not re-enter through
+  /// that field's own onChanged and fight the user's cursor.
+  bool _pairing = false;
+
+  void _onErgChanged() {
+    if (_pairing) return;
+    _pairing = true;
+    final erg = parseErgToNano(_ergCtrl.text);
+    final dexy = (erg == null || erg <= 0)
+        ? 0
+        : dexyForErgDeposit(widget.state, erg);
+    _dexyCtrl.text =
+        dexy <= 0 ? '' : formatTokenAmount(dexy, widget.variant.decimals);
+    _pairing = false;
+    _onChanged();
+  }
+
+  void _onDexyChanged() {
+    if (_pairing) return;
+    _pairing = true;
+    final dexy =
+        parseDecimalToBase(_dexyCtrl.text, widget.variant.decimals);
+    final erg = (dexy == null || dexy <= 0)
+        ? 0
+        : ergForDexyDeposit(widget.state, dexy);
+    _ergCtrl.text = erg <= 0 ? '' : formatErg(erg, unit: false);
+    _pairing = false;
+    _onChanged();
   }
 
   Future<void> _refresh() async {
@@ -1242,7 +1286,7 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
               controller: _ergCtrl,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
-              onChanged: (_) => _onChanged(),
+              onChanged: (_) => _onErgChanged(),
               decoration: InputDecoration(
                 labelText: 'ERG to deposit',
                 suffixIcon: TextButton(
@@ -1257,10 +1301,24 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
                           ),
                         );
                       } else {
-                        _ergCtrl.text = formatErg(max, unit: false);
+                        final pairable = maxPairableErg(
+                          widget.state,
+                          ergAvailable: max,
+                          tokenBalance: widget.tokenBalance ?? 0,
+                        );
+                        if (pairable <= 0) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                  'No ${variant.shortName} to pair with ERG'),
+                            ),
+                          );
+                        } else {
+                          _ergCtrl.text = formatErg(pairable, unit: false);
+                        }
                       }
                     }
-                    _onChanged();
+                    _onErgChanged();
                   },
                   child: const Text('MAX'),
                 ),
@@ -1271,15 +1329,32 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
               controller: _dexyCtrl,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
-              onChanged: (_) => _onChanged(),
+              onChanged: (_) => _onDexyChanged(),
               decoration: InputDecoration(
                 labelText: '${variant.shortName} to deposit',
                 suffixIcon: TextButton(
                   onPressed: () {
                     final b = widget.tokenBalance;
-                    if (b != null)
-                      _dexyCtrl.text = formatTokenAmount(b, variant.decimals);
-                    _onChanged();
+                    if (b != null) {
+                      final spendable = widget.spendableBalance ?? 0;
+                      final ergAvailable = spendable - minerFeeNano - minBoxNano;
+                      final pairable = maxPairableDexy(
+                        widget.state,
+                        tokenBalance: b,
+                        ergAvailable: ergAvailable,
+                      );
+                      if (pairable <= 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Not enough ERG to pair a deposit'),
+                          ),
+                        );
+                      } else {
+                        _dexyCtrl.text =
+                            formatTokenAmount(pairable, variant.decimals);
+                      }
+                    }
+                    _onDexyChanged();
                   },
                   child: const Text('MAX'),
                 ),

@@ -14,6 +14,20 @@ import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'scan_screen.dart';
 
+/// One auto-buy route line, e.g. `≈ 3.7196 ERG via FreeMint  ·  cheapest`.
+String dexyQuoteLabel(DexyPathQuote quote, {required bool cheapest}) =>
+    '≈ ${formatErg(quote.ergCostNano)} via ${quote.path}'
+    '${cheapest ? '  ·  cheapest' : ''}';
+
+/// Asset-picker entry for a variant the wallet doesn't hold yet. Names the
+/// token (USE), not the protocol implementation (DexyUSD).
+String dexyAssetLabel(DexyVariant variant) =>
+    '${variant.shortName} · buy & send';
+
+/// Amount-field label for the auto-buy flow.
+String dexyAmountLabel(DexyVariant variant) =>
+    '${variant.shortName} amount to deliver';
+
 class SendScreen extends StatefulWidget {
   const SendScreen({super.key});
 
@@ -751,7 +765,7 @@ child: Column(
         TextFormField(
           controller: _tokenAmtCtrl,
           decoration: InputDecoration(
-            labelText: '${variant.name} amount to deliver',
+            labelText: dexyAmountLabel(variant),
             helperText:
                 'You don\'t hold ${variant.shortName} — it is bought automatically at the best rate.',
           ),
@@ -791,8 +805,7 @@ child: Column(
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '≈ ${formatErg(q.ergCostNano)} ERG via ${q.path}'
-                      '${i == 0 ? '  ·  cheapest' : ''}',
+                      dexyQuoteLabel(q, cheapest: i == 0),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
@@ -912,7 +925,7 @@ child: Column(
                             .map(
                               (v) => DropdownMenuItem(
                                 value: '$_dexyPrefix${v.code}',
-                                child: Text('${v.name} · buy & send'),
+                                child: Text(dexyAssetLabel(v)),
                               ),
                             ),
                       ],

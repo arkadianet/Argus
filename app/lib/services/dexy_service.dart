@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import '../bridge/api.dart' as api;
 import '../bridge/argus_error.dart';
@@ -21,7 +22,7 @@ enum DexyVariant {
     'DexyUSD',
     'a55b8735ed1a99e46c2c89f8994aacdf4b1109bdcf682f1e5b34479c6e3' '92669',
     3,
-    '1 USE = 0.001 USD',
+    '1 USE = 1 USD',
     '804a66426283b8281240df8f9de783651986f20ad6391a71b26b9e7d6' 'faad099',
     'USE',
   );
@@ -43,6 +44,58 @@ enum DexyVariant {
   final String peg;
   final String lpTokenId;
   final String shortName;
+}
+
+/// ERG needed to pair [dexyAmount] raw tokens at the current pool ratio.
+///
+/// An LP deposit must match the pool's reserve ratio. `calculate_lp_deposit`
+/// takes both sides, converts each to LP shares, and keeps the **smaller** —
+/// so an unbalanced deposit silently leaves part of the larger side unused.
+/// Rounding up here makes the entered side the limiting one, so all of it is
+/// consumed. Returns 0 for an empty pool, which has no ratio to match.
+int ergForDexyDeposit(DexyState st, int dexyAmount) {
+  if (st.lpDexyReserves <= 0 || st.lpErgReserves <= 0 || dexyAmount <= 0) {
+    return 0;
+  }
+  final n = BigInt.from(dexyAmount) * BigInt.from(st.lpErgReserves) +
+      BigInt.from(st.lpDexyReserves - 1);
+  return (n ~/ BigInt.from(st.lpDexyReserves)).toInt();
+}
+
+/// Raw tokens needed to pair [ergNano] at the current pool ratio.
+/// Counterpart of [ergForDexyDeposit]; same rounding rationale.
+int dexyForErgDeposit(DexyState st, int ergNano) {
+  if (st.lpDexyReserves <= 0 || st.lpErgReserves <= 0 || ergNano <= 0) {
+    return 0;
+  }
+  final n = BigInt.from(ergNano) * BigInt.from(st.lpDexyReserves) +
+      BigInt.from(st.lpErgReserves - 1);
+  return (n ~/ BigInt.from(st.lpErgReserves)).toInt();
+}
+
+/// Largest token amount the wallet can actually deposit: its whole balance,
+/// unless pairing that much would need more ERG than [ergAvailable].
+int maxPairableDexy(
+  DexyState st, {
+  required int tokenBalance,
+  required int ergAvailable,
+}) {
+  if (tokenBalance <= 0 || ergAvailable <= 0) return 0;
+  final needed = ergForDexyDeposit(st, tokenBalance);
+  if (needed <= ergAvailable) return tokenBalance;
+  return dexyForErgDeposit(st, ergAvailable).clamp(0, tokenBalance);
+}
+
+/// Largest ERG amount the wallet can actually deposit, capped by the tokens it
+/// holds to pair against.
+int maxPairableErg(
+  DexyState st, {
+  required int ergAvailable,
+  required int tokenBalance,
+}) {
+  if (tokenBalance <= 0 || ergAvailable <= 0) return 0;
+  final needed = ergForDexyDeposit(st, tokenBalance);
+  return needed < ergAvailable ? needed : ergAvailable;
 }
 
 /// Pricing for a Dexy mint path (ArbMint / FreeMint / LP swap).
@@ -93,7 +146,6 @@ class DexyRates {
   final int oracleRateNano;
   final double ergPerToken;
   final double tokensPerErg;
-  final String pegDescription;
   final DexyMintPath arbMint;
   final DexyMintPath freeMint;
   final DexyMintPath lpSwap;
@@ -105,7 +157,6 @@ class DexyRates {
     required this.oracleRateNano,
     required this.ergPerToken,
     required this.tokensPerErg,
-    required this.pegDescription,
     required this.arbMint,
     required this.freeMint,
     required this.lpSwap,
@@ -120,7 +171,6 @@ class DexyRates {
       oracleRateNano: (json['oracle_rate_nano'] as num?)?.toInt() ?? 0,
       ergPerToken: (json['erg_per_token'] as num?)?.toDouble() ?? 0,
       tokensPerErg: (json['tokens_per_erg'] as num?)?.toDouble() ?? 0,
-      pegDescription: json['peg_description'] as String? ?? '',
       arbMint: DexyMintPath.fromJson(
           (paths['arb_mint'] as Map?)?.cast() ?? const {}),
       freeMint: DexyMintPath.fromJson(
@@ -580,9 +630,26 @@ class DexyService {
     return ergIn.toInt();
   }
 
+  /// FreeMint cost in nanoERG for [tokenAmount] *raw* base units.
+  ///
+  /// `effective_rate` / `erg_per_token` arrive from Rust as ERG per **display**
+  /// token (see `DexyRates::from_state`), so converting to nanoERG per raw unit
+  /// needs both the 1e9 ERG→nanoERG scale and the token's decimals.
+  int _freeMintCostNano(DexyState st, int tokenAmount) {
+    final ergPerDisplay =
+        st.rates.freeMint.effectiveRate ?? st.rates.ergPerToken;
+    final perDisplayUnit = math.pow(10, st.rates.tokenDecimals).toDouble();
+    return (ergPerDisplay * tokenAmount * 1e9 / perDisplayUnit).ceil();
+  }
+
   /// Route eligibility and cost estimates shared by [quoteTokenSend] and
   /// [buildTokenSend], so displayed quotes and built routes always agree.
   _RoutePlan _planRoutes(DexyState st, int tokenAmount) {
+    // Guard centrally: callers that skip their own validation must not get a
+    // zero-cost quote or a buildable route out of a non-positive amount.
+    if (tokenAmount <= 0) {
+      return const _RoutePlan(freeOk: false, freeEstimateNano: 0, swapErgIn: 0);
+    }
     final free = st.rates.freeMint;
     final limit = [
       free.maxTokens,
@@ -595,9 +662,7 @@ class DexyService {
     if (st.lpErgReserves > 0 && st.lpDexyReserves > tokenAmount) {
       swapErgIn = ergInForLpSwapOutput(st, tokenAmount);
     }
-    final freeEstimateNano = freeOk
-        ? ((free.effectiveRate ?? st.rates.ergPerToken) * tokenAmount).ceil()
-        : 0;
+    final freeEstimateNano = freeOk ? _freeMintCostNano(st, tokenAmount) : 0;
     return _RoutePlan(
       freeOk: freeOk,
       freeEstimateNano: freeEstimateNano,
@@ -612,7 +677,11 @@ class DexyService {
     DexyVariant variant,
     int tokenAmount,
   ) async {
-    final st = await state(variant);
+    return quotesForState(await state(variant), tokenAmount);
+  }
+
+  /// [quoteTokenSend] against an already-fetched snapshot.
+  List<DexyPathQuote> quotesForState(DexyState st, int tokenAmount) {
     final plan = _planRoutes(st, tokenAmount);
     final quotes = <DexyPathQuote>[];
     // Oracle rate per token + miner fee (protocol fees included in rate).
