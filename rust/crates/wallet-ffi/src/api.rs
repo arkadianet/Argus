@@ -1943,6 +1943,213 @@ pub async fn dexy_build_lp_redeem(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+/// Live SigmaUSD (AgeUSD) protocol state: bank reserves, oracle rate, reserve
+/// ratio, token prices, liabilities/equity, and per-action availability.
+#[flutter_rust_bridge::frb]
+pub async fn sigmausd_state(node_url: Option<String>) -> Result<String, String> {
+    crate::api_sigmausd_impl::state(node_url).await
+}
+
+/// Cost/proceeds preview for one of the four SigmaUSD bank actions at the
+/// live oracle rate. `action` is `mint_sigusd`, `redeem_sigusd`, `mint_sigrsv`,
+/// or `redeem_sigrsv`.
+#[flutter_rust_bridge::frb]
+pub async fn sigmausd_preview(
+    action: String,
+    amount: i64,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    crate::api_sigmausd_impl::preview(&action, amount, node_url).await
+}
+
+/// Build a SigmaUSD bank transaction into the standard broadcast flow. The
+/// primary output (minted tokens, or redeemed ERG with leftover tokens) goes
+/// to `recipient_address` — any valid Ergo address; ERG change returns to
+/// wallet-owned `change_address`.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn sigmausd_build(
+    handle_id: u64,
+    action: String,
+    amount: i64,
+    recipient_address: String,
+    change_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    use citadel_core::BoxId;
+    use sigmausd::fetch::fetch_tx_context;
+    use sigmausd::state::{BankBoxData, OracleBoxData, SigmaUsdState};
+    use sigmausd::tx_builder::{
+        build_mint_sigusd_tx, build_mint_sigrsv_tx, build_redeem_sigusd_tx,
+        build_redeem_sigrsv_tx, validate_mint_sigusd, validate_mint_sigrsv,
+        validate_redeem_sigusd, validate_redeem_sigrsv, MintSigRsvRequest, MintSigUsdRequest,
+        RedeemSigRsvRequest, RedeemSigUsdRequest, SigmaUsdAction,
+    };
+
+    let parsed_action = action.parse::<SigmaUsdAction>().map_err(|_| {
+        ArgusError::Generic(format!("Invalid SigmaUSD action: {action}")).to_json_string()
+    })?;
+    let ids = crate::api_sigmausd_impl::nft_ids()?;
+
+    let (recipient_tree, change_tree) = resolve_dexy_destinations(
+        handle_id,
+        "sigmausd_build",
+        &recipient_address,
+        &change_address,
+    )?;
+
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    let caps = client
+        .require_capabilities()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+
+    let (all_boxes, eip12) =
+        gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
+    if eip12.is_empty() {
+        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+    }
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+
+    let fetched = fetch_tx_context(&client, &caps, &ids)
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+
+    // Derive the validation state from the SAME bank/oracle boxes the builder
+    // will consume, so ratio checks can never pass on a stale snapshot.
+    let state = SigmaUsdState::from_boxes(
+        &BankBoxData {
+            box_id: BoxId::new(fetched.bank_box.box_id().to_string()),
+            value_nano: fetched.bank_erg_nano,
+            sigusd_circulating: fetched.sigusd_circulating,
+            sigrsv_circulating: fetched.sigrsv_circulating,
+        },
+        &OracleBoxData {
+            box_id: BoxId::new(fetched.oracle_box.box_id().to_string()),
+            nanoerg_per_usd: fetched.oracle_rate,
+        },
+    );
+
+    let check = match parsed_action {
+        SigmaUsdAction::MintSigUsd => validate_mint_sigusd(amount, &state),
+        SigmaUsdAction::RedeemSigUsd => validate_redeem_sigusd(amount, &state),
+        SigmaUsdAction::MintSigRsv => validate_mint_sigrsv(amount, &state),
+        SigmaUsdAction::RedeemSigRsv => validate_redeem_sigrsv(amount, &state),
+    };
+    check.map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    let user_tree = change_tree.clone();
+    let ctx = sigmausd::tx_builder::TxContext {
+        nft_ids: ids,
+        bank_input: fetched.bank_input,
+        bank_erg_nano: fetched.bank_erg_nano,
+        sigusd_circulating: fetched.sigusd_circulating,
+        sigrsv_circulating: fetched.sigrsv_circulating,
+        sigusd_in_bank: fetched.sigusd_in_bank,
+        sigrsv_in_bank: fetched.sigrsv_in_bank,
+        oracle_data_input: fetched.oracle_data_input,
+        oracle_rate: fetched.oracle_rate,
+    };
+
+    let built = match parsed_action {
+        SigmaUsdAction::MintSigUsd => build_mint_sigusd_tx(
+            &MintSigUsdRequest {
+                amount,
+                user_address: change_address.clone(),
+                user_ergo_tree: user_tree.clone(),
+                user_inputs: eip12,
+                current_height: height,
+                recipient_ergo_tree: Some(recipient_tree),
+            },
+            &ctx,
+            &state,
+        ),
+        SigmaUsdAction::RedeemSigUsd => build_redeem_sigusd_tx(
+            &RedeemSigUsdRequest {
+                amount,
+                user_address: change_address.clone(),
+                user_ergo_tree: user_tree.clone(),
+                user_inputs: eip12,
+                current_height: height,
+                recipient_ergo_tree: Some(recipient_tree),
+            },
+            &ctx,
+            &state,
+        ),
+        SigmaUsdAction::MintSigRsv => build_mint_sigrsv_tx(
+            &MintSigRsvRequest {
+                amount,
+                user_address: change_address.clone(),
+                user_ergo_tree: user_tree.clone(),
+                user_inputs: eip12,
+                current_height: height,
+                recipient_ergo_tree: Some(recipient_tree),
+            },
+            &ctx,
+            &state,
+        ),
+        SigmaUsdAction::RedeemSigRsv => build_redeem_sigrsv_tx(
+            &RedeemSigRsvRequest {
+                amount,
+                user_address: change_address.clone(),
+                user_ergo_tree: user_tree.clone(),
+                user_inputs: eip12,
+                current_height: height,
+                recipient_ergo_tree: Some(recipient_tree),
+            },
+            &ctx,
+            &state,
+        ),
+    }
+    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    // Inputs: [bank] + user inputs (in order). Data inputs: oracle.
+    let selected_ids = built
+        .unsigned_tx
+        .inputs
+        .iter()
+        .skip(1)
+        .map(|i| i.box_id.clone())
+        .collect::<Vec<_>>();
+    let user_boxes = ordered_user_boxes(&selected_ids, &all_boxes)?;
+
+    let mut ergo_boxes = vec![fetched.bank_box];
+    ergo_boxes.extend(user_boxes);
+    let data_input_boxes = vec![fetched.oracle_box];
+
+    let miner_fee = built.summary.tx_fee_nano;
+    let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        data_input_boxes,
+        unsigned_tx: built.unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: built.summary.erg_amount_nano,
+        node_url,
+    });
+
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "action": built.summary.action,
+        "token_amount": built.summary.token_amount,
+        "token_name": built.summary.token_name,
+        "erg_amount_nano": built.summary.erg_amount_nano,
+        "protocol_fee_nano": built.summary.protocol_fee_nano,
+        "citadel_fee_nano": built.summary.citadel_fee_nano,
+        "miner_fee": miner_fee,
+        "change_nano_erg": change_erg,
+        "recipient": recipient_address,
+        "change_address": change_address,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

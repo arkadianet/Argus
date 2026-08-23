@@ -8,6 +8,7 @@ import 'services/watch_only_service.dart';
 import 'services/wallet_service.dart';
 import 'theme/argus_theme.dart';
 import 'theme/theme_controller.dart';
+import 'ui/ageusd_screen.dart';
 import 'ui/contacts_screen.dart';
 import 'ui/create_wallet_screen.dart';
 import 'ui/dashboard_screen.dart';
@@ -91,6 +92,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/tx' => const TransactionDetailScreen(),
               '/utxos' => const UtxoManagementScreen(),
               '/dexy' => const DexyScreen(),
+              '/ageusd' => const AgeUsdScreen(),
               _ => null,
             };
             if (page == null) return null;

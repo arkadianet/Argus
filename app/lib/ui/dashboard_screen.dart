@@ -1081,7 +1081,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     title: 'AgeUSD',
                     subtitle: 'The decentralized stablecoin on Ergo.',
                     icon: Icons.attach_money,
-                    comingSoon: true,
+                    onTap: () => _go('/ageusd'),
                   ),
                   _discoverCard(
                     title: 'DEX',
