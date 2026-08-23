@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `with_handle`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `with_handle`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 
 Future<void> setNetwork({
@@ -350,12 +350,14 @@ Future<String> dexyPreviewLp({
 
 /// Prepare a Dexy mint: builds the FreeMint transaction, caches it, and returns
 /// a preview JSON with the `preparation_id` for the shared confirm → broadcast
-/// flow.
+/// flow. `recipient_address` receives the minted tokens (any valid Ergo
+/// address); ERG change returns to wallet-owned `change_address`.
 Future<String> dexyBuildMint({
   required BigInt handleId,
   required String variant,
   required PlatformInt64 amount,
   required String recipientAddress,
+  required String changeAddress,
   required List<String> spendAddresses,
   String? nodeUrl,
 }) => RustLib.instance.api.crateApiDexyBuildMint(
@@ -363,11 +365,14 @@ Future<String> dexyBuildMint({
   variant: variant,
   amount: amount,
   recipientAddress: recipientAddress,
+  changeAddress: changeAddress,
   spendAddresses: spendAddresses,
   nodeUrl: nodeUrl,
 );
 
 /// Prepare a Dexy LP swap (both directions) into the standard broadcast flow.
+/// `recipient_address` receives the swapped output (any valid Ergo address);
+/// ERG/token change returns to wallet-owned `change_address`.
 Future<String> dexyBuildSwap({
   required BigInt handleId,
   required String variant,
@@ -375,6 +380,7 @@ Future<String> dexyBuildSwap({
   required PlatformInt64 amount,
   required PlatformInt64 minOutput,
   required String recipientAddress,
+  required String changeAddress,
   required List<String> spendAddresses,
   String? nodeUrl,
 }) => RustLib.instance.api.crateApiDexyBuildSwap(
@@ -384,6 +390,7 @@ Future<String> dexyBuildSwap({
   amount: amount,
   minOutput: minOutput,
   recipientAddress: recipientAddress,
+  changeAddress: changeAddress,
   spendAddresses: spendAddresses,
   nodeUrl: nodeUrl,
 );
@@ -395,6 +402,7 @@ Future<String> dexyBuildLpDeposit({
   required PlatformInt64 depositErg,
   required PlatformInt64 depositDexy,
   required String recipientAddress,
+  required String changeAddress,
   required List<String> spendAddresses,
   String? nodeUrl,
 }) => RustLib.instance.api.crateApiDexyBuildLpDeposit(
@@ -403,6 +411,7 @@ Future<String> dexyBuildLpDeposit({
   depositErg: depositErg,
   depositDexy: depositDexy,
   recipientAddress: recipientAddress,
+  changeAddress: changeAddress,
   spendAddresses: spendAddresses,
   nodeUrl: nodeUrl,
 );
@@ -413,6 +422,7 @@ Future<String> dexyBuildLpRedeem({
   required String variant,
   required PlatformInt64 lpToBurn,
   required String recipientAddress,
+  required String changeAddress,
   required List<String> spendAddresses,
   String? nodeUrl,
 }) => RustLib.instance.api.crateApiDexyBuildLpRedeem(
@@ -420,6 +430,7 @@ Future<String> dexyBuildLpRedeem({
   variant: variant,
   lpToBurn: lpToBurn,
   recipientAddress: recipientAddress,
+  changeAddress: changeAddress,
   spendAddresses: spendAddresses,
   nodeUrl: nodeUrl,
 );

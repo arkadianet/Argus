@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -45,9 +44,14 @@ class _DexyScreenState extends State<DexyScreen> {
     return null;
   }
 
-  String get _recipient => _args.receiveAddress.isNotEmpty
-      ? _args.receiveAddress
-      : _args.senderAddress;
+  // Mint outputs (tokens + ERG change) land on the change-policy address:
+  // first derived by default, next unused when privacy mode is on.
+  String get _recipient =>
+      _args.changeAddress.isNotEmpty
+          ? _args.changeAddress
+          : _args.receiveAddress.isNotEmpty
+              ? _args.receiveAddress
+              : _args.senderAddress;
 
   List<String> get _spendAddresses {
     final args = _args;
@@ -103,10 +107,8 @@ class _DexyScreenState extends State<DexyScreen> {
   Future<void> _broadcast(DexyBuildResult build) async {
     setState(() => _busy = true);
     try {
-      final raw =
+      final txId =
           await walletService.sendErg(preparationId: build.preparationId);
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final txId = map['tx_id']?.toString() ?? raw;
       if (!mounted) return;
       _snack('Broadcast! ${shorten(txId, head: 8, tail: 6)}');
       HapticFeedback.mediumImpact();
@@ -139,6 +141,7 @@ class _DexyScreenState extends State<DexyScreen> {
           variant: _variant,
           amount: amount,
           recipient: _recipient,
+          changeAddress: _recipient,
           spendAddresses: _spendAddresses,
         ),
       ),
@@ -178,6 +181,7 @@ class _DexyScreenState extends State<DexyScreen> {
           amount: amount,
           minOutput: minOutput,
           recipient: _recipient,
+          changeAddress: _recipient,
           spendAddresses: _spendAddresses,
         ),
       ),
@@ -230,6 +234,7 @@ class _DexyScreenState extends State<DexyScreen> {
               depositErg: ergAmt,
               depositDexy: dexyAmt,
               recipient: _recipient,
+              changeAddress: _recipient,
               spendAddresses: _spendAddresses,
             );
           }
@@ -237,6 +242,7 @@ class _DexyScreenState extends State<DexyScreen> {
             variant: _variant,
             lpToBurn: lpAmt,
             recipient: _recipient,
+            changeAddress: _recipient,
             spendAddresses: _spendAddresses,
           );
         },
