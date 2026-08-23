@@ -198,14 +198,19 @@ pub(crate) async fn load_pools(
     Ok(set)
 }
 
+/// ErgoTree of the Citadel dev-fee P2PK (`ergo-tx/src/dev_fee.rs:29`).
+pub(crate) const CITADEL_DEV_FEE_TREE: &str =
+    "0008cd0224f3a8909d624e7c584f215956370278324c9b3bfc206a4605a27c952121e68c";
+
+/// True when any output pays the inherited Citadel dev fee. Argus levies no
+/// app fee, so a built transaction must never contain such an output.
+pub(crate) fn pays_citadel_dev_fee(output_trees: &[String]) -> bool {
+    output_trees.iter().any(|t| t == CITADEL_DEV_FEE_TREE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// ErgoTree of the Citadel dev-fee P2PK (`ergo-tx/src/dev_fee.rs:29`).
-    /// Argus must never pay it.
-    const CITADEL_DEV_FEE_TREE: &str =
-        "0008cd0224f3a8909d624e7c584f215956370278324c9b3bfc206a4605a27c952121e68c";
 
     /// `init_app` disables the inherited Citadel fee. This pins that guard:
     /// `resolved_dev_fee_config` caches into a process-global `OnceLock` on
@@ -265,5 +270,23 @@ mod tests {
         assert_eq!(min_output_for(1_000_000, 0.0), 1_000_000);
         // Rounds down: never quote a min the pool cannot satisfy.
         assert_eq!(min_output_for(3, 50.0), 1);
+    }
+
+    /// A built swap must never pay the Citadel address. Pinned to that tree
+    /// specifically, not to "no extra outputs" — Argus plans its own 0.0011 ERG
+    /// fee, and this assertion must survive it.
+    #[test]
+    fn built_swap_outputs_never_pay_citadel() {
+        let trees = vec![
+            "0008cd03aaaaaa".to_string(),
+            "0008cd03bbbbbb".to_string(),
+        ];
+        assert!(!pays_citadel_dev_fee(&trees));
+
+        let with_fee = vec![
+            "0008cd03aaaaaa".to_string(),
+            CITADEL_DEV_FEE_TREE.to_string(),
+        ];
+        assert!(pays_citadel_dev_fee(&with_fee));
     }
 }

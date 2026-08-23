@@ -2223,6 +2223,134 @@ pub async fn amm_quote(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+/// Prepare a Spectrum direct swap: builds the transaction, caches it, and
+/// returns a preview JSON with the `preparation_id` for the shared confirm →
+/// broadcast flow.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn amm_build_swap(
+    handle_id: u64,
+    from_token: Option<String>,
+    to_token: Option<String>,
+    amount: i64,
+    min_output: i64,
+    pool_id: String,
+    recipient_address: String,
+    change_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    if amount <= 0 || min_output <= 0 {
+        return Err(ArgusError::Generic("Amount must be positive".into()).to_json_string());
+    }
+    let (recipient_tree, change_tree) =
+        resolve_dexy_destinations(handle_id, "amm_build_swap", &recipient_address, &change_address)?;
+
+    let set = crate::api_amm_impl::load_pools(node_url.clone(), true).await?;
+    let pool = set
+        .pools
+        .iter()
+        .find(|p| p.pool_id == pool_id)
+        .ok_or_else(|| {
+            ArgusError::Generic("POOL_MOVED: pool no longer available, re-quote".into())
+                .to_json_string()
+        })?;
+
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    // One node fetch serves both the builder (EIP-12) and the preparation
+    // cache (raw ErgoBox needed by sign_prepared_tx).
+    let pool_ergo_box = client
+        .get_box_by_id(&citadel_core::BoxId::new(&pool.box_id))
+        .await
+        .map_err(|_| {
+            ArgusError::Generic("POOL_MOVED: pool box was spent, re-quote".into()).to_json_string()
+        })?;
+    let creation = client
+        .get_box_creation_info(&pool_ergo_box.box_id().to_string())
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    let pool_box =
+        ergo_tx::Eip12InputBox::from_ergo_box(&pool_ergo_box, creation.0, creation.1);
+
+    let (all_boxes, eip12) =
+        gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
+    if eip12.is_empty() {
+        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+    }
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+
+    let input = crate::api_amm_impl::swap_input(from_token.as_deref(), amount as u64);
+    let built = amm::direct_swap::build_direct_swap_eip12(
+        &pool_box,
+        pool,
+        &input,
+        min_output as u64,
+        &eip12,
+        &change_tree,
+        height,
+        Some(&recipient_tree),
+        None,
+    )
+    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+
+    // Argus levies no dev fee. Fail loudly rather than silently paying Citadel.
+    let output_trees: Vec<String> = built
+        .unsigned_tx
+        .outputs
+        .iter()
+        .map(|o| o.ergo_tree.clone())
+        .collect();
+    if crate::api_amm_impl::pays_citadel_dev_fee(&output_trees) {
+        return Err(ArgusError::Generic(
+            "DEV_FEE_LEAK: built tx pays the Citadel dev fee — init_app guard failed".into(),
+        )
+        .to_json_string());
+    }
+
+    // Pool box is inputs[0]; user boxes follow in order.
+    let selected_ids = built
+        .unsigned_tx
+        .inputs
+        .iter()
+        .skip(1)
+        .map(|i| i.box_id.clone())
+        .collect::<Vec<_>>();
+    let user_boxes = ordered_user_boxes(&selected_ids, &all_boxes)?;
+
+    let mut ergo_boxes = vec![pool_ergo_box];
+    ergo_boxes.extend(user_boxes);
+
+    let miner_fee = built.summary.miner_fee as i64;
+    let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        data_input_boxes: vec![],
+        unsigned_tx: built.unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: 0,
+        node_url,
+    });
+
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "input_amount": built.summary.input_amount,
+        "input_token": built.summary.input_token,
+        "output_amount": built.summary.output_amount,
+        "output_token": built.summary.output_token,
+        "min_output": built.summary.min_output,
+        "miner_fee": built.summary.miner_fee,
+        "total_erg_cost": built.summary.total_erg_cost,
+        "pool_id": pool_id,
+        "to_token": to_token,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
