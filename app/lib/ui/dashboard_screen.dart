@@ -7,6 +7,7 @@ import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/address_label_service.dart';
 import '../services/network_controller.dart';
+import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/watch_only_service.dart';
@@ -28,7 +29,8 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   bool _loading = true;
   String _status = 'Initializing...';
   String? _receiveAddress;
@@ -54,6 +56,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     walletService.unlocked.addListener(_syncLock);
     watchOnlyService.addListener(_onWatchOnlyChanged);
     _init();
@@ -61,6 +64,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     walletService.unlocked.removeListener(_syncLock);
     watchOnlyService.removeListener(_onWatchOnlyChanged);
     _pinCtrl.dispose();
@@ -69,6 +73,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   void _onWatchOnlyChanged() {
     _refreshWatchOnly();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    // Re-prompt biometrics when the session lock fired while backgrounded.
+    // If the user returned within the grace window the wallet is still
+    // unlocked and this is a no-op.
+    if (!_unlockBusy &&
+        !walletService.isUnlocked &&
+        _canBiometric &&
+        _walletId != null) {
+      _unlockBiometric();
+    }
   }
 
   void _syncLock() {
@@ -521,6 +539,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
       final receive = next == 0
           ? (_receiveAddress ?? await walletService.deriveAddress(pinnedIndex))
           : await walletService.deriveAddress(next);
+      // Privacy off (default): change returns to the first derived address.
+      // Privacy on: change goes to the next unused address.
+      final change = privacyService.useUnusedChangeAddress
+          ? receive
+          : await walletService.deriveAddress(pinnedIndex);
       if (!mounted) return;
       if (!walletService.isUnlocked) {
         setState(_resetLocked);
@@ -529,7 +552,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _usedAddresses = used;
         _receiveAddress = receive;
-        _changeAddress = receive;
+        _changeAddress = change;
         _senderAddress = _bestSender(receive);
       });
     } catch (_) {
