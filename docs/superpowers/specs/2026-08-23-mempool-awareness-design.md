@@ -142,14 +142,22 @@ The first implementation step is therefore to establish empirically whether
 Everything downstream depends on the answer, so it is step one, not an
 assumption.
 
-**Duplicate rather than extend.** `get_effective_utxos` already implements most
-of this — a spent-set filter plus owned-output inclusion — but returns
-`Eip12InputBox`. The choice is to reimplement that logic wrapper-side in
-`wallet-ffi` returning `ErgoBox`, rather than add an `ErgoBox` variant to
-`ergo-node-client`. This duplicates roughly forty lines but keeps the vendored
-crate pristine, following the house rule established by the AMM work. The Dexy
-top-up was a deliberate exception because the recipient output could only be
-built inside the vendored builder; no such constraint applies here.
+**Where this logic lives.** `get_effective_utxos` already implements most of it
+— a spent-set filter plus owned-output inclusion — but returns `Eip12InputBox`
+and sits in the vendored `ergo-node-client`.
+
+It goes in **`wallet-net`** (`rust/crates/wallet-net/src/client.rs`), as a
+sibling of `get_unspent`. `wallet-net` is first-party, not vendored, and talks to
+the node directly over reqwest, so this needs no vendored change. Returning the
+same `(Vec<ErgoBox>, Vec<Eip12InputBox>)` tuple as `get_unspent` makes it a drop-
+in at the one call site in `gather_unspent`.
+
+This is better than the two obvious alternatives: extending the vendored crate
+would break the house rule from the AMM work, and reimplementing inside
+`wallet-ffi` would duplicate the logic into an already-large `api.rs` while
+splitting UTXO fetching across two crates. The Dexy top-up remains the one
+deliberate vendored exception, because the recipient output could only be built
+inside the vendored builder; no such constraint applies here.
 
 **Accepted risk:** a transaction chained onto an unconfirmed parent becomes
 invalid if that parent is dropped from the mempool, and any descendants fail
