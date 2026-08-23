@@ -402,6 +402,20 @@ class _SendScreenState extends State<SendScreen> {
       _snack('Enter a token amount');
       return;
     }
+    // Nothing to acquire: the auto-buy routes have no shortfall to price and
+    // would fail with NO_ROUTE. Hand the user the ordinary token send instead,
+    // which spends the balance they already hold.
+    if (shortfallFor(wanted: tokenAmount, held: _heldFor(variant)) == 0) {
+      final outputErg = _amountNano();
+      if (outputErg == null || outputErg < minBoxNano) {
+        _amountCtrl.text = formatErg(minBoxNano, unit: false);
+      }
+      setState(() => _assetId = variant.tokenId);
+      _snack('You already hold enough ${variant.shortName} — '
+          'sending it directly. Review to continue.');
+      return;
+    }
+
     final changeAddr = args.changeAddress.isNotEmpty
         ? args.changeAddress
         : args.senderAddress;
@@ -780,8 +794,10 @@ child: Column(
           controller: _tokenAmtCtrl,
           decoration: InputDecoration(
             labelText: dexyAmountLabel(variant),
-            helperText:
-                'You don\'t hold ${variant.shortName} — it is bought automatically at the best rate.',
+            helperText: _heldFor(variant) > 0
+                ? 'You hold ${formatTokenAmount(_heldFor(variant), variant.decimals)} '
+                    '${variant.shortName} — only the shortfall is bought.'
+                : 'You don\'t hold ${variant.shortName} — it is bought automatically at the best rate.',
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           onChanged: (_) => _scheduleQuotes(),

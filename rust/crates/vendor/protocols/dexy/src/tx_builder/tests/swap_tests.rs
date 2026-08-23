@@ -493,8 +493,9 @@ fn erg_to_dexy_swap_tops_up_held_tokens() {
     let recipient = &build.unsigned_tx.outputs[2];
     assert_eq!(recipient.ergo_tree, "recipient_ergo_tree");
     let delivered: i64 = recipient.assets[0].amount.parse().unwrap();
-    assert!(
-        delivered > 266,
+    assert_eq!(
+        delivered,
+        build.summary.output_amount + request.recipient_held_tokens,
         "recipient must get swapped output plus the held 266, got {delivered}"
     );
 

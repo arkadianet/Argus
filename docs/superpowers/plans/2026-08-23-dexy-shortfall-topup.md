@@ -524,6 +524,8 @@ int shortfallFor({required int wanted, required int held}) {
 
 Give `buildTokenSend` a `heldTokens` parameter, quote and build against `shortfallFor(...)` rather than the full amount, and pass `heldTokens` to both `buildMint` and `buildSwap`. `quoteTokenSend` must quote the shortfall too, or the displayed cost will overstate what the user pays.
 
+**Handle a zero shortfall.** When the wallet already holds enough, `shortfallFor` returns `0`, `_planRoutes` yields no routes, and `buildTokenSend` throws `NO_ROUTE` — the auto-buy route has nothing to buy. Since the picker now offers that route unconditionally, the send screen must detect the zero case before calling `buildTokenSend` and fall back to the ordinary token send, which spends the held balance directly.
+
 In `send_screen.dart`, the dropdown currently offers the auto-buy entry only when the wallet holds none (`:921`):
 
 ```dart

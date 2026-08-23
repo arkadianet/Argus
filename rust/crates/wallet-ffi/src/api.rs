@@ -1725,6 +1725,14 @@ pub async fn dexy_build_swap(
         "direction": built.summary.direction,
         "input_amount": built.summary.input_amount,
         "output_amount": built.summary.output_amount,
+        // Tokens actually delivered. Only an ERG-funded swap hands tokens to
+        // the recipient; selling dexy delivers ERG, so it reports none.
+        "token_amount": if built.summary.direction == "erg_to_dexy" {
+            built.summary.output_amount + held_tokens
+        } else {
+            0
+        },
+        "held_amount": held_tokens,
         "min_output": built.summary.min_output,
         "price_impact_pct": built.summary.price_impact_pct,
         "fee_pct": built.summary.fee_pct,
