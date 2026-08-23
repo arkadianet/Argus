@@ -230,6 +230,7 @@ class _DexyScreenState extends State<DexyScreen> {
       isScrollControlled: true,
       builder: (ctx) => _DexyLiquiditySheet(
         variant: _variant,
+        state: _state!,
         initialAction: initialAction,
         tokenBalance: _tokenBalance,
         lpBalance: _lpBalance,
@@ -1071,6 +1072,7 @@ class _DexySwapSheetState extends State<_DexySwapSheet> {
 class _DexyLiquiditySheet extends StatefulWidget {
   const _DexyLiquiditySheet({
     required this.variant,
+    required this.state,
     required this.onBuild,
     this.initialAction = 'deposit',
     this.tokenBalance,
@@ -1079,6 +1081,8 @@ class _DexyLiquiditySheet extends StatefulWidget {
   });
 
   final DexyVariant variant;
+  /// Pool reserves, needed to pair the two deposit sides at the current ratio.
+  final DexyState state;
   final Future<DexyBuildResult> Function(
       String action, int ergAmt, int dexyAmt, int lpAmt) onBuild;
   final String initialAction;
@@ -1119,6 +1123,39 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
   void _onChanged() {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 400), _refresh);
+  }
+
+  /// A deposit must match the pool's reserve ratio, and the ratio is not
+  /// something a user can work out. Typing in either side fills the other.
+  ///
+  /// Guarded by [_pairing] so writing to a controller does not re-enter through
+  /// that field's own onChanged and fight the user's cursor.
+  bool _pairing = false;
+
+  void _onErgChanged() {
+    if (_pairing) return;
+    _pairing = true;
+    final erg = parseErgToNano(_ergCtrl.text);
+    final dexy = (erg == null || erg <= 0)
+        ? 0
+        : dexyForErgDeposit(widget.state, erg);
+    _dexyCtrl.text =
+        dexy <= 0 ? '' : formatTokenAmount(dexy, widget.variant.decimals);
+    _pairing = false;
+    _onChanged();
+  }
+
+  void _onDexyChanged() {
+    if (_pairing) return;
+    _pairing = true;
+    final dexy =
+        parseDecimalToBase(_dexyCtrl.text, widget.variant.decimals);
+    final erg = (dexy == null || dexy <= 0)
+        ? 0
+        : ergForDexyDeposit(widget.state, dexy);
+    _ergCtrl.text = erg <= 0 ? '' : formatErg(erg, unit: false);
+    _pairing = false;
+    _onChanged();
   }
 
   Future<void> _refresh() async {
@@ -1249,7 +1286,7 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
               controller: _ergCtrl,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
-              onChanged: (_) => _onChanged(),
+              onChanged: (_) => _onErgChanged(),
               decoration: InputDecoration(
                 labelText: 'ERG to deposit',
                 suffixIcon: TextButton(
@@ -1267,7 +1304,7 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
                         _ergCtrl.text = formatErg(max, unit: false);
                       }
                     }
-                    _onChanged();
+                    _onErgChanged();
                   },
                   child: const Text('MAX'),
                 ),
@@ -1278,7 +1315,7 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
               controller: _dexyCtrl,
               keyboardType:
                   const TextInputType.numberWithOptions(decimal: true),
-              onChanged: (_) => _onChanged(),
+              onChanged: (_) => _onDexyChanged(),
               decoration: InputDecoration(
                 labelText: '${variant.shortName} to deposit',
                 suffixIcon: TextButton(
@@ -1286,7 +1323,7 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
                     final b = widget.tokenBalance;
                     if (b != null)
                       _dexyCtrl.text = formatTokenAmount(b, variant.decimals);
-                    _onChanged();
+                    _onDexyChanged();
                   },
                   child: const Text('MAX'),
                 ),

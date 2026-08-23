@@ -46,6 +46,33 @@ enum DexyVariant {
   final String shortName;
 }
 
+/// ERG needed to pair [dexyAmount] raw tokens at the current pool ratio.
+///
+/// An LP deposit must match the pool's reserve ratio. `calculate_lp_deposit`
+/// takes both sides, converts each to LP shares, and keeps the **smaller** —
+/// so an unbalanced deposit silently leaves part of the larger side unused.
+/// Rounding up here makes the entered side the limiting one, so all of it is
+/// consumed. Returns 0 for an empty pool, which has no ratio to match.
+int ergForDexyDeposit(DexyState st, int dexyAmount) {
+  if (st.lpDexyReserves <= 0 || st.lpErgReserves <= 0 || dexyAmount <= 0) {
+    return 0;
+  }
+  final n = BigInt.from(dexyAmount) * BigInt.from(st.lpErgReserves) +
+      BigInt.from(st.lpDexyReserves - 1);
+  return (n ~/ BigInt.from(st.lpDexyReserves)).toInt();
+}
+
+/// Raw tokens needed to pair [ergNano] at the current pool ratio.
+/// Counterpart of [ergForDexyDeposit]; same rounding rationale.
+int dexyForErgDeposit(DexyState st, int ergNano) {
+  if (st.lpDexyReserves <= 0 || st.lpErgReserves <= 0 || ergNano <= 0) {
+    return 0;
+  }
+  final n = BigInt.from(ergNano) * BigInt.from(st.lpDexyReserves) +
+      BigInt.from(st.lpErgReserves - 1);
+  return (n ~/ BigInt.from(st.lpErgReserves)).toInt();
+}
+
 /// Pricing for a Dexy mint path (ArbMint / FreeMint / LP swap).
 class DexyMintPath {
   final String name;

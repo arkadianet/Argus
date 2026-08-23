@@ -93,6 +93,41 @@ void main() {
     });
   });
 
+  group('LP deposit pairing', () {
+    // Pool holds 3700 ERG against 1000 USE, so one whole USE pairs with 3.7 ERG.
+    DexyState pool() => _useState(
+          effectiveRate: 3.7185,
+          lpErgReserves: 3700000000000,
+          lpDexyReserves: 1000000,
+        );
+
+    test('derives the ERG needed to pair a USE amount', () {
+      // 0.26 USE at 3 decimals is 260 raw units.
+      expect(ergForDexyDeposit(pool(), 260), 962000000); // 0.962 ERG
+    });
+
+    test('derives the USE needed to pair an ERG amount', () {
+      expect(dexyForErgDeposit(pool(), 962000000), 260);
+    });
+
+    // Round up, so the entered side is fully consumed rather than partly
+    // refunded by calculate_lp_deposit's min-of-shares rule.
+    test('rounds the pair up so the entered side is not left over', () {
+      expect(ergForDexyDeposit(pool(), 1), 3700000);
+      expect(dexyForErgDeposit(pool(), 3700001), 2);
+    });
+
+    test('an empty pool cannot be paired', () {
+      final empty = _useState(
+        effectiveRate: 3.7185,
+        lpErgReserves: 0,
+        lpDexyReserves: 0,
+      );
+      expect(ergForDexyDeposit(empty, 260), 0);
+      expect(dexyForErgDeposit(empty, 962000000), 0);
+    });
+  });
+
   group('send screen labels', () {
     test('quote line states the ERG unit exactly once', () {
       final label = dexyQuoteLabel(
