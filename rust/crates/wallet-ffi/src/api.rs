@@ -545,7 +545,7 @@ async fn gather_unspent(
             Ok(())
         })?;
         let (b, e) = client
-            .get_unspent(addr)
+            .get_effective_unspent(addr)
             .await
             .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
         for (bx, input) in b.into_iter().zip(e.into_iter()) {
