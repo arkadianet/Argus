@@ -57,10 +57,13 @@ class _SwapHubScreenState extends State<SwapHubScreen> {
             Expanded(
               child: IndexedStack(
                 index: _tab.index,
-                children: const [
-                  DexyScreen(embedded: true),
-                  SwapScreen(embedded: true),
-                  AgeUsdScreen(embedded: true),
+                children: [
+                  for (final venue in SwapVenue.values)
+                    switch (venue) {
+                      SwapVenue.dexy => const DexyScreen(embedded: true),
+                      SwapVenue.spectrum => const SwapScreen(embedded: true),
+                      SwapVenue.ageusd => const AgeUsdScreen(embedded: true),
+                    },
                 ],
               ),
             ),

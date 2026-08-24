@@ -86,7 +86,7 @@ void main() {
       'pool_type': 'T2T',
       'token_x': {'token_id': 'a', 'amount': 700},
       'token_y': {'token_id': 'b', 'amount': 1400},
-      'fee_num': 3,
+      'fee_num': 996,
       'fee_denom': 1000,
     };
 
@@ -109,6 +109,8 @@ void main() {
       expect(poolSupportsPair(n2tErgTok, 'tok', null), isTrue);
       expect(poolSupportsPair(n2tErgTok, 'tok', 'other'), isFalse);
       expect(poolSupportsPair(t2t, 'a', 'b'), isTrue);
+      // Identical sides are never a tradable pair.
+      expect(poolSupportsPair(n2tErgTok, 'tok', 'tok'), isFalse);
     });
 
     test('requiredInputFor mirrors the CFMM input formula with fee', () {

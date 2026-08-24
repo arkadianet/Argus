@@ -31,6 +31,10 @@ class TransactionDetailScreen extends StatelessWidget {
         const <({String id, BigInt amount})>[];
     final confirmed = height != null && height > 0;
     final outgoing = nano != null && nano < 0;
+    // Compare identities, not lengths: token_ids may repeat and arrivals
+    // cover a subset of the unique ids.
+    final missingTokenIds =
+        tokens.toSet().difference(received.map((r) => r.id).toSet());
 
     return Scaffold(
       appBar: AppBar(title: const Text('Transaction')),
@@ -75,7 +79,7 @@ class TransactionDetailScreen extends StatelessWidget {
           const SizedBox(height: 8),
           SelectableText(txId, style: monoStyle(context, size: 12)),
           const SizedBox(height: 16),
-          if (received.isNotEmpty) ...[
+            if (received.isNotEmpty) ...[
             const SectionLabel('Tokens received'),
             const SizedBox(height: 8),
             for (final t in received)
@@ -94,11 +98,13 @@ class TransactionDetailScreen extends StatelessWidget {
                   },
                 ),
               ),
-            if (tokens.length > received.length)
+            // Compare identities, not lengths: token_ids may repeat and
+            // arrivals cover a subset of the unique ids.
+            if (missingTokenIds.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(top: 2, bottom: 6),
                 child: Text(
-                  '${tokens.length - received.length} further token id(s) involved — see explorer.',
+                  '${missingTokenIds.length} further token id(s) involved — see explorer.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),

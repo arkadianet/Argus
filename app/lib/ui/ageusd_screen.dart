@@ -281,8 +281,11 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
                           ),
                         ),
                       )
-                    : ListView(
-                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                    : RefreshIndicator(
+                        onRefresh: _load,
+                        child: ListView(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
                         children: [
                           if (st != null) ...[
                             _protocolHeader(st),
@@ -341,7 +344,8 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
                           ],
                         ],
                       ),
-          ),
+                  ),
+            ),
         ],
       );
     if (widget.embedded) {

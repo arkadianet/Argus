@@ -805,6 +805,26 @@ class _DashboardScreenState extends State<DashboardScreen>
     Navigator.pushNamed(context, route, arguments: _args());
   }
 
+  /// Opens the swap hub on [venue] with the same guards and wallet route
+  /// arguments as [_go], so embedded swap screens see balances.
+  void _goHub(SwapVenue venue) {
+    if (!walletService.isUnlocked || !_walletUnlocked) {
+      _snack('Unlock the wallet first');
+      return;
+    }
+    if (_receiveAddress == null) {
+      _snack('Address is still loading');
+      return;
+    }
+    Navigator.push(
+      context,
+      fadeRoute(
+        SwapHubScreen(initialTab: venue),
+        settings: RouteSettings(arguments: _args()),
+      ),
+    );
+  }
+
   void _openTx(Map<String, dynamic> tx) {
     Navigator.push(
       context,
@@ -897,7 +917,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               selectedIndex: 0,
               onDestinationSelected: (i) {
                 if (i == 1) _go('/transactions');
-                if (i == 2) _go('/swap');
+                if (i == 2) _goHub(SwapVenue.dexy);
                 if (i == 3) _openSettings();
               },
               destinations: const [
@@ -1130,7 +1150,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
             const SizedBox(height: 28),
             _sectionHeader('Discover',
-                action: 'Explore all', onTap: () => _go('/swap')),
+                action: 'Explore all', onTap: () => _goHub(SwapVenue.dexy)),
             const SizedBox(height: 10),
             SizedBox(
               height: 168,
@@ -1141,26 +1161,19 @@ class _DashboardScreenState extends State<DashboardScreen>
                     title: 'Dexy',
                     subtitle: 'Trade, provide liquidity, and mint on Ergo.',
                     icon: Icons.all_inclusive,
-                    onTap: () => Navigator.push(context,
-                        fadeRoute(SwapHubScreen(initialTab: SwapVenue.dexy))),
+                    onTap: () => _goHub(SwapVenue.dexy),
                   ),
                   _discoverCard(
                     title: 'AgeUSD',
                     subtitle: 'The decentralized stablecoin on Ergo.',
                     icon: Icons.attach_money,
-                    onTap: () => Navigator.push(
-                        context,
-                        fadeRoute(
-                            SwapHubScreen(initialTab: SwapVenue.ageusd))),
+                    onTap: () => _goHub(SwapVenue.ageusd),
                   ),
                   _discoverCard(
                     title: 'DEX',
                     subtitle: 'Permissionless token swaps on Ergo.',
                     icon: Icons.swap_horiz,
-                    onTap: () => Navigator.push(
-                        context,
-                        fadeRoute(SwapHubScreen(
-                            initialTab: SwapVenue.spectrum))),
+                    onTap: () => _goHub(SwapVenue.spectrum),
                   ),
                 ],
               ),
@@ -1441,7 +1454,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 child: _actionButton(
                     icon: Icons.swap_horiz,
                     label: 'Swap',
-                    onTap: () => _go('/swap')),
+                    onTap: () => _goHub(SwapVenue.spectrum)),
               ),
             ],
           ),

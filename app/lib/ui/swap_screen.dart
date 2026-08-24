@@ -111,13 +111,15 @@ class _SwapScreenState extends State<SwapScreen> {
   String _fmtReserve(BigInt raw, int decimals) => _fmtAmount(raw, decimals);
 
   /// Deepest pool for the current pair by the reserve of whichever side the
-  /// user is selling into; used for rate/depth display before a quote exists.
-  Map<String, dynamic>? _bestPoolForPair() {
-    final pools = _set?.pools ?? const [];
+  /// user is selling into, plus how many pools serve the pair — one scan.
+  /// Recomputed per build; the pool list only changes via _loadPools.
+  (Map<String, dynamic>?, int) _pairPoolInfo() {
     Map<String, dynamic>? best;
     var bestDepth = BigInt.zero;
-    for (final pool in pools) {
+    var count = 0;
+    for (final pool in _set?.pools ?? const []) {
       if (!poolSupportsPair(pool, _fromToken, _toToken)) continue;
+      count++;
       final sides = poolSides(pool);
       final rIn = sides.firstWhere((s) => s.$1 == _fromToken).$2;
       if (best == null || rIn > bestDepth) {
@@ -125,22 +127,17 @@ class _SwapScreenState extends State<SwapScreen> {
         bestDepth = rIn;
       }
     }
-    return best;
-  }
-
-  int _poolCountForPair() {
-    var n = 0;
-    for (final pool in _set?.pools ?? const []) {
-      if (poolSupportsPair(pool, _fromToken, _toToken)) n++;
-    }
-    return n;
+    return (best, count);
   }
 
   /// Desired-TO editing: derive required input from pool reserves and seed
-  /// the FROM field. The forward FFI quote remains authoritative.
+  /// the FROM field. The forward FFI quote remains authoritative. Any
+  /// derivation failure clears the pay field so the two sides can't disagree
+  /// about what is being quoted.
   void _onToAmountChanged(String text) {
     final parsed = parseDecimalToBase(text, _decimals(_toToken));
     if (parsed == null || parsed <= 0 || _fromToken == _toToken) {
+      _invalidateFromForFailedDerivation();
       return;
     }
     final outRaw = BigInt.from(parsed);
@@ -151,7 +148,10 @@ class _SwapScreenState extends State<SwapScreen> {
       to: _toToken,
       output: outRaw,
     );
-    if (match == null) return;
+    if (match == null) {
+      _invalidateFromForFailedDerivation();
+      return;
+    }
     final (_, rIn, rOut) = match;
     final feeNum = (match.$1['fee_num'] as num?)?.toInt() ?? 0;
     final feeDenom = (match.$1['fee_denom'] as num?)?.toInt() ?? 1;
@@ -162,8 +162,17 @@ class _SwapScreenState extends State<SwapScreen> {
       feeNum: feeNum,
       feeDenom: feeDenom,
     );
-    if (requiredIn == null) return;
+    if (requiredIn == null) {
+      _invalidateFromForFailedDerivation();
+      return;
+    }
     _amountCtrl.text = _fmtReserve(requiredIn, _decimals(_fromToken));
+    _scheduleQuote();
+  }
+
+  void _invalidateFromForFailedDerivation() {
+    if (_amountCtrl.text.isEmpty) return;
+    setState(() => _amountCtrl.clear());
     _scheduleQuote();
   }
 
@@ -372,8 +381,7 @@ class _SwapScreenState extends State<SwapScreen> {
     }
 
     final set = _set!;
-    final pool = _bestPoolForPair();
-    final poolCount = _poolCountForPair();
+    final (pool, poolCount) = _pairPoolInfo();
     final fromBal = _balanceFor(_fromToken);
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -436,7 +444,11 @@ class _SwapScreenState extends State<SwapScreen> {
             ),
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          onChanged: (_) => _scheduleQuote(),
+          onChanged: (_) {
+            // A manual pay amount invalidates the previously derived want.
+            if (_toAmountCtrl.text.isNotEmpty) _toAmountCtrl.clear();
+            _scheduleQuote();
+          },
         ),
         const SizedBox(height: 12),
         TextFormField(
@@ -490,11 +502,16 @@ class _SwapScreenState extends State<SwapScreen> {
     var raw = bal;
     if (_fromToken == null) {
       final reserve = BigInt.from(minerFeeNano + minBoxNano);
-      if (raw <= reserve) return;
+      if (raw <= reserve) {
+        _snack('Not enough ERG for fee and change');
+        return;
+      }
       raw -= reserve;
     }
-    setState(() => _amountCtrl.text =
-        _fmtAmount(raw, _decimals(_fromToken)));
+    setState(() {
+      _amountCtrl.text = _fmtAmount(raw, _decimals(_fromToken));
+      _toAmountCtrl.clear();
+    });
     _scheduleQuote();
   }
 
@@ -504,8 +521,10 @@ class _SwapScreenState extends State<SwapScreen> {
         '${_fmtAmount(s.$2, _decimals(s.$1))} ${_symbol(s.$1)}';
     final rIn = sides.firstWhere((s) => s.$1 == _fromToken).$2;
     final rOut = sides.firstWhere((s) => s.$1 == _toToken).$2;
+    // Rate per one whole FROM unit, expressed in TO raw units so the TO
+    // decimals formatter below renders it correctly for any pair direction.
     final rate = (rIn > BigInt.zero)
-        ? rOut * BigInt.from(10).pow(9) ~/ rIn
+        ? rOut * BigInt.from(10).pow(_decimals(_fromToken)) ~/ rIn
         : BigInt.zero;
     final verifiedIn = _fromToken != null && isVerifiedToken(_fromToken!);
     return Container(
@@ -560,7 +579,9 @@ class _SwapScreenState extends State<SwapScreen> {
     String? otherSide,
     ValueChanged<String?> onPicked,
   ) async {
-    final picked = await showModalBottomSheet<String?>(
+    // The record wraps the token id so a picked ERG (`(null,)`) is distinct
+    // from a dismissed sheet (`null`).
+    final result = await showModalBottomSheet<(String?,)>(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
       builder: (ctx) => _AssetPickerSheet(
@@ -571,7 +592,8 @@ class _SwapScreenState extends State<SwapScreen> {
         exclude: otherSide,
       ),
     );
-    if (picked != null && picked != current) onPicked(picked);
+    if (result == null) return; // dismissed
+    if (result.$1 != current) onPicked(result.$1);
   }
 
   Widget _assetSelector(
@@ -657,14 +679,17 @@ class _AssetPickerSheet extends StatelessWidget {
         trailing: isVerified
             ? Icon(Icons.verified_outlined, size: 18, color: moss)
             : null,
-        onTap: disabled ? null : () => Navigator.pop(context, id),
+        onTap: disabled ? null : () => Navigator.pop(context, (id,)),
       );
     }
 
     return SafeArea(
-      child: ListView(
-        shrinkWrap: true,
-        padding: const EdgeInsets.fromLTRB(0, 16, 0, 24),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.75,
+        ),
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(0, 16, 0, 24),
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -702,6 +727,7 @@ class _AssetPickerSheet extends StatelessWidget {
             if (id != exclude && !heldTokens.any((t) => t.id == id))
               row(id),
         ],
+        ),
       ),
     );
   }
