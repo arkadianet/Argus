@@ -59,6 +59,23 @@ pub fn balance_delta(
     ergo_tree: &str,
     confirmed_values: &HashMap<String, i64>,
 ) -> i64 {
+    let mut trees = HashSet::new();
+    trees.insert(ergo_tree.to_string());
+    wallet_balance_delta(txs, &trees, confirmed_values)
+}
+
+/// Net nanoERG change from unconfirmed transactions across a whole wallet —
+/// every owned address tree at once.
+///
+/// The leaving side is tree-agnostic: an input counts as leaving whenever its
+/// box id is in the combined confirmed set. Summing per-address deltas would
+/// double-count a spend touching several owned addresses, so value a wallet
+/// transaction exactly once through this function instead.
+pub fn wallet_balance_delta(
+    txs: &[serde_json::Value],
+    trees: &HashSet<String>,
+    confirmed_values: &HashMap<String, i64>,
+) -> i64 {
     let spent = spent_box_ids(txs);
 
     // Confirmed boxes of ours consumed by mempool: leaving.
@@ -76,8 +93,9 @@ pub fn balance_delta(
             None => continue,
         };
         for output in outputs {
-            if output["ergoTree"].as_str() != Some(ergo_tree) {
-                continue;
+            match output["ergoTree"].as_str() {
+                Some(tree) if trees.contains(tree) => {}
+                _ => continue,
             }
             let id = output["boxId"].as_str().unwrap_or_default();
             if spent.contains(id) {
@@ -87,6 +105,55 @@ pub fn balance_delta(
         }
     }
     delta
+}
+
+/// Net per-token change from unconfirmed transactions for `ergo_tree`.
+///
+/// Same ownership and spent-set rules as [`balance_delta`]: leaving amounts
+/// resolve against `confirmed_tokens`, the map of the caller's confirmed box
+/// ids to the tokens each box holds, and unspent own outputs arrive.
+pub fn token_deltas(
+    txs: &[serde_json::Value],
+    ergo_tree: &str,
+    confirmed_tokens: &HashMap<String, Vec<(String, i64)>>,
+) -> HashMap<String, i64> {
+    let spent = spent_box_ids(txs);
+    let mut deltas: HashMap<String, i64> = HashMap::new();
+
+    for id in &spent {
+        if let Some(held) = confirmed_tokens.get(id) {
+            for (token_id, amount) in held {
+                *deltas.entry(token_id.clone()).or_insert(0) -= amount;
+            }
+        }
+    }
+
+    for tx in txs {
+        let outputs = match tx["outputs"].as_array() {
+            Some(o) => o,
+            None => continue,
+        };
+        for output in outputs {
+            if output["ergoTree"].as_str() != Some(ergo_tree) {
+                continue;
+            }
+            let id = output["boxId"].as_str().unwrap_or_default();
+            if spent.contains(id) {
+                continue;
+            }
+            if let Some(assets) = output["assets"].as_array() {
+                for asset in assets {
+                    let token_id = match asset["tokenId"].as_str() {
+                        Some(t) => t.to_string(),
+                        None => continue,
+                    };
+                    let amount = asset["amount"].as_i64().unwrap_or(0);
+                    *deltas.entry(token_id).or_insert(0) += amount;
+                }
+            }
+        }
+    }
+    deltas
 }
 
 /// Build an `ErgoBox` from one output of an unconfirmed transaction.
@@ -228,5 +295,61 @@ mod tests {
         // counted as an asset while also being spent by t2.
         let delta = balance_delta(&[t1, t2], OWN_TREE, &confirmed);
         assert_eq!(delta, -600_000_000, "expected -1.0 spent + 0.4 returned");
+    }
+
+    fn plain_output(tree: &str, id: &str, value: u64) -> serde_json::Value {
+        serde_json::json!({"boxId": id, "ergoTree": tree, "value": value, "assets": []})
+    }
+
+    #[test]
+    fn a_wallet_transaction_is_valued_once_across_trees() {
+        let other_tree = "0008cd03bbbb";
+
+        let mut confirmed = std::collections::HashMap::new();
+        confirmed.insert("boxA".to_string(), 1_000_000_000i64);
+
+        // One mempool tx spends our boxA and pays the wallet's other address.
+        let out = plain_output(other_tree, "boxX", 1_000_000_000);
+        let txs = vec![tx("t1", &["boxA"], vec![out])];
+
+        let trees: std::collections::HashSet<String> =
+            [OWN_TREE.to_string(), other_tree.to_string()].into();
+
+        // Leaving (-1.0) and arriving (+1.0) net to zero at wallet level;
+        // per-address deltas would each have reported a full ±1.0.
+        assert_eq!(wallet_balance_delta(&txs, &trees, &confirmed), 0);
+    }
+
+    #[test]
+    fn token_deltas_follow_the_same_ownership_rules() {
+        const TOKEN: &str = "tok";
+        let mut confirmed_tokens = std::collections::HashMap::new();
+        confirmed_tokens.insert(
+            "boxA".to_string(),
+            vec![(TOKEN.to_string(), 500i64)],
+        );
+
+        let incoming = serde_json::json!({
+            "boxId": "boxC",
+            "ergoTree": OWN_TREE,
+            "value": 1u64,
+            "assets": [{"tokenId": TOKEN, "amount": 100}],
+        });
+        // Pays a foreign tree — must not count as arriving for us.
+        let outgoing_only = serde_json::json!({
+            "boxId": "boxD",
+            "ergoTree": "0008cd03cccc",
+            "value": 1u64,
+            "assets": [{"tokenId": TOKEN, "amount": 999}],
+        });
+
+        let txs = vec![
+            tx("t1", &["boxA"], vec![incoming]),
+            tx("t2", &[], vec![outgoing_only]),
+        ];
+
+        let deltas = token_deltas(&txs, OWN_TREE, &confirmed_tokens);
+        assert_eq!(deltas.get(TOKEN), Some(&-400));
+        assert_eq!(deltas.len(), 1);
     }
 }

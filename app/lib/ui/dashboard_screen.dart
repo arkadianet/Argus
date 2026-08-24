@@ -59,7 +59,18 @@ class _DashboardScreenState extends State<DashboardScreen>
   /// skipped if the previous refresh is still in flight.
   Timer? _pollTimer;
   bool _pollBackgrounded = false;
-  bool _refreshInFlight = false;
+  Future<void>? _refreshOp;
+
+  /// Single-flight refresh shared by polling, the unlock flow and pull to
+  /// refresh: callers during an in-flight refresh await the same operation
+  /// instead of starting a competing one.
+  Future<void> _sharedRefresh() {
+    final inFlight = _refreshOp;
+    if (inFlight != null) return inFlight;
+    final op = _refresh().whenComplete(() => _refreshOp = null);
+    _refreshOp = op;
+    return op;
+  }
 
   @override
   void initState() {
@@ -75,9 +86,8 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   void _pollTick() {
-    if (!mounted || _pollBackgrounded || _refreshInFlight) return;
-    _refreshInFlight = true;
-    _refresh().whenComplete(() => _refreshInFlight = false);
+    if (!mounted || _pollBackgrounded || _refreshOp != null) return;
+    _sharedRefresh();
   }
 
   @override
@@ -284,7 +294,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
 
     // 3. Fast sync in background
-    await _refresh();
+    await _sharedRefresh();
   }
 
   String _bestSender(String receive) {
@@ -629,9 +639,10 @@ class _DashboardScreenState extends State<DashboardScreen>
           _balanceNano = erg;
           _tokens = tokens.values.toList();
         }
-        if (txs.isNotEmpty) {
-          _recentTxs = txs.take(5).toList();
-        }
+        // Replace unconditionally: an empty result means pending entries
+        // dropped from the mempool must leave the dashboard (and the cache
+        // persisted below). Only a thrown loadHistory keeps the old list.
+        _recentTxs = txs.take(5).toList();
         if (failed == addresses.length) {
           _status = 'Could not refresh balances';
         } else if (failed > 0) {
@@ -1037,7 +1048,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         ];
 
         return RefreshIndicator(
-          onRefresh: _refresh,
+          onRefresh: _sharedRefresh,
           child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
           children: [

@@ -437,7 +437,14 @@ impl ErgoNodeClient {
         };
 
         let spent = crate::mempool::spent_box_ids(&txs);
-        let (mut boxes, _) = confirmed_boxes;
+        let (confirmed, _) = confirmed_boxes;
+
+        // Confirmed boxes already spent by a mempool transaction are gone;
+        // their unconfirmed replacements arrive below.
+        let mut boxes: Vec<ErgoBox> = confirmed
+            .into_iter()
+            .filter(|b| !spent.contains(&b.box_id().to_string()))
+            .collect();
 
         // Chained spends: an unconfirmed output may itself already be spent by
         // a later mempool transaction, so filter the additions by the same set.

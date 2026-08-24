@@ -324,7 +324,7 @@ pub fn validate_ergo_address(address: String) -> bool {
 #[flutter_rust_bridge::frb]
 pub async fn get_balance(address: String, node_url: Option<String>) -> Result<String, String> {
     let client = node_client(node_url).await?;
-    let (nano, tokens) = client
+    let (nano, mut tokens) = client
         .get_address_balances(&address)
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
@@ -336,15 +336,44 @@ pub async fn get_balance(address: String, node_url: Option<String>) -> Result<St
         if let Ok(txs) = client.mempool_txs_for(&tree).await {
             if !txs.is_empty() {
                 if let Ok((boxes, _)) = client.get_unspent(&address).await {
-                    let confirmed_values: std::collections::HashMap<String, i64> = boxes
-                        .iter()
-                        .map(|b| (b.box_id().to_string(), b.value.as_i64()))
-                        .collect();
+                    let mut confirmed_values: std::collections::HashMap<String, i64> =
+                        std::collections::HashMap::new();
+                    let mut confirmed_tokens: std::collections::HashMap<
+                        String,
+                        Vec<(String, i64)>,
+                    > = std::collections::HashMap::new();
+                    for b in &boxes {
+                        confirmed_values.insert(b.box_id().to_string(), b.value.as_i64());
+                        if let Some(held) = b.tokens.as_ref() {
+                            let held: Vec<(String, i64)> = held
+                                .iter()
+                                .map(|t| (t.token_id.clone().into(), *t.amount.as_u64() as i64))
+                                .collect();
+                            if !held.is_empty() {
+                                confirmed_tokens.insert(b.box_id().to_string(), held);
+                            }
+                        }
+                    }
                     delta = wallet_net::mempool::balance_delta(
                         &txs,
                         &tree,
                         &confirmed_values,
                     );
+                    // Pending token spends reduce the reported amounts under
+                    // the same ownership and spent-set rules as the ERG delta.
+                    let token_delta =
+                        wallet_net::mempool::token_deltas(&txs, &tree, &confirmed_tokens);
+                    if !token_delta.is_empty() {
+                        tokens = tokens
+                            .into_iter()
+                            .map(|(id, amount)| {
+                                match token_delta.get(&id) {
+                                    Some(d) => (id, ((amount as i64) + d).max(0) as u64),
+                                    None => (id, amount),
+                                }
+                            })
+                            .collect();
+                    }
                 }
             }
         }
@@ -397,52 +426,24 @@ pub async fn get_pending_transactions(
 ) -> Result<String, String> {
     let client = node_client(node_url).await?;
 
+    let addrs: Vec<String> = addresses.into_iter().filter(|a| !a.is_empty()).collect();
+
     let mut join_set = tokio::task::JoinSet::new();
-    for addr in addresses {
-        if addr.is_empty() {
-            continue;
-        }
+    for addr in &addrs {
         let client_c = client.clone();
+        let addr = addr.clone();
         join_set.spawn(async move {
-            let tree = match address_to_ergo_tree(&addr) {
-                Ok(t) => t,
-                Err(_) => return Vec::new(),
-            };
-            let txs = match client_c.mempool_txs_for(&tree).await {
-                Ok(t) => t,
-                Err(_) => return Vec::new(),
-            };
-            if txs.is_empty() {
-                return txs;
+            match address_to_ergo_tree(&addr) {
+                Ok(tree) => client_c.mempool_txs_for(&tree).await.unwrap_or_default(),
+                Err(_) => Vec::new(),
             }
-            // Inputs carry no value; resolve leaving amounts against the
-            // address's confirmed UTXOs for an outgoing/incoming direction.
-            let confirmed_values: std::collections::HashMap<String, i64> = client_c
-                .get_unspent(&addr)
-                .await
-                .map(|(boxes, _)| {
-                    boxes
-                        .iter()
-                        .map(|b| (b.box_id().to_string(), b.value.as_i64()))
-                        .collect()
-                })
-                .unwrap_or_default();
-            txs.into_iter()
-                .map(|mut tx| {
-                    let v = wallet_net::mempool::balance_delta(
-                        std::slice::from_ref(&tx),
-                        &tree,
-                        &confirmed_values,
-                    );
-                    tx["value_nano_erg"] = serde_json::json!(v);
-                    tx
-                })
-                .collect()
         });
     }
 
+    // Collect uniquely by ID first: a transaction touching several wallet
+    // addresses surfaces once, regardless of which fetch completes first.
     let mut seen = std::collections::HashSet::new();
-    let mut out = Vec::new();
+    let mut unique: Vec<serde_json::Value> = Vec::new();
     while let Some(res) = join_set.join_next().await {
         let txs = res.unwrap_or_default();
         for tx in txs {
@@ -450,30 +451,60 @@ pub async fn get_pending_transactions(
                 Some(i) => i.to_string(),
                 None => continue,
             };
-            if !seen.insert(id.clone()) {
-                continue;
+            if seen.insert(id) {
+                unique.push(tx);
             }
-            let token_ids: Vec<String> = tx["outputs"]
-                .as_array()
-                .map(|outs| {
-                    outs.iter()
-                        .filter_map(|o| o["assets"].as_array())
-                        .flatten()
-                        .filter_map(|a| a["tokenId"].as_str().map(str::to_string))
-                        .collect()
-                })
-                .unwrap_or_default();
-            out.push(serde_json::json!({
-                "tx_id": id,
-                "height": 0u64,
-                "timestamp": 0u64,
-                "value_nano_erg": tx["value_nano_erg"].as_i64().unwrap_or(0),
-                "token_ids": token_ids,
-                "num_inputs": tx["inputs"].as_array().map(|a| a.len() as u32).unwrap_or(0),
-                "num_outputs": tx["outputs"].as_array().map(|a| a.len() as u32).unwrap_or(0),
-                "confirmed": false,
-            }));
         }
+    }
+
+    // Wallet-wide context: combined confirmed values and every owned tree, so
+    // each transaction is valued exactly once from the whole wallet's
+    // perspective instead of whichever address saw it first.
+    let mut trees = std::collections::HashSet::new();
+    let mut confirmed_values: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
+    for addr in &addrs {
+        if let Ok(tree) = address_to_ergo_tree(addr) {
+            trees.insert(tree);
+        }
+        if let Ok((boxes, _)) = client.get_unspent(addr).await {
+            for b in boxes {
+                confirmed_values.insert(b.box_id().to_string(), b.value.as_i64());
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for tx in &unique {
+        let id = match tx["id"].as_str() {
+            Some(i) => i.to_string(),
+            None => continue,
+        };
+        let v = wallet_net::mempool::wallet_balance_delta(
+            std::slice::from_ref(tx),
+            &trees,
+            &confirmed_values,
+        );
+        let token_ids: Vec<String> = tx["outputs"]
+            .as_array()
+            .map(|outs| {
+                outs.iter()
+                    .filter_map(|o| o["assets"].as_array())
+                    .flatten()
+                    .filter_map(|a| a["tokenId"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        out.push(serde_json::json!({
+            "tx_id": id,
+            "height": 0u64,
+            "timestamp": 0u64,
+            "value_nano_erg": v,
+            "token_ids": token_ids,
+            "num_inputs": tx["inputs"].as_array().map(|a| a.len() as u32).unwrap_or(0),
+            "num_outputs": tx["outputs"].as_array().map(|a| a.len() as u32).unwrap_or(0),
+            "confirmed": false,
+        }));
     }
 
     serde_json::to_string(&out)
