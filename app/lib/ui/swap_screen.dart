@@ -7,6 +7,7 @@ import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/amm_service.dart';
 import '../services/wallet_service.dart';
+import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
 import 'offline_banner.dart';
 
@@ -47,7 +48,11 @@ class _SwapScreenState extends State<SwapScreen> {
   String? _fromToken;
   String? _toToken;
 
+  /// The FROM field is the single source of truth for quoting. The TO field
+  /// is a convenience entry: editing it derives a required input via pool
+  /// reserves and writes it back into the FROM field.
   final _amountCtrl = TextEditingController();
+  final _toAmountCtrl = TextEditingController();
   Timer? _quoteDebounce;
   int _quoteGeneration = 0;
   AmmQuote? _quote;
@@ -78,6 +83,90 @@ class _SwapScreenState extends State<SwapScreen> {
   int _decimals(String? tokenId) =>
       tokenId == null ? 9 : (_set?.tokens[tokenId]?.decimals ?? 0);
 
+  /// Wallet balance for an asset; null = ERG spendable.
+  BigInt? _balanceFor(String? tokenId) {
+    if (tokenId == null) {
+      final nano = _args.spendableNano;
+      return nano == null ? null : BigInt.from(nano);
+    }
+    for (final t in _args.tokens) {
+      if (t.id == tokenId) return BigInt.from(t.amount);
+    }
+    return BigInt.zero;
+  }
+
+  String _fmtAmount(BigInt raw, int decimals) {
+    if (raw <= BigInt.from(0x7FFFFFFFFFFFFFFF)) {
+      return formatTokenAmount(raw.toInt(), decimals);
+    }
+    // Exact manual scaling for reserves/amounts beyond i64.
+    if (decimals <= 0) return raw.toString();
+    final base = BigInt.from(10).pow(decimals);
+    final whole = raw ~/ base;
+    final frac =
+        (raw % base).toString().padLeft(decimals, '0').replaceFirst(RegExp(r'0+$'), '');
+    return frac.isEmpty ? '$whole' : '$whole.$frac';
+  }
+
+  String _fmtReserve(BigInt raw, int decimals) => _fmtAmount(raw, decimals);
+
+  /// Deepest pool for the current pair by the reserve of whichever side the
+  /// user is selling into; used for rate/depth display before a quote exists.
+  Map<String, dynamic>? _bestPoolForPair() {
+    final pools = _set?.pools ?? const [];
+    Map<String, dynamic>? best;
+    var bestDepth = BigInt.zero;
+    for (final pool in pools) {
+      if (!poolSupportsPair(pool, _fromToken, _toToken)) continue;
+      final sides = poolSides(pool);
+      final rIn = sides.firstWhere((s) => s.$1 == _fromToken).$2;
+      if (best == null || rIn > bestDepth) {
+        best = pool;
+        bestDepth = rIn;
+      }
+    }
+    return best;
+  }
+
+  int _poolCountForPair() {
+    var n = 0;
+    for (final pool in _set?.pools ?? const []) {
+      if (poolSupportsPair(pool, _fromToken, _toToken)) n++;
+    }
+    return n;
+  }
+
+  /// Desired-TO editing: derive required input from pool reserves and seed
+  /// the FROM field. The forward FFI quote remains authoritative.
+  void _onToAmountChanged(String text) {
+    final parsed = parseDecimalToBase(text, _decimals(_toToken));
+    if (parsed == null || parsed <= 0 || _fromToken == _toToken) {
+      return;
+    }
+    final outRaw = BigInt.from(parsed);
+    final pools = _set?.pools ?? const [];
+    final match = bestPoolForOutput(
+      pools: pools,
+      from: _fromToken,
+      to: _toToken,
+      output: outRaw,
+    );
+    if (match == null) return;
+    final (_, rIn, rOut) = match;
+    final feeNum = (match.$1['fee_num'] as num?)?.toInt() ?? 0;
+    final feeDenom = (match.$1['fee_denom'] as num?)?.toInt() ?? 1;
+    final requiredIn = requiredInputFor(
+      reservesIn: rIn,
+      reservesOut: rOut,
+      output: outRaw,
+      feeNum: feeNum,
+      feeDenom: feeDenom,
+    );
+    if (requiredIn == null) return;
+    _amountCtrl.text = _fmtReserve(requiredIn, _decimals(_fromToken));
+    _scheduleQuote();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -88,6 +177,7 @@ class _SwapScreenState extends State<SwapScreen> {
   void dispose() {
     _quoteDebounce?.cancel();
     _amountCtrl.dispose();
+    _toAmountCtrl.dispose();
     super.dispose();
   }
 
@@ -227,19 +317,6 @@ class _SwapScreenState extends State<SwapScreen> {
   void _snack(String msg) =>
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
-  List<DropdownMenuItem<String?>> _assetItems(bool includeFrom) {
-    final tokens = _set?.tokens ?? const {};
-    return [
-      DropdownMenuItem<String?>(
-        value: null,
-        child: Text(includeFrom ? 'ERG' : 'ERG'),
-      ),
-      ...tokens.entries.map(
-        (e) => DropdownMenuItem(value: e.key, child: Text(e.value.name)),
-      ),
-    ];
-  }
-
   @override
   Widget build(BuildContext context) {
     final body = Column(
@@ -295,6 +372,9 @@ class _SwapScreenState extends State<SwapScreen> {
     }
 
     final set = _set!;
+    final pool = _bestPoolForPair();
+    final poolCount = _poolCountForPair();
+    final fromBal = _balanceFor(_fromToken);
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -307,7 +387,7 @@ class _SwapScreenState extends State<SwapScreen> {
         Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(child: _dropdown('From', _fromToken, _assetItems(true),
+            Expanded(child: _assetSelector('From', _fromToken, _toToken,
                 (v) {
                   setState(() {
                     _fromToken = v;
@@ -316,18 +396,22 @@ class _SwapScreenState extends State<SwapScreen> {
                   _onPairChanged();
                 })),
             IconButton(
+              tooltip: 'Flip direction',
               onPressed: () {
                 setState(() {
                   final from = _fromToken;
                   _fromToken = _toToken;
                   _toToken = from;
+                  final fromText = _amountCtrl.text;
+                  _amountCtrl.text = _toAmountCtrl.text;
+                  _toAmountCtrl.text = fromText;
                   _quote = null;
                 });
                 _onPairChanged();
               },
               icon: const Icon(Icons.swap_vert),
             ),
-            Expanded(child: _dropdown('To', _toToken, _assetItems(false),
+            Expanded(child: _assetSelector('To', _toToken, _fromToken,
                 (v) {
                   setState(() {
                     _toToken = v;
@@ -341,18 +425,39 @@ class _SwapScreenState extends State<SwapScreen> {
         TextFormField(
           controller: _amountCtrl,
           decoration: InputDecoration(
-            labelText: '${_symbol(_fromToken)} amount',
-            suffixText: _symbol(_fromToken),
+            labelText: 'You pay (${_symbol(_fromToken)})',
+            helperText: fromBal == null
+                ? null
+                : 'Balance ${_fmtAmount(fromBal, _decimals(_fromToken))}',
+            suffixIcon: TextButton(
+              onPressed:
+                  fromBal == null || fromBal <= BigInt.zero ? null : _applyMax,
+              child: const Text('MAX'),
+            ),
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           onChanged: (_) => _scheduleQuote(),
         ),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _toAmountCtrl,
+          decoration: InputDecoration(
+            labelText: 'You want (${_symbol(_toToken)})',
+            helperText: 'Optional — we derive what to pay',
+          ),
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          onChanged: _onToAmountChanged,
+        ),
+        if (pool != null) ...[
+          const SizedBox(height: 16),
+          _depthCard(pool, poolCount),
+        ],
         const SizedBox(height: 16),
         if (_quote == null)
           Text(
             _fromToken == _toToken
                 ? 'Choose two different assets.'
-                : 'Enter an amount to see the quote.',
+                : 'Enter an amount on either side to see the quote.',
             style: Theme.of(context).textTheme.bodySmall,
           )
         else ...[
@@ -378,17 +483,226 @@ class _SwapScreenState extends State<SwapScreen> {
     );
   }
 
-  Widget _dropdown(
+  void _applyMax() {
+    final bal = _balanceFor(_fromToken);
+    if (bal == null || bal <= BigInt.zero) return;
+    // Selling ERG must leave room for miner fee + min-box reserve.
+    var raw = bal;
+    if (_fromToken == null) {
+      final reserve = BigInt.from(minerFeeNano + minBoxNano);
+      if (raw <= reserve) return;
+      raw -= reserve;
+    }
+    setState(() => _amountCtrl.text =
+        _fmtAmount(raw, _decimals(_fromToken)));
+    _scheduleQuote();
+  }
+
+  Widget _depthCard(Map<String, dynamic> pool, int poolCount) {
+    final sides = poolSides(pool);
+    String side((String?, BigInt) s) =>
+        '${_fmtAmount(s.$2, _decimals(s.$1))} ${_symbol(s.$1)}';
+    final rIn = sides.firstWhere((s) => s.$1 == _fromToken).$2;
+    final rOut = sides.firstWhere((s) => s.$1 == _toToken).$2;
+    final rate = (rIn > BigInt.zero)
+        ? rOut * BigInt.from(10).pow(9) ~/ rIn
+        : BigInt.zero;
+    final verifiedIn = _fromToken != null && isVerifiedToken(_fromToken!);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Theme.of(context)
+            .colorScheme
+            .surfaceContainerHighest
+            .withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text('Rate  ',
+                  style: Theme.of(context).textTheme.bodySmall),
+              Flexible(
+                child: Text(
+                  '1 ${_symbol(_fromToken)} ≈ '
+                  '${_fmtAmount(rate > BigInt.zero ? rate : BigInt.zero, _decimals(_toToken))} '
+                  '${_symbol(_toToken)}'
+                  '${verifiedIn ? '' : ' · unverified token'}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Pool depth  ${side(sides.firstWhere((s) => s.$1 == _fromToken))}'
+            '  /  ${side(sides.firstWhere((s) => s.$1 == _toToken))}',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          if (poolCount > 1)
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                '$poolCount pools available — using the deepest for your direction.',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openAssetPicker(
+    String label,
+    String? current,
+    String? otherSide,
+    ValueChanged<String?> onPicked,
+  ) async {
+    final picked = await showModalBottomSheet<String?>(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      builder: (ctx) => _AssetPickerSheet(
+        title: label,
+        set: _set,
+        heldTokens: _args.tokens,
+        spendableNano: _args.spendableNano,
+        exclude: otherSide,
+      ),
+    );
+    if (picked != null && picked != current) onPicked(picked);
+  }
+
+  Widget _assetSelector(
     String label,
     String? value,
-    List<DropdownMenuItem<String?>> items,
+    String? otherSide,
     ValueChanged<String?> onChanged,
   ) {
-    return DropdownButtonFormField<String?>(
-      initialValue: value,
-      decoration: InputDecoration(labelText: label),
-      items: items,
-      onChanged: onChanged,
+    final verified = value != null && isVerifiedToken(value);
+    return InkWell(
+      borderRadius: BorderRadius.circular(buttonRadius),
+      onTap: () => _openAssetPicker(label, value, otherSide, onChanged),
+      child: InputDecorator(
+        decoration: InputDecoration(labelText: label),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                _symbol(value),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (verified)
+              Padding(
+                padding: const EdgeInsets.only(left: 4),
+                child: Tooltip(
+                  message: 'Verified protocol token',
+                  child: Icon(Icons.verified_outlined,
+                      size: 16, color: moss),
+                ),
+              ),
+            const Icon(Icons.arrow_drop_down, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AssetPickerSheet extends StatelessWidget {
+  const _AssetPickerSheet({
+    required this.title,
+    required this.set,
+    required this.heldTokens,
+    required this.spendableNano,
+    required this.exclude,
+  });
+
+  final String title;
+  final AmmPoolSet? set;
+  final List<TokenBalance> heldTokens;
+  final int? spendableNano;
+
+  /// Asset that cannot be picked (the other side of the pair).
+  final String? exclude;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = set?.tokens ?? const {};
+    final poolIds = <String>{for (final id in tokens.keys) id};
+
+    final verified =
+        verifiedTokenLabels().keys.where(poolIds.contains).toList();
+    final rest = poolIds.where((id) => !verified.contains(id)).toList()..sort();
+
+    String symbol(String? id) =>
+        id == null ? 'ERG' : (tokens[id]?.name ?? id);
+
+    Widget row(String? id, {BigInt? balance}) {
+      final isVerified = id != null && isVerifiedToken(id);
+      final disabled = id == exclude;
+      return ListTile(
+        enabled: !disabled,
+        dense: true,
+        title: Text(symbol(id)),
+        subtitle: balance != null
+            ? Text(formatTokenAmount(
+                balance <= BigInt.from(0x7FFFFFFFFFFFFFFF)
+                    ? balance.toInt()
+                    : 0,
+                id == null ? 9 : (tokens[id]?.decimals ?? 0)))
+            : (isVerified ? const Text('Verified') : null),
+        trailing: isVerified
+            ? Icon(Icons.verified_outlined, size: 18, color: moss)
+            : null,
+        onTap: disabled ? null : () => Navigator.pop(context, id),
+      );
+    }
+
+    return SafeArea(
+      child: ListView(
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(0, 16, 0, 24),
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(title, style: Theme.of(context).textTheme.titleMedium),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text('Your tokens',
+                style: Theme.of(context).textTheme.titleSmall),
+          ),
+          row(null,
+              balance: spendableNano == null ? null : BigInt.from(spendableNano!)),
+          for (final t in heldTokens)
+            if (t.id != exclude) row(t.id, balance: BigInt.from(t.amount)),
+          const Divider(height: 24),
+          if (verified.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text('Verified protocols',
+                  style: Theme.of(context).textTheme.titleSmall),
+            ),
+            for (final id in verified)
+              if (id != exclude &&
+                  !heldTokens.any((t) => t.id == id))
+                row(id),
+            const SizedBox(height: 8),
+          ],
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text('All pool assets',
+                style: Theme.of(context).textTheme.titleSmall),
+          ),
+          for (final id in rest)
+            if (id != exclude && !heldTokens.any((t) => t.id == id))
+              row(id),
+        ],
+      ),
     );
   }
 }
