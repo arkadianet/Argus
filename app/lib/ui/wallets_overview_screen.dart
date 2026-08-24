@@ -133,7 +133,8 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                     )
                   : ListView(
                       physics: const AlwaysScrollableScrollPhysics(),
-                      padding: const EdgeInsets.fromLTRB(20, 12, 20, 40),
+                      padding: EdgeInsets.fromLTRB(20, 12, 20,
+                          40 + MediaQuery.paddingOf(context).bottom),
                       children: [
                         _summaryCard(context),
                         const SizedBox(height: 8),
@@ -302,10 +303,64 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                   ),
                 ],
               ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.delete_outline, size: 20),
+                tooltip: 'Remove wallet',
+                onPressed: () => _confirmDelete(w),
+              ),
             ],
           ),
         ),
       ),
     );
+  }
+
+  Future<void> _confirmDelete(WalletInfo w) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remove wallet?'),
+        content: Text(
+          '"${w.name}" will be removed from this device. Your recovery '
+          'phrase is the only way back in — make sure the paper backup '
+          'exists before removing.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: rust,
+              foregroundColor: bone,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await walletService.deleteWallet(w.walletId);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('"${w.name}" removed')),
+      );
+      final remaining =
+          _wallets.where((x) => x.walletId != w.walletId).toList();
+      if (w.walletId == widget.selectedWalletId) {
+        // The active wallet is gone: hand the dashboard the wallet to land
+        // on, or an empty id when none remain.
+        Navigator.pop(context, remaining.isEmpty ? '' : remaining.first.walletId);
+        return;
+      }
+      _load();
+    } catch (e) {
+      if (!mounted) return;
+      _snack('Could not remove wallet: $e');
+    }
   }
 }

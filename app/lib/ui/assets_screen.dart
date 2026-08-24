@@ -74,11 +74,7 @@ class AssetsScreen extends StatelessWidget {
     );
   }
 
-  static String? _ergFiat(int? nano) {
-    final aud = networkController.audPerErg;
-    if (aud == null || nano == null) return null;
-    return '≈ \$${(nano / 1e9 * aud).toStringAsFixed(2)} AUD';
-  }
+  static String? _ergFiat(int? nano) => networkController.fiatText(nano);
 
   Widget _section(BuildContext context, String text) {
     return Padding(

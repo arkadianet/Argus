@@ -98,6 +98,49 @@ class NetworkController extends ChangeNotifier {
   bool probing = false;
   double? usdPerErg;
   double? audPerErg;
+
+  /// Display currency for fiat conversions (CoinGecko vs_currency code).
+  String fiatCode = 'usd';
+  double? fiatPerErg;
+
+  static const fiatOptions = <String, String>{
+    'usd': r'$',
+    'eur': '€',
+    'gbp': '£',
+    'aud': 'A\$',
+    'cad': 'C\$',
+    'jpy': '¥',
+  };
+
+  String get fiatSymbol => fiatOptions[fiatCode] ?? '\$';
+
+  /// Formatted fiat line for a nanoERG balance, or null when the price is
+  /// unknown.
+  String? fiatText(int? nano) {
+    final rate = fiatPerErg;
+    if (rate == null || nano == null) return null;
+    return '≈ $fiatSymbol${(nano / 1e9 * rate).toStringAsFixed(2)} '
+        '${fiatCode.toUpperCase()}';
+  }
+
+  Future<void> setFiatCurrency(String code) async {
+    if (!fiatOptions.containsKey(code) || code == fiatCode) return;
+    fiatCode = code;
+    fiatPerErg = null;
+    _priceAt = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_fiatPrefKey, code);
+    await refreshPrice();
+  }
+
+  Future<void> _loadFiatCurrency() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_fiatPrefKey);
+    if (saved != null && fiatOptions.containsKey(saved)) {
+      fiatCode = saved;
+    }
+  }
+
   final Map<String, NodeProbe> probes = {};
 
   List<String> get enabledUrls =>
@@ -235,13 +278,17 @@ class NetworkController extends ChangeNotifier {
 
   DateTime? _priceAt;
   static const _priceTtl = Duration(minutes: 5);
+  static const _fiatPrefKey = 'argus_fiat_currency';
 
   Future<void> refreshPrice() async {
     final now = DateTime.now();
     if (_priceAt != null && now.difference(_priceAt!) < _priceTtl) return;
+    await _loadFiatCurrency();
+    final code = fiatCode.toLowerCase();
     try {
       final res = await http
-          .get(Uri.parse('https://api.coingecko.com/api/v3/simple/price?ids=ergo&vs_currencies=usd,aud'))
+          .get(Uri.parse(
+              'https://api.coingecko.com/api/v3/simple/price?ids=ergo&vs_currencies=$code'))
           .timeout(const Duration(seconds: 8));
       if (res.statusCode != 200) {
         notifyListeners();
@@ -249,11 +296,13 @@ class NetworkController extends ChangeNotifier {
       }
       final map = jsonDecode(res.body) as Map<String, dynamic>;
       final ergo = map['ergo'] as Map?;
-      final usd = ergo?['usd'];
-      final aud = ergo?['aud'];
-      if (usd is num) usdPerErg = usd.toDouble();
-      if (aud is num) audPerErg = aud.toDouble();
-      if (usd is num || aud is num) _priceAt = now;
+      final value = ergo?[code];
+      if (value is num) {
+        fiatPerErg = value.toDouble();
+        if (code == 'usd') usdPerErg = value.toDouble();
+        if (code == 'aud') audPerErg = value.toDouble();
+        _priceAt = now;
+      }
     } catch (_) {}
     notifyListeners();
   }

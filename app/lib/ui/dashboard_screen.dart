@@ -572,8 +572,20 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
       ),
     );
-    if (!mounted || picked == null) return;
-    if (picked == _walletId) return;
+    if (!mounted) return;
+    // A wallet may have been removed inside the overview — reload the list
+    // before acting on the result.
+    await _loadWallets();
+    if (picked == null || picked == _walletId) {
+      if (mounted) setState(() {});
+      return;
+    }
+    if (picked.isEmpty) {
+      // The active wallet was removed and none remain.
+      if (walletService.isUnlocked) await walletService.lock();
+      setState(_resetLocked);
+      return;
+    }
     await _switchWallet(picked);
   }
 
@@ -1338,17 +1350,13 @@ class _DashboardScreenState extends State<DashboardScreen>
           ListenableBuilder(
             listenable: networkController,
             builder: (context, _) {
-              final aud = networkController.audPerErg;
-              final nano = _balanceNano;
               if (_balanceHidden) {
-                return Text('≈ \$•••• AUD',
+                return Text(
+                    '≈ \$•••• ${networkController.fiatCode.toUpperCase()}',
                     style: TextStyle(fontSize: 14, color: muted));
               }
-              final fiat = aud != null && nano != null
-                  ? '≈ \$${(nano / 1e9 * aud).toStringAsFixed(2)} AUD'
-                  : null;
               return Text(
-                fiat ?? '',
+                networkController.fiatText(_balanceNano) ?? '',
                 style: TextStyle(fontSize: 14, color: muted),
               );
             },
@@ -1786,15 +1794,11 @@ class _AssetRow {
   });
 
   factory _AssetRow.erg({int? balanceNano}) {
-    final aud = networkController.audPerErg;
-    final fiat = aud != null && balanceNano != null
-        ? '≈ \$${(balanceNano / 1e9 * aud).toStringAsFixed(2)} AUD'
-        : null;
     return _AssetRow(
       ticker: 'ERG',
       name: 'Ergo',
       amountText: formatErg(balanceNano, unit: false, maxFrac: 4),
-      fiatText: fiat,
+      fiatText: networkController.fiatText(balanceNano),
       isErg: true,
     );
   }
