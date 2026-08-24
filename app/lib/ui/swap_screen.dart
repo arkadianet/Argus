@@ -28,7 +28,11 @@ String poolTruncationNotice() =>
 /// spent in the same signed transaction, so quotes go stale on contention —
 /// the service reports that as `POOL_MOVED` and this screen re-quotes.
 class SwapScreen extends StatefulWidget {
-  const SwapScreen({super.key});
+  const SwapScreen({super.key, this.embedded = false});
+
+  /// When true the screen renders without its own Scaffold/AppBar so it can
+  /// live inside the swap hub's tab view.
+  final bool embedded;
 
   @override
   State<SwapScreen> createState() => _SwapScreenState();
@@ -238,14 +242,18 @@ class _SwapScreenState extends State<SwapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Swap')),
-      body: Column(
+    final body = Column(
         children: [
           const OfflineBanner(),
           Expanded(child: _buildBody(context)),
         ],
-      ),
+      );
+    if (widget.embedded) {
+      return body;
+    }
+    return Scaffold(
+      appBar: AppBar(title: const Text('Swap')),
+      body: body,
     );
   }
 

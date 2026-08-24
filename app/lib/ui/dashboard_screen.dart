@@ -21,6 +21,7 @@ import 'offline_banner.dart';
 import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
 import 'settings_screen.dart';
+import 'swap_hub_screen.dart';
 import 'transaction_detail_screen.dart';
 import 'wallets_overview_screen.dart';
 
@@ -896,7 +897,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               selectedIndex: 0,
               onDestinationSelected: (i) {
                 if (i == 1) _go('/transactions');
-                if (i == 2) _go('/dexy');
+                if (i == 2) _go('/swap');
                 if (i == 3) _openSettings();
               },
               destinations: const [
@@ -1129,7 +1130,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
             const SizedBox(height: 28),
             _sectionHeader('Discover',
-                action: 'Explore all', onTap: () => _go('/dexy')),
+                action: 'Explore all', onTap: () => _go('/swap')),
             const SizedBox(height: 10),
             SizedBox(
               height: 168,
@@ -1140,19 +1141,26 @@ class _DashboardScreenState extends State<DashboardScreen>
                     title: 'Dexy',
                     subtitle: 'Trade, provide liquidity, and mint on Ergo.',
                     icon: Icons.all_inclusive,
-                    onTap: () => _go('/dexy'),
+                    onTap: () => Navigator.push(context,
+                        fadeRoute(SwapHubScreen(initialTab: SwapVenue.dexy))),
                   ),
                   _discoverCard(
                     title: 'AgeUSD',
                     subtitle: 'The decentralized stablecoin on Ergo.',
                     icon: Icons.attach_money,
-                    onTap: () => _go('/ageusd'),
+                    onTap: () => Navigator.push(
+                        context,
+                        fadeRoute(
+                            SwapHubScreen(initialTab: SwapVenue.ageusd))),
                   ),
                   _discoverCard(
                     title: 'DEX',
                     subtitle: 'Permissionless token swaps on Ergo.',
                     icon: Icons.swap_horiz,
-                    onTap: () => _go('/swap'),
+                    onTap: () => Navigator.push(
+                        context,
+                        fadeRoute(SwapHubScreen(
+                            initialTab: SwapVenue.spectrum))),
                   ),
                 ],
               ),
@@ -1433,7 +1441,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 child: _actionButton(
                     icon: Icons.swap_horiz,
                     label: 'Swap',
-                    onTap: () => _go('/dexy')),
+                    onTap: () => _go('/swap')),
               ),
             ],
           ),

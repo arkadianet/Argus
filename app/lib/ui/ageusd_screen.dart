@@ -15,7 +15,11 @@ import 'offline_banner.dart';
 /// the live oracle rate. Every action builds through the shared confirm sheet
 /// ("Sign & broadcast") and submits via the cached-preparation flow.
 class AgeUsdScreen extends StatefulWidget {
-  const AgeUsdScreen({super.key});
+  const AgeUsdScreen({super.key, this.embedded = false});
+
+  /// When true the screen renders without its own Scaffold/AppBar so it can
+  /// live inside the swap hub's tab view.
+  final bool embedded;
 
   @override
   State<AgeUsdScreen> createState() => _AgeUsdScreenState();
@@ -256,14 +260,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
   @override
   Widget build(BuildContext context) {
     final st = _state;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('AgeUSD'),
-        actions: [
-          IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
-        ],
-      ),
-      body: Column(
+    final body = Column(
         children: [
           const OfflineBanner(),
           Expanded(
@@ -346,7 +343,16 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
                       ),
           ),
         ],
+      );
+    if (widget.embedded) {
+      return body;
+    }
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('AgeUSD'),
+        actions: [IconButton(onPressed: _load, icon: const Icon(Icons.refresh))],
       ),
+      body: body,
     );
   }
 
