@@ -218,6 +218,13 @@ pub(crate) async fn load_pools(
     let mut pools = n2t;
     pools.extend(t2t);
 
+    // Dexy's pools copy the Spectrum AMM box layout, so discovery picks them
+    // up — but they are a separate protocol with its own oracle/fee rules and
+    // the direct-swap builder cannot fill against them. Exclude them here so
+    // the picker never lists Dexy tokens AND `best_pool_for` never routes a
+    // quote through a Dexy pool (which would fail at broadcast).
+    pools.retain(|pool| keep_pool(&pool.pool_id));
+
     let set = PoolSet {
         pools,
         truncated,
@@ -232,6 +239,17 @@ pub(crate) async fn load_pools(
 pub(crate) const CITADEL_DEV_FEE_TREE: &str =
     "0008cd0224f3a8909d624e7c584f215956370278324c9b3bfc206a4605a27c952121e68c";
 
+/// Dexy protocol pool NFTs (gold + USD, `protocols/dexy/src/constants.rs`).
+/// Their pools mirror the Spectrum layout and must never be traded here.
+const DEXY_POOL_NFTS: [&str; 2] = [
+    "905ecdef97381b92c2f0ea9b516f312bfb18082c61b24b40affa6a55555c77c7",
+    "4ecaa1aac9846b1454563ae51746db95a3a40ee9f8c5f5301afbe348ae803d41",
+];
+
+fn keep_pool(pool_id: &str) -> bool {
+    !DEXY_POOL_NFTS.contains(&pool_id)
+}
+
 /// True when any output pays the inherited Citadel dev fee. Argus levies no
 /// app fee, so a built transaction must never contain such an output.
 pub(crate) fn pays_citadel_dev_fee(output_trees: &[String]) -> bool {
@@ -241,6 +259,21 @@ pub(crate) fn pays_citadel_dev_fee(output_trees: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dexy_pools_are_excluded_from_spectrum_discovery() {
+        // Dexy gold + USD pool NFTs mirror the Spectrum layout and must be
+        // filtered; a real Spectrum pool id passes.
+        assert!(!keep_pool(
+            "905ecdef97381b92c2f0ea9b516f312bfb18082c61b24b40affa6a55555c77c7"
+        ));
+        assert!(!keep_pool(
+            "4ecaa1aac9846b1454563ae51746db95a3a40ee9f8c5f5301afbe348ae803d41"
+        ));
+        assert!(keep_pool(
+            "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+        ));
+    }
 
     /// `init_app` disables the inherited Citadel fee. This pins that guard:
     /// `resolved_dev_fee_config` caches into a process-global `OnceLock` on

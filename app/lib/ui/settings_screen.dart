@@ -368,7 +368,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ]),
         builder: (context, _) {
           return ListView(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+            padding: EdgeInsets.fromLTRB(
+                20, 8, 20, 32 + MediaQuery.paddingOf(context).bottom),
             children: [
               const SectionLabel('Network'),
               const SizedBox(height: 8),
