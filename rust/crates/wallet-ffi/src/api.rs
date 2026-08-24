@@ -373,15 +373,18 @@ pub async fn get_balance(address: String, node_url: Option<String>) -> Result<St
                     let token_delta =
                         wallet_net::mempool::token_deltas(&txs, &tree, &confirmed_tokens);
                     if !token_delta.is_empty() {
-                        tokens = tokens
-                            .into_iter()
-                            .map(|(id, amount)| {
-                                match token_delta.get(&id) {
-                                    Some(d) => (id, ((amount as i64) + d).max(0) as u64),
-                                    None => (id, amount),
-                                }
-                            })
-                            .collect();
+                        let mut by_id: std::collections::HashMap<String, u64> =
+                            tokens.into_iter().collect();
+                        for (id, d) in token_delta {
+                            let confirmed = *by_id.get(&id).unwrap_or(&0);
+                            let updated = (confirmed as i64 + d).max(0) as u64;
+                            // Positive deltas introduce tokens the address
+                            // holds only in the mempool (pending arrivals).
+                            if updated > 0 || by_id.contains_key(&id) {
+                                by_id.insert(id, updated);
+                            }
+                        }
+                        tokens = by_id.into_iter().collect();
                     }
                 }
             }
@@ -812,13 +815,13 @@ async fn prepare_management<S>(
             ))
             .to_json_string());
         }
-        apply_custom_fee(
+        let applied_fee = apply_custom_fee(
             &mut built.unsigned_tx,
             &change_tree,
             built.miner_fee,
             custom_fee,
         )?;
-        built.miner_fee = custom_fee;
+        built.miner_fee = applied_fee;
         built.change_erg = built.unsigned_tx.outputs.iter()
             .find(|o| o.ergo_tree == change_tree)
             .map(|o| o.value.parse::<i64>().unwrap_or(0))
@@ -1420,7 +1423,10 @@ pub async fn prepare_send_multi(
     for rcpt in &parsed {
         if let Some((id, amt)) = &rcpt.token {
             let entry = needed_tokens.entry(id.clone()).or_insert(0);
-            *entry = entry.saturating_add(*amt);
+            *entry = entry.checked_add(*amt).ok_or_else(|| {
+                ArgusError::TxBuildFailed("token requirement out of range".into())
+                    .to_json_string()
+            })?;
         }
     }
 

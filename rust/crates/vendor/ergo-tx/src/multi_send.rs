@@ -35,6 +35,12 @@ pub enum MultiSendError {
 
     #[error("Change {change} nanoERG is below minimum box value of {min} nanoERG")]
     ChangeBelowMin { change: i64, min: i64 },
+
+    #[error("Input ERG total exceeds the representable range")]
+    ErgTotalOverflow,
+
+    #[error("Total held amount of token {token_id} exceeds the representable range")]
+    TokenTotalOverflow { token_id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -104,14 +110,19 @@ pub fn build_multi_send_tx_with_fee(
     let total_erg: i64 = user_inputs
         .iter()
         .map(|b| b.value.parse::<i64>().unwrap_or(0))
-        .sum();
+        .try_fold(0i64, i64::checked_add)
+        .ok_or(MultiSendError::ErgTotalOverflow)?;
 
     // Aggregate input token balances.
     let mut input_tokens: HashMap<String, u64> = HashMap::new();
     for input in user_inputs {
         for asset in &input.assets {
             let entry = input_tokens.entry(asset.token_id.clone()).or_insert(0);
-            *entry = entry.saturating_add(asset.amount.parse::<u64>().unwrap_or(0));
+            *entry = entry.checked_add(asset.amount.parse::<u64>().unwrap_or(0)).ok_or_else(|| {
+                MultiSendError::TokenTotalOverflow {
+                    token_id: asset.token_id.clone(),
+                }
+            })?;
         }
     }
 

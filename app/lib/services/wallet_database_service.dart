@@ -7,10 +7,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// NOT encryption: `_obfuscate` only deters casual greps of prefs files. The
 /// key is derived from the wallet id, which is stored inside the payload
 /// itself, so anyone with file access (root, backup, malware) can read
-/// everything here — addresses, balances, full transaction history. This is
-/// acceptable only because the data is public chain data and cloud/device
-/// backups are disabled (see AndroidManifest allowBackup / FLAG_SECURE);
-/// never store secrets through this service.
+/// everything here — addresses, balances, full transaction history.
+///
+/// Platform notes: Android excludes this data from cloud backup and D2D
+/// transfer (see AndroidManifest + data_extraction_rules.xml). On iOS,
+/// NSUserDefaults IS included in iCloud/device backups — only obfuscated,
+/// never encrypted. This is acceptable solely because the payload is public
+/// chain data; never store secrets through this service. FLAG_SECURE guards
+/// the screen, not storage, and is irrelevant here.
 class WalletDatabaseService {
   static const _keyDbSnapshot = 'argus_local_wallet_db_v2';
   static const _keyTrackedLineages = 'argus_tracked_lineages_v2';

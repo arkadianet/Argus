@@ -158,6 +158,11 @@ class _SendScreenState extends State<SendScreen> {
       _recipientCtrl.text.trim().isNotEmpty &&
       looksLikeErgoAddress(_recipientCtrl.text.trim());
 
+  /// True when the recipient came from a trusted source (contact picker or
+  /// scanned payment URI) rather than free-typed/pasted text, so the
+  /// clipboard-hijack gate can be skipped.
+  bool _recipientTrusted = false;
+
   int? _amountNano() => parseErgToNano(_amountCtrl.text);
 
   String? get _contactForRecipient {
@@ -207,6 +212,7 @@ class _SendScreenState extends State<SendScreen> {
     if (pay.amountErg != null && pay.amountErg!.isNotEmpty) {
       _amountCtrl.text = pay.amountErg!;
     }
+    _recipientTrusted = true;
     setState(() {});
   }
 
@@ -421,6 +427,14 @@ class _SendScreenState extends State<SendScreen> {
         ? args.changeAddress
         : args.senderAddress;
 
+    // The token send carries a user-supplied recipient too — run the same
+    // clipboard-hijack gate as the ordinary flow.
+    if (!_recipientTrusted) {
+      final clear =
+          await _clipboardMatchesIntent(context, _recipientCtrl.text.trim());
+      if (!clear) return;
+    }
+
     setState(() => _sending = true);
     DexyBuildResult build;
     try {
@@ -538,7 +552,14 @@ class _SendScreenState extends State<SendScreen> {
   /// Clipboard-hijack defense: if the OS clipboard holds a *different*
   /// Ergo address than the one entered, make the user acknowledge it before
   /// the confirmation dialog appears.
+  ///
+  /// Skipped when the recipient came from a trusted source (contact or scan).
+  /// Residual risk for free-typed entries — malware that swaps the clipboard
+  /// *before* the user pastes is indistinguishable from ordinary paste — is
+  /// mitigated by the selectable full-address display in the confirm dialog
+  /// and contact-book usage, not by this check.
   Future<bool> _clipboardMatchesIntent(BuildContext ctx, String recipient) async {
+    if (_recipientTrusted) return true;
     final clip = await Clipboard.getData('text/plain');
     final clipText = clip?.text?.trim() ?? '';
     if (clipText.isEmpty || clipText == recipient) return true;
@@ -916,6 +937,7 @@ child: Column(
               if (!mounted) return;
               if (result != null && result.address.isNotEmpty) {
                 _recipientCtrl.text = result.address;
+                _recipientTrusted = true;
                 setState(() {});
               }
             },
@@ -976,7 +998,11 @@ child: Column(
                         hintText: 'Or tap contacts to pick a saved one',
                         helperText: _contactForRecipient,
                       ),
-                      onChanged: (_) => setState(() {}),
+                      onChanged: (_) {
+                        // Free-typed or re-pasted text loses trusted provenance.
+                        _recipientTrusted = false;
+                        setState(() {});
+                      },
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) return 'Required';
                         if (!looksLikeErgoAddress(v)) return 'Not an Ergo address';

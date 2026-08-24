@@ -38,6 +38,12 @@ pub enum SendError {
     )]
     ChangeBelowMin { change: i64, min: i64 },
 
+    #[error("Input ERG total exceeds the representable range")]
+    ErgTotalOverflow,
+
+    #[error("Total held amount of token {token_id} exceeds the representable range")]
+    TokenTotalOverflow { token_id: String },
+
     #[error("Citadel fee config error: {0}")]
     DevFee(String),
 }
@@ -116,14 +122,19 @@ pub fn build_send_tx_with_fee(
     let total_erg: i64 = user_inputs
         .iter()
         .map(|b| b.value.parse::<i64>().unwrap_or(0))
-        .sum();
+        .try_fold(0i64, i64::checked_add)
+        .ok_or(SendError::ErgTotalOverflow)?;
 
     let mut token_totals: HashMap<String, u64> = HashMap::new();
     for input in user_inputs {
         for asset in &input.assets {
             let amount = asset.amount.parse::<u64>().unwrap_or(0);
             let entry = token_totals.entry(asset.token_id.clone()).or_insert(0);
-            *entry = entry.saturating_add(amount);
+            *entry = entry.checked_add(amount).ok_or_else(|| {
+                SendError::TokenTotalOverflow {
+                    token_id: asset.token_id.clone(),
+                }
+            })?;
         }
     }
 

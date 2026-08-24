@@ -665,10 +665,13 @@ class _DashboardScreenState extends State<DashboardScreen>
           _balanceNano = erg;
           _tokens = tokens.values.toList();
         }
-        // Replace unconditionally: an empty result means pending entries
-        // dropped from the mempool must leave the dashboard (and the cache
-        // persisted below). Only a thrown loadHistory keeps the old list.
-        _recentTxs = txs.take(5).toList();
+        // Replace only when the result is trustworthy: an empty result means
+        // pending entries dropped from the mempool must leave the dashboard
+        // (and the cache persisted below). A partial address failure returns
+        // an empty list without throwing — keep the old list in that case.
+        if (txs.isNotEmpty || failed == 0) {
+          _recentTxs = txs.take(5).toList();
+        }
         if (failed == addresses.length) {
           _status = 'Could not refresh balances';
         } else if (failed > 0) {

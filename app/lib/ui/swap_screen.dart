@@ -240,7 +240,12 @@ class _SwapScreenState extends State<SwapScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Swap')),
-      body: _buildBody(context),
+      body: Column(
+        children: [
+          const OfflineBanner(),
+          Expanded(child: _buildBody(context)),
+        ],
+      ),
     );
   }
 
@@ -285,7 +290,6 @@ class _SwapScreenState extends State<SwapScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const OfflineBanner(),
         if (set.truncated)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),

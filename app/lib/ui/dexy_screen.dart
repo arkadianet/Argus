@@ -306,14 +306,17 @@ class _DexyScreenState extends State<DexyScreen> {
           ),
         ],
       ),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
-          children: [
-            const OfflineBanner(),
-            _variantSwitcher(context),
-            const SizedBox(height: 16),
+      body: Column(
+        children: [
+          const OfflineBanner(),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+                children: [
+                  _variantSwitcher(context),
+                  const SizedBox(height: 16),
             if (_loading)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 90),
@@ -332,7 +335,10 @@ class _DexyScreenState extends State<DexyScreen> {
             ],
           ],
         ),
-      ),
+              ),
+            ),
+          ],
+        ),
     );
   }
 

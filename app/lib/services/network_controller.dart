@@ -333,13 +333,32 @@ String explorerTransactionUrl(String explorer, String txId) {
 }
 
 /// Accepts `https://host` or a bare `host[:port]` (upgraded to https).
-/// Explicit `http://` still parses — for local/LAN nodes — but the platform
-/// network security configs block cleartext in release builds.
+///
+/// Explicit `http://` is accepted only for loopback/LAN hosts: Dart's
+/// dart:io HTTP client bypasses the platform cleartext policy, so TLS is
+/// enforced here for anything reachable beyond the local network.
 String? normalizeNodeUrl(String raw) {
   var clean = raw.trim().replaceAll(RegExp(r'/$'), '');
   if (clean.isEmpty) return null;
   if (!clean.contains('://')) clean = 'https://$clean';
-  return isAbsoluteHttpUrl(clean) ? clean : null;
+  if (!isAbsoluteHttpUrl(clean)) return null;
+  final uri = Uri.tryParse(clean);
+  if (uri == null) return null;
+  if (uri.scheme == 'http' && !_isLocalNetworkHost(uri.host)) return null;
+  return clean;
+}
+
+bool _isLocalNetworkHost(String host) {
+  final h = host.toLowerCase();
+  if (h == 'localhost' || h == '::1') return true;
+  if (h.startsWith('127.') || h.startsWith('10.')) return true;
+  if (h.startsWith('192.168.')) return true;
+  final second = RegExp(r'^172\.(\d+)\.').firstMatch(h);
+  if (second != null) {
+    final n = int.tryParse(second.group(1)!) ?? -1;
+    if (n >= 16 && n <= 31) return true;
+  }
+  return false;
 }
 
 final networkController = NetworkController();

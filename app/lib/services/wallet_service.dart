@@ -408,13 +408,34 @@ BigInt _requireBigInt(Map<String, dynamic> json, String key) {
 /// Parse decimal ERG text into nanoERG without using [double].
 int? parseErgToNano(String raw) => parseDecimalToBase(raw, 9);
 
+/// Normalize `,` decimals; reject grouping separators instead of guessing.
+///
+/// "1,5" is a locale decimal → "1.5". "1,234" is ambiguous across locales
+/// (1234 vs 1.234) and mixed forms like "1,23.4" are malformed → both return
+/// null so the caller shows an input error rather than silently mis-scaling.
+String? _normalizeDecimalSeparators(String trimmed) {
+  if (!trimmed.contains(',')) return trimmed;
+  final thousandsWithFraction = RegExp(r'^\d{1,3}(,\d{3})+\.\d+$');
+  if (trimmed.contains('.')) {
+    // Dot present: commas are only acceptable as strict thousands groups.
+    return thousandsWithFraction.hasMatch(trimmed)
+        ? trimmed.replaceAll(',', '')
+        : null;
+  }
+  final thousandsOnly = RegExp(r'^\d{1,3}(,\d{3})+$');
+  if (thousandsOnly.hasMatch(trimmed)) return null;
+  final decimalComma = RegExp(r'^\d+,\d+$');
+  return decimalComma.hasMatch(trimmed) ? trimmed.replaceFirst(',', '.') : null;
+}
+
 /// Parse a decimal token amount into the on-chain integer.
 ///
-/// Accepts both `.` and `,` as the decimal separator so locales whose
-/// keyboard emits commas still work; thousands separators are rejected.
+/// Accepts both `.` and `,` as the decimal separator; see
+/// [_normalizeDecimalSeparators] for grouping-separator handling.
 int? parseDecimalToBase(String raw, int decimals) {
   if (decimals < 0 || decimals > 18) return null;
-  final text = raw.trim().replaceAll(',', '.');
+  final text = _normalizeDecimalSeparators(raw.trim());
+  if (text == null || text.isEmpty) return null;
   if (text.isEmpty) return null;
   final parts = text.split('.');
   if (parts.length > 2) return null;
