@@ -17,7 +17,7 @@ import 'ui/receive_screen.dart';
 import 'ui/restore_wallet_screen.dart';
 import 'ui/send_screen.dart';
 import 'ui/settings_screen.dart';
-import 'ui/swap_screen.dart';
+import 'ui/swap_hub_screen.dart';
 import 'ui/transaction_detail_screen.dart';
 import 'ui/transactions_screen.dart';
 import 'ui/utxo_management_screen.dart';
@@ -103,7 +103,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/utxos' => const UtxoManagementScreen(),
               '/dexy' => const DexyScreen(),
               '/ageusd' => const AgeUsdScreen(),
-              '/swap' => const SwapScreen(),
+              '/swap' => const SwapHubScreen(),
               _ => null,
             };
             if (page == null) return null;

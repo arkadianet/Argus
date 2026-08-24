@@ -180,8 +180,70 @@ pub struct TxSummary {
     /// Total nanoERG value sent (inputs - outputs to self)
     pub value_nano_erg: i64,
     pub token_ids: Vec<String>,
+    /// Tokens that arrived at the queried address, summed over outputs it
+    /// owns. Outgoing token legs ride in spent inputs, which the byAddress
+    /// payload does not describe beyond box ids — so this is arrivals only.
+    #[serde(default)]
+    pub tokens_received: Vec<TokenReceived>,
     pub num_inputs: u32,
     pub num_outputs: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenReceived {
+    pub token_id: String,
+    pub amount: u64,
+}
+
+/// Pure summary of one `byAddress` item; extracted for fixture testing.
+/// Returns None when the item lacks a transaction id.
+pub fn summarize_tx_for_address(
+    tx: &serde_json::Value,
+    address: &str,
+) -> Option<TxSummary> {
+    let tx_id = tx["id"].as_str()?.to_string();
+    let height = tx["inclusionHeight"].as_u64().unwrap_or(0);
+    let timestamp = tx["timestamp"].as_u64().unwrap_or(0);
+    let num_inputs = tx["inputs"].as_array().map(|a| a.len() as u32).unwrap_or(0);
+    let num_outputs = tx["outputs"].as_array().map(|a| a.len() as u32).unwrap_or(0);
+
+    let value_nano_erg = net_value_for_address(tx, address);
+
+    let outs = tx["outputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let mut token_ids: Vec<String> = Vec::new();
+    let mut received: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for output in outs {
+        if let Some(assets) = output["assets"].as_array() {
+            for asset in assets {
+                if let Some(id) = asset["tokenId"].as_str() {
+                    if !token_ids.iter().any(|t| t == id) {
+                        token_ids.push(id.to_string());
+                    }
+                    // Arrivals: only outputs owned by the queried address
+                    // carry the address field on extraIndex nodes.
+                    if output["address"].as_str() == Some(address) {
+                        let amount = asset["amount"].as_u64().unwrap_or(0);
+                        let entry = received.entry(id.to_string()).or_insert(0);
+                        *entry = entry.saturating_add(amount);
+                    }
+                }
+            }
+        }
+    }
+
+    Some(TxSummary {
+        tx_id,
+        height,
+        timestamp,
+        value_nano_erg,
+        token_ids,
+        tokens_received: received
+            .into_iter()
+            .map(|(token_id, amount)| TokenReceived { token_id, amount })
+            .collect(),
+        num_inputs,
+        num_outputs,
+    })
 }
 
 /// Result of following a singleton token lineage through spent transaction chains.
@@ -522,36 +584,10 @@ impl ErgoNodeClient {
         let value: serde_json::Value = serde_json::from_str(&text)
             .map_err(|e| format!("Parse: {}", e))?;
         let items = value["items"].as_array().cloned().unwrap_or_default();
-        let summaries = items.into_iter().filter_map(|tx| {
-            let tx_id = tx["id"].as_str()?.to_string();
-            let height = tx["inclusionHeight"].as_u64().unwrap_or(0);
-            let timestamp = tx["timestamp"].as_u64().unwrap_or(0);
-            let num_inputs = tx["inputs"].as_array().map(|a| a.len() as u32).unwrap_or(0);
-            let num_outputs = tx["outputs"].as_array().map(|a| a.len() as u32).unwrap_or(0);
-
-            let value_nano_erg = net_value_for_address(&tx, address);
-
-            let token_ids: Vec<String> = tx["outputs"]
-                .as_array()
-                .map(|outs| {
-                    outs.iter()
-                        .filter_map(|o| o["assets"].as_array())
-                        .flatten()
-                        .filter_map(|a| a["tokenId"].as_str().map(|s| s.to_string()))
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            Some(TxSummary {
-                tx_id,
-                height,
-                timestamp,
-                value_nano_erg,
-                token_ids,
-                num_inputs,
-                num_outputs,
-            })
-        }).collect();
+        let summaries = items
+            .iter()
+            .filter_map(|tx| summarize_tx_for_address(tx, address))
+            .collect();
         Ok(summaries)
     }
 
@@ -857,6 +893,40 @@ fn net_value_for_address(tx: &serde_json::Value, address: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_collects_token_arrivals_for_owned_outputs_only() {
+        let addr = "9hXQzT1jJdfLmMGA4rH5QMW2EK9QVnWYyRvVGHKP8pqvS2tVK9t";
+        let tx = serde_json::json!({
+            "id": "tx1",
+            "inclusionHeight": 100,
+            "timestamp": 1700000000000u64,
+            "inputs": [
+                {"boxId": "b0", "spendingProof": {}, "address": addr, "value": 200}
+            ],
+            "outputs": [
+                {"address": "9foreign", "value": 100,
+                 "assets": [{"tokenId": "tokA", "amount": 50}]},
+                {"address": addr, "value": 90,
+                 "assets": [{"tokenId": "tokB", "amount": 7},
+                            {"tokenId": "tokA", "amount": 3}]},
+                {"address": addr, "value": 10,
+                 "assets": [{"tokenId": "tokB", "amount": 5}]}
+            ]
+        });
+
+        let s = summarize_tx_for_address(&tx, addr).expect("summary");
+        assert_eq!(s.value_nano_erg, -100); // 100 back to self - 200 in
+        // ids cover ALL outputs; arrivals only owned ones, summed per token.
+        assert_eq!(s.token_ids, vec!["tokA".to_string(), "tokB".to_string()]);
+        let received: Vec<(String, u64)> = s
+            .tokens_received
+            .iter()
+            .map(|t| (t.token_id.clone(), t.amount))
+            .collect();
+        assert!(received.contains(&("tokB".to_string(), 12)));
+        assert!(received.contains(&("tokA".to_string(), 3)));
+    }
 
     fn reset_network() {
         set_network(

@@ -2,7 +2,9 @@ import 'dart:convert';
 
 import '../bridge/api.dart' as api;
 import '../bridge/argus_error.dart';
+import 'dexy_service.dart';
 import 'network_controller.dart';
+import 'sigmausd_service.dart';
 import 'wallet_service.dart';
 
 /// Tolerance absorbing pool movement between the cached quote and the
@@ -187,3 +189,112 @@ class AmmService {
 }
 
 final ammService = AmmService();
+
+/// Curated mainnet token ids treated as verified in swap pickers, with
+/// display labels. Sources are protocol constants already pinned in this
+/// codebase (AgeUSD bank tokens, Dexy variant tokens) — never hand-typed.
+Map<String, String> verifiedTokenLabels() => {
+      SigmaUsdTokens.sigUsd: 'SigUSD',
+      SigmaUsdTokens.sigRsv: 'SigRSV',
+      for (final v in DexyVariant.values)
+        if (v.tokenId.isNotEmpty) v.tokenId: '${v.shortName} (Dexy)',
+    };
+
+bool isVerifiedToken(String tokenId) =>
+    verifiedTokenLabels().containsKey(tokenId);
+
+/// The two tradable sides of a pool as `(tokenId, reserveAmount)` pairs;
+/// `null` tokenId is ERG.
+List<(String?, BigInt)> poolSides(Map<String, dynamic> pool) {
+  final y = pool['token_y'] as Map?;
+  final yId = y?['token_id'] as String?;
+  final yAmt = BigInt.from((y?['amount'] as num?)?.toInt() ?? 0);
+  if (pool['pool_type'] == 'T2T') {
+    final x = pool['token_x'] as Map?;
+    return [
+      (
+        x?['token_id'] as String?,
+        BigInt.from((x?['amount'] as num?)?.toInt() ?? 0),
+      ),
+      (yId, yAmt),
+    ];
+  }
+  return [
+    (null, BigInt.from((pool['erg_reserves'] as num?)?.toInt() ?? 0)),
+    (yId, yAmt),
+  ];
+}
+
+bool poolSupportsPair(Map<String, dynamic> pool, String? from, String? to) {
+  final sides = poolSides(pool);
+  bool matches(String? t) => sides.any((s) => s.$1 == t);
+  return matches(from) && matches(to) && from != to;
+}
+
+/// CFMM input-for-output price used to prefill the FROM field when the user
+/// types a desired TO amount. Mirrors vendored `calculator::calculate_input`
+/// (`(rIn * out * feeDen) / ((rOut - out) * feeNum) + 1`); the authoritative
+/// numbers still come from the forward FFI quote — this only seeds the field.
+///
+/// Returns null for degenerate or exceeding-reserve requests.
+BigInt? requiredInputFor({
+  required BigInt reservesIn,
+  required BigInt reservesOut,
+  required BigInt output,
+  required int feeNum,
+  required int feeDenom,
+}) {
+  if (reservesIn <= BigInt.zero ||
+      reservesOut <= BigInt.zero ||
+      output <= BigInt.zero ||
+      output >= reservesOut ||
+      feeNum <= 0 ||
+      feeDenom <= 0) {
+    return null;
+  }
+  final numerator = reservesIn * output * BigInt.from(feeDenom);
+  final denominator = (reservesOut - output) * BigInt.from(feeNum);
+  if (denominator <= BigInt.zero) return null;
+  return numerator ~/ denominator + BigInt.one;
+}
+
+/// Cheapest pool (least required input) for receiving [output] of [to] by
+/// paying [from]; returns the pool plus its two sides oriented as
+/// `(inReserve, outReserve)` for the chosen direction, or null when no pool
+/// can fill it.
+(Map<String, dynamic>, BigInt inReserve, BigInt outReserve)?
+    bestPoolForOutput({
+  required List<Map<String, dynamic>> pools,
+  required String? from,
+  required String? to,
+  required BigInt output,
+}) {
+  Map<String, dynamic>? best;
+  var bestInput = BigInt.zero;
+  var bestInReserve = BigInt.zero;
+  var bestOutReserve = BigInt.zero;
+  for (final pool in pools) {
+    if (!poolSupportsPair(pool, from, to)) continue;
+    final sides = poolSides(pool);
+    final (_, rIn) = sides.firstWhere((s) => s.$1 == from);
+    final (_, rOut) = sides.firstWhere((s) => s.$1 == to);
+    final feeNum = (pool['fee_num'] as num?)?.toInt() ?? 0;
+    final feeDenom = (pool['fee_denom'] as num?)?.toInt() ?? 1;
+    final required = requiredInputFor(
+      reservesIn: rIn,
+      reservesOut: rOut,
+      output: output,
+      feeNum: feeNum,
+      feeDenom: feeDenom,
+    );
+    if (required == null) continue;
+    if (best == null || required < bestInput) {
+      best = pool;
+      bestInput = required;
+      bestInReserve = rIn;
+      bestOutReserve = rOut;
+    }
+  }
+  if (best == null) return null;
+  return (best, bestInReserve, bestOutReserve);
+}

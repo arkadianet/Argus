@@ -22,7 +22,11 @@ String dexyHoldingsTitle(DexyVariant variant) => 'Your ${variant.shortName}';
 /// confirm sheet ("Sign & broadcast") and submits via the cached-preparation
 /// flow — the same guard rails as every other send in Argus.
 class DexyScreen extends StatefulWidget {
-  const DexyScreen({super.key});
+  const DexyScreen({super.key, this.embedded = false});
+
+  /// When true the screen renders without its own Scaffold/AppBar so it can
+  /// live inside the swap hub's tab view.
+  final bool embedded;
 
   @override
   State<DexyScreen> createState() => _DexyScreenState();
@@ -295,6 +299,42 @@ class _DexyScreenState extends State<DexyScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final body = Column(
+      children: [
+        const OfflineBanner(),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
+              children: [
+                _variantSwitcher(context),
+                const SizedBox(height: 16),
+                if (_loading)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 90),
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else if (_error != null)
+                  _errorView(context)
+                else if (_state != null) ...[
+                  _balanceCard(context),
+                  const SizedBox(height: 14),
+                  _ratesCard(context),
+                  const SizedBox(height: 14),
+                  _statsCard(context),
+                  const SizedBox(height: 22),
+                  _actionsCard(context),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+    if (widget.embedded) {
+      return body;
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('Dexy'),
@@ -306,39 +346,7 @@ class _DexyScreenState extends State<DexyScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          const OfflineBanner(),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _load,
-              child: ListView(
-                padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
-                children: [
-                  _variantSwitcher(context),
-                  const SizedBox(height: 16),
-            if (_loading)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 90),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (_error != null)
-              _errorView(context)
-            else if (_state != null) ...[
-              _balanceCard(context),
-              const SizedBox(height: 14),
-              _ratesCard(context),
-              const SizedBox(height: 14),
-              _statsCard(context),
-              const SizedBox(height: 22),
-              _actionsCard(context),
-            ],
-          ],
-        ),
-              ),
-            ),
-          ],
-        ),
+      body: body,
     );
   }
 

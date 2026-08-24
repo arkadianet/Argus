@@ -507,12 +507,36 @@ pub async fn get_pending_transactions(
                     .collect()
             })
             .unwrap_or_default();
+        // Tokens arriving at any wallet address (mempool outputs paying an
+        // owned tree), so the activity list can render incoming amounts.
+        let mut received: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        if let Some(outs) = tx["outputs"].as_array() {
+            for o in outs {
+                let tree_owned =
+                    o["ergoTree"].as_str().map(|t| trees.contains(t)).unwrap_or(false);
+                if !tree_owned {
+                    continue;
+                }
+                if let Some(assets) = o["assets"].as_array() {
+                    for a in assets {
+                        if let Some(tid) = a["tokenId"].as_str() {
+                            let entry = received.entry(tid.to_string()).or_insert(0);
+                            *entry = entry.saturating_add(a["amount"].as_u64().unwrap_or(0));
+                        }
+                    }
+                }
+            }
+        }
         out.push(serde_json::json!({
             "tx_id": id,
             "height": 0u64,
             "timestamp": 0u64,
             "value_nano_erg": v,
             "token_ids": token_ids,
+            "tokens_received": received.into_iter().map(|(token_id, amount)| {
+                serde_json::json!({"token_id": token_id, "amount": amount})
+            }).collect::<Vec<_>>(),
             "num_inputs": tx["inputs"].as_array().map(|a| a.len() as u32).unwrap_or(0),
             "num_outputs": tx["outputs"].as_array().map(|a| a.len() as u32).unwrap_or(0),
             "confirmed": false,

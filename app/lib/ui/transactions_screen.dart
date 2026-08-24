@@ -107,6 +107,39 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     }
   }
 
+  /// Inflow/outflow marker mirroring the dashboard activity tile.
+  Widget _directionBadge(int? nano) {
+    final outgoing = nano != null && nano < 0;
+    final color = outgoing ? rust : moss;
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        shape: BoxShape.circle,
+      ),
+      child: Icon(
+        outgoing ? Icons.arrow_upward : Icons.arrow_downward,
+        size: 17,
+        color: color,
+      ),
+    );
+  }
+
+  Widget _tokenChip(int count) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        '$count token${count == 1 ? '' : 's'}',
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 10),
+      ),
+    );
+  }
+
   void _open(Map<String, dynamic> tx) {
     Navigator.push(
       context,
@@ -238,13 +271,26 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                               child: Row(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
+                                  _directionBadge(nano),
+                                  const SizedBox(width: 10),
                                   Expanded(
                                     child: Column(
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
-                                        Text(
-                                          formatErg(nano),
-                                          style: Theme.of(context).textTheme.titleMedium,
+                                        Row(
+                                          children: [
+                                            Text(
+                                              '${nano != null && nano < 0 ? 'Sent' : 'Received'} '
+                                              '${formatErg(nano?.abs())}',
+                                              style: Theme.of(context).textTheme.titleMedium,
+                                            ),
+                                            if ((tx['tokens_received'] as List?)?.isNotEmpty ?? false)
+                                              Padding(
+                                                padding: const EdgeInsets.only(left: 8),
+                                                child: _tokenChip(
+                                                    (tx['tokens_received'] as List).length),
+                                              ),
+                                          ],
                                         ),
                                         const SizedBox(height: 4),
                                         Text(
