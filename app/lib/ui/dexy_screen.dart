@@ -9,6 +9,7 @@ import '../services/dexy_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
+import 'offline_banner.dart';
 
 /// Mint card and confirm-sheet title for a variant. Names the token (USE), not
 /// the protocol implementation (DexyUSD).
@@ -310,6 +311,7 @@ class _DexyScreenState extends State<DexyScreen> {
         child: ListView(
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
           children: [
+            const OfflineBanner(),
             _variantSwitcher(context),
             const SizedBox(height: 16),
             if (_loading)
@@ -806,7 +808,7 @@ class _DexyMintSheetState extends State<_DexyMintSheet> {
             _sheetRow('Miner fee', formatErg(_preview!.txFeeNano, unit: false)),
           ] else if (_previewError != null)
             Text(_previewError!,
-                style: TextStyle(color: rust, fontSize: 12)),
+                style: TextStyle(color: rustFor(context), fontSize: 12)),
           const SizedBox(height: 20),
           SizedBox(
             width: double.infinity,
@@ -1047,7 +1049,7 @@ class _DexySwapSheetState extends State<_DexySwapSheet> {
                 '${_quote!.priceImpactPct.toStringAsFixed(2)}%'),
             _sheetRow('LP fee', '${_quote!.feePct.toStringAsFixed(2)}%'),
           ] else if (_quoteError != null)
-            Text(_quoteError!, style: TextStyle(color: rust, fontSize: 12)),
+            Text(_quoteError!, style: TextStyle(color: rustFor(context), fontSize: 12)),
           const SizedBox(height: 18),
           SizedBox(
             width: double.infinity,
@@ -1405,7 +1407,7 @@ class _DexyLiquiditySheetState extends State<_DexyLiquiditySheet> {
             ],
           ] else if (_previewError != null)
             Text(_previewError!,
-                style: TextStyle(color: rust, fontSize: 12)),
+                style: TextStyle(color: rustFor(context), fontSize: 12)),
           const SizedBox(height: 18),
           SizedBox(
             width: double.infinity,

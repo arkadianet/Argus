@@ -433,7 +433,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                     Text(
                       _error!,
                       textAlign: TextAlign.center,
-                      style: const TextStyle(color: rust),
+                      style: TextStyle(color: rustFor(context)),
                     ),
                         const SizedBox(height: 16),
                     FilledButton(

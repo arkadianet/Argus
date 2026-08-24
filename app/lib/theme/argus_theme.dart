@@ -3,6 +3,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 
 const iris = Color(0xFFC4A46A);
+/// Brand iris darkened for text/buttons on light paper (~6.4:1 vs ~2.1:1).
+const irisDeep = Color(0xFF6B5320);
 const ink = Color(0xFF0E1110);
 const watchfulSurface = Color(0xFF171C1A);
 const bone = Color(0xFFE8E4D9);
@@ -12,8 +14,15 @@ const ledgerSurface = Color(0xFFFEFCF7);
 const ledgerInk = Color(0xFF1C1914);
 const ledgerMuted = Color(0xFF6B6458);
 const rust = Color(0xFFB54A3C);
+/// Brand rust brightened for text on dark ink (~6.9:1 vs ~3.6:1).
+const rustBright = Color(0xFFE08A70);
 const moss = Color(0xFF3E7A55);
 const bannerTint = Color(0xFFF0E6D2);
+
+/// Palette-aware rust for *text*: the brand rust fails WCAG on dark
+/// surfaces, so dark mode gets [rustBright]. Icons and borders keep [rust].
+Color rustFor(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark ? rustBright : rust;
 
 const cardRadius = 20.0;
 const buttonRadius = 14.0;
@@ -153,7 +162,9 @@ ThemeData argusTheme({required bool watchful}) {
       ),
     ),
     textButtonTheme: TextButtonThemeData(
-      style: TextButton.styleFrom(foregroundColor: iris),
+      style: TextButton.styleFrom(
+        foregroundColor: watchful ? iris : irisDeep,
+      ),
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: watchful ? ink : paper,

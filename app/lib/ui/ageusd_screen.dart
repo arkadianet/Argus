@@ -9,6 +9,7 @@ import '../services/sigmausd_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
+import 'offline_banner.dart';
 
 /// AgeUSD (SigmaUSD) hub. Mint and redeem SigUSD / SigRSV against the bank at
 /// the live oracle rate. Every action builds through the shared confirm sheet
@@ -281,6 +282,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
               : ListView(
                   padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
                   children: [
+                    const OfflineBanner(),
                     if (st != null) ...[
                       _protocolHeader(st),
                       const SizedBox(height: 20),
@@ -462,7 +464,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     if (_previewError != null) {
       return Text(
         _previewError!,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rust),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rustFor(context)),
       );
     }
     final p = _preview;
@@ -475,7 +477,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     if (!p.canExecute) {
       return Text(
         p.error ?? 'This action is not available right now.',
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rust),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rustFor(context)),
       );
     }
     final isMint = !_action.isRedeem;

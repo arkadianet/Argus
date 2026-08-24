@@ -17,6 +17,7 @@ import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'assets_screen.dart';
 import 'create_wallet_screen.dart';
+import 'offline_banner.dart';
 import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
 import 'settings_screen.dart';
@@ -968,7 +969,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         ],
         if (_status.startsWith('Error') || _status.contains(':')) ...[
           const SizedBox(height: 12),
-          Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: rust)),
+          Text(_status,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: rustFor(context))),
         ],
         if (watchOnlyService.addresses.isNotEmpty) ...[
           const SizedBox(height: 24),
@@ -1079,8 +1082,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
           children: [
-            if (networkController.activeUrl == null && !networkController.probing)
-              _offlineBanner(),
+            const OfflineBanner(),
             _walletCard(fragmented),
             const SizedBox(height: 28),
             _sectionHeader('Assets',
@@ -1336,7 +1338,10 @@ class _DashboardScreenState extends State<DashboardScreen>
                   : paper,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Row(
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 0,
+              runSpacing: 4,
               children: [
                 InkWell(
                   onTap: () => _go('/utxos'),
@@ -1385,7 +1390,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ],
                   ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 8),
                 InkWell(
                   onTap: _openSettings,
                   borderRadius: BorderRadius.circular(8),
@@ -1474,36 +1479,6 @@ class _DashboardScreenState extends State<DashboardScreen>
           fontFamily: 'Karla',
           fontWeight: FontWeight.w500,
           fontSize: 14.5,
-        ),
-      ),
-    );
-  }
-
-  Widget _offlineBanner() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Material(
-        color: rust.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
-            children: [
-              const Icon(Icons.wifi_off_outlined, color: rust, size: 16),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'No reachable nodes. Tap Retry to check.',
-                  style: TextStyle(color: rust, fontSize: 12),
-                ),
-              ),
-              TextButton(
-                onPressed:
-                    networkController.probing ? null : networkController.probe,
-                child: const Text('Retry'),
-              ),
-            ],
-          ),
         ),
       ),
     );

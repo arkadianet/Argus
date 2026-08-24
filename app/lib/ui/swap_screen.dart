@@ -8,6 +8,7 @@ import '../format.dart';
 import '../services/amm_service.dart';
 import '../services/wallet_service.dart';
 import 'confirm_transaction_sheet.dart';
+import 'offline_banner.dart';
 
 /// One quote line. `formatTokenAmount` supplies the number; the symbol is
 /// appended once here.
@@ -284,6 +285,7 @@ class _SwapScreenState extends State<SwapScreen> {
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        const OfflineBanner(),
         if (set.truncated)
           Padding(
             padding: const EdgeInsets.only(bottom: 12),
