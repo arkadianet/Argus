@@ -141,13 +141,13 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
         Text('Recovery phrase', style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 8),
         const Text(
-            '12, 15, or 24 words, in order — 15 is the Ergo standard. Optional BIP-39 passphrase if you used one.'),
+            '12, 15, 18, 21, or 24 words, in order — 15 is the Ergo standard. Optional BIP-39 passphrase if you used one.'),
         const SizedBox(height: 20),
         TextField(
           controller: _phraseCtrl,
           decoration: const InputDecoration(
             labelText: 'Recovery phrase',
-            hintText: '12, 15, or 24 words',
+            hintText: '12, 15, 18, 21, or 24 words',
           ),
           minLines: 4,
           maxLines: 6,

@@ -413,6 +413,10 @@ class _SwapScreenState extends State<SwapScreen> {
                   setState(() {
                     _fromToken = v;
                     _quote = null;
+                    // The old pair's want amount is meaningless against a
+                    // different pay asset.
+                    _toAmountCtrl.clear();
+                    _lastEdited = 'from';
                   });
                   _onPairChanged();
                 })),
@@ -438,6 +442,10 @@ class _SwapScreenState extends State<SwapScreen> {
                   setState(() {
                     _toToken = v;
                     _quote = null;
+                    // Keep the user's desired quantity across receive-token
+                    // changes; the next quote re-mirrors it for the new
+                    // token's decimals.
+                    _lastEdited = 'from';
                   });
                   _onPairChanged();
                 })),

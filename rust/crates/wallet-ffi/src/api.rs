@@ -312,13 +312,17 @@ pub fn sign_reduced_transaction(
 pub fn generate_mnemonic(strength: u32) -> Result<String, String> {
     use ergo_lib::wallet::mnemonic_generator::{Language, MnemonicGenerator};
 
-    // 160-bit (15 words) is the Ergo ecosystem standard; 128/256 cover the
-    // common BIP-39 alternatives. Anything else snaps to the nearest of the
-    // three rather than failing.
+    // All five BIP-39 strengths are supported; 160-bit (15 words) is the
+    // Ergo ecosystem standard. Unknown values are rejected rather than
+    // silently substituted.
     let strength = match strength {
-        128 => 128,
-        160 => 160,
-        _ => 256,
+        128 | 160 | 192 | 224 | 256 => strength,
+        other => {
+            return Err(ArgusError::InvalidMnemonic(format!(
+                "unsupported mnemonic strength {other}: use 128, 160, 192, 224, or 256"
+            ))
+            .to_json_string())
+        }
     };
     let byte_len = (strength / 8) as usize;
     let mut entropy = vec![0u8; byte_len];
@@ -2613,6 +2617,23 @@ mod tests {
         assert_eq!(n, 15, "160-bit entropy must yield 15 words, got {n}");
         wallet_core::bip39::validate_phrase(&phrase)
             .expect("generated 15-word phrase must pass validation");
+    }
+
+    #[test]
+    fn generate_mnemonic_covers_every_bip39_strength() {
+        for (strength, words) in [(128u32, 12usize), (192, 18), (224, 21), (256, 24)] {
+            let phrase = generate_mnemonic(strength)
+                .unwrap_or_else(|e| panic!("{strength}-bit generation failed: {e}"));
+            assert_eq!(
+                phrase.split_whitespace().count(),
+                words,
+                "{strength}-bit entropy must yield {words} words"
+            );
+        }
+        assert!(
+            generate_mnemonic(129).is_err(),
+            "unsupported strengths must be rejected, not substituted"
+        );
     }
 
     #[test]
