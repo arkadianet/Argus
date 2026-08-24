@@ -518,7 +518,31 @@ class _DashboardScreenState extends State<DashboardScreen>
             : 'Wallet found. Unlock to continue.';
       });
       if (wrapKeyAvailable) {
-        await walletService.switchWallet(walletId);
+        // Loading another wallet's wrap key must be user-authenticated. On
+        // Android the stored key has no biometric ACL of its own, so a silent
+        // load here would let anyone holding the device bypass the lock
+        // screen; iOS enforces this inside the Keychain read itself.
+        final wrapKey = await sessionLock.run(
+          () => SecureStorageService.authenticateBiometric(walletId: walletId),
+        );
+        if (!mounted) return;
+        if (wrapKey == null) {
+          setState(() {
+            _resetLocked();
+            _status = 'Authentication cancelled. Unlock with PIN.';
+          });
+          return;
+        }
+        final json = await SecureStorageService.loadEncryptedSeed(
+          walletId: walletId,
+        );
+        if (!mounted) return;
+        if (json == null) {
+          setState(_resetLocked);
+          _snack('Wallet data not found');
+          return;
+        }
+        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: walletId);
         if (!mounted) return;
         setState(_resetLocked);
         if (walletService.isUnlocked) {
@@ -634,6 +658,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         return;
       }
       final balanceSucceeded = failed < addresses.length && addresses.isNotEmpty;
+      final historyPartial = walletService.lastHistoryPartial;
       setState(() {
         if (balanceSucceeded) {
           _balanceNano = erg;
@@ -647,6 +672,8 @@ class _DashboardScreenState extends State<DashboardScreen>
           _status = 'Could not refresh balances';
         } else if (failed > 0) {
           _status = 'Unlocked (balances may be stale)';
+        } else if (historyPartial) {
+          _status = 'Unlocked (activity may be incomplete)';
         } else {
           _status = 'Unlocked';
         }

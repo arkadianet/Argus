@@ -409,9 +409,12 @@ BigInt _requireBigInt(Map<String, dynamic> json, String key) {
 int? parseErgToNano(String raw) => parseDecimalToBase(raw, 9);
 
 /// Parse a decimal token amount into the on-chain integer.
+///
+/// Accepts both `.` and `,` as the decimal separator so locales whose
+/// keyboard emits commas still work; thousands separators are rejected.
 int? parseDecimalToBase(String raw, int decimals) {
   if (decimals < 0 || decimals > 18) return null;
-  final text = raw.trim();
+  final text = raw.trim().replaceAll(',', '.');
   if (text.isEmpty) return null;
   final parts = text.split('.');
   if (parts.length > 2) return null;
@@ -437,6 +440,10 @@ const minerFeeNano = 1100000;
 const minBoxNano = 1000000;
 const maxInputsPerTx = 200;
 const utxoFragmentationThreshold = 80;
+
+/// Upper bound on UTXOs gathered per listing call across all addresses.
+/// Beyond this the wallet's view of funds is partial by design.
+const maxUnspentBoxesTotal = 2000;
 
 String? validatePin(String pin) {
   final n = pin.runes.length;
@@ -618,26 +625,6 @@ class WalletService {
         }
       }
     }
-  }
-
-  /// Switch the active wallet to [targetId]. If the target is locked, it is
-  /// restored from secure storage first.
-  Future<void> switchWallet(String targetId) async {
-    if (_currentWalletId == targetId && _handles.containsKey(targetId)) return;
-
-    // Lock current wallet
-    if (_handleId != null) await lock();
-
-    // Restore target
-    final json = await SecureStorageService.loadEncryptedSeed(walletId: targetId);
-    if (json == null) {
-      throw ArgusException(
-        code: 'NO_WALLET',
-        message: 'Wallet data not found for $targetId',
-      );
-    }
-    final wrapKey = await SecureStorageService.loadWrapKey(walletId: targetId);
-    await restoreWallet(json, wrapKey: wrapKey, walletId: targetId);
   }
 
   /// Returns metadata for all stored wallets.
@@ -934,6 +921,10 @@ class WalletService {
     return Future.wait(jobs);
   }
 
+  /// True when the last [loadHistory] succeeded but at least one address
+  /// failed to load, meaning the returned activity may be incomplete.
+  bool lastHistoryPartial = false;
+
   Future<List<Map<String, dynamic>>> loadHistory(
     List<String> addresses, {
     int limit = 20,
@@ -967,6 +958,7 @@ class WalletService {
         message: 'Could not load activity',
       );
     }
+    lastHistoryPartial = failed > 0;
     final all = <Map<String, dynamic>>[];
     final seen = <String>{};
     for (final txs in results) {
@@ -1036,6 +1028,9 @@ class WalletService {
 
   /// Fetch all unspent boxes (UTXOs) for the given addresses by calling the
   /// node's REST API directly. Returns parsed [InputBoxInput] objects.
+  ///
+  /// Caps at [maxUnspentBoxesTotal] across all addresses; a node error is
+  /// raised, never silently treated as an empty wallet.
   Future<List<InputBoxInput>> listUnspentBoxes(
     List<String> addresses, {
     required String? nodeUrl,
@@ -1051,9 +1046,9 @@ class WalletService {
       final seen = <String>{};
       for (final addr in addresses) {
         if (addr.isEmpty) continue;
-        if (all.length >= 500) break;
+        if (all.length >= maxUnspentBoxesTotal) break;
         var offset = 0;
-        while (all.length < 500) {
+        while (all.length < maxUnspentBoxesTotal) {
           final endpoint = '$normalizedUrl/blockchain/box/unspent/byAddress'
               '?offset=$offset&limit=$limit';
           final response = await client
@@ -1061,7 +1056,10 @@ class WalletService {
                   headers: {'Content-Type': 'application/json'},
                   body: jsonEncode(addr))
               .timeout(const Duration(seconds: 15));
-          if (response.statusCode != 200) break;
+          if (response.statusCode != 200) {
+            throw Exception(
+                'Node returned ${response.statusCode} for unspent boxes');
+          }
           final body = response.body;
           if (body.isEmpty) break;
           final value = jsonDecode(body);
@@ -1078,13 +1076,13 @@ class WalletService {
               );
               if (seen.add(b.boxId)) {
                 all.add(b);
-                if (all.length >= 500) break;
+                if (all.length >= maxUnspentBoxesTotal) break;
               }
             } catch (_) {
               // skip malformed entries
             }
           }
-          if (items.length < limit || all.length >= 500) break;
+          if (items.length < limit || all.length >= maxUnspentBoxesTotal) break;
           offset += limit;
         }
       }
@@ -1154,8 +1152,11 @@ class WalletService {
         final txId = await sendErg(preparationId: preview.preparationId);
         txIds.add(txId);
         if (ergOnly.length <= maxInputsPerTx) break;
-      } catch (_) {
-        // If one batch fails (e.g. node reject), skip remaining.
+      } catch (e) {
+        // Progress already broadcast is preserved; a total failure is a real
+        // error the caller must see rather than an empty success.
+        if (txIds.isEmpty) rethrow;
+        debugPrint('argus: consolidation stopped after ${txIds.length} batch(es): $e');
         break;
       }
     }

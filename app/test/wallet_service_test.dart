@@ -194,8 +194,12 @@ void main() {
   });
 
   group('normalizeNodeUrl', () {
-    test('accepts a bare ip:port as http', () {
-      expect(normalizeNodeUrl('104.131.9.252:9053'), 'http://104.131.9.252:9053');
+    test('upgrades a bare ip:port to https', () {
+      expect(normalizeNodeUrl('104.131.9.252:9053'), 'https://104.131.9.252:9053');
+    });
+
+    test('keeps explicit http for LAN nodes', () {
+      expect(normalizeNodeUrl('http://192.168.1.10:9053'), 'http://192.168.1.10:9053');
     });
 
     test('keeps https hosts', () {

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Defaults are HTTPS. Cleartext is for user-added http://ip:port nodes. -->
-    <base-config cleartextTrafficPermitted="true" />
+    <!-- HTTPS everywhere. User-added nodes must serve TLS; a bare host in
+         Settings is upgraded to https:// by NetworkController. -->
+    <base-config cleartextTrafficPermitted="false" />
 </network-security-config>

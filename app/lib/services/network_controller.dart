@@ -332,11 +332,13 @@ String explorerTransactionUrl(String explorer, String txId) {
   return '${explorer.replaceAll(RegExp(r'/$'), '')}/en/transactions/$txId';
 }
 
-/// Accepts `https://host`, `http://ip:port`, or a bare `ip:port` (treated as http).
+/// Accepts `https://host` or a bare `host[:port]` (upgraded to https).
+/// Explicit `http://` still parses — for local/LAN nodes — but the platform
+/// network security configs block cleartext in release builds.
 String? normalizeNodeUrl(String raw) {
   var clean = raw.trim().replaceAll(RegExp(r'/$'), '');
   if (clean.isEmpty) return null;
-  if (!clean.contains('://')) clean = 'http://$clean';
+  if (!clean.contains('://')) clean = 'https://$clean';
   return isAbsoluteHttpUrl(clean) ? clean : null;
 }
 
