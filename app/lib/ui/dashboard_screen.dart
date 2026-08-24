@@ -934,7 +934,8 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _gate() {
     return ListView(
       key: const ValueKey('gate'),
-      padding: const EdgeInsets.fromLTRB(28, 36, 28, 40),
+      padding: EdgeInsets.fromLTRB(
+          28, 36, 28, 40 + MediaQuery.paddingOf(context).bottom),
       children: [
         const SizedBox(height: 56),
         const Center(child: IrisMark(size: 72)),

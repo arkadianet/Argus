@@ -111,7 +111,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Receive')),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(28, 16, 28, 40),
+        padding: EdgeInsets.fromLTRB(
+                28, 16, 28, 40 + MediaQuery.paddingOf(context).bottom),
         children: [
           const SectionLabel('Unused address'),
           const SizedBox(height: 8),

@@ -191,6 +191,23 @@ void main() {
     });
   });
 
+  group('isValidMnemonicWordCount', () {
+    test('accepts all BIP-39 counts including the 15-word Ergo standard', () {
+      expect(isValidMnemonicWordCount(12), isTrue);
+      expect(isValidMnemonicWordCount(15), isTrue);
+      expect(isValidMnemonicWordCount(18), isTrue);
+      expect(isValidMnemonicWordCount(21), isTrue);
+      expect(isValidMnemonicWordCount(24), isTrue);
+    });
+
+    test('rejects everything else', () {
+      expect(isValidMnemonicWordCount(11), isFalse);
+      expect(isValidMnemonicWordCount(13), isFalse);
+      expect(isValidMnemonicWordCount(16), isFalse);
+      expect(isValidMnemonicWordCount(0), isFalse);
+    });
+  });
+
   group('isAbsoluteHttpUrl', () {
     test('accepts only http(s) with a host', () {
       expect(isAbsoluteHttpUrl('https://ergo-node.eutxo.de'), isTrue);

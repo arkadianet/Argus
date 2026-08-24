@@ -481,6 +481,9 @@ List<String> mnemonicWords(String raw) {
       .toList();
 }
 
+/// BIP-39 word counts. 15 is the Ergo ecosystem standard (160-bit entropy).
+bool isValidMnemonicWordCount(int n) => const [12, 15, 18, 21, 24].contains(n);
+
 bool mnemonicWordsEqual(String a, String b) {
   final left = mnemonicWords(a);
   final right = mnemonicWords(b);

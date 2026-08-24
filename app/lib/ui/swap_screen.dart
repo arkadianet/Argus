@@ -62,6 +62,10 @@ class _SwapScreenState extends State<SwapScreen> {
   bool _movedRetried = false;
   bool _busy = false;
 
+  /// Which field the user touched last: the quote result mirrors into the
+  /// other one so both sides always show a consistent pair.
+  String _lastEdited = 'from';
+
   WalletRouteArgs get _args =>
       WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
 
@@ -245,7 +249,16 @@ class _SwapScreenState extends State<SwapScreen> {
         amount: amount,
       );
       if (!mounted || gen != _quoteGeneration) return;
-      setState(() => _quote = q);
+      setState(() {
+        _quote = q;
+        // Mirror the quoted output into the want field so both sides always
+        // show a consistent pair — but only when the user's last edit was on
+        // the pay side; otherwise it would fight their typing.
+        if (_lastEdited == 'from') {
+          _toAmountCtrl.text =
+              _fmtAmount(BigInt.from(q.outputAmount), _decimals(_toToken));
+        }
+      });
     } catch (e) {
       if (!mounted || gen != _quoteGeneration) return;
       setState(() => _quote = null);
@@ -414,6 +427,7 @@ class _SwapScreenState extends State<SwapScreen> {
                   _amountCtrl.text = _toAmountCtrl.text;
                   _toAmountCtrl.text = fromText;
                   _quote = null;
+                  _lastEdited = 'from';
                 });
                 _onPairChanged();
               },
@@ -445,6 +459,7 @@ class _SwapScreenState extends State<SwapScreen> {
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           onChanged: (_) {
+            _lastEdited = 'from';
             // A manual pay amount invalidates the previously derived want.
             if (_toAmountCtrl.text.isNotEmpty) _toAmountCtrl.clear();
             _scheduleQuote();
@@ -458,7 +473,10 @@ class _SwapScreenState extends State<SwapScreen> {
             helperText: 'Optional — we derive what to pay',
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          onChanged: _onToAmountChanged,
+          onChanged: (text) {
+            _lastEdited = 'to';
+            _onToAmountChanged(text);
+          },
         ),
         if (pool != null) ...[
           const SizedBox(height: 16),
@@ -509,6 +527,7 @@ class _SwapScreenState extends State<SwapScreen> {
       raw -= reserve;
     }
     setState(() {
+      _lastEdited = 'from';
       _amountCtrl.text = _fmtAmount(raw, _decimals(_fromToken));
       _toAmountCtrl.clear();
     });
@@ -633,7 +652,7 @@ class _SwapScreenState extends State<SwapScreen> {
   }
 }
 
-class _AssetPickerSheet extends StatelessWidget {
+class _AssetPickerSheet extends StatefulWidget {
   const _AssetPickerSheet({
     required this.title,
     required this.set,
@@ -651,8 +670,15 @@ class _AssetPickerSheet extends StatelessWidget {
   final String? exclude;
 
   @override
+  State<_AssetPickerSheet> createState() => _AssetPickerSheetState();
+}
+
+class _AssetPickerSheetState extends State<_AssetPickerSheet> {
+  String _query = '';
+
+  @override
   Widget build(BuildContext context) {
-    final tokens = set?.tokens ?? const {};
+    final tokens = widget.set?.tokens ?? const {};
     final poolIds = <String>{for (final id in tokens.keys) id};
 
     final verified =
@@ -662,9 +688,36 @@ class _AssetPickerSheet extends StatelessWidget {
     String symbol(String? id) =>
         id == null ? 'ERG' : (tokens[id]?.name ?? id);
 
+    bool matches(String? id) {
+      if (_query.isEmpty) return true;
+      final q = _query.toLowerCase();
+      return symbol(id).toLowerCase().contains(q) ||
+          (id?.toLowerCase().contains(q) ?? false);
+    }
+
+    final showErg = matches(null);
+    final heldRows = [
+      for (final t in widget.heldTokens)
+        if (t.id != widget.exclude && matches(t.id)) t,
+    ];
+    final verifiedRows = [
+      for (final id in verified)
+        if (id != widget.exclude &&
+            !widget.heldTokens.any((t) => t.id == id) &&
+            matches(id))
+          id,
+    ];
+    final restRows = [
+      for (final id in rest)
+        if (id != widget.exclude &&
+            !widget.heldTokens.any((t) => t.id == id) &&
+            matches(id))
+          id,
+    ];
+
     Widget row(String? id, {BigInt? balance}) {
       final isVerified = id != null && isVerifiedToken(id);
-      final disabled = id == exclude;
+      final disabled = id == widget.exclude;
       return ListTile(
         enabled: !disabled,
         dense: true,
@@ -688,45 +741,77 @@ class _AssetPickerSheet extends StatelessWidget {
         constraints: BoxConstraints(
           maxHeight: MediaQuery.of(context).size.height * 0.75,
         ),
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(0, 16, 0, 24),
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(title, style: Theme.of(context).textTheme.titleMedium),
-          ),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text('Your tokens',
-                style: Theme.of(context).textTheme.titleSmall),
-          ),
-          row(null,
-              balance: spendableNano == null ? null : BigInt.from(spendableNano!)),
-          for (final t in heldTokens)
-            if (t.id != exclude) row(t.id, balance: BigInt.from(t.amount)),
-          const Divider(height: 24),
-          if (verified.isNotEmpty) ...[
+        child: Column(
+          children: [
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text('Verified protocols',
-                  style: Theme.of(context).textTheme.titleSmall),
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+              child: TextField(
+                autofocus: true,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search, size: 20),
+                  hintText: 'Search name or token id',
+                  isDense: true,
+                ),
+                onChanged: (v) => setState(() => _query = v.trim()),
+              ),
             ),
-            for (final id in verified)
-              if (id != exclude &&
-                  !heldTokens.any((t) => t.id == id))
-                row(id),
-            const SizedBox(height: 8),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(0, 0, 0, 24),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(widget.title,
+                        style: Theme.of(context).textTheme.titleMedium),
+                  ),
+                  const SizedBox(height: 8),
+                  if (!showErg &&
+                      heldRows.isEmpty &&
+                      verifiedRows.isEmpty &&
+                      restRows.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text('Nothing matches "$_query".',
+                          style: Theme.of(context).textTheme.bodySmall),
+                    )
+                  else ...[
+                    if (showErg || heldRows.isNotEmpty) ...[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text('Your tokens',
+                            style: Theme.of(context).textTheme.titleSmall),
+                      ),
+                      if (showErg)
+                        row(null,
+                            balance: widget.spendableNano == null
+                                ? null
+                                : BigInt.from(widget.spendableNano!)),
+                      for (final t in heldRows)
+                        row(t.id, balance: BigInt.from(t.amount)),
+                      const Divider(height: 24),
+                    ],
+                    if (verifiedRows.isNotEmpty) ...[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text('Verified protocols',
+                            style: Theme.of(context).textTheme.titleSmall),
+                      ),
+                      for (final id in verifiedRows) row(id),
+                      const SizedBox(height: 8),
+                    ],
+                    if (restRows.isNotEmpty) ...[
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text('All pool assets',
+                            style: Theme.of(context).textTheme.titleSmall),
+                      ),
+                      for (final id in restRows) row(id),
+                    ],
+                  ],
+                ],
+              ),
+            ),
           ],
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text('All pool assets',
-                style: Theme.of(context).textTheme.titleSmall),
-          ),
-          for (final id in rest)
-            if (id != exclude && !heldTokens.any((t) => t.id == id))
-              row(id),
-        ],
         ),
       ),
     );

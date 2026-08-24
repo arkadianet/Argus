@@ -43,7 +43,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
   Future<void> _generate() async {
     setState(() => _busy = true);
     try {
-      final phrase = await walletService.generateMnemonic(strength: 256);
+      final phrase = await walletService.generateMnemonic(strength: 160);
       setState(() {
         _mnemonic = phrase;
         _revealed = false;
@@ -127,7 +127,8 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
         ),
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+        padding: EdgeInsets.fromLTRB(
+                20, 8, 20, 32 + MediaQuery.paddingOf(context).bottom),
         children: [
           StepDots(total: 3, index: _step),
           const SizedBox(height: 24),
@@ -215,7 +216,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
       children: [
         Text('Confirm the phrase', style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 8),
-        const Text('Type the 24 words in order. This proves the backup is readable.'),
+        const Text('Type the words back in order. This proves the backup is readable.'),
         const SizedBox(height: 20),
         TextField(
           controller: _confirmCtrl,

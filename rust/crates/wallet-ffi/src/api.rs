@@ -312,7 +312,14 @@ pub fn sign_reduced_transaction(
 pub fn generate_mnemonic(strength: u32) -> Result<String, String> {
     use ergo_lib::wallet::mnemonic_generator::{Language, MnemonicGenerator};
 
-    let strength = if strength >= 192 { 256 } else { 128 };
+    // 160-bit (15 words) is the Ergo ecosystem standard; 128/256 cover the
+    // common BIP-39 alternatives. Anything else snaps to the nearest of the
+    // three rather than failing.
+    let strength = match strength {
+        128 => 128,
+        160 => 160,
+        _ => 256,
+    };
     let byte_len = (strength / 8) as usize;
     let mut entropy = vec![0u8; byte_len];
     rand::rngs::OsRng.fill_bytes(&mut entropy);
@@ -2598,6 +2605,15 @@ mod tests {
     use super::*;
 
     const APPKIT: &str = "slow silly start wash bundle suffer bulb ancient height spin express remind today effort helmet";
+
+    #[test]
+    fn generate_mnemonic_supports_the_15_word_ergo_standard() {
+        let phrase = generate_mnemonic(160).expect("160-bit generation must work");
+        let n = phrase.split_whitespace().count();
+        assert_eq!(n, 15, "160-bit entropy must yield 15 words, got {n}");
+        wallet_core::bip39::validate_phrase(&phrase)
+            .expect("generated 15-word phrase must pass validation");
+    }
 
     #[test]
     fn create_restore_lock() {

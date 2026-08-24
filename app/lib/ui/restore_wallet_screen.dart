@@ -48,8 +48,8 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
       _snack('Enter a recovery phrase');
       return;
     }
-    if (words.length != 12 && words.length != 24) {
-      _snack('Recovery phrase must be 12 or 24 words');
+    if (!isValidMnemonicWordCount(words.length)) {
+      _snack('Recovery phrase must be 12, 15, 18, 21, or 24 words');
       return;
     }
     setState(() => _step = 1);
@@ -116,7 +116,8 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
         ),
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
+        padding: EdgeInsets.fromLTRB(
+                20, 8, 20, 32 + MediaQuery.paddingOf(context).bottom),
         children: [
           StepDots(total: 2, index: _step),
           const SizedBox(height: 24),
@@ -139,13 +140,14 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
       children: [
         Text('Recovery phrase', style: Theme.of(context).textTheme.headlineSmall),
         const SizedBox(height: 8),
-        const Text('12 or 24 words, in order. Optional BIP-39 passphrase if you used one.'),
+        const Text(
+            '12, 15, or 24 words, in order — 15 is the Ergo standard. Optional BIP-39 passphrase if you used one.'),
         const SizedBox(height: 20),
         TextField(
           controller: _phraseCtrl,
           decoration: const InputDecoration(
             labelText: 'Recovery phrase',
-            hintText: '12 or 24 words',
+            hintText: '12, 15, or 24 words',
           ),
           minLines: 4,
           maxLines: 6,
