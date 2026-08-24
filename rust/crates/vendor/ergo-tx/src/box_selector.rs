@@ -94,7 +94,7 @@ pub fn select_erg_boxes(
         }
         let erg = utxos[idx].value.parse::<u64>().unwrap_or(0);
         selected.push(utxos[idx].clone());
-        total_erg += erg;
+        total_erg = total_erg.saturating_add(erg);
     }
 
     if total_erg < required_erg {
@@ -150,8 +150,8 @@ pub fn select_token_boxes(
             break;
         }
         selected_indices.push(idx);
-        total_tokens += tok_amt;
-        total_erg += utxos[idx].value.parse::<u64>().unwrap_or(0);
+        total_tokens = total_tokens.saturating_add(tok_amt);
+        total_erg = total_erg.saturating_add(utxos[idx].value.parse::<u64>().unwrap_or(0));
     }
 
     if total_tokens < required_tokens {
@@ -321,7 +321,8 @@ pub fn collect_multi_change_tokens(
     for utxo in selected {
         for asset in &utxo.assets {
             let amount = asset.amount.parse::<u64>().unwrap_or(0);
-            *token_totals.entry(asset.token_id.clone()).or_insert(0) += amount;
+            let entry = token_totals.entry(asset.token_id.clone()).or_insert(0);
+            *entry = entry.saturating_add(amount);
         }
     }
 
@@ -356,7 +357,8 @@ pub fn collect_change_tokens(
     for utxo in selected {
         for asset in &utxo.assets {
             let amount = asset.amount.parse::<u64>().unwrap_or(0);
-            *token_totals.entry(asset.token_id.clone()).or_insert(0) += amount;
+            let entry = token_totals.entry(asset.token_id.clone()).or_insert(0);
+            *entry = entry.saturating_add(amount);
         }
     }
 

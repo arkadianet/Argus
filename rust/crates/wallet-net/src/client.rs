@@ -344,6 +344,12 @@ impl ErgoNodeClient {
             all.extend(page);
             if all.len() >= UNSPENT_MAX_BOXES {
                 all.truncate(UNSPENT_MAX_BOXES);
+                tracing::warn!(
+                    "Unspent box listing for {} hit the {}-box cap; \
+                     balances and coin selection exclude older boxes",
+                    address,
+                    UNSPENT_MAX_BOXES
+                );
                 break;
             }
             if n < UNSPENT_PAGE_SIZE as usize {
@@ -472,13 +478,16 @@ impl ErgoNodeClient {
     ) -> Result<(u64, Vec<(String, u64)>), String> {
         use std::collections::HashMap;
         let boxes = self.all_unspent_boxes(address).await?;
-        let erg_total: u64 = boxes.iter().map(|b| *b.value.as_u64()).sum();
+        let erg_total: u64 = boxes
+            .iter()
+            .fold(0u64, |acc, b| acc.saturating_add(*b.value.as_u64()));
         let mut tokens: HashMap<String, u64> = HashMap::new();
         for b in &boxes {
             if let Some(held) = b.tokens.as_ref() {
                 for t in held.iter() {
                     let id: String = t.token_id.clone().into();
-                    *tokens.entry(id).or_insert(0) += *t.amount.as_u64();
+                    let entry = tokens.entry(id).or_insert(0);
+                    *entry = entry.saturating_add(*t.amount.as_u64());
                 }
             }
         }

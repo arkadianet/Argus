@@ -107,16 +107,25 @@ fn apply_custom_fee(
         )).to_json_string());
     }
     tx.outputs[fee_idx].value = custom_fee.to_string();
-    if new_change == 0 {
+    // The change box is the sole carrier of leftover tokens — never erase it.
+    let carries_tokens = !tx.outputs[change_idx].assets.is_empty();
+    if new_change == 0 && carries_tokens {
+        return Err(ArgusError::TxBuildFailed(
+            "custom fee would remove the change box holding tokens; lower the fee".into(),
+        ).to_json_string());
+    }
+    let mut final_fee = custom_fee;
+    if new_change == 0 || (!carries_tokens && new_change < MIN_BOX_VALUE_NANO) {
+        // Dust change folds into the miner fee rather than failing the send.
+        final_fee = i64::checked_add(custom_fee, new_change).ok_or_else(|| {
+            ArgusError::TxBuildFailed("custom fee out of range".into()).to_json_string()
+        })?;
+        tx.outputs[fee_idx].value = final_fee.to_string();
         tx.outputs.remove(change_idx);
-    } else if new_change < MIN_BOX_VALUE_NANO {
-        return Err(ArgusError::TxBuildFailed(format!(
-            "change {new_change} below min box value {MIN_BOX_VALUE_NANO}"
-        )).to_json_string());
     } else {
         tx.outputs[change_idx].value = new_change.to_string();
     }
-    Ok(custom_fee)
+    Ok(final_fee)
 }
 
 fn register_handle(handle: WalletHandle) -> u64 {
@@ -896,7 +905,12 @@ async fn prepare(
     }
 
     let fee_for_required = fee_nano.unwrap_or(TX_FEE_NANO);
-    let required = (amount_nano_erg + fee_for_required + MIN_BOX_VALUE_NANO) as u64;
+    let required = i64::checked_add(amount_nano_erg, fee_for_required)
+        .and_then(|v| i64::checked_add(v, MIN_BOX_VALUE_NANO))
+        .filter(|v| *v > 0)
+        .ok_or_else(|| {
+            ArgusError::TxBuildFailed("send amount out of range".into()).to_json_string()
+        })? as u64;
     let token_ref = send_token.as_ref().map(|(id, amt)| (id.as_str(), *amt));
     let selected = select_for_send(&eip12, required, token_ref).map_err(|e| {
         ArgusError::TxBuildFailed(e.to_string()).to_json_string()
@@ -924,10 +938,8 @@ async fn prepare(
 
     let mut built = built;
     if let Some(custom_fee) = fee_nano {
-        if let Err(e) = apply_custom_fee(&mut built.unsigned_tx, &change_tree, built.summary.miner_fee, custom_fee) {
-            return Err(e);
-        }
-        built.summary.miner_fee = custom_fee;
+        let applied_fee = apply_custom_fee(&mut built.unsigned_tx, &change_tree, built.summary.miner_fee, custom_fee)?;
+        built.summary.miner_fee = applied_fee;
         built.summary.change_erg = built.unsigned_tx.outputs.iter()
             .find(|o| o.ergo_tree == change_tree)
             .map(|o| o.value.parse::<i64>().unwrap_or(0))
@@ -1357,7 +1369,10 @@ pub async fn prepare_send_multi(
             ))
             .to_json_string());
         }
-        total_send_erg += amount;
+        total_send_erg = total_send_erg.checked_add(amount).ok_or_else(|| {
+            ArgusError::TxBuildFailed("recipient total amount out of range".into())
+                .to_json_string()
+        })?;
         parsed.push(ParsedRecipient {
             address: addr.to_string(),
             amount_nano_erg: amount,
@@ -1404,7 +1419,8 @@ pub async fn prepare_send_multi(
     let mut needed_tokens: HashMap<String, u64> = HashMap::new();
     for rcpt in &parsed {
         if let Some((id, amt)) = &rcpt.token {
-            *needed_tokens.entry(id.clone()).or_insert(0) += *amt;
+            let entry = needed_tokens.entry(id.clone()).or_insert(0);
+            *entry = entry.saturating_add(*amt);
         }
     }
 
@@ -1413,7 +1429,13 @@ pub async fn prepare_send_multi(
 
     // Use UTXO selection: pick boxes covering total_send_erg + fee + min change,
     // and which collectively hold the needed tokens.
-    let required = (total_send_erg + fee_for_required + MIN_BOX_VALUE_NANO) as u64;
+    let required = i64::checked_add(total_send_erg, fee_for_required)
+        .and_then(|v| i64::checked_add(v, MIN_BOX_VALUE_NANO))
+        .filter(|v| *v > 0)
+        .ok_or_else(|| {
+            ArgusError::TxBuildFailed("recipient total amount out of range".into())
+                .to_json_string()
+        })? as u64;
     let selected = select_for_multi_send(&eip12, required, &needed_tokens)
         .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
 
