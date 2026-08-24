@@ -21,14 +21,46 @@ class TransactionDetailScreen extends StatelessWidget {
     final nano = (tx['value_nano_erg'] as num?)?.toInt();
     final rawTokens = tx['token_ids'];
     final tokens = rawTokens is List ? rawTokens.map((e) => e.toString()).toList() : const <String>[];
+    final received = (tx['tokens_received'] as List?)
+            ?.whereType<Map>()
+            .map((m) => (
+                  id: m['token_id']?.toString() ?? '',
+                  amount: BigInt.from((m['amount'] as num?)?.toInt() ?? 0),
+                ))
+            .toList() ??
+        const <({String id, BigInt amount})>[];
     final confirmed = height != null && height > 0;
+    final outgoing = nano != null && nano < 0;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Transaction')),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
         children: [
-          Text(formatErg(nano), style: Theme.of(context).textTheme.headlineSmall),
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: (outgoing ? rust : moss).withValues(alpha: 0.14),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  outgoing ? Icons.arrow_upward : Icons.arrow_downward,
+                  size: 20,
+                  color: outgoing ? rust : moss,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  '${outgoing ? 'Sent' : 'Received'} ${formatErg(nano?.abs())}',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 8),
           Text(
             confirmed ? 'Confirmed ${formatHeight(height)}' : 'Not yet in a block',
@@ -43,7 +75,35 @@ class TransactionDetailScreen extends StatelessWidget {
           const SizedBox(height: 8),
           SelectableText(txId, style: monoStyle(context, size: 12)),
           const SizedBox(height: 16),
-          if (tokens.isNotEmpty) ...[
+          if (received.isNotEmpty) ...[
+            const SectionLabel('Tokens received'),
+            const SizedBox(height: 8),
+            for (final t in received)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: FutureBuilder<TokenBalance>(
+                  future: walletService.tokenMeta(t.id, 0),
+                  builder: (context, snap) {
+                    final sym = snap.data?.name ?? shorten(t.id, head: 10, tail: 6);
+                    final decimals = snap.data?.decimals ?? 0;
+                    return Text(
+                      '${formatTokenAmount(t.amount <= BigInt.from(0x7FFFFFFFFFFFFFFF) ? t.amount.toInt() : 0, decimals)} $sym'
+                      '${t.amount > BigInt.from(0x7FFFFFFFFFFFFFFF) ? ' (large amount)' : ''}',
+                      style: monoStyle(context, size: 12),
+                    );
+                  },
+                ),
+              ),
+            if (tokens.length > received.length)
+              Padding(
+                padding: const EdgeInsets.only(top: 2, bottom: 6),
+                child: Text(
+                  '${tokens.length - received.length} further token id(s) involved — see explorer.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            const SizedBox(height: 8),
+          ] else if (tokens.isNotEmpty) ...[
             const SectionLabel('Tokens'),
             const SizedBox(height: 8),
             ...tokens.map((id) => Padding(
