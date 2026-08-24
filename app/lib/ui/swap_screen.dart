@@ -8,6 +8,7 @@ import '../format.dart';
 import '../services/amm_service.dart';
 import '../services/wallet_service.dart';
 import 'confirm_transaction_sheet.dart';
+import 'offline_banner.dart';
 
 /// One quote line. `formatTokenAmount` supplies the number; the symbol is
 /// appended once here.
@@ -239,7 +240,12 @@ class _SwapScreenState extends State<SwapScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Swap')),
-      body: _buildBody(context),
+      body: Column(
+        children: [
+          const OfflineBanner(),
+          Expanded(child: _buildBody(context)),
+        ],
+      ),
     );
   }
 

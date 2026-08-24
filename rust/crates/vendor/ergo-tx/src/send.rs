@@ -38,6 +38,12 @@ pub enum SendError {
     )]
     ChangeBelowMin { change: i64, min: i64 },
 
+    #[error("Input ERG total exceeds the representable range")]
+    ErgTotalOverflow,
+
+    #[error("Total held amount of token {token_id} exceeds the representable range")]
+    TokenTotalOverflow { token_id: String },
+
     #[error("Citadel fee config error: {0}")]
     DevFee(String),
 }
@@ -116,13 +122,19 @@ pub fn build_send_tx_with_fee(
     let total_erg: i64 = user_inputs
         .iter()
         .map(|b| b.value.parse::<i64>().unwrap_or(0))
-        .sum();
+        .try_fold(0i64, i64::checked_add)
+        .ok_or(SendError::ErgTotalOverflow)?;
 
     let mut token_totals: HashMap<String, u64> = HashMap::new();
     for input in user_inputs {
         for asset in &input.assets {
             let amount = asset.amount.parse::<u64>().unwrap_or(0);
-            *token_totals.entry(asset.token_id.clone()).or_insert(0) += amount;
+            let entry = token_totals.entry(asset.token_id.clone()).or_insert(0);
+            *entry = entry.checked_add(amount).ok_or_else(|| {
+                SendError::TokenTotalOverflow {
+                    token_id: asset.token_id.clone(),
+                }
+            })?;
         }
     }
 
@@ -160,22 +172,25 @@ pub fn build_send_tx_with_fee(
     }
 
     let has_change_tokens = !token_totals.is_empty();
-    let need_change = remainder > 0 || has_change_tokens;
+    // Dust change (0 < remainder < min box value) folds into the miner fee
+    // instead of failing the send — a slightly higher fee beats a stranded
+    // transfer. Token-bearing change still requires a full min-value box.
+    let dust_to_fee = if !has_change_tokens && remainder > 0 && remainder < MIN_BOX_VALUE {
+        remainder
+    } else {
+        0
+    };
+    let change_remainder = remainder - dust_to_fee;
+    let need_change = change_remainder > 0 || has_change_tokens;
 
-    if need_change {
-        if has_change_tokens && remainder < MIN_BOX_VALUE {
-            return Err(SendError::InsufficientErg {
-                have: total_erg,
-                need: send_erg + TX_FEE + citadel_fee + MIN_BOX_VALUE,
-            });
-        }
-        if remainder > 0 && remainder < MIN_BOX_VALUE {
-            return Err(SendError::ChangeBelowMin {
-                change: remainder,
-                min: MIN_BOX_VALUE,
-            });
-        }
+    if has_change_tokens && remainder < MIN_BOX_VALUE {
+        return Err(SendError::InsufficientErg {
+            have: total_erg,
+            need: send_erg + TX_FEE + citadel_fee + MIN_BOX_VALUE,
+        });
     }
+
+    let effective_fee = TX_FEE + dust_to_fee;
 
     let recipient_assets: Vec<Eip12Asset> = match send_token {
         Some((token_id, amount)) => vec![Eip12Asset::new(token_id, amount as i64)],
@@ -192,8 +207,8 @@ pub fn build_send_tx_with_fee(
     });
 
     let change_erg = if need_change {
-        let change_value = if remainder > 0 {
-            remainder
+        let change_value = if change_remainder > 0 {
+            change_remainder
         } else {
             MIN_BOX_VALUE
         };
@@ -215,7 +230,7 @@ pub fn build_send_tx_with_fee(
 
     append_dev_fee_output(&mut outputs, fee_cfg, current_height)
         .map_err(|e| SendError::DevFee(e.to_string()))?;
-    outputs.push(Eip12Output::fee(TX_FEE, current_height));
+    outputs.push(Eip12Output::fee(effective_fee, current_height));
 
     let unsigned_tx = Eip12UnsignedTx {
         inputs: user_inputs.to_vec(),
@@ -230,7 +245,7 @@ pub fn build_send_tx_with_fee(
             token_id: send_token.map(|(id, _)| id.to_string()),
             token_amount: send_token.map(|(_, amt)| amt),
             change_erg,
-            miner_fee: TX_FEE,
+            miner_fee: effective_fee,
             citadel_fee_nano: citadel_fee,
             input_count: user_inputs.len(),
         },
@@ -416,6 +431,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.summary.change_erg, 0);
+        assert_eq!(result.unsigned_tx.outputs.len(), 2); // recipient + fee only
+    }
+
+    #[test]
+    fn dust_change_folds_into_miner_fee() {
+        // Leftover 900_000 nanoERG is below MIN_BOX_VALUE (1_000_000): instead
+        // of erroring, it joins the miner fee and no change box is emitted.
+        let send = 9_998_000_000i64;
+        let inputs = vec![make_box("10000000000", vec![])];
+        let result = build_send_tx(
+            &inputs,
+            RECIPIENT_TREE,
+            USER_TREE,
+            send,
+            None,
+            50000,
+        )
+        .unwrap();
+        assert_eq!(result.summary.change_erg, 0);
+        assert_eq!(result.summary.miner_fee, TX_FEE + 900_000);
         assert_eq!(result.unsigned_tx.outputs.len(), 2); // recipient + fee only
     }
 }

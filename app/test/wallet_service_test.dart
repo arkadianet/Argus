@@ -121,6 +121,26 @@ void main() {
       expect(parseErgToNano('.5'), 500000000);
     });
 
+    test('accepts comma as a locale decimal separator', () {
+      expect(parseErgToNano('1,5'), 1500000000);
+      expect(parseErgToNano('1234,5'), 1234500000000);
+      // Exactly-3-digit fractions like "0,001" are indistinguishable from
+      // thousands grouping and are rejected by design (see next test).
+    });
+
+    test('rejects ambiguous or grouped comma forms', () {
+      // "1,234" means 1234 in en-US but 1.234 in much of Europe — refuse
+      // rather than silently mis-scaling a transfer.
+      expect(parseErgToNano('1,234'), isNull);
+      expect(parseErgToNano('12,345,678'), isNull);
+      expect(parseErgToNano('0,001'), isNull);
+      expect(parseErgToNano('1,23.4'), isNull);
+    });
+
+    test('accepts unambiguous thousands groups before a decimal point', () {
+      expect(parseErgToNano('1,234.56'), 1234560000000);
+    });
+
     test('rejects invalid input and extra precision', () {
       expect(parseErgToNano(''), isNull);
       expect(parseErgToNano('abc'), isNull);
@@ -194,8 +214,19 @@ void main() {
   });
 
   group('normalizeNodeUrl', () {
-    test('accepts a bare ip:port as http', () {
-      expect(normalizeNodeUrl('104.131.9.252:9053'), 'http://104.131.9.252:9053');
+    test('upgrades a bare ip:port to https', () {
+      expect(normalizeNodeUrl('104.131.9.252:9053'), 'https://104.131.9.252:9053');
+    });
+
+    test('keeps explicit http only for LAN hosts', () {
+      expect(normalizeNodeUrl('http://192.168.1.10:9053'), 'http://192.168.1.10:9053');
+      expect(normalizeNodeUrl('http://localhost:9053'), 'http://localhost:9053');
+      expect(normalizeNodeUrl('http://10.0.0.5:9053'), 'http://10.0.0.5:9053');
+    });
+
+    test('rejects http for public hosts (dart:io bypasses platform TLS policy)', () {
+      expect(normalizeNodeUrl('http://node.example.com'), isNull);
+      expect(normalizeNodeUrl('http://104.131.9.252:9053'), isNull);
     });
 
     test('keeps https hosts', () {

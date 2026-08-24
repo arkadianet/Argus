@@ -9,6 +9,7 @@ import '../services/sigmausd_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
+import 'offline_banner.dart';
 
 /// AgeUSD (SigmaUSD) hub. Mint and redeem SigUSD / SigRSV against the bank at
 /// the live oracle rate. Every action builds through the shared confirm sheet
@@ -262,82 +263,90 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
           IconButton(onPressed: _load, icon: const Icon(Icons.refresh)),
         ],
       ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(28),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(_error!, textAlign: TextAlign.center),
-                        const SizedBox(height: 12),
-                        TextButton(onPressed: _load, child: const Text('Retry')),
-                      ],
-                    ),
-                  ),
-                )
-              : ListView(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
-                  children: [
-                    if (st != null) ...[
-                      _protocolHeader(st),
-                      const SizedBox(height: 20),
-                      _balances(),
-                      const SizedBox(height: 20),
-                      const SectionLabel('Action'),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
+      body: Column(
+        children: [
+          const OfflineBanner(),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : _error != null
+                    ? Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(28),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(_error!, textAlign: TextAlign.center),
+                              const SizedBox(height: 12),
+                              TextButton(
+                                  onPressed: _load, child: const Text('Retry')),
+                            ],
+                          ),
+                        ),
+                      )
+                    : ListView(
+                        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
                         children: [
-                          for (final a in SigmaUsdAction.values)
-                            ChoiceChip(
-                              label: Text('${a.verb} ${a.tokenName}'),
-                              selected: a == _action,
-                              onSelected: st.can(a)
-                                  ? (_) => _switchAction(a)
-                                  : null,
+                          if (st != null) ...[
+                            _protocolHeader(st),
+                            const SizedBox(height: 20),
+                            _balances(),
+                            const SizedBox(height: 20),
+                            const SectionLabel('Action'),
+                            const SizedBox(height: 10),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                for (final a in SigmaUsdAction.values)
+                                  ChoiceChip(
+                                    label: Text('${a.verb} ${a.tokenName}'),
+                                    selected: a == _action,
+                                    onSelected: st.can(a)
+                                        ? (_) => _switchAction(a)
+                                        : null,
+                                  ),
+                              ],
                             ),
+                            const SizedBox(height: 16),
+                            TextField(
+                              controller: _amountCtrl,
+                              decoration: InputDecoration(
+                                labelText:
+                                    'Amount (${_action.tokenName})',
+                                suffixIcon: TextButton(
+                                  onPressed: _applyMax,
+                                  child: const Text('MAX'),
+                                ),
+                                helperText: _helperFor(st),
+                              ),
+                              keyboardType: const TextInputType.numberWithOptions(
+                                  decimal: true),
+                              onChanged: (_) => _schedulePreview(),
+                            ),
+                            const SizedBox(height: 12),
+                            _previewPanel(),
+                            const SizedBox(height: 24),
+                            FilledButton(
+                              onPressed: _busy || !st.can(_action)
+                                  ? null
+                                  : _review,
+                              child: _busy
+                                  ? const SizedBox(
+                                      width: 20,
+                                      height: 20,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  : Text('${_action.verb} '
+                                      '${_action.tokenName}'),
+                            ),
+                          ],
                         ],
                       ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: _amountCtrl,
-                        decoration: InputDecoration(
-                          labelText:
-                              'Amount (${_action.tokenName})',
-                          suffixIcon: TextButton(
-                            onPressed: _applyMax,
-                            child: const Text('MAX'),
-                          ),
-                          helperText: _helperFor(st),
-                        ),
-                        keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true),
-                        onChanged: (_) => _schedulePreview(),
-                      ),
-                      const SizedBox(height: 12),
-                      _previewPanel(),
-                      const SizedBox(height: 24),
-                      FilledButton(
-                        onPressed: _busy || !st.can(_action)
-                            ? null
-                            : _review,
-                        child: _busy
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(
-                                    strokeWidth: 2),
-                              )
-                            : Text('${_action.verb} '
-                                '${_action.tokenName}'),
-                      ),
-                    ],
-                  ],
-                ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -462,7 +471,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     if (_previewError != null) {
       return Text(
         _previewError!,
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rust),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rustFor(context)),
       );
     }
     final p = _preview;
@@ -475,7 +484,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     if (!p.canExecute) {
       return Text(
         p.error ?? 'This action is not available right now.',
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rust),
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rustFor(context)),
       );
     }
     final isMint = !_action.isRedeem;

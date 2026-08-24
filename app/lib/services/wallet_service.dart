@@ -408,10 +408,34 @@ BigInt _requireBigInt(Map<String, dynamic> json, String key) {
 /// Parse decimal ERG text into nanoERG without using [double].
 int? parseErgToNano(String raw) => parseDecimalToBase(raw, 9);
 
+/// Normalize `,` decimals; reject grouping separators instead of guessing.
+///
+/// "1,5" is a locale decimal → "1.5". "1,234" is ambiguous across locales
+/// (1234 vs 1.234) and mixed forms like "1,23.4" are malformed → both return
+/// null so the caller shows an input error rather than silently mis-scaling.
+String? _normalizeDecimalSeparators(String trimmed) {
+  if (!trimmed.contains(',')) return trimmed;
+  final thousandsWithFraction = RegExp(r'^\d{1,3}(,\d{3})+\.\d+$');
+  if (trimmed.contains('.')) {
+    // Dot present: commas are only acceptable as strict thousands groups.
+    return thousandsWithFraction.hasMatch(trimmed)
+        ? trimmed.replaceAll(',', '')
+        : null;
+  }
+  final thousandsOnly = RegExp(r'^\d{1,3}(,\d{3})+$');
+  if (thousandsOnly.hasMatch(trimmed)) return null;
+  final decimalComma = RegExp(r'^\d+,\d+$');
+  return decimalComma.hasMatch(trimmed) ? trimmed.replaceFirst(',', '.') : null;
+}
+
 /// Parse a decimal token amount into the on-chain integer.
+///
+/// Accepts both `.` and `,` as the decimal separator; see
+/// [_normalizeDecimalSeparators] for grouping-separator handling.
 int? parseDecimalToBase(String raw, int decimals) {
   if (decimals < 0 || decimals > 18) return null;
-  final text = raw.trim();
+  final text = _normalizeDecimalSeparators(raw.trim());
+  if (text == null || text.isEmpty) return null;
   if (text.isEmpty) return null;
   final parts = text.split('.');
   if (parts.length > 2) return null;
@@ -437,6 +461,10 @@ const minerFeeNano = 1100000;
 const minBoxNano = 1000000;
 const maxInputsPerTx = 200;
 const utxoFragmentationThreshold = 80;
+
+/// Upper bound on UTXOs gathered per listing call across all addresses.
+/// Beyond this the wallet's view of funds is partial by design.
+const maxUnspentBoxesTotal = 2000;
 
 String? validatePin(String pin) {
   final n = pin.runes.length;
@@ -618,26 +646,6 @@ class WalletService {
         }
       }
     }
-  }
-
-  /// Switch the active wallet to [targetId]. If the target is locked, it is
-  /// restored from secure storage first.
-  Future<void> switchWallet(String targetId) async {
-    if (_currentWalletId == targetId && _handles.containsKey(targetId)) return;
-
-    // Lock current wallet
-    if (_handleId != null) await lock();
-
-    // Restore target
-    final json = await SecureStorageService.loadEncryptedSeed(walletId: targetId);
-    if (json == null) {
-      throw ArgusException(
-        code: 'NO_WALLET',
-        message: 'Wallet data not found for $targetId',
-      );
-    }
-    final wrapKey = await SecureStorageService.loadWrapKey(walletId: targetId);
-    await restoreWallet(json, wrapKey: wrapKey, walletId: targetId);
   }
 
   /// Returns metadata for all stored wallets.
@@ -934,6 +942,10 @@ class WalletService {
     return Future.wait(jobs);
   }
 
+  /// True when the last [loadHistory] succeeded but at least one address
+  /// failed to load, meaning the returned activity may be incomplete.
+  bool lastHistoryPartial = false;
+
   Future<List<Map<String, dynamic>>> loadHistory(
     List<String> addresses, {
     int limit = 20,
@@ -967,6 +979,7 @@ class WalletService {
         message: 'Could not load activity',
       );
     }
+    lastHistoryPartial = failed > 0;
     final all = <Map<String, dynamic>>[];
     final seen = <String>{};
     for (final txs in results) {
@@ -983,7 +996,16 @@ class WalletService {
       final ta = (a['timestamp'] as num?)?.toInt() ?? 0;
       return tb.compareTo(ta);
     });
-    return all;
+    // Unconfirmed transactions ride ahead of confirmed history. A mempool
+    // failure must never break the activity list, so it degrades to confirmed.
+    var pending = const <dynamic>[];
+    try {
+      final raw = await RustLib.instance.api
+          .crateApiGetPendingTransactions(addresses: addresses);
+      pending = jsonDecode(raw) as List;
+    } catch (_) {}
+
+    return mergePending(pending, all);
   }
 
   Future<TokenBalance> tokenMeta(String id, int amount) async {
@@ -1027,6 +1049,9 @@ class WalletService {
 
   /// Fetch all unspent boxes (UTXOs) for the given addresses by calling the
   /// node's REST API directly. Returns parsed [InputBoxInput] objects.
+  ///
+  /// Caps at [maxUnspentBoxesTotal] across all addresses; a node error is
+  /// raised, never silently treated as an empty wallet.
   Future<List<InputBoxInput>> listUnspentBoxes(
     List<String> addresses, {
     required String? nodeUrl,
@@ -1042,9 +1067,9 @@ class WalletService {
       final seen = <String>{};
       for (final addr in addresses) {
         if (addr.isEmpty) continue;
-        if (all.length >= 500) break;
+        if (all.length >= maxUnspentBoxesTotal) break;
         var offset = 0;
-        while (all.length < 500) {
+        while (all.length < maxUnspentBoxesTotal) {
           final endpoint = '$normalizedUrl/blockchain/box/unspent/byAddress'
               '?offset=$offset&limit=$limit';
           final response = await client
@@ -1052,7 +1077,10 @@ class WalletService {
                   headers: {'Content-Type': 'application/json'},
                   body: jsonEncode(addr))
               .timeout(const Duration(seconds: 15));
-          if (response.statusCode != 200) break;
+          if (response.statusCode != 200) {
+            throw Exception(
+                'Node returned ${response.statusCode} for unspent boxes');
+          }
           final body = response.body;
           if (body.isEmpty) break;
           final value = jsonDecode(body);
@@ -1069,13 +1097,13 @@ class WalletService {
               );
               if (seen.add(b.boxId)) {
                 all.add(b);
-                if (all.length >= 500) break;
+                if (all.length >= maxUnspentBoxesTotal) break;
               }
             } catch (_) {
               // skip malformed entries
             }
           }
-          if (items.length < limit || all.length >= 500) break;
+          if (items.length < limit || all.length >= maxUnspentBoxesTotal) break;
           offset += limit;
         }
       }
@@ -1145,8 +1173,11 @@ class WalletService {
         final txId = await sendErg(preparationId: preview.preparationId);
         txIds.add(txId);
         if (ergOnly.length <= maxInputsPerTx) break;
-      } catch (_) {
-        // If one batch fails (e.g. node reject), skip remaining.
+      } catch (e) {
+        // Progress already broadcast is preserved; a total failure is a real
+        // error the caller must see rather than an empty success.
+        if (txIds.isEmpty) rethrow;
+        debugPrint('argus: consolidation stopped after ${txIds.length} batch(es): $e');
         break;
       }
     }
@@ -1274,3 +1305,31 @@ class WalletService {
 }
 
 final walletService = WalletService();
+
+/// Pending transactions ahead of confirmed history, deduplicated by id.
+///
+/// The mempool is queried once per wallet address, so a transaction touching
+/// two of our addresses — spending from one, change to another — arrives
+/// twice. A transaction that has since confirmed wins over its pending copy.
+List<Map<String, dynamic>> mergePending(
+  List<dynamic> pending,
+  List<dynamic> confirmed,
+) {
+  String idOf(Map m) => m['tx_id']?.toString() ?? '';
+  final confirmedIds = <String>{
+    for (final c in confirmed) idOf((c as Map).cast<String, dynamic>()),
+  };
+  final seen = <String>{};
+  final out = <Map<String, dynamic>>[];
+
+  for (final p in pending) {
+    final m = (p as Map).cast<String, dynamic>();
+    final id = idOf(m);
+    if (id.isEmpty || confirmedIds.contains(id) || !seen.add(id)) continue;
+    out.add(m);
+  }
+  for (final c in confirmed) {
+    out.add((c as Map).cast<String, dynamic>());
+  }
+  return out;
+}

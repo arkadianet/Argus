@@ -344,6 +344,12 @@ impl ErgoNodeClient {
             all.extend(page);
             if all.len() >= UNSPENT_MAX_BOXES {
                 all.truncate(UNSPENT_MAX_BOXES);
+                tracing::warn!(
+                    "Unspent box listing for {} hit the {}-box cap; \
+                     balances and coin selection exclude older boxes",
+                    address,
+                    UNSPENT_MAX_BOXES
+                );
                 break;
             }
             if n < UNSPENT_PAGE_SIZE as usize {
@@ -376,6 +382,91 @@ impl ErgoNodeClient {
         Ok(self.get_unspent(address).await?.1)
     }
 
+    /// Unconfirmed transactions touching `ergo_tree`. Mempool is in-memory on
+    /// the node, so this needs no extra index and works against any node.
+    pub async fn mempool_txs_for(&self, ergo_tree: &str) -> Result<Vec<serde_json::Value>, String> {
+        const MEMPOOL_LIMIT: usize = 100;
+        let endpoint = format!(
+            "/transactions/unconfirmed/byErgoTree?offset=0&limit={}",
+            MEMPOOL_LIMIT
+        );
+        let body =
+            serde_json::to_string(ergo_tree).map_err(|e| format!("JSON serialize: {}", e))?;
+        let response = self
+            .inner
+            .send_post_req(&endpoint, body)
+            .await
+            .map_err(|e| format!("Node request: {}", e))?;
+        let text = response.text().await.map_err(|e| format!("Read: {}", e))?;
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("Parse: {}", e))?;
+        let items = match value {
+            serde_json::Value::Array(arr) => arr,
+            serde_json::Value::Object(ref map) => map
+                .get("items")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        if items.len() >= MEMPOOL_LIMIT {
+            tracing::warn!("Mempool page limit hit; some unconfirmed transactions not seen");
+        }
+        Ok(items)
+    }
+
+    /// Mempool-aware UTXOs: confirmed, minus boxes already spent in mempool,
+    /// plus this address's unconfirmed outputs. Enables 0-conf chaining.
+    ///
+    /// Returns the same tuple as [`get_unspent`], so it is a drop-in for
+    /// callers. Any mempool failure degrades to exactly the confirmed set.
+    pub async fn get_effective_unspent(
+        &self,
+        address: &str,
+    ) -> Result<(Vec<ErgoBox>, Vec<ergo_tx::Eip12InputBox>), String> {
+        let confirmed_boxes = self.get_unspent(address).await?;
+
+        let tree = match address_to_ergo_tree(address) {
+            Ok(t) => t,
+            Err(_) => return Ok(confirmed_boxes),
+        };
+        let txs = match self.mempool_txs_for(&tree).await {
+            Ok(t) if !t.is_empty() => t,
+            Ok(_) => return Ok(confirmed_boxes),
+            Err(e) => {
+                tracing::warn!("Mempool query failed, using confirmed UTXOs only: {}", e);
+                return Ok(confirmed_boxes);
+            }
+        };
+
+        let spent = crate::mempool::spent_box_ids(&txs);
+        let (confirmed, _) = confirmed_boxes;
+
+        // Confirmed boxes already spent by a mempool transaction are gone;
+        // their unconfirmed replacements arrive below.
+        let mut boxes: Vec<ErgoBox> = confirmed
+            .into_iter()
+            .filter(|b| !spent.contains(&b.box_id().to_string()))
+            .collect();
+
+        // Chained spends: an unconfirmed output may itself already be spent by
+        // a later mempool transaction, so filter the additions by the same set.
+        for b in crate::mempool::owned_outputs(&txs, &tree) {
+            if !spent.contains(&b.box_id().to_string()) {
+                boxes.push(b);
+            }
+        }
+
+        let eip12 = boxes
+            .iter()
+            .map(|b| ergo_tx::Eip12InputBox::from_ergo_box(b, b.transaction_id.to_string(), b.index))
+            .collect();
+        Ok((boxes, eip12))
+    }
+
     pub async fn address_has_transactions(&self, address: &str) -> Result<bool, String> {
         Ok(!self.get_transaction_history(address, 1, 0).await?.is_empty())
     }
@@ -387,13 +478,16 @@ impl ErgoNodeClient {
     ) -> Result<(u64, Vec<(String, u64)>), String> {
         use std::collections::HashMap;
         let boxes = self.all_unspent_boxes(address).await?;
-        let erg_total: u64 = boxes.iter().map(|b| *b.value.as_u64()).sum();
+        let erg_total: u64 = boxes
+            .iter()
+            .fold(0u64, |acc, b| acc.saturating_add(*b.value.as_u64()));
         let mut tokens: HashMap<String, u64> = HashMap::new();
         for b in &boxes {
             if let Some(held) = b.tokens.as_ref() {
                 for t in held.iter() {
                     let id: String = t.token_id.clone().into();
-                    *tokens.entry(id).or_insert(0) += *t.amount.as_u64();
+                    let entry = tokens.entry(id).or_insert(0);
+                    *entry = entry.saturating_add(*t.amount.as_u64());
                 }
             }
         }

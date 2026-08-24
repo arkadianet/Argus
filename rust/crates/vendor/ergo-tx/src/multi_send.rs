@@ -35,6 +35,12 @@ pub enum MultiSendError {
 
     #[error("Change {change} nanoERG is below minimum box value of {min} nanoERG")]
     ChangeBelowMin { change: i64, min: i64 },
+
+    #[error("Input ERG total exceeds the representable range")]
+    ErgTotalOverflow,
+
+    #[error("Total held amount of token {token_id} exceeds the representable range")]
+    TokenTotalOverflow { token_id: String },
 }
 
 #[derive(Debug, Clone)]
@@ -79,7 +85,14 @@ pub fn build_multi_send_tx_with_fee(
     }
 
     let has_sent_tokens = recipients.iter().any(|r| r.token.is_some());
-    let total_send_erg: i64 = recipients.iter().map(|r| r.amount_nano_erg).sum();
+    let total_send_erg: i64 = recipients
+        .iter()
+        .map(|r| r.amount_nano_erg)
+        .try_fold(0i64, i64::checked_add)
+        .ok_or(MultiSendError::InsufficientErg {
+            have: i64::MAX,
+            need: 0,
+        })?;
     if total_send_erg <= 0 && !has_sent_tokens {
         return Err(MultiSendError::EmptySend);
     }
@@ -97,21 +110,31 @@ pub fn build_multi_send_tx_with_fee(
     let total_erg: i64 = user_inputs
         .iter()
         .map(|b| b.value.parse::<i64>().unwrap_or(0))
-        .sum();
+        .try_fold(0i64, i64::checked_add)
+        .ok_or(MultiSendError::ErgTotalOverflow)?;
 
     // Aggregate input token balances.
     let mut input_tokens: HashMap<String, u64> = HashMap::new();
     for input in user_inputs {
         for asset in &input.assets {
-            *input_tokens.entry(asset.token_id.clone()).or_insert(0) +=
-                asset.amount.parse::<u64>().unwrap_or(0);
+            let entry = input_tokens.entry(asset.token_id.clone()).or_insert(0);
+            *entry = entry.checked_add(asset.amount.parse::<u64>().unwrap_or(0)).ok_or_else(|| {
+                MultiSendError::TokenTotalOverflow {
+                    token_id: asset.token_id.clone(),
+                }
+            })?;
         }
     }
 
-    if total_erg < total_send_erg + fee_nano {
+    let required_erg = i64::checked_add(total_send_erg, fee_nano)
+        .ok_or(MultiSendError::InsufficientErg {
+            have: total_erg,
+            need: i64::MAX,
+        })?;
+    if total_erg < required_erg {
         return Err(MultiSendError::InsufficientErg {
             have: total_erg,
-            need: total_send_erg + fee_nano,
+            need: required_erg,
         });
     }
 
@@ -128,22 +151,22 @@ pub fn build_multi_send_tx_with_fee(
     }
 
     let has_token_change = !input_tokens.is_empty();
-    let change_erg = total_erg - total_send_erg - fee_nano;
+    let raw_change = total_erg - total_send_erg - fee_nano;
+    // Dust change folds into the miner fee instead of failing the send.
+    let dust_to_fee = if !has_token_change && raw_change > 0 && raw_change < MIN_BOX_VALUE {
+        raw_change
+    } else {
+        0
+    };
+    let change_erg = raw_change - dust_to_fee;
+    let effective_fee = fee_nano + dust_to_fee;
     let need_change = change_erg > 0 || has_token_change;
 
-    if need_change {
-        if has_token_change && change_erg < MIN_BOX_VALUE {
-            return Err(MultiSendError::TokenChangeInsufficientErg {
-                have: change_erg,
-                min: MIN_BOX_VALUE,
-            });
-        }
-        if change_erg > 0 && change_erg < MIN_BOX_VALUE {
-            return Err(MultiSendError::ChangeBelowMin {
-                change: change_erg,
-                min: MIN_BOX_VALUE,
-            });
-        }
+    if need_change && has_token_change && change_erg < MIN_BOX_VALUE {
+        return Err(MultiSendError::TokenChangeInsufficientErg {
+            have: change_erg,
+            min: MIN_BOX_VALUE,
+        });
     }
 
     // Recipient outputs.
@@ -181,7 +204,7 @@ pub fn build_multi_send_tx_with_fee(
         ));
     }
 
-    outputs.push(Eip12Output::fee(fee_nano, current_height));
+    outputs.push(Eip12Output::fee(effective_fee, current_height));
 
     let unsigned_tx = Eip12UnsignedTx {
         inputs: user_inputs.to_vec(),
@@ -194,7 +217,7 @@ pub fn build_multi_send_tx_with_fee(
         summary: MultiSendSummary {
             recipient_erg: total_send_erg,
             change_erg,
-            miner_fee: fee_nano,
+            miner_fee: effective_fee,
             input_count: user_inputs.len(),
         },
     })

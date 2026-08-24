@@ -2,13 +2,25 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Encrypted local state for instant 0ms UI load and non-extraIndex contract tracking.
+/// Local cache for instant 0ms UI load and non-extraIndex contract tracking.
+///
+/// NOT encryption: `_obfuscate` only deters casual greps of prefs files. The
+/// key is derived from the wallet id, which is stored inside the payload
+/// itself, so anyone with file access (root, backup, malware) can read
+/// everything here — addresses, balances, full transaction history.
+///
+/// Platform notes: Android excludes this data from cloud backup and D2D
+/// transfer (see AndroidManifest + data_extraction_rules.xml). On iOS,
+/// NSUserDefaults IS included in iCloud/device backups — only obfuscated,
+/// never encrypted. This is acceptable solely because the payload is public
+/// chain data; never store secrets through this service. FLAG_SECURE guards
+/// the screen, not storage, and is irrelevant here.
 class WalletDatabaseService {
   static const _keyDbSnapshot = 'argus_local_wallet_db_v2';
   static const _keyTrackedLineages = 'argus_tracked_lineages_v2';
 
-  /// Encrypt plaintext with a wallet-specific key using a deterministic keystream.
-  static String _encrypt(String plaintext, String walletId) {
+  /// Obfuscate plaintext with a wallet-specific deterministic keystream.
+  static String _obfuscate(String plaintext, String walletId) {
     final textBytes = utf8.encode(plaintext);
     final keyBytes = utf8.encode(walletId);
     if (keyBytes.isEmpty) return base64Encode(textBytes);
@@ -21,8 +33,8 @@ class WalletDatabaseService {
     return base64Encode(out);
   }
 
-  /// Decrypt ciphertext with the expected wallet-specific key.
-  static String? _decrypt(String ciphertext, String walletId) {
+  /// De-obfuscate ciphertext with the expected wallet-specific keystream.
+  static String? _deobfuscate(String ciphertext, String walletId) {
     try {
       final encBytes = base64Decode(ciphertext);
       final keyBytes = utf8.encode(walletId);
@@ -49,7 +61,7 @@ class WalletDatabaseService {
     if (raw == null || raw.isEmpty) return null;
 
     try {
-      final decrypted = _decrypt(raw, expectedWalletId);
+      final decrypted = _deobfuscate(raw, expectedWalletId);
       if (decrypted == null) return null;
 
       final map = jsonDecode(decrypted) as Map<String, dynamic>;
@@ -88,8 +100,8 @@ class WalletDatabaseService {
       'last_sync_timestamp': DateTime.now().millisecondsSinceEpoch,
     };
 
-    final encrypted = _encrypt(jsonEncode(snapshot), walletId);
-    await prefs.setString(_keyDbSnapshot, encrypted);
+    final obfuscated = _obfuscate(jsonEncode(snapshot), walletId);
+    await prefs.setString(_keyDbSnapshot, obfuscated);
   }
 
   /// Record or update a tracked DeFi singleton contract lineage.

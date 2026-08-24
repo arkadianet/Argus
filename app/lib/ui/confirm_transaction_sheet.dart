@@ -60,7 +60,7 @@ class ConfirmTransactionSheet extends StatelessWidget {
                       style: Theme.of(context)
                           .textTheme
                           .bodySmall
-                          ?.copyWith(color: rust),
+                          ?.copyWith(color: rustFor(context)),
                     ),
                   ),
                 ],

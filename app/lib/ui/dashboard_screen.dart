@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -16,6 +17,7 @@ import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'assets_screen.dart';
 import 'create_wallet_screen.dart';
+import 'offline_banner.dart';
 import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
 import 'settings_screen.dart';
@@ -53,17 +55,45 @@ class _DashboardScreenState extends State<DashboardScreen>
   List<WalletInfo> _wallets = [];
   String? _walletId;
 
+  /// Poll for mempool changes (pending activity, balance, spendable UTXOs)
+  /// while the dashboard is open. Paused while backgrounded; a tick is
+  /// skipped if the previous refresh is still in flight.
+  Timer? _pollTimer;
+  bool _pollBackgrounded = false;
+  Future<void>? _refreshOp;
+
+  /// Single-flight refresh shared by polling, the unlock flow and pull to
+  /// refresh: callers during an in-flight refresh await the same operation
+  /// instead of starting a competing one.
+  Future<void> _sharedRefresh() {
+    final inFlight = _refreshOp;
+    if (inFlight != null) return inFlight;
+    final op = _refresh().whenComplete(() => _refreshOp = null);
+    _refreshOp = op;
+    return op;
+  }
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     walletService.unlocked.addListener(_syncLock);
     watchOnlyService.addListener(_onWatchOnlyChanged);
+    _pollTimer = Timer.periodic(
+      const Duration(seconds: 20),
+      (_) => _pollTick(),
+    );
     _init();
+  }
+
+  void _pollTick() {
+    if (!mounted || _pollBackgrounded || _refreshOp != null) return;
+    _sharedRefresh();
   }
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     walletService.unlocked.removeListener(_syncLock);
     watchOnlyService.removeListener(_onWatchOnlyChanged);
@@ -77,6 +107,9 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Pause mempool polling while backgrounded; resume on return.
+    _pollBackgrounded =
+        state == AppLifecycleState.paused || state == AppLifecycleState.hidden;
     if (state != AppLifecycleState.resumed) return;
     // Re-prompt biometrics when the session lock fired while backgrounded.
     // If the user returned within the grace window the wallet is still
@@ -262,7 +295,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
 
     // 3. Fast sync in background
-    await _refresh();
+    await _sharedRefresh();
   }
 
   String _bestSender(String receive) {
@@ -486,7 +519,31 @@ class _DashboardScreenState extends State<DashboardScreen>
             : 'Wallet found. Unlock to continue.';
       });
       if (wrapKeyAvailable) {
-        await walletService.switchWallet(walletId);
+        // Loading another wallet's wrap key must be user-authenticated. On
+        // Android the stored key has no biometric ACL of its own, so a silent
+        // load here would let anyone holding the device bypass the lock
+        // screen; iOS enforces this inside the Keychain read itself.
+        final wrapKey = await sessionLock.run(
+          () => SecureStorageService.authenticateBiometric(walletId: walletId),
+        );
+        if (!mounted) return;
+        if (wrapKey == null) {
+          setState(() {
+            _resetLocked();
+            _status = 'Authentication cancelled. Unlock with PIN.';
+          });
+          return;
+        }
+        final json = await SecureStorageService.loadEncryptedSeed(
+          walletId: walletId,
+        );
+        if (!mounted) return;
+        if (json == null) {
+          setState(_resetLocked);
+          _snack('Wallet data not found');
+          return;
+        }
+        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: walletId);
         if (!mounted) return;
         setState(_resetLocked);
         if (walletService.isUnlocked) {
@@ -602,18 +659,25 @@ class _DashboardScreenState extends State<DashboardScreen>
         return;
       }
       final balanceSucceeded = failed < addresses.length && addresses.isNotEmpty;
+      final historyPartial = walletService.lastHistoryPartial;
       setState(() {
         if (balanceSucceeded) {
           _balanceNano = erg;
           _tokens = tokens.values.toList();
         }
-        if (txs.isNotEmpty) {
+        // Replace only when the result is trustworthy: an empty result means
+        // pending entries dropped from the mempool must leave the dashboard
+        // (and the cache persisted below). A partial address failure returns
+        // an empty list without throwing — keep the old list in that case.
+        if (txs.isNotEmpty || failed == 0) {
           _recentTxs = txs.take(5).toList();
         }
         if (failed == addresses.length) {
           _status = 'Could not refresh balances';
         } else if (failed > 0) {
           _status = 'Unlocked (balances may be stale)';
+        } else if (historyPartial) {
+          _status = 'Unlocked (activity may be incomplete)';
         } else {
           _status = 'Unlocked';
         }
@@ -908,7 +972,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         ],
         if (_status.startsWith('Error') || _status.contains(':')) ...[
           const SizedBox(height: 12),
-          Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: rust)),
+          Text(_status,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: rustFor(context))),
         ],
         if (watchOnlyService.addresses.isNotEmpty) ...[
           const SizedBox(height: 24),
@@ -1015,12 +1081,11 @@ class _DashboardScreenState extends State<DashboardScreen>
         ];
 
         return RefreshIndicator(
-          onRefresh: _refresh,
+          onRefresh: _sharedRefresh,
           child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
           children: [
-            if (networkController.activeUrl == null && !networkController.probing)
-              _offlineBanner(),
+            const OfflineBanner(),
             _walletCard(fragmented),
             const SizedBox(height: 28),
             _sectionHeader('Assets',
@@ -1276,7 +1341,10 @@ class _DashboardScreenState extends State<DashboardScreen>
                   : paper,
               borderRadius: BorderRadius.circular(12),
             ),
-            child: Row(
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 0,
+              runSpacing: 4,
               children: [
                 InkWell(
                   onTap: () => _go('/utxos'),
@@ -1325,7 +1393,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ],
                   ),
                 ),
-                const Spacer(),
+                const SizedBox(width: 8),
                 InkWell(
                   onTap: _openSettings,
                   borderRadius: BorderRadius.circular(8),
@@ -1414,36 +1482,6 @@ class _DashboardScreenState extends State<DashboardScreen>
           fontFamily: 'Karla',
           fontWeight: FontWeight.w500,
           fontSize: 14.5,
-        ),
-      ),
-    );
-  }
-
-  Widget _offlineBanner() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Material(
-        color: rust.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(14),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          child: Row(
-            children: [
-              const Icon(Icons.wifi_off_outlined, color: rust, size: 16),
-              const SizedBox(width: 8),
-              const Expanded(
-                child: Text(
-                  'No reachable nodes. Tap Retry to check.',
-                  style: TextStyle(color: rust, fontSize: 12),
-                ),
-              ),
-              TextButton(
-                onPressed:
-                    networkController.probing ? null : networkController.probe,
-                child: const Text('Retry'),
-              ),
-            ],
-          ),
         ),
       ),
     );

@@ -12,6 +12,7 @@ import '../services/dexy_service.dart';
 import '../services/network_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
+import 'offline_banner.dart';
 import 'scan_screen.dart';
 
 /// One auto-buy route line, e.g. `≈ 3.7196 ERG via FreeMint  ·  cheapest`.
@@ -157,6 +158,11 @@ class _SendScreenState extends State<SendScreen> {
       _recipientCtrl.text.trim().isNotEmpty &&
       looksLikeErgoAddress(_recipientCtrl.text.trim());
 
+  /// True when the recipient came from a trusted source (contact picker or
+  /// scanned payment URI) rather than free-typed/pasted text, so the
+  /// clipboard-hijack gate can be skipped.
+  bool _recipientTrusted = false;
+
   int? _amountNano() => parseErgToNano(_amountCtrl.text);
 
   String? get _contactForRecipient {
@@ -206,6 +212,7 @@ class _SendScreenState extends State<SendScreen> {
     if (pay.amountErg != null && pay.amountErg!.isNotEmpty) {
       _amountCtrl.text = pay.amountErg!;
     }
+    _recipientTrusted = true;
     setState(() {});
   }
 
@@ -420,6 +427,14 @@ class _SendScreenState extends State<SendScreen> {
         ? args.changeAddress
         : args.senderAddress;
 
+    // The token send carries a user-supplied recipient too — run the same
+    // clipboard-hijack gate as the ordinary flow.
+    if (!_recipientTrusted) {
+      final clear =
+          await _clipboardMatchesIntent(context, _recipientCtrl.text.trim());
+      if (!clear) return;
+    }
+
     setState(() => _sending = true);
     DexyBuildResult build;
     try {
@@ -472,7 +487,7 @@ class _SendScreenState extends State<SendScreen> {
                           style: Theme.of(ctx)
                               .textTheme
                               .bodySmall
-                              ?.copyWith(color: rust),
+                              ?.copyWith(color: rustFor(context)),
                         ),
                       ),
                     ],
@@ -527,14 +542,63 @@ class _SendScreenState extends State<SendScreen> {
         _resultTxId = txId;
         _sending = false;
       });
-      Future.delayed(const Duration(seconds: 4), () {
-        if (mounted) Navigator.pop(context);
-      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
       _snack('Broadcast may have failed. Check activity before retrying.');
     }
+  }
+
+  /// Clipboard-hijack defense: if the OS clipboard holds a *different*
+  /// Ergo address than the one entered, make the user acknowledge it before
+  /// the confirmation dialog appears.
+  ///
+  /// Skipped when the recipient came from a trusted source (contact or scan).
+  /// Residual risk for free-typed entries — malware that swaps the clipboard
+  /// *before* the user pastes is indistinguishable from ordinary paste — is
+  /// mitigated by the selectable full-address display in the confirm dialog
+  /// and contact-book usage, not by this check.
+  Future<bool> _clipboardMatchesIntent(BuildContext ctx, String recipient) async {
+    if (_recipientTrusted) return true;
+    final clip = await Clipboard.getData('text/plain');
+    final clipText = clip?.text?.trim() ?? '';
+    if (clipText.isEmpty || clipText == recipient) return true;
+    if (!looksLikeErgoAddress(clipText)) return true;
+    if (!mounted) return false;
+    final proceed = await showDialog<bool>(
+      context: ctx,
+      builder: (context) => AlertDialog(
+        title: const Text('Clipboard holds another address'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Something you copied earlier is an Ergo address that differs '
+              'from the recipient. Malware can swap addresses on the '
+              'clipboard. Verify every character.',
+            ),
+            const SizedBox(height: 12),
+            Text('Recipient:', style: Theme.of(context).textTheme.titleSmall),
+            SelectableText(recipient, style: monoStyle(context, size: 12)),
+            const SizedBox(height: 8),
+            Text('Clipboard:', style: Theme.of(context).textTheme.titleSmall),
+            SelectableText(clipText, style: monoStyle(context, size: 12)),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Go back'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Recipient is correct'),
+          ),
+        ],
+      ),
+    );
+    return proceed ?? false;
   }
 
   Future<void> _confirmAndSend({
@@ -544,6 +608,13 @@ class _SendScreenState extends State<SendScreen> {
     required List<String> spend,
     bool isMulti = false,
   }) async {
+    if (!isMulti) {
+      final clear = await _clipboardMatchesIntent(ctx, preview.recipient);
+      if (!clear) {
+        setState(() => _sending = false);
+        return;
+      }
+    }
     final ok = await showDialog<dynamic>(
       context: ctx,
       builder: (context) {
@@ -586,16 +657,16 @@ child: Column(
                                   style: Theme.of(ctx)
                                       .textTheme
                                       .bodySmall
-                                      ?.copyWith(color: rust),
+                                      ?.copyWith(color: rustFor(context)),
                                 ),
                               ),
                             ],
                           ),
                         ),
                         if (isMulti) ..._multiRecipientSummary(ctx, preview) else ...[
-                        Text('To', style: Theme.of(ctx).textTheme.titleSmall),
-                        const SizedBox(height: 4),
-                        Text(preview.recipient, style: monoStyle(ctx, size: 12)),
+                         Text('To', style: Theme.of(ctx).textTheme.titleSmall),
+                         const SizedBox(height: 4),
+                         SelectableText(preview.recipient, style: monoStyle(ctx, size: 12)),
                         const SizedBox(height: 12),
                         Text('Amount  ${formatErg(preview.amountNanoErg)}'),
                         const SizedBox(height: 8),
@@ -655,7 +726,14 @@ child: Column(
                   icon: const Icon(Icons.save, size: 16),
                   label: const Text('Sign only'),
                 ),
-                FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Sign & broadcast')),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: rust,
+                    foregroundColor: bone,
+                  ),
+                  onPressed: () => Navigator.pop(context, true),
+                  child: const Text('Sign & broadcast'),
+                ),
               ],
             );
           },
@@ -680,9 +758,6 @@ child: Column(
         setState(() {
           _resultTxId = txId;
           _sending = false;
-        });
-        Future.delayed(const Duration(seconds: 4), () {
-          if (mounted) Navigator.pop(context);
         });
       }
     } catch (e) {
@@ -819,7 +894,7 @@ child: Column(
             style: Theme.of(context)
                 .textTheme
                 .bodySmall
-                ?.copyWith(color: rust),
+                ?.copyWith(color: rustFor(context)),
           )
         else
           for (final (i, q) in quotes.indexed)
@@ -862,6 +937,7 @@ child: Column(
               if (!mounted) return;
               if (result != null && result.address.isNotEmpty) {
                 _recipientCtrl.text = result.address;
+                _recipientTrusted = true;
                 setState(() {});
               }
             },
@@ -883,8 +959,7 @@ child: Column(
                   children: [
                     const Icon(Icons.check_circle, size: 64, color: Color(0xFF5B9E6D)),
                     const SizedBox(height: 20),
-                    Text('Sent!', style: Theme.of(context).textTheme.headlineSmall),
-                    const SizedBox(height: 8),
+                    Text('Sent!', style: Theme.of(context).textTheme.headlineSmall),                    const SizedBox(height: 8),
                     const SizedBox(width: 48, child: Hairline(gold: true)),
                     const SizedBox(height: 16),
                     SelectableText(_resultTxId!, style: monoStyle(context, size: 12)),
@@ -897,10 +972,10 @@ child: Column(
                       icon: const Icon(Icons.open_in_browser, size: 16),
                       label: const Text('View on explorer'),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Returning to dashboard…',
-                      style: Theme.of(context).textTheme.bodySmall,
+                    const SizedBox(height: 20),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('Done'),
                     ),
                   ],
                 ),
@@ -912,6 +987,7 @@ child: Column(
                 key: _formKey,
                 child: ListView(
                   children: [
+                    const OfflineBanner(),
                     const SectionLabel('Destination'),
                     const SizedBox(height: 12),
                     TextFormField(
@@ -922,7 +998,11 @@ child: Column(
                         hintText: 'Or tap contacts to pick a saved one',
                         helperText: _contactForRecipient,
                       ),
-                      onChanged: (_) => setState(() {}),
+                      onChanged: (_) {
+                        // Free-typed or re-pasted text loses trusted provenance.
+                        _recipientTrusted = false;
+                        setState(() {});
+                      },
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) return 'Required';
                         if (!looksLikeErgoAddress(v)) return 'Not an Ergo address';

@@ -80,6 +80,15 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
           theme: argusTheme(watchful: false),
           darkTheme: argusTheme(watchful: true),
           themeMode: themeController.themeMode,
+          // Densities in the wallet card assume at most ~1.6x text; larger
+          // system font scales would overflow fixed rows.
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler:
+                  MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.6),
+            ),
+            child: child!,
+          ),
           onGenerateRoute: (settings) {
             final page = switch (settings.name) {
               '/' || null => const DashboardScreen(),
