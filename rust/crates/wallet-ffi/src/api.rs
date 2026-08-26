@@ -558,7 +558,7 @@ pub async fn get_pending_transactions(
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
-const MAX_DISCOVERY: u32 = 256;
+const MAX_DISCOVERY: u32 = 512;
 
 #[flutter_rust_bridge::frb]
 pub async fn discover_addresses(

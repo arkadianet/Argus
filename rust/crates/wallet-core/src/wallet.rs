@@ -9,7 +9,7 @@ use crate::seed::MnemonicPhrase;
 use crate::CoreError;
 
 const PRELOAD_INDICES: u32 = 32;
-const MAX_OWN_SCAN: u32 = 256;
+const MAX_OWN_SCAN: u32 = 512;
 
 pub struct UnlockedWallet {
     pub(crate) wallet: Wallet,

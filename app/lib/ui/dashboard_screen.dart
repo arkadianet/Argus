@@ -56,6 +56,10 @@ class _DashboardScreenState extends State<DashboardScreen>
   List<WalletInfo> _wallets = [];
   String? _walletId;
 
+  /// Non-null when a stored pinned address index can't be derived (e.g.
+  /// beyond the wallet core's scan range). Shown as a warning on the card.
+  String? _pinIssue;
+
   /// Poll for mempool changes (pending activity, balance, spendable UTXOs)
   /// while the dashboard is open. Paused while backgrounded; a tick is
   /// skipped if the previous refresh is still in flight.
@@ -228,13 +232,27 @@ class _DashboardScreenState extends State<DashboardScreen>
 
     // 1. Derive address (pinned index or 0) locally (instant, deterministic)
     final int addressIndex = await walletService.getPinnedAddressIndex();
+    String? derived = await walletService.tryDeriveAddress(addressIndex);
+    if (derived == null && addressIndex != 0) {
+      // A stored pin beyond the derivable range must not lock the user out
+      // of their wallet — fall back to index 0 and surface the problem.
+      _pinIssue = "Pinned index $addressIndex can't be derived "
+          '(max ${WalletService.maxAddressIndex}). Reset it in Settings.';
+      derived = await walletService.tryDeriveAddress(0);
+    } else {
+      _pinIssue = null;
+    }
     final String receive;
     try {
-      receive = await walletService.deriveAddress(addressIndex);
-      if (!mounted) return;
-      if (!walletService.isUnlocked) {
-        setState(_resetLocked);
-        return;
+      if (derived != null) {
+        receive = derived;
+        if (!mounted) return;
+        if (!walletService.isUnlocked) {
+          setState(_resetLocked);
+          return;
+        }
+      } else {
+        throw StateError('no derivable address');
       }
     } catch (e) {
       if (!mounted) return;
@@ -594,13 +612,32 @@ class _DashboardScreenState extends State<DashboardScreen>
           .toList();
       final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
       final pinnedIndex = await walletService.getPinnedAddressIndex();
-      final receive = next == 0
-          ? (_receiveAddress ?? await walletService.deriveAddress(pinnedIndex))
-          : await walletService.deriveAddress(next);
+      final pinnedReceive = pinnedIndex > 0
+          ? await walletService.tryDeriveAddress(pinnedIndex)
+          : null;
+      if (pinnedIndex > 0 && pinnedReceive == null) {
+        _pinIssue = "Pinned index $pinnedIndex can't be derived "
+            '(max ${WalletService.maxAddressIndex}). Reset it in Settings.';
+      } else {
+        _pinIssue = null;
+      }
+      // The pinned address stays the main address while it sits at or beyond
+      // the usage frontier; once the wallet has moved past it, the next
+      // unused address takes over.
+      final String receive;
+      if (pinnedReceive != null && (next == 0 || pinnedIndex >= next)) {
+        receive = pinnedReceive;
+      } else if (next == 0) {
+        receive = _receiveAddress ?? await walletService.deriveAddress(0);
+      } else {
+        receive = await walletService.deriveAddress(next);
+      }
       // Privacy off (default): change returns to the first derived address.
       // Privacy on: change goes to the next unused address.
       final change = await walletService.deriveAddress(
-        privacyService.useUnusedChangeAddress ? next : 0,
+        privacyService.useUnusedChangeAddress(walletService.activeWalletId)
+            ? next
+            : 0,
       );
       if (!mounted) return;
       if (!walletService.isUnlocked) {
@@ -838,8 +875,16 @@ class _DashboardScreenState extends State<DashboardScreen>
       fadeRoute(SettingsScreen(walletId: _walletId)),
     );
     if (!mounted) return;
-    if (switchedTo != null && switchedTo != _walletId) {
-      await _switchWallet(switchedTo);
+    if (switchedTo != null) {
+      // Reload first: the selected wallet may have been renamed or deleted
+      // (empty string means "the wallet this screen pointed at is gone").
+      await _loadWallets();
+      if (switchedTo.isEmpty) {
+        setState(_resetLocked);
+      } else if (switchedTo != _walletId) {
+        await _switchWallet(switchedTo);
+        return;
+      }
     }
     try {
       await _refreshUnlockMethods();
@@ -1354,6 +1399,28 @@ class _DashboardScreenState extends State<DashboardScreen>
             },
           ),
           const SizedBox(height: 14),
+          if (_pinIssue != null) ...[
+            InkWell(
+              onTap: _openSettings,
+              borderRadius: BorderRadius.circular(8),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.push_pin_outlined, size: 14, color: rust),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        _pinIssue!,
+                        style: TextStyle(fontSize: 12.5, color: rust),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
           Container(
             padding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 10),

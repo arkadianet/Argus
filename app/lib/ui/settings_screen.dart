@@ -32,12 +32,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
   late Future<List<WalletInfo>> _walletsFuture;
   late Future<int> _pinnedIndexFuture;
 
+  /// The wallet these wallet-scoped settings apply to. Falls back to the
+  /// active wallet when the screen was opened without an explicit id.
+  String? get _walletId => widget.walletId ?? walletService.activeWalletId;
+
   @override
   void initState() {
     super.initState();
     _explorerCtrl.text = networkController.explorer;
     _walletsFuture = walletService.listWallets();
-    _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: widget.walletId);
+    _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: _walletId);
     _load();
   }
 
@@ -50,10 +54,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _load() async {
     try {
-      final hasPin = await SecureStorageService.hasPinWrap(walletId: widget.walletId);
+      final hasPin = await SecureStorageService.hasPinWrap(walletId: _walletId);
       final bio = hasPin &&
           await SecureStorageService.hasBiometric() &&
-          await SecureStorageService.hasWrapKey(walletId: widget.walletId);
+          await SecureStorageService.hasWrapKey(walletId: _walletId);
       if (!mounted) return;
       setState(() {
         _hasPin = hasPin;
@@ -70,7 +74,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _disableBiometric() async {
     setState(() => _busy = true);
     try {
-      await SecureStorageService.deleteWrapKey(walletId: widget.walletId);
+      await SecureStorageService.deleteWrapKey(walletId: _walletId);
       await _load();
     } catch (_) {
       _snack('Could not disable biometrics');
@@ -123,10 +127,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     setState(() => _busy = true);
     try {
       final saved = await sessionLock.run(() async {
-        final pinWrap = await SecureStorageService.loadPinWrap(walletId: widget.walletId);
+        final pinWrap = await SecureStorageService.loadPinWrap(walletId: _walletId);
         if (pinWrap == null) return false;
         final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, entered);
-        await SecureStorageService.saveWrapKey(wrapKey, walletId: widget.walletId);
+        await SecureStorageService.saveWrapKey(wrapKey, walletId: _walletId);
         await SecureStorageService.clearPinGate();
         return true;
       });
@@ -153,39 +157,87 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _switchWallet() async {
-    final wallets = await walletService.listWallets();
-    if (!mounted) return;
-    final current = widget.walletId;
-    final result = await showModalBottomSheet<String?>(
+  void _refreshWallets() {
+    setState(() {
+      _walletsFuture = walletService.listWallets();
+      _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: _walletId);
+    });
+  }
+
+  Future<void> _renameWallet(WalletInfo w) async {
+    final ctrl = TextEditingController(text: w.name);
+    final ok = await showDialog<bool>(
       context: context,
-      backgroundColor: Theme.of(context).colorScheme.surface,
-      builder: (ctx) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Padding(
-            padding: EdgeInsets.all(16),
-            child: Text('Select wallet', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-          ),
-          for (final w in wallets)
-            ListTile(
-              leading: const Icon(Icons.account_balance_wallet_outlined),
-              title: Text(w.name),
-              subtitle: Text(w.address0 != null ? w.address0! : 'wallet_id: ${w.walletId.length >= 8 ? w.walletId.substring(0, 8) : w.walletId}…'),
-              selected: w.walletId == current,
-              trailing: w.isUnlocked ? const Icon(Icons.lock_open, size: 16) : null,
-              onTap: () => Navigator.pop(ctx, w.walletId),
-            ),
-          const SizedBox(height: 8),
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename wallet'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'Name'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Rename')),
         ],
       ),
     );
-    if (result != null && result != current && mounted) {
-      _walletsFuture = walletService.listWallets();
-      _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: widget.walletId);
-      Navigator.pop(context, result);
+    final name = ctrl.text.trim();
+    ctrl.dispose();
+    if (ok != true || name.isEmpty || name == w.name) return;
+    try {
+      await walletService.renameWallet(w.walletId, name);
+      _refreshWallets();
+    } catch (_) {
+      _snack('Could not rename wallet');
     }
   }
+
+  Future<void> _deleteWallet(WalletInfo w) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete ${w.name}?'),
+        content: const Text(
+          'This removes the wallet from this device. Argus does not keep a '
+          'copy of the recovery phrase — the paper you wrote when creating '
+          'this wallet is the only way back in.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              foregroundColor: Theme.of(ctx).colorScheme.onError,
+              backgroundColor: Theme.of(ctx).colorScheme.error,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await walletService.deleteWallet(w.walletId);
+      final remaining = await walletService.listWallets();
+      if (!mounted) return;
+      if (w.walletId == _walletId) {
+        // The wallet this screen was opened for is gone — pop so the
+        // dashboard re-loads onto the first remaining wallet (or none).
+        Navigator.pop(context, remaining.isNotEmpty ? remaining.first.walletId : '');
+        return;
+      }
+      _refreshWallets();
+      _snack('Wallet deleted');
+    } catch (_) {
+      _snack('Could not delete wallet');
+    }
+  }
+
+  Future<void> _openCreateOrRestore(String route) async {
+    await Navigator.pushNamed(context, route);
+    _refreshWallets();
+  }
+
 
   Future<void> _changePin() async {
     final oldPin = TextEditingController();
@@ -229,7 +281,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       var changed = false;
       await sessionLock.run(() async {
-        final pinWrap = await SecureStorageService.loadPinWrap(walletId: widget.walletId);
+        final pinWrap = await SecureStorageService.loadPinWrap(walletId: _walletId);
         if (pinWrap == null) {
           _snack('No PIN-protected wallet found');
           return;
@@ -241,7 +293,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         }
         final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, old);
         final newPinWrap = await walletService.wrapKeyWithPin(wrapKey, next);
-        await SecureStorageService.savePinWrap(newPinWrap, walletId: widget.walletId);
+        await SecureStorageService.savePinWrap(newPinWrap, walletId: _walletId);
         changed = true;
       });
       if (changed) {
@@ -323,9 +375,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 12),
             TextField(
               controller: indexCtrl,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 labelText: 'Index',
                 hintText: '0',
+                helperText:
+                    '0–${WalletService.maxAddressIndex}',
               ),
               keyboardType: TextInputType.number,
               autofocus: true,
@@ -346,12 +400,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _snack('Invalid index');
       return;
     }
-    final wid = widget.walletId;
+    if (index > WalletService.maxAddressIndex) {
+      _snack("This wallet can't derive past index ${WalletService.maxAddressIndex}");
+      return;
+    }
+    final wid = _walletId;
     if (wid == null) return;
+    // Verify the wallet can actually derive the index before persisting.
+    final addr = await walletService.tryDeriveAddress(index);
+    if (!mounted) return;
+    if (addr == null) {
+      _snack("Wallet can't derive index $index");
+      return;
+    }
     await walletService.setPinnedAddressIndex(wid, index);
-    _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: widget.walletId);
-    if (mounted) setState(() {});
-    _snack('Pinned address index $index');
+    _refreshWallets();
+    _snack('Pinned index $index · ${shorten(addr, head: 10, tail: 8)}');
   }
 
   @override
@@ -371,7 +435,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             padding: EdgeInsets.fromLTRB(
                 20, 8, 20, 32 + MediaQuery.paddingOf(context).bottom),
             children: [
-              const SectionLabel('Network'),
+              const SectionLabel('Network', scope: 'App-wide'),
               const SizedBox(height: 8),
               Text(
                 networkController.statusLabel,
@@ -472,7 +536,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 style: Theme.of(context).textTheme.bodySmall,
               ),
               const SizedBox(height: 28),
-              const SectionLabel('Appearance'),
+              const SectionLabel('Appearance', scope: 'App-wide'),
               const SizedBox(height: 12),
               ...ArgusPalette.values.map((p) {
                 final label = switch (p) {
@@ -524,7 +588,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 );
               }),
               const SizedBox(height: 28),
-              const SectionLabel('Auto-lock'),
+              const SectionLabel('Auto-lock', scope: 'App-wide'),
               const SizedBox(height: 12),
               DropdownButtonFormField<int>(
                 key: ValueKey(_graceKey),
@@ -550,7 +614,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
               ),
               const SizedBox(height: 28),
-              const SectionLabel('Privacy'),
+              const SectionLabel('Privacy', scope: 'This wallet'),
               const SizedBox(height: 12),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -559,15 +623,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   'Send transaction change to unused addresses instead of your first address.',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-                value: privacyService.useUnusedChangeAddress,
+                value: privacyService.useUnusedChangeAddress(_walletId),
                 onChanged: (v) async {
-                  final prev = privacyService.useUnusedChangeAddress;
+                  final wid = _walletId;
+                  if (wid == null) {
+                    _snack('Unlock a wallet to change this setting');
+                    return;
+                  }
+                  final prev = privacyService.useUnusedChangeAddress(wid);
                   try {
-                    await privacyService.setUnusedChangeAddress(v);
+                    await privacyService.setUnusedChangeAddress(v, walletId: wid);
                   } catch (_) {
                     // Service flips in-memory state before persisting; restore.
                     try {
-                      await privacyService.setUnusedChangeAddress(prev);
+                      await privacyService.setUnusedChangeAddress(prev, walletId: wid);
                     } catch (_) {}
                     if (mounted) _snack('Could not update privacy setting');
                   }
@@ -575,7 +644,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 },
               ),
               const SizedBox(height: 28),
-              const SectionLabel('Unlock'),
+              const SectionLabel('Unlock', scope: 'This wallet'),
               const SizedBox(height: 12),
               if (!walletService.isUnlocked)
                 Text(
@@ -627,41 +696,104 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ],
+              const SizedBox(height: 28),
+              const SectionLabel('Wallets', scope: 'App-wide'),
+              const SizedBox(height: 12),
+              FutureBuilder(
+                future: _walletsFuture,
+                builder: (context, snapshot) {
+                  final wallets = snapshot.data ?? [];
+                  if (wallets.isEmpty) {
+                    return Text(
+                      'No wallets stored.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    );
+                  }
+                  final currentId = _walletId;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final w in wallets)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: Icon(
+                            Icons.account_balance_wallet_outlined,
+                            size: 22,
+                            color: w.walletId == currentId
+                                ? iris
+                                : Theme.of(context).colorScheme.primary,
+                          ),
+                          title: Row(
+                            children: [
+                              Flexible(
+                                child: Text(w.name,
+                                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                              ),
+                              if (w.isUnlocked) ...[
+                                const SizedBox(width: 6),
+                                Text('UNLOCKED',
+                                    style: TextStyle(
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w600,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary)),
+                              ],
+                            ],
+                          ),
+                          subtitle: Text(
+                            w.address0 != null
+                                ? shorten(w.address0!, head: 10, tail: 8)
+                                : 'wallet_id: ${w.walletId.length >= 8 ? w.walletId.substring(0, 8) : w.walletId}…',
+                            style: monoStyle(context, size: 11),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                tooltip: 'Rename',
+                                icon: const Icon(Icons.edit_outlined, size: 18),
+                                onPressed: () => _renameWallet(w),
+                              ),
+                              IconButton(
+                                tooltip: 'Delete',
+                                icon: Icon(Icons.delete_outline,
+                                    size: 18,
+                                    color: Theme.of(context).colorScheme.error),
+                                onPressed: () => _deleteWallet(w),
+                              ),
+                            ],
+                          ),
+                          onTap: () {
+                            // Tapping another wallet switches to it: pop with
+                            // its id so the dashboard runs the switch flow.
+                            if (w.walletId != currentId) {
+                              Navigator.pop(context, w.walletId);
+                            }
+                          },
+                        ),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          TextButton.icon(
+                            onPressed: () => _openCreateOrRestore('/create'),
+                            icon: const Icon(Icons.add, size: 18),
+                            label: const Text('Create new'),
+                          ),
+                          TextButton.icon(
+                            onPressed: () => _openCreateOrRestore('/restore'),
+                            icon: const Icon(Icons.restore, size: 18),
+                            label: const Text('Restore'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              ),
               if (walletService.isUnlocked) ...[
                 const SizedBox(height: 28),
-                const SectionLabel('Wallets'),
-                const SizedBox(height: 12),
-                FutureBuilder(
-                  future: _walletsFuture,
-                  builder: (context, snapshot) {
-                    final wallets = snapshot.data ?? [];
-                    if (wallets.length < 2) {
-                      return Text(
-                        wallets.isEmpty
-                            ? 'No wallets stored.'
-                            : '1 wallet stored. Create or restore another to switch.',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      );
-                    }
-                    return Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '${wallets.length} wallets stored',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                        const SizedBox(height: 8),
-                        TextButton.icon(
-                          onPressed: _busy ? null : _switchWallet,
-                          icon: const Icon(Icons.swap_horiz),
-                          label: const Text('Switch wallet'),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 28),
-                const SectionLabel('Advanced Tools'),
+                const SectionLabel('Advanced Tools', scope: 'This wallet'),
                 const SizedBox(height: 12),
                 Align(
                   alignment: Alignment.centerLeft,
@@ -673,7 +805,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
               const SizedBox(height: 28),
-              const SectionLabel('Watch-only addresses'),
+              const SectionLabel('Watch-only addresses', scope: 'App-wide'),
               const SizedBox(height: 12),
               if (watchOnlyService.addresses.isEmpty)
                 Text(
@@ -709,29 +841,57 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   child: const Text('Add watch-only address'),
                 ),
               const SizedBox(height: 28),
-              const SectionLabel('Primary address'),
+              const SectionLabel('Primary address', scope: 'This wallet'),
               const SizedBox(height: 12),
               FutureBuilder(
                 future: _pinnedIndexFuture,
                 builder: (context, snapshot) {
                   final pinned = snapshot.data ?? 0;
                   final isPinned = pinned != 0;
+                  final outOfRange = pinned > WalletService.maxAddressIndex;
                   return ListTile(
-                    leading: const Icon(Icons.push_pin_outlined),
-                    title: Text(isPinned
-                        ? 'Address index #$pinned is pinned as primary'
-                        : 'Primary address (index 0)'),
+                    leading: Icon(
+                      Icons.push_pin_outlined,
+                      color: outOfRange ? Theme.of(context).colorScheme.error : null,
+                    ),
+                    title: Text(outOfRange
+                        ? "Pinned index #$pinned can't be derived"
+                        : isPinned
+                            ? 'Address index #$pinned is pinned as primary'
+                            : 'Primary address (index 0)'),
+                    subtitle: outOfRange
+                        ? Text(
+                            'This wallet derives up to index '
+                            '${WalletService.maxAddressIndex}. Unpin or choose a lower index — the dashboard is falling back to index 0.',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(context).colorScheme.error),
+                          )
+                        : (isPinned && walletService.isUnlocked
+                            ? FutureBuilder<String?>(
+                                future: walletService.tryDeriveAddress(pinned),
+                                builder: (context, snap) {
+                                  final addr = snap.data;
+                                  if (addr == null) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return Text(
+                                    shorten(addr, head: 10, tail: 8),
+                                    style: monoStyle(context, size: 11),
+                                  );
+                                },
+                              )
+                            : null),
                     trailing: isPinned
                         ? IconButton(
                             icon: const Icon(Icons.clear, size: 18),
                             tooltip: 'Unpin',
                              onPressed: () async {
-                               final wid = widget.walletId;
-                               if (wid == null) return;
-                               await walletService.setPinnedAddressIndex(wid, 0);
-                               _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: widget.walletId);
-                               if (mounted) setState(() {});
-                             },
+     final wid = _walletId;
+                                if (wid == null) return;
+                                await walletService.setPinnedAddressIndex(wid, 0);
+                                _refreshWallets();
+                              },
                           )
                         : null,
                   );
@@ -745,7 +905,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 label: const Text('Find & pin an address index'),
               ),
               const SizedBox(height: 28),
-              const SectionLabel('Address labels'),
+              const SectionLabel('Address labels', scope: 'App-wide'),
               const SizedBox(height: 12),
               if (addressLabelService.labels.isEmpty)
                 Text(
