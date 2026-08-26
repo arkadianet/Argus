@@ -119,7 +119,8 @@ class NetworkController extends ChangeNotifier {
   String? fiatText(int? nano) {
     final rate = fiatPerErg;
     if (rate == null || nano == null) return null;
-    return '≈ $fiatSymbol${(nano / 1e9 * rate).toStringAsFixed(2)} '
+    final digits = fiatCode == 'jpy' ? 0 : 2;
+    return '≈ $fiatSymbol${(nano / 1e9 * rate).toStringAsFixed(digits)} '
         '${fiatCode.toUpperCase()}';
   }
 
@@ -128,6 +129,9 @@ class NetworkController extends ChangeNotifier {
     fiatCode = code;
     fiatPerErg = null;
     _priceAt = null;
+    // Invalidate any in-flight price fetch for the previous currency so a
+    // late response cannot overwrite the new currency's rate.
+    _fiatGen++;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_fiatPrefKey, code);
     await refreshPrice();
@@ -172,6 +176,7 @@ class NetworkController extends ChangeNotifier {
     }
     explorer = prefs.getString(_explorerKey) ?? defaultExplorer;
     lastGood = prefs.getString(_lastGoodKey);
+    await _loadFiatCurrency();
     try {
       await apply();
     } catch (_) {}
@@ -280,16 +285,22 @@ class NetworkController extends ChangeNotifier {
   static const _priceTtl = Duration(minutes: 5);
   static const _fiatPrefKey = 'argus_fiat_currency';
 
+  /// Bumped on currency change so a stale in-flight [refreshPrice] response
+  /// for the previous currency is discarded instead of applied.
+  int _fiatGen = 0;
+
   Future<void> refreshPrice() async {
     final now = DateTime.now();
     if (_priceAt != null && now.difference(_priceAt!) < _priceTtl) return;
-    await _loadFiatCurrency();
+    final gen = _fiatGen;
     final code = fiatCode.toLowerCase();
     try {
       final res = await http
           .get(Uri.parse(
               'https://api.coingecko.com/api/v3/simple/price?ids=ergo&vs_currencies=$code'))
           .timeout(const Duration(seconds: 8));
+      final stillCurrent = gen == _fiatGen && code == fiatCode.toLowerCase();
+      if (!stillCurrent) return;
       if (res.statusCode != 200) {
         notifyListeners();
         return;

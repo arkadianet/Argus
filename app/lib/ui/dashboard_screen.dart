@@ -203,6 +203,9 @@ class _DashboardScreenState extends State<DashboardScreen>
       }
     } else {
       _walletId = null;
+      // Clear stale flags so a no-wallet gate rendered right after this
+      // doesn't still offer unlock options for a deleted wallet.
+      await _refreshUnlockMethods();
     }
   }
 
@@ -573,20 +576,31 @@ class _DashboardScreenState extends State<DashboardScreen>
       ),
     );
     if (!mounted) return;
-    // A wallet may have been removed inside the overview — reload the list
-    // before acting on the result.
+    // A wallet may have been removed inside the overview — capture the
+    // pre-reload selection so removal (and its replacement) is detectable
+    // after the list reload reassigns _walletId.
+    final previousId = _walletId;
     await _loadWallets();
-    if (picked == null || picked == _walletId) {
-      if (mounted) setState(() {});
+    if (previousId != null &&
+        !_wallets.any((w) => w.walletId == previousId)) {
+      // The wallet this screen was showing was removed.
+      if (_wallets.isEmpty) {
+        if (walletService.isUnlocked) await walletService.lock();
+        setState(_resetLocked);
+        return;
+      }
+      // Land on the replacement the reload selected, regardless of what the
+      // overview popped with.
+      if (_walletId != null) {
+        await _switchWallet(_walletId!);
+        return;
+      }
+    }
+    if (picked != null && picked.isNotEmpty && picked != previousId) {
+      await _switchWallet(picked);
       return;
     }
-    if (picked.isEmpty) {
-      // The active wallet was removed and none remain.
-      if (walletService.isUnlocked) await walletService.lock();
-      setState(_resetLocked);
-      return;
-    }
-    await _switchWallet(picked);
+    if (mounted) setState(() {});
   }
 
   Future<void> _refresh() async {
@@ -1352,7 +1366,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             builder: (context, _) {
               if (_balanceHidden) {
                 return Text(
-                    '≈ \$•••• ${networkController.fiatCode.toUpperCase()}',
+                    '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}',
                     style: TextStyle(fontSize: 14, color: muted));
               }
               return Text(
@@ -1562,7 +1576,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  _balanceHidden ? '≈ \$•••• AUD' : asset.fiatText ?? '',
+                  _balanceHidden
+                      ? '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}'
+                      : asset.fiatText ?? '',
                   style: TextStyle(fontSize: 12, color: muted),
                 ),
               ],
