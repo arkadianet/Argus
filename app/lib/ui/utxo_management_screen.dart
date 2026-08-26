@@ -83,7 +83,11 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
   Future<List<String>> _getWalletAddresses() async {
     final list = <String>[];
     try {
-      final primary = await walletService.deriveAddress(0);
+      final pinnedIndex = await walletService.getPinnedAddressIndex();
+      final primary = pinnedIndex > 0
+          ? await walletService.tryDeriveAddress(pinnedIndex) ??
+              await walletService.deriveAddress(0)
+          : await walletService.deriveAddress(0);
       list.add(primary);
       final raw = await walletService.discoverAddresses();
       final map = jsonDecode(raw) as Map<String, dynamic>;

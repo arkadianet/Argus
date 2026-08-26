@@ -736,10 +736,26 @@ class WalletService {
     await _removeWalletMeta(walletId);
   }
 
+  /// Highest address index the wallet core can derive and scan (inclusive).
+  /// Mirrors MAX_OWN_SCAN in rust/crates/wallet-core/src/wallet.rs — indices
+  /// beyond this make deriveAddress throw.
+  static const maxAddressIndex = 512;
+
   Future<String> deriveAddress(int index) {
     _requireUnlocked();
     return RustLib.instance.api
         .crateApiDeriveAddress(handleId: _handleId!, index: index);
+  }
+
+  /// Derive like [deriveAddress] but return null on failure (e.g. an index
+  /// above [maxAddressIndex]) instead of throwing, so one bad pinned index
+  /// cannot take down the whole sync flow.
+  Future<String?> tryDeriveAddress(int index) async {
+    try {
+      return await deriveAddress(index);
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<String> discoverAddresses({int gapLimit = 20, String? nodeUrl}) async {

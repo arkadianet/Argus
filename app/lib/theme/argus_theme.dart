@@ -212,18 +212,44 @@ class Hairline extends StatelessWidget {
 }
 
 class SectionLabel extends StatelessWidget {
-  const SectionLabel(this.text, {super.key});
+  const SectionLabel(this.text, {super.key, this.scope});
   final String text;
+
+  /// Optional scope tag shown next to the label, e.g. 'This wallet' or
+  /// 'App-wide', so readers know what a settings section applies to.
+  final String? scope;
 
   @override
   Widget build(BuildContext context) {
-    return Text(
-      text.toUpperCase(),
-      style: Theme.of(context).textTheme.titleSmall?.copyWith(
-            color: Theme.of(context).brightness == Brightness.dark
-                ? watchfulMuted
-                : ledgerMuted,
+    final muted = Theme.of(context).brightness == Brightness.dark
+        ? watchfulMuted
+        : ledgerMuted;
+    return Row(
+      children: [
+        Text(
+          text.toUpperCase(),
+          style: Theme.of(context).textTheme.titleSmall?.copyWith(color: muted),
+        ),
+        if (scope != null) ...[
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+            decoration: BoxDecoration(
+              border: Border.all(color: muted, width: 0.8),
+              borderRadius: BorderRadius.circular(3),
+            ),
+            child: Text(
+              scope!.toUpperCase(),
+              style: TextStyle(
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.5,
+                color: muted,
+              ),
+            ),
           ),
+        ],
+      ],
     );
   }
 }
