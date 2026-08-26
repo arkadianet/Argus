@@ -207,6 +207,9 @@ class _DashboardScreenState extends State<DashboardScreen>
       }
     } else {
       _walletId = null;
+      // Clear stale flags so a no-wallet gate rendered right after this
+      // doesn't still offer unlock options for a deleted wallet.
+      await _refreshUnlockMethods();
     }
   }
 
@@ -590,9 +593,32 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
       ),
     );
-    if (!mounted || picked == null) return;
-    if (picked == _walletId) return;
-    await _switchWallet(picked);
+    if (!mounted) return;
+    // A wallet may have been removed inside the overview — capture the
+    // pre-reload selection so removal (and its replacement) is detectable
+    // after the list reload reassigns _walletId.
+    final previousId = _walletId;
+    await _loadWallets();
+    if (previousId != null &&
+        !_wallets.any((w) => w.walletId == previousId)) {
+      // The wallet this screen was showing was removed.
+      if (_wallets.isEmpty) {
+        if (walletService.isUnlocked) await walletService.lock();
+        setState(_resetLocked);
+        return;
+      }
+      // Land on the replacement the reload selected, regardless of what the
+      // overview popped with.
+      if (_walletId != null) {
+        await _switchWallet(_walletId!);
+        return;
+      }
+    }
+    if (picked != null && picked.isNotEmpty && picked != previousId) {
+      await _switchWallet(picked);
+      return;
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _refresh() async {
@@ -1384,17 +1410,13 @@ class _DashboardScreenState extends State<DashboardScreen>
           ListenableBuilder(
             listenable: networkController,
             builder: (context, _) {
-              final aud = networkController.audPerErg;
-              final nano = _balanceNano;
               if (_balanceHidden) {
-                return Text('≈ \$•••• AUD',
+                return Text(
+                    '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}',
                     style: TextStyle(fontSize: 14, color: muted));
               }
-              final fiat = aud != null && nano != null
-                  ? '≈ \$${(nano / 1e9 * aud).toStringAsFixed(2)} AUD'
-                  : null;
               return Text(
-                fiat ?? '',
+                networkController.fiatText(_balanceNano) ?? '',
                 style: TextStyle(fontSize: 14, color: muted),
               );
             },
@@ -1622,7 +1644,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  _balanceHidden ? '≈ \$•••• AUD' : asset.fiatText ?? '',
+                  _balanceHidden
+                      ? '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}'
+                      : asset.fiatText ?? '',
                   style: TextStyle(fontSize: 12, color: muted),
                 ),
               ],
@@ -1854,15 +1878,11 @@ class _AssetRow {
   });
 
   factory _AssetRow.erg({int? balanceNano}) {
-    final aud = networkController.audPerErg;
-    final fiat = aud != null && balanceNano != null
-        ? '≈ \$${(balanceNano / 1e9 * aud).toStringAsFixed(2)} AUD'
-        : null;
     return _AssetRow(
       ticker: 'ERG',
       name: 'Ergo',
       amountText: formatErg(balanceNano, unit: false, maxFrac: 4),
-      fiatText: fiat,
+      fiatText: networkController.fiatText(balanceNano),
       isErg: true,
     );
   }

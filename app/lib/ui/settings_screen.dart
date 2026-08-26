@@ -241,6 +241,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _refreshWallets();
   }
 
+  Future<void> _pickFiatCurrency() async {
+    final current = networkController.fiatCode;
+    final picked = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Display currency'),
+        children: [
+          for (final entry in NetworkController.fiatOptions.entries)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, entry.key),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                        '${entry.key.toUpperCase()} (${entry.value})'),
+                  ),
+                  if (entry.key == current)
+                    const Icon(Icons.check, size: 18),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+    if (picked == null || picked == current) return;
+    await networkController.setFiatCurrency(picked);
+    if (mounted) setState(() {});
+  }
 
   Future<void> _changePin() async {
     final oldPin = TextEditingController();
@@ -590,6 +618,50 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 );
               }),
+              const SizedBox(height: 28),
+              const SectionLabel('Currency', scope: 'App-wide'),
+              const SizedBox(height: 12),
+              ListenableBuilder(
+                listenable: networkController,
+                builder: (context, _) => InkWell(
+                  onTap: _pickFiatCurrency,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(
+                      border: Border(
+                          bottom:
+                              BorderSide(color: Theme.of(context).dividerColor)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Display currency',
+                                  style:
+                                      Theme.of(context).textTheme.titleMedium),
+                              const SizedBox(height: 2),
+                              Text(
+                                'ERG price shown in '
+                                '${networkController.fiatCode.toUpperCase()}',
+                                style:
+                                    Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          networkController.fiatSymbol,
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(width: 6),
+                        const Icon(Icons.arrow_drop_down, size: 20),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
               const SizedBox(height: 28),
               const SectionLabel('Auto-lock', scope: 'App-wide'),
               const SizedBox(height: 12),
