@@ -158,6 +158,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   void _refreshWallets() {
+    // Callers invoke this after awaits (rename/delete/pin dialogs); a
+    // disposed state must not call setState.
+    if (!mounted) return;
     setState(() {
       _walletsFuture = walletService.listWallets();
       _pinnedIndexFuture = walletService.getPinnedAddressIndex(walletId: _walletId);
@@ -630,14 +633,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     _snack('Unlock a wallet to change this setting');
                     return;
                   }
-                  final prev = privacyService.useUnusedChangeAddress(wid);
                   try {
                     await privacyService.setUnusedChangeAddress(v, walletId: wid);
                   } catch (_) {
-                    // Service flips in-memory state before persisting; restore.
-                    try {
-                      await privacyService.setUnusedChangeAddress(prev, walletId: wid);
-                    } catch (_) {}
                     if (mounted) _snack('Could not update privacy setting');
                   }
                   if (mounted) setState(() {});

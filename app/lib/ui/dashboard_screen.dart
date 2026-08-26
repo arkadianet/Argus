@@ -879,6 +879,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       // Reload first: the selected wallet may have been renamed or deleted
       // (empty string means "the wallet this screen pointed at is gone").
       await _loadWallets();
+      if (!mounted) return;
       if (switchedTo.isEmpty) {
         setState(_resetLocked);
       } else if (switchedTo != _walletId) {

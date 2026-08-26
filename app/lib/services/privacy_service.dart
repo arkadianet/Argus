@@ -40,12 +40,15 @@ class PrivacyService extends ChangeNotifier {
 
   Future<void> setUnusedChangeAddress(bool value, {String? walletId}) async {
     if (walletId == null) return;
-    if (useUnusedChangeAddress(walletId) == value && _byWallet.containsKey(walletId)) {
-      return;
+    if (_byWallet.containsKey(walletId) && _byWallet[walletId] == value) return;
+    // Persist first and only then flip the in-memory value: a failed write
+    // must leave the previous policy in place.
+    final prefs = await SharedPreferences.getInstance();
+    final ok = await prefs.setBool('$_prefix$walletId', value);
+    if (!ok) {
+      throw StateError('Failed to persist change-address policy');
     }
     _byWallet[walletId] = value;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('$_prefix$walletId', value);
     notifyListeners();
   }
 }
