@@ -146,7 +146,7 @@ Items from the 2026-09-02 audit not yet done, in order of user impact:
 |---|---|
 | A trust | Deferred by decision. Still the first thing to do before wider testing. |
 | B ErgoPay | Shipped (#30). ErgoAuth and `#MULTIPLE_ADDRESSES#` not built. |
-| C code health | Shipped (#31). `flutter_rust_bridge` still 2.11: the bump needs a matching codegen install and native rebuild. |
+| C code health | Shipped (#31). `flutter_rust_bridge` still 2.11 (needs a matching codegen install and native rebuild) and `share_plus` still 11 (13.3.0 fails to compile its Android sources in this Gradle setup). |
 | D craft | Shipped (#32). |
 | E.1 iOS | Deferred: needs a Mac. |
 | E.2 testnet | Deferred: see below. |
