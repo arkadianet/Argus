@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/address_label_service.dart';
+import '../services/deep_link_controller.dart';
+import '../services/ergopay_service.dart';
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
@@ -16,9 +18,11 @@ import '../services/wallet_sync_controller.dart';
 import '../theme/argus_theme.dart';
 import 'assets_screen.dart';
 import 'create_wallet_screen.dart';
+import 'ergopay_screen.dart';
 import 'offline_banner.dart';
 import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
+import 'scan_screen.dart';
 import 'send_screen.dart';
 import 'settings_screen.dart';
 import 'swap_hub_screen.dart';
@@ -84,6 +88,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     walletService.unlocked.addListener(_syncLock);
     watchOnlyService.addListener(_onWatchOnlyChanged);
     _sync.addListener(_onSyncChanged);
+    deepLinkController.addListener(_onDeepLink);
     _pollTimer = Timer.periodic(_pollInterval, (_) => _pollTick());
     _probeTimer = Timer.periodic(_probeInterval, (_) => _probeTick());
     _init();
@@ -91,6 +96,70 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   void _onSyncChanged() {
     if (mounted) setState(() {});
+    _openPendingDeepLink();
+  }
+
+  void _onDeepLink() {
+    if (!_openPendingDeepLink() && mounted) {
+      // Parked until the wallet unlocks; tell the user why nothing happened.
+      if (!_walletUnlocked && deepLinkController.pending != null) {
+        setState(() => _status = 'Unlock to continue with the ErgoPay request.');
+      }
+    }
+  }
+
+  bool _ergoPayOpen = false;
+
+  /// Opens a parked ErgoPay link once the wallet is unlocked and has an
+  /// address. Returns false when it had to stay parked.
+  bool _openPendingDeepLink() {
+    if (!mounted || _ergoPayOpen) return false;
+    final link = deepLinkController.pending;
+    if (link == null) return false;
+    if (!_walletUnlocked || !walletService.isUnlocked || _sync.receiveAddress == null) {
+      return false;
+    }
+    deepLinkController.take();
+    if (!isErgoPayLink(link)) return true;
+    _openErgoPay(link);
+    return true;
+  }
+
+  Future<void> _openErgoPay(String link) async {
+    _ergoPayOpen = true;
+    try {
+      final txId = await Navigator.push<String?>(
+        context,
+        fadeRoute(ErgoPayScreen(link: link), settings: RouteSettings(arguments: _args())),
+      );
+      if (txId != null && mounted) _sync.refresh(discover: false);
+    } finally {
+      _ergoPayOpen = false;
+    }
+  }
+
+  /// Home scan: ErgoPay links open the signing flow; `ergo:` payment URIs
+  /// open Send prefilled.
+  Future<void> _scan() async {
+    if (!_guardUnlocked()) return;
+    final raw = await Navigator.push<String>(context, fadeRoute(const ScanScreen()));
+    if (!mounted || raw == null) return;
+    if (isErgoPayLink(raw)) {
+      _openErgoPay(raw);
+      return;
+    }
+    final pay = parseErgoUri(raw);
+    if (pay == null) {
+      _snack('Not an Ergo address or ErgoPay link');
+      return;
+    }
+    Navigator.push(
+      context,
+      fadeRoute(
+        SendScreen(initialRecipient: pay.address, initialAmountErg: pay.amountErg),
+        settings: RouteSettings(arguments: _args()),
+      ),
+    );
   }
 
   void _pollTick() {
@@ -113,6 +182,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     walletService.unlocked.removeListener(_syncLock);
     watchOnlyService.removeListener(_onWatchOnlyChanged);
     _sync.removeListener(_onSyncChanged);
+    deepLinkController.removeListener(_onDeepLink);
     _sync.dispose();
     _pinCtrl.dispose();
     super.dispose();
@@ -721,6 +791,12 @@ class _DashboardScreenState extends State<DashboardScreen>
           style: Theme.of(context).textTheme.headlineSmall,
         ),
         actions: [
+          if (_walletUnlocked)
+            IconButton(
+              icon: const Icon(Icons.qr_code_scanner),
+              tooltip: 'Scan',
+              onPressed: _scan,
+            ),
           if (_walletUnlocked)
             IconButton(
               icon: const Icon(Icons.lock_open_outlined),

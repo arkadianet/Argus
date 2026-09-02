@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
@@ -996,6 +997,47 @@ class WalletService {
     );
     final map = jsonDecode(raw) as Map<String, dynamic>;
     return map['tx_id'] as String? ?? raw;
+  }
+
+  // ── ErgoPay (EIP-20) ────────────────────────────────────────────────
+
+  /// Summary JSON for a reduced transaction (see `describe_reduced_transaction`).
+  Future<Map<String, dynamic>> describeReducedTransaction(
+    Uint8List reducedTx, {
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiDescribeReducedTransaction(
+      handleId: _handleId!,
+      reducedTxBytes: reducedTx,
+      nodeUrl: nodeUrl,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  /// Signs a reduced transaction with the unlocked wallet; returns node JSON.
+  Future<String> signReducedTransaction(Uint8List reducedTx) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiSignReducedTransaction(
+      handleId: _handleId!,
+      reducedTxBytes: reducedTx,
+    );
+  }
+
+  /// Broadcasts signed transaction JSON and returns the tx id.
+  Future<String> submitSignedTransaction(String txJson, {String? nodeUrl}) {
+    return RustLib.instance.api.crateApiSubmitSignedTransaction(
+      txJson: txJson,
+      nodeUrl: nodeUrl,
+    );
+  }
+
+  Future<bool> ownsAddress(String address) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiWalletOwnsAddress(
+      handleId: _handleId!,
+      address: address,
+    );
   }
 
   /// Sign a prepared transaction without submitting it. Returns the raw signed
