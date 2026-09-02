@@ -9,6 +9,7 @@ import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'transaction_detail_screen.dart';
 import 'widgets/activity_tile.dart';
+import 'widgets/empty_state.dart';
 
 class TransactionsScreen extends StatefulWidget {
   const TransactionsScreen({super.key, this.embedded = false, this.args});
@@ -212,30 +213,21 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     return _loading && _txs.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : _error != null && _txs.isEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(28),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          _error!,
-                          style: Theme.of(context).textTheme.bodyMedium,
-                          textAlign: TextAlign.center,
-                        ),
-                        const SizedBox(height: 16),
-                        FilledButton(onPressed: _load, child: const Text('Retry')),
-                      ],
-                    ),
-                  ),
+              ? EmptyState(
+                  icon: Icons.cloud_off_outlined,
+                  tone: EmptyStateTone.error,
+                  title: 'Could not load activity',
+                  body: 'The node did not answer. Check your connection or pick another node in Settings, then try again.',
+                  actionLabel: 'Retry',
+                  onAction: _load,
                 )
           : _txs.isEmpty
-              ? Center(
-                  child: Text(
-                    'No activity yet. Receive to this wallet first.',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                    textAlign: TextAlign.center,
-                  ),
+              ? EmptyState(
+                  icon: Icons.inbox_outlined,
+                  title: 'No activity yet',
+                  body: 'Transactions to and from this wallet will show up here, newest first.',
+                  actionLabel: 'Refresh',
+                  onAction: _load,
                 )
               : RefreshIndicator(
                   onRefresh: _load,

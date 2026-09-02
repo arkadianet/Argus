@@ -185,6 +185,18 @@ pub struct TxSummary {
     /// payload does not describe beyond box ids — so this is arrivals only.
     #[serde(default)]
     pub tokens_received: Vec<TokenReceived>,
+    /// Tokens that left the queried address: held in its spent inputs and
+    /// not returned in its outputs. Needs input details (extraIndex).
+    #[serde(default)]
+    pub tokens_sent: Vec<TokenReceived>,
+    /// Miner fee, from the fee output; falls back to inputs minus outputs
+    /// when input values are known. None when neither is available.
+    #[serde(default)]
+    pub fee_nano_erg: Option<u64>,
+    /// The other party: for a spend, the first foreign non-fee output; for
+    /// a receipt, the first foreign input address.
+    #[serde(default)]
+    pub counterparty: Option<String>,
     pub num_inputs: u32,
     pub num_outputs: u32,
 }
@@ -231,6 +243,60 @@ pub fn summarize_tx_for_address(
         }
     }
 
+    let ins = tx["inputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
+    let fee_tree = ergo_lib::wallet::miner_fee::MINERS_FEE_BASE16_BYTES;
+    let is_fee = |o: &serde_json::Value| o["ergoTree"].as_str() == Some(fee_tree);
+
+    let fee_from_output: u64 = outs
+        .iter()
+        .filter(|o| is_fee(o))
+        .map(|o| o["value"].as_u64().unwrap_or(0))
+        .sum();
+    let inputs_valued = !ins.is_empty() && ins.iter().all(|i| i["value"].is_number());
+    let fee_nano_erg = if fee_from_output > 0 {
+        Some(fee_from_output)
+    } else if inputs_valued {
+        let in_total: u64 = ins.iter().map(|i| i["value"].as_u64().unwrap_or(0)).sum();
+        let out_total: u64 = outs.iter().map(|o| o["value"].as_u64().unwrap_or(0)).sum();
+        Some(in_total.saturating_sub(out_total))
+    } else {
+        None
+    };
+
+    let counterparty = if value_nano_erg < 0 {
+        outs.iter()
+            .filter(|o| !is_fee(o))
+            .filter_map(|o| o["address"].as_str())
+            .find(|a| *a != address)
+            .map(str::to_string)
+    } else {
+        ins.iter()
+            .filter_map(|i| i["address"].as_str())
+            .find(|a| *a != address)
+            .map(str::to_string)
+    };
+
+    let mut spent: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+    for input in ins.iter().filter(|i| i["address"].as_str() == Some(address)) {
+        if let Some(assets) = input["assets"].as_array() {
+            for asset in assets {
+                if let Some(id) = asset["tokenId"].as_str() {
+                    let amount = asset["amount"].as_u64().unwrap_or(0);
+                    let e = spent.entry(id.to_string()).or_insert(0);
+                    *e = e.saturating_add(amount);
+                }
+            }
+        }
+    }
+    let tokens_sent: Vec<TokenReceived> = spent
+        .into_iter()
+        .filter_map(|(token_id, out)| {
+            let back = received.get(&token_id).copied().unwrap_or(0);
+            let net = out.saturating_sub(back);
+            (net > 0).then_some(TokenReceived { token_id, amount: net })
+        })
+        .collect();
+
     Some(TxSummary {
         tx_id,
         height,
@@ -241,6 +307,9 @@ pub fn summarize_tx_for_address(
             .into_iter()
             .map(|(token_id, amount)| TokenReceived { token_id, amount })
             .collect(),
+        tokens_sent,
+        fee_nano_erg,
+        counterparty,
         num_inputs,
         num_outputs,
     })
@@ -926,6 +995,48 @@ mod tests {
             .collect();
         assert!(received.contains(&("tokB".to_string(), 12)));
         assert!(received.contains(&("tokA".to_string(), 3)));
+    }
+
+    #[test]
+    fn summary_reports_fee_counterparty_and_tokens_sent() {
+        let addr = "9hXQzT1jJdfLmMGA4rH5QMW2EK9QVnWYyRvVGHKP8pqvS2tVK9t";
+        let fee_tree = ergo_lib::wallet::miner_fee::MINERS_FEE_BASE16_BYTES;
+        let tx = serde_json::json!({
+            "id": "tx2",
+            "inclusionHeight": 100,
+            "timestamp": 1700000000000u64,
+            "inputs": [
+                {"boxId": "b0", "address": addr, "value": 200,
+                 "assets": [{"tokenId": "tokA", "amount": 50}]}
+            ],
+            "outputs": [
+                {"address": "9foreign", "value": 100, "ergoTree": "00",
+                 "assets": [{"tokenId": "tokA", "amount": 30}]},
+                {"address": addr, "value": 90, "ergoTree": "01",
+                 "assets": [{"tokenId": "tokA", "amount": 20}]},
+                {"address": "9miner", "value": 10, "ergoTree": fee_tree, "assets": []}
+            ]
+        });
+        let s = summarize_tx_for_address(&tx, addr).expect("summary");
+        assert_eq!(s.fee_nano_erg, Some(10));
+        assert_eq!(s.counterparty.as_deref(), Some("9foreign"));
+        assert_eq!(s.tokens_sent.len(), 1);
+        assert_eq!(s.tokens_sent[0].token_id, "tokA");
+        assert_eq!(s.tokens_sent[0].amount, 30);
+
+        // Incoming: counterparty is the sender's input address.
+        let incoming = serde_json::json!({
+            "id": "tx3",
+            "inputs": [{"boxId": "b9", "address": "9sender", "value": 500}],
+            "outputs": [
+                {"address": addr, "value": 490, "ergoTree": "01", "assets": []},
+                {"address": "9miner", "value": 10, "ergoTree": fee_tree, "assets": []}
+            ]
+        });
+        let s = summarize_tx_for_address(&incoming, addr).expect("summary");
+        assert_eq!(s.value_nano_erg, 490);
+        assert_eq!(s.counterparty.as_deref(), Some("9sender"));
+        assert!(s.tokens_sent.is_empty());
     }
 
     fn reset_network() {

@@ -8,6 +8,7 @@ import '../services/address_label_service.dart';
 import '../services/session_lock.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
+import 'widgets/soft_card.dart';
 
 class ReceiveScreen extends StatefulWidget {
   const ReceiveScreen({super.key});
@@ -44,21 +45,17 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     final args = WalletRouteArgs.of(context);
     final address = args.receiveAddress;
     final amount = _amountCtrl.text.trim();
-    String data;
+    String data = address;
     String? error;
-    if (amount.isEmpty) {
-      data = address;
-    } else if (RegExp(r'^\d+(\.\d+)?$').hasMatch(amount)) {
+    if (amount.isNotEmpty) {
       final nano = parseErgToNano(amount);
-      if (nano != null && nano > 0) {
-        data = 'ergo:$address?amount=$amount';
-      } else {
-        data = address;
+      if (nano == null) {
+        error = 'Amount must be a decimal number, like 0.001';
+      } else if (nano <= 0) {
         error = 'Amount must be greater than zero';
+      } else {
+        data = 'ergo:$address?amount=${formatErg(nano, unit: false)}';
       }
-    } else {
-      data = address;
-      error = 'Amount must be a decimal number, like 0.001';
     }
     if (data != _qrData || error != _amountError) {
       setState(() {
@@ -103,6 +100,42 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     await addressLabelService.setLabel(address, label);
   }
 
+  Widget _usedAddressRow(BuildContext context, String a) {
+    final colors = ArgusColors.of(context);
+    final label = addressLabelService.labelFor(a);
+    return InkWell(
+      onTap: () async {
+        await sessionLock.run(() => Clipboard.setData(ClipboardData(text: a)));
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${shorten(a, head: 8, tail: 6)} copied')),
+          );
+        }
+      },
+      onLongPress: () => _editLabel(a),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(shorten(a, head: 12, tail: 10), style: monoStyle(context, size: 12)),
+                  if (label != null && label.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(label, style: TextStyle(fontSize: 12, color: colors.muted)),
+                  ],
+                ],
+              ),
+            ),
+            Icon(Icons.copy, size: 16, color: colors.muted),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final args = WalletRouteArgs.of(context);
@@ -135,8 +168,14 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
           if (address.isNotEmpty)
             Center(
               child: Container(
-                color: paper,
-                padding: const EdgeInsets.all(16),
+                // Scanners need dark-on-light; the pale card reads as a
+                // deliberate "ticket" in both palettes.
+                decoration: BoxDecoration(
+                  color: paper,
+                  borderRadius: BorderRadius.circular(cardRadius),
+                  border: Border.all(color: iris.withValues(alpha: 0.45)),
+                ),
+                padding: const EdgeInsets.all(18),
                 child: QrImageView(
                   data: _qrData.isEmpty ? address : _qrData,
                   version: QrVersions.auto,
@@ -209,35 +248,28 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                     ),
             child: const Text('Share'),
           ),
-          if (args.historyAddresses.length > 1) ...[
+          if (args.historyAddresses.where((a) => a != address).isNotEmpty) ...[
             const SizedBox(height: 28),
             const SectionLabel('Used addresses'),
-            const SizedBox(height: 8),
-            ...args.historyAddresses.map((a) {
-              if (a == address) return const SizedBox.shrink();
-              final label = addressLabelService.labelFor(a);
-              return InkWell(
-                onTap: () async {
-                  await sessionLock.run(() => Clipboard.setData(ClipboardData(text: a)));
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('${shorten(a, head: 8, tail: 6)} copied')),
-                    );
-                  }
-                },
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(shorten(a, head: 10, tail: 8), style: monoStyle(context, size: 11)),
-                      if (label != null)
-                        Text(label, style: TextStyle(color: iris, fontSize: 12)),
-                    ],
-                  ),
+            const SizedBox(height: 4),
+            Text(
+              'Older addresses keep working; tap one to copy it.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 10),
+            ListenableBuilder(
+              listenable: addressLabelService,
+              builder: (context, _) => SoftCard(
+                padding: EdgeInsets.zero,
+                child: DividedColumn(
+                  indent: 16,
+                  children: [
+                    for (final a in args.historyAddresses)
+                      if (a != address) _usedAddressRow(context, a),
+                  ],
                 ),
-              );
-            }),
+              ),
+            ),
           ],
         ],
       ),

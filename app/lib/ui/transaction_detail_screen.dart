@@ -7,6 +7,7 @@ import '../services/network_controller.dart';
 import '../services/session_lock.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
+import 'widgets/soft_card.dart';
 
 class TransactionDetailScreen extends StatelessWidget {
   const TransactionDetailScreen({super.key});
@@ -31,6 +32,16 @@ class TransactionDetailScreen extends StatelessWidget {
         const <({String id, BigInt amount})>[];
     final confirmed = height != null && height > 0;
     final outgoing = nano != null && nano < 0;
+    final fee = (tx['fee_nano_erg'] as num?)?.toInt();
+    final counterparty = tx['counterparty']?.toString();
+    final sent = (tx['tokens_sent'] as List?)
+            ?.whereType<Map>()
+            .map((m) => (
+                  id: m['token_id']?.toString() ?? '',
+                  amount: BigInt.from((m['amount'] as num?)?.toInt() ?? 0),
+                ))
+            .toList() ??
+        const <({String id, BigInt amount})>[];
     // Compare identities, not lengths: token_ids may repeat and arrivals
     // cover a subset of the unique ids.
     final missingTokenIds =
@@ -82,6 +93,43 @@ class TransactionDetailScreen extends StatelessWidget {
             Text(formatTxTime(ts), style: Theme.of(context).textTheme.bodySmall),
           ],
           const SizedBox(height: 24),
+          if (counterparty != null && counterparty.isNotEmpty) ...[
+            SectionLabel(outgoing ? 'To' : 'From'),
+            const SizedBox(height: 8),
+            SoftCard(
+              padding: const EdgeInsets.all(12),
+              child: SelectableText(counterparty, style: monoStyle(context, size: 12)),
+            ),
+            const SizedBox(height: 16),
+          ],
+          if (fee != null && fee > 0) ...[
+            const SectionLabel('Miner fee'),
+            const SizedBox(height: 8),
+            Text(formatErg(fee), style: Theme.of(context).textTheme.bodyMedium),
+            const SizedBox(height: 16),
+          ],
+          if (sent.isNotEmpty) ...[
+            const SectionLabel('Tokens sent'),
+            const SizedBox(height: 8),
+            for (final t in sent)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: FutureBuilder<TokenBalance>(
+                  future: walletService.tokenMeta(t.id, 0),
+                  builder: (context, snap) {
+                    final sym = snap.data?.name ?? shorten(t.id, head: 10, tail: 6);
+                    final decimals = snap.data?.decimals ?? 0;
+                    final fits = t.amount <= BigInt.from(0x7FFFFFFFFFFFFFFF);
+                    return Text(
+                      '${formatTokenAmount(fits ? t.amount.toInt() : 0, decimals)} $sym'
+                      '${fits ? '' : ' (large amount)'}',
+                      style: monoStyle(context, size: 12),
+                    );
+                  },
+                ),
+              ),
+            const SizedBox(height: 10),
+          ],
           const SectionLabel('Id'),
           const SizedBox(height: 8),
           SelectableText(txId, style: monoStyle(context, size: 12)),

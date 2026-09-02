@@ -7,6 +7,7 @@ import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/address_label_service.dart';
 import '../services/deep_link_controller.dart';
+import '../services/dexy_service.dart';
 import '../services/ergopay_service.dart';
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
@@ -31,8 +32,15 @@ import 'transactions_screen.dart';
 import 'wallets_overview_screen.dart';
 import 'widgets/activity_tile.dart';
 import 'widgets/asset_tile.dart';
+import 'widgets/empty_state.dart';
 import 'widgets/soft_card.dart';
 import 'widgets/token_detail_sheet.dart';
+
+/// Mainnet SigmaUSD token ids (EIP-15 bank), for the Discover position line.
+const sigUsdTokenId =
+    '03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04';
+const sigRsvTokenId =
+    '003bd19d0187117f130b62e1bcab0939929ff5c7709f843c5c4dd158949285d0';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -1136,9 +1144,13 @@ class _DashboardScreenState extends State<DashboardScreen>
             const SizedBox(height: 10),
             _sync.recentTxs.isEmpty
                 ? SoftCard(
-                    child: Text(
-                      'No activity yet. Receive to your address to get started.',
-                      style: Theme.of(context).textTheme.bodyMedium,
+                    child: EmptyState(
+                      compact: true,
+                      icon: Icons.inbox_outlined,
+                      title: 'No activity yet',
+                      body: 'Share your address or scan a payment request to receive your first ERG.',
+                      actionLabel: 'Show my address',
+                      onAction: () => _go('/receive'),
                     ),
                   )
                 : SoftCard(
@@ -1165,13 +1177,19 @@ class _DashboardScreenState extends State<DashboardScreen>
                 children: [
                   _discoverCard(
                     title: 'Dexy',
-                    subtitle: 'Trade, provide liquidity, and mint on Ergo.',
+                    subtitle: _positionLine(
+                          ids: [
+                            for (final v in DexyVariant.values) ...[v.tokenId, v.lpTokenId],
+                          ],
+                        ) ??
+                        'Trade, provide liquidity, and mint on Ergo.',
                     icon: Icons.all_inclusive,
                     onTap: () => _goHub(SwapVenue.dexy),
                   ),
                   _discoverCard(
                     title: 'AgeUSD',
-                    subtitle: 'The decentralized stablecoin on Ergo.',
+                    subtitle: _positionLine(ids: const [sigUsdTokenId, sigRsvTokenId]) ??
+                        'The decentralized stablecoin on Ergo.',
                     icon: Icons.attach_money,
                     onTap: () => _goHub(SwapVenue.ageusd),
                   ),
@@ -1524,6 +1542,20 @@ class _DashboardScreenState extends State<DashboardScreen>
         ),
       ),
     );
+  }
+
+  /// "You hold 12.5 SigUSD · 3 SigRSV" when the wallet has a position in
+  /// any of [ids]; null otherwise so the card keeps its marketing line.
+  String? _positionLine({required List<String> ids}) {
+    final held = <String>[];
+    for (final t in _sync.tokens) {
+      if (!ids.contains(t.id) || t.amount <= 0) continue;
+      held.add(_balanceHidden
+          ? '•••• ${t.label}'
+          : '${formatTokenAmountGrouped(t.amount, t.decimals)} ${t.label}');
+    }
+    if (held.isEmpty) return null;
+    return 'You hold ${held.take(2).join(' · ')}';
   }
 
   Widget _discoverCard({
