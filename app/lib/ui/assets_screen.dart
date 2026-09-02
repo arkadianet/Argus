@@ -6,6 +6,7 @@ import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'send_screen.dart';
 import 'widgets/asset_tile.dart';
+import 'widgets/empty_state.dart';
 import 'widgets/soft_card.dart';
 import 'widgets/token_detail_sheet.dart';
 
@@ -88,10 +89,12 @@ class AssetsScreen extends StatelessWidget {
               ],
               if (args.tokens.isEmpty) ...[
                 const SizedBox(height: 16),
-                SoftCard(
-                  child: Text(
-                    'No tokens yet. Tokens you receive appear here.',
-                    style: Theme.of(context).textTheme.bodyMedium,
+                const SoftCard(
+                  child: EmptyState(
+                    compact: true,
+                    icon: Icons.token_outlined,
+                    title: 'No tokens yet',
+                    body: 'Tokens and NFTs sent to any of your addresses appear here automatically.',
                   ),
                 ),
               ],

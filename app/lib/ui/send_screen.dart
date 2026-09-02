@@ -19,6 +19,7 @@ import 'ergopay_screen.dart';
 import 'offline_banner.dart';
 import 'scan_screen.dart';
 import 'send_recipients.dart';
+import 'widgets/amount_entry.dart';
 
 /// One auto-buy route line, e.g. `≈ 3.7196 ERG via FreeMint  ·  cheapest`.
 String dexyQuoteLabel(DexyPathQuote quote, {required bool cheapest}) =>
@@ -604,17 +605,11 @@ class _SendScreenState extends State<SendScreen> {
     return '$tokenId: $amount';
   }
 
-  /// "Available 12.3456 ERG  ·  ≈ $4.20 USD" under the amount field; the
-  /// fiat part tracks what is typed.
-  String? _amountHelper() {
-    final parts = <String>[];
+  /// "Available 12.3456 ERG" under the amount field.
+  String? _availableLine() {
     final spendable = _args.spendableNano;
-    if (spendable != null) {
-      parts.add('Available ${formatErg(spendable, maxFrac: 4)}');
-    }
-    final fiat = networkController.fiatText(_amountNano());
-    if (fiat != null) parts.add(fiat);
-    return parts.isEmpty ? null : parts.join('  ·  ');
+    if (spendable == null) return null;
+    return 'Available ${formatErg(spendable, maxFrac: 4)}';
   }
 
   String _advancedSummary() {
@@ -882,15 +877,10 @@ class _SendScreenState extends State<SendScreen> {
                     else ...[
                       const SizedBox(height: 12),
                       if (token == null)
-                        TextFormField(
+                        AmountEntry(
                           controller: _amountCtrl,
-                          decoration: InputDecoration(
-                            labelText: 'Amount (ERG)',
-                            hintText: '0.001',
-                            helperText: _amountHelper(),
-                            suffixIcon: TextButton(onPressed: _applyMaxErg, child: const Text('MAX')),
-                          ),
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          helperText: _availableLine(),
+                          onMax: _applyMaxErg,
                           onChanged: (_) => setState(() {}),
                           validator: (v) {
                             final n = parseErgToNano(v ?? '');

@@ -30,6 +30,7 @@ class ActivityTile extends StatelessWidget {
     final confirmed = height > 0;
     final tokenCount = (tx['tokens_received'] as List?)?.length ?? 0;
     final txId = tx['tx_id']?.toString() ?? '';
+    final counterparty = tx['counterparty']?.toString();
     final tint = outgoing ? rust : moss;
 
     return InkWell(
@@ -80,8 +81,14 @@ class ActivityTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    hidden ? '••••' : formatErg(nano.abs(), unit: true, maxFrac: 4),
+                    [
+                      hidden ? '••••' : formatErg(nano.abs(), unit: true, maxFrac: 4),
+                      if (counterparty != null && counterparty.isNotEmpty)
+                        '${outgoing ? 'to' : 'from'} ${shorten(counterparty, head: 6, tail: 4)}',
+                    ].join(' '),
                     style: TextStyle(fontSize: 12.5, color: muted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                   if (showTxId && txId.isNotEmpty) ...[
                     const SizedBox(height: 2),
