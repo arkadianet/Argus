@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -8,12 +7,11 @@ import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/address_label_service.dart';
 import '../services/network_controller.dart';
-import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/watch_only_service.dart';
-import '../services/wallet_database_service.dart';
 import '../services/wallet_service.dart';
+import '../services/wallet_sync_controller.dart';
 import '../theme/argus_theme.dart';
 import 'assets_screen.dart';
 import 'create_wallet_screen.dart';
@@ -35,20 +33,16 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen>
     with WidgetsBindingObserver {
   bool _loading = true;
+
+  /// Gate-screen message (locked / no wallet / unlock errors). The synced
+  /// ledger reads its state from [_sync] instead.
   String _status = 'Initializing...';
-  String? _receiveAddress;
-  String? _changeAddress;
-  String? _senderAddress;
-  int? _balanceNano;
-  List<Map<String, dynamic>> _recentTxs = [];
-  List<Map<String, dynamic>> _usedAddresses = [];
-  List<TokenBalance> _tokens = [];
+  final _sync = WalletSyncController(const LiveWalletSyncGateway());
   bool _walletUnlocked = false;
   bool _hasSeed = false;
   bool _hasPin = false;
   bool _canBiometric = false;
   bool _unlockBusy = false;
-  int _utxoCount = 0;
   int _watchOnlyTotal = 0;
   bool _watchOnlyLoading = false;
   int _watchOnlyGeneration = 0;
@@ -56,27 +50,17 @@ class _DashboardScreenState extends State<DashboardScreen>
   List<WalletInfo> _wallets = [];
   String? _walletId;
 
-  /// Non-null when a stored pinned address index can't be derived (e.g.
-  /// beyond the wallet core's scan range). Shown as a warning on the card.
-  String? _pinIssue;
-
   /// Poll for mempool changes (pending activity, balance, spendable UTXOs)
-  /// while the dashboard is open. Paused while backgrounded; a tick is
-  /// skipped if the previous refresh is still in flight.
+  /// while the dashboard is open. A tick is a light refresh on the known
+  /// addresses; discovery and node probing only run on unlock and pull to
+  /// refresh, plus the slower probe timer. Paused while backgrounded; a
+  /// tick is skipped if the previous refresh is still in flight.
   Timer? _pollTimer;
+  Timer? _probeTimer;
   bool _pollBackgrounded = false;
-  Future<void>? _refreshOp;
 
-  /// Single-flight refresh shared by polling, the unlock flow and pull to
-  /// refresh: callers during an in-flight refresh await the same operation
-  /// instead of starting a competing one.
-  Future<void> _sharedRefresh() {
-    final inFlight = _refreshOp;
-    if (inFlight != null) return inFlight;
-    final op = _refresh().whenComplete(() => _refreshOp = null);
-    _refreshOp = op;
-    return op;
-  }
+  static const _pollInterval = Duration(seconds: 20);
+  static const _probeInterval = Duration(minutes: 2);
 
   @override
   void initState() {
@@ -84,24 +68,37 @@ class _DashboardScreenState extends State<DashboardScreen>
     WidgetsBinding.instance.addObserver(this);
     walletService.unlocked.addListener(_syncLock);
     watchOnlyService.addListener(_onWatchOnlyChanged);
-    _pollTimer = Timer.periodic(
-      const Duration(seconds: 20),
-      (_) => _pollTick(),
-    );
+    _sync.addListener(_onSyncChanged);
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _pollTick());
+    _probeTimer = Timer.periodic(_probeInterval, (_) => _probeTick());
     _init();
   }
 
+  void _onSyncChanged() {
+    if (mounted) setState(() {});
+  }
+
   void _pollTick() {
-    if (!mounted || _pollBackgrounded || _refreshOp != null) return;
-    _sharedRefresh();
+    if (!mounted || _pollBackgrounded || !_walletUnlocked || _sync.busy) {
+      return;
+    }
+    _sync.refresh(discover: false);
+  }
+
+  void _probeTick() {
+    if (!mounted || _pollBackgrounded) return;
+    networkController.probe();
   }
 
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _probeTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     walletService.unlocked.removeListener(_syncLock);
     watchOnlyService.removeListener(_onWatchOnlyChanged);
+    _sync.removeListener(_onSyncChanged);
+    _sync.dispose();
     _pinCtrl.dispose();
     super.dispose();
   }
@@ -135,14 +132,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   void _resetLocked() {
     _walletUnlocked = false;
-    _receiveAddress = null;
-    _changeAddress = null;
-    _senderAddress = null;
-    _balanceNano = null;
-    _recentTxs = [];
-    _usedAddresses = [];
-    _tokens = [];
-    _utxoCount = 0;
+    _sync.reset();
     _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
   }
 
@@ -232,106 +222,27 @@ class _DashboardScreenState extends State<DashboardScreen>
       setState(_resetLocked);
       return;
     }
-
-    // 1. Derive address (pinned index or 0) locally (instant, deterministic)
-    final int addressIndex = await walletService.getPinnedAddressIndex();
-    String? derived = await walletService.tryDeriveAddress(addressIndex);
-    if (derived == null && addressIndex != 0) {
-      // A stored pin beyond the derivable range must not lock the user out
-      // of their wallet — fall back to index 0 and surface the problem.
-      _pinIssue = "Pinned index $addressIndex can't be derived "
-          '(max ${WalletService.maxAddressIndex}). Reset it in Settings.';
-      derived = await walletService.tryDeriveAddress(0);
-    } else {
-      _pinIssue = null;
+    // 1. Derive the main address locally and paint from the cache (instant).
+    final ok = await _sync.hydrateAfterUnlock();
+    if (!mounted) return;
+    if (!walletService.isUnlocked) {
+      setState(_resetLocked);
+      return;
     }
-    final String receive;
-    try {
-      if (derived != null) {
-        receive = derived;
-        if (!mounted) return;
-        if (!walletService.isUnlocked) {
-          setState(_resetLocked);
-          return;
-        }
-      } else {
-        throw StateError('no derivable address');
-      }
-    } catch (e) {
-      if (!mounted) return;
-      debugPrint('argus: address derivation failed after unlock: $e');
+    if (!ok) {
+      debugPrint('argus: address derivation failed after unlock');
       setState(() {
-        _walletUnlocked = walletService.isUnlocked;
-        _status = walletService.isUnlocked
-            ? 'Unlocked, but no address could be derived'
-            : 'Locked';
+        _walletUnlocked = true;
+        _status = 'Unlocked, but no address could be derived';
       });
       return;
     }
-
-    // 2. Instant 0ms hydration from local mini-db cache validated by wallet identifier
-    final cached = await WalletDatabaseService.loadCachedState(expectedWalletId: receive);
-    if (cached != null && mounted) {
-      final used = (cached['used_addresses'] as List? ?? [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-      final balance = cached['balance_nano_erg'] as int?;
-      final txs = (cached['transactions'] as List? ?? [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-      final rawTokens = (cached['tokens'] as List? ?? []);
-      final tokenList = <TokenBalance>[];
-      for (final t in rawTokens) {
-        if (t is Map) {
-          tokenList.add(TokenBalance(
-            id: t['id']?.toString() ?? '',
-            amount: (t['amount'] as num?)?.toInt() ?? 0,
-            name: t['name']?.toString(),
-            decimals: (t['decimals'] as num?)?.toInt() ?? 0,
-          ));
-        }
-      }
-
-      setState(() {
-        _walletUnlocked = true;
-        _receiveAddress ??= receive;
-        _changeAddress ??= receive;
-        _senderAddress ??= _bestSender(receive);
-        _usedAddresses = used;
-        _balanceNano = balance;
-        _tokens = tokenList;
-        _recentTxs = txs;
-        _utxoCount = (cached['utxo_count'] as num?)?.toInt() ?? 0;
-        _status = 'Unlocked';
-      });
-    } else {
-      setState(() {
-        _walletUnlocked = true;
-        _receiveAddress ??= receive;
-        _changeAddress ??= receive;
-        _senderAddress ??= receive;
-        _status = 'Unlocked';
-      });
-    }
-
-    // 3. Fast sync in background
-    await _sharedRefresh();
-  }
-
-  String _bestSender(String receive) {
-    var best = receive;
-    var bestNano = -1;
-    for (final used in _usedAddresses) {
-      final addr = used['address']?.toString();
-      final nano = (used['balance_nano_erg'] as num?)?.toInt() ?? 0;
-      if (addr != null && addr.isNotEmpty && nano >= bestNano) {
-        best = addr;
-        bestNano = nano;
-      }
-    }
-    return best;
+    setState(() {
+      _walletUnlocked = true;
+      _status = 'Unlocked';
+    });
+    // 2. Full sync (discovery + balances + activity) in the background.
+    await _sync.refresh(discover: true);
   }
 
   Future<bool> _pinAllowed() async {
@@ -589,7 +500,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       fadeRoute(
         WalletOverviewScreen(
           selectedWalletId: _walletId,
-          activeBalanceNano: _walletUnlocked ? _balanceNano : null,
+          activeBalanceNano: _walletUnlocked ? _sync.balanceNano : null,
         ),
       ),
     );
@@ -619,183 +530,6 @@ class _DashboardScreenState extends State<DashboardScreen>
       return;
     }
     if (mounted) setState(() {});
-  }
-
-  Future<void> _refresh() async {
-    networkController.probe();
-    setState(() => _status = 'Syncing addresses…');
-    try {
-      final raw = await walletService.discoverAddresses();
-      if (!mounted) return;
-      if (!walletService.isUnlocked) {
-        setState(_resetLocked);
-        return;
-      }
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final used = (map['addresses'] as List? ?? [])
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-      final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
-      final pinnedIndex = await walletService.getPinnedAddressIndex();
-      final pinnedReceive = pinnedIndex > 0
-          ? await walletService.tryDeriveAddress(pinnedIndex)
-          : null;
-      if (pinnedIndex > 0 && pinnedReceive == null) {
-        _pinIssue = "Pinned index $pinnedIndex can't be derived "
-            '(max ${WalletService.maxAddressIndex}). Reset it in Settings.';
-      } else {
-        _pinIssue = null;
-      }
-      // The pinned address stays the main address while it sits at or beyond
-      // the usage frontier; once the wallet has moved past it, the next
-      // unused address takes over.
-      final String receive;
-      if (pinnedReceive != null && (next == 0 || pinnedIndex >= next)) {
-        receive = pinnedReceive;
-      } else if (next == 0) {
-        receive = _receiveAddress ?? await walletService.deriveAddress(0);
-      } else {
-        receive = await walletService.deriveAddress(next);
-      }
-      // Privacy off (default): change returns to the first derived address.
-      // Privacy on: change goes to the next unused address.
-      final change = await walletService.deriveAddress(
-        privacyService.useUnusedChangeAddress(walletService.activeWalletId)
-            ? next
-            : 0,
-      );
-      if (!mounted) return;
-      if (!walletService.isUnlocked) {
-        setState(_resetLocked);
-        return;
-      }
-      setState(() {
-        _usedAddresses = used;
-        _receiveAddress = receive;
-        _changeAddress = change;
-        _senderAddress = _bestSender(receive);
-      });
-    } catch (_) {
-      // Discovery failed — fall through to balance refresh with known addresses.
-    }
-    final addresses = _historyAddresses();
-    if (addresses.isEmpty) {
-      if (mounted) setState(() => _status = 'Could not find any addresses');
-      return;
-    }
-    try {
-      setState(() => _status = 'Refreshing balances…');
-      final maps = await Future.wait(
-        addresses.map((address) async {
-          try {
-            return await walletService.getBalance(address);
-          } catch (_) {
-            return null;
-          }
-        }),
-      );
-      var erg = 0;
-      var failed = 0;
-      final tokens = <String, TokenBalance>{};
-      for (final map in maps) {
-        if (map == null) {
-          failed++;
-          continue;
-        }
-        erg += (map['balance_nano_erg'] as num?)?.toInt() ?? 0;
-        for (final t in await walletService.hydrateTokens(map['tokens'])) {
-          final prev = tokens[t.id];
-          tokens[t.id] = TokenBalance(
-            id: t.id,
-            amount: (prev?.amount ?? 0) + t.amount,
-            name: t.name,
-            decimals: t.decimals,
-            emissionAmount: t.emissionAmount,
-            iconUrl: t.iconUrl,
-          );
-        }
-      }
-      final txs = await walletService.loadHistory(addresses, limit: 20);
-      if (!mounted) return;
-      if (!walletService.isUnlocked) {
-        setState(_resetLocked);
-        return;
-      }
-      final balanceSucceeded = failed < addresses.length && addresses.isNotEmpty;
-      final historyPartial = walletService.lastHistoryPartial;
-      setState(() {
-        if (balanceSucceeded) {
-          _balanceNano = erg;
-          _tokens = tokens.values.toList();
-        }
-        // Replace only when the result is trustworthy: an empty result means
-        // pending entries dropped from the mempool must leave the dashboard
-        // (and the cache persisted below). A partial address failure returns
-        // an empty list without throwing — keep the old list in that case.
-        if (txs.isNotEmpty || failed == 0) {
-          _recentTxs = txs.take(5).toList();
-        }
-        if (failed == addresses.length) {
-          _status = 'Could not refresh balances';
-        } else if (failed > 0) {
-          _status = 'Unlocked (balances may be stale)';
-        } else if (historyPartial) {
-          _status = 'Unlocked (activity may be incomplete)';
-        } else {
-          _status = 'Unlocked';
-        }
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _status = 'Could not refresh balances');
-    }
-    await _refreshUtxos();
-
-    // Persist latest state to local mini-db cache for instant load next time
-    if (_receiveAddress != null) {
-      await WalletDatabaseService.saveCachedState(
-        walletId: _receiveAddress!,
-        primaryAddress: _receiveAddress,
-        usedAddresses: _usedAddresses,
-        balanceNano: _balanceNano ?? 0,
-        tokens: _tokens
-            .map((t) => {
-                  'id': t.id,
-                  'amount': t.amount,
-                  'name': t.name,
-                  'decimals': t.decimals,
-                })
-            .toList(),
-        transactions: _recentTxs,
-        utxoCount: _utxoCount,
-      );
-    }
-  }
-
-  List<String> _historyAddresses() {
-    final out = <String>[];
-    for (final used in _usedAddresses) {
-      final a = used['address']?.toString();
-      if (a != null && a.isNotEmpty) out.add(a);
-    }
-    if (_receiveAddress != null && !out.contains(_receiveAddress)) {
-      out.add(_receiveAddress!);
-    }
-    return out;
-  }
-
-  Future<void> _refreshUtxos() async {
-    final addr = _historyAddresses();
-    if (addr.isEmpty) return;
-    try {
-      final boxes = await walletService.listUnspentBoxes(addr,
-          nodeUrl: networkController.activeUrl);
-      if (!mounted) return;
-      setState(() => _utxoCount = boxes.length);
-    } catch (_) {
-      // UTXO count is best-effort; don't disrupt the dashboard
-    }
   }
 
   Future<void> _lock() async {
@@ -845,13 +579,14 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   WalletRouteArgs _args({Map<String, dynamic>? transaction}) {
+    final receive = _sync.receiveAddress ?? '';
     return WalletRouteArgs(
-      senderAddress: _senderAddress ?? _receiveAddress ?? '',
-      receiveAddress: _receiveAddress ?? '',
-      changeAddress: _changeAddress ?? _receiveAddress ?? '',
-      historyAddresses: _historyAddresses(),
-      tokens: _tokens,
-      spendableNano: _balanceNano,
+      senderAddress: _sync.senderAddress ?? receive,
+      receiveAddress: receive,
+      changeAddress: _sync.changeAddress ?? receive,
+      historyAddresses: _sync.historyAddresses,
+      tokens: _sync.tokens,
+      spendableNano: _sync.balanceNano,
       transaction: transaction,
     );
   }
@@ -861,7 +596,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       _snack('Unlock the wallet first');
       return;
     }
-    if (_receiveAddress == null) {
+    if (_sync.receiveAddress == null) {
       _snack('Address is still loading');
       return;
     }
@@ -875,7 +610,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       _snack('Unlock the wallet first');
       return;
     }
-    if (_receiveAddress == null) {
+    if (_sync.receiveAddress == null) {
       _snack('Address is still loading');
       return;
     }
@@ -919,11 +654,6 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (mounted) setState(() {});
   }
 
-  bool get _stale =>
-      _status.contains('stale') ||
-      _status.contains('unavailable') ||
-      _status.contains('Could not') ||
-      _status.contains('no address');
 
   String get _activeWalletName {
     for (final w in _wallets) {
@@ -1165,17 +895,17 @@ class _DashboardScreenState extends State<DashboardScreen>
       key: const ValueKey('ledger'),
       listenable: networkController,
       builder: (context, _) {
-        final fungible = _tokens.where((t) => !t.isNft).toList();
-        final nfts = _tokens.where((t) => t.isNft).toList();
-        final fragmented = _utxoCount > utxoFragmentationThreshold;
+        final fungible = _sync.tokens.where((t) => !t.isNft).toList();
+        final nfts = _sync.tokens.where((t) => t.isNft).toList();
+        final fragmented = _sync.utxoCount > utxoFragmentationThreshold;
         final assets = [
-          _AssetRow.erg(balanceNano: _balanceNano),
+          _AssetRow.erg(balanceNano: _sync.balanceNano),
           ...fungible.map(_AssetRow.token),
           ...nfts.map(_AssetRow.token),
         ];
 
         return RefreshIndicator(
-          onRefresh: _sharedRefresh,
+          onRefresh: () => _sync.refresh(discover: true),
           child: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
           children: [
@@ -1200,10 +930,10 @@ class _DashboardScreenState extends State<DashboardScreen>
             ),
             const SizedBox(height: 28),
             _sectionHeader('Recent activity',
-                action: _recentTxs.isNotEmpty ? 'View all' : null,
+                action: _sync.recentTxs.isNotEmpty ? 'View all' : null,
                 onTap: () => _go('/transactions')),
             const SizedBox(height: 10),
-            _recentTxs.isEmpty
+            _sync.recentTxs.isEmpty
                 ? _card(
                     child: Text(
                       'No activity yet. Receive to your address to get started.',
@@ -1214,9 +944,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                     padding: EdgeInsets.zero,
                     child: Column(
                       children: [
-                        for (var i = 0; i < _recentTxs.length; i++) ...[
+                        for (var i = 0; i < _sync.recentTxs.length; i++) ...[
                           if (i > 0) const Divider(height: 1, indent: 68),
-                          _activityTile(_recentTxs[i]),
+                          _activityTile(_sync.recentTxs[i]),
                         ],
                       ],
                     ),
@@ -1251,7 +981,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ],
               ),
             ),
-            if (_usedAddresses.isNotEmpty) ...[
+            if (_sync.usedAddresses.isNotEmpty) ...[
               const SizedBox(height: 28),
               _sectionHeader('Addresses'),
               const SizedBox(height: 10),
@@ -1259,9 +989,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                 padding: EdgeInsets.zero,
                 child: Column(
                   children: [
-                    for (var i = 0; i < _usedAddresses.length; i++) ...[
+                    for (var i = 0; i < _sync.usedAddresses.length; i++) ...[
                       if (i > 0) const Divider(height: 1, indent: 16),
-                      _addressTile(_usedAddresses[i]),
+                      _addressTile(_sync.usedAddresses[i]),
                     ],
                   ],
                 ),
@@ -1332,10 +1062,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         ? watchfulMuted
         : ledgerMuted;
     final online = networkController.activeUrl != null;
-    final synced = !_stale &&
-        !_status.contains('Syncing') &&
-        !_status.contains('Refreshing') &&
-        online;
+    final stale = _sync.isStale;
+    final syncing = _sync.isSyncing;
+    final synced = !stale && !syncing && online;
 
     return _card(
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
@@ -1384,7 +1113,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 child: Text(
                   _balanceHidden
                       ? '••••••'
-                      : formatErg(_balanceNano, unit: false, maxFrac: 4),
+                      : formatErg(_sync.balanceNano, unit: false, maxFrac: 4),
                   style: Theme.of(context)
                       .textTheme
                       .displayLarge
@@ -1416,13 +1145,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                     style: TextStyle(fontSize: 14, color: muted));
               }
               return Text(
-                networkController.fiatText(_balanceNano) ?? '',
+                networkController.fiatText(_sync.balanceNano) ?? '',
                 style: TextStyle(fontSize: 14, color: muted),
               );
             },
           ),
           const SizedBox(height: 14),
-          if (_pinIssue != null) ...[
+          if (_sync.pinIssue != null) ...[
             InkWell(
               onTap: _openSettings,
               borderRadius: BorderRadius.circular(8),
@@ -1434,7 +1163,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        _pinIssue!,
+                        _sync.pinIssue!,
                         style: TextStyle(fontSize: 12.5, color: rust),
                       ),
                     ),
@@ -1466,17 +1195,14 @@ class _DashboardScreenState extends State<DashboardScreen>
                     children: [
                       Icon(Icons.circle,
                           size: 8,
-                          color: synced ? moss : (_stale ? rust : iris)),
+                          color: synced ? moss : (stale ? rust : iris)),
                       const SizedBox(width: 6),
                       Text(
                         synced
                             ? 'Synced'
-                            : (_stale
+                            : (stale
                                 ? 'Out of sync'
-                                : (_status.contains('Syncing') ||
-                                        _status.contains('Refreshing')
-                                    ? 'Syncing…'
-                                    : 'Offline')),
+                                : (syncing ? 'Syncing…' : 'Offline')),
                         style: TextStyle(
                             fontSize: 12.5,
                             color: muted,
@@ -1494,7 +1220,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                       ),
                       _dotSep(muted),
                       Text(
-                        '$_utxoCount UTXOs${fragmented ? ' · Fragmented' : ''}',
+                        '${_sync.utxoCount} UTXOs${fragmented ? ' · Fragmented' : ''}',
                         style: TextStyle(
                           fontSize: 12.5,
                           color: fragmented ? rust : muted,
