@@ -13,8 +13,21 @@ class PrivacyService extends ChangeNotifier {
   /// per-wallet value yet.
   static const _legacyKey = 'argus_privacy_unused_change';
 
+  static const _hideBalancesKey = 'argus_hide_balances';
+
   final Map<String, bool> _byWallet = {};
   bool? _legacyDefault;
+
+  /// App-wide: mask amounts on the home screen (shoulder-surfing guard).
+  bool hideBalances = false;
+
+  Future<void> setHideBalances(bool value) async {
+    if (value == hideBalances) return;
+    hideBalances = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_hideBalancesKey, value);
+  }
 
   bool? get legacyDefault => _legacyDefault;
 
@@ -35,6 +48,7 @@ class PrivacyService extends ChangeNotifier {
       _byWallet[walletId] = prefs.getBool(key) ?? false;
     }
     _legacyDefault = prefs.getBool(_legacyKey);
+    hideBalances = prefs.getBool(_hideBalancesKey) ?? false;
     notifyListeners();
   }
 

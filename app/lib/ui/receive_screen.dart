@@ -41,7 +41,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   }
 
   void _updateQr() {
-    final args = WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+    final args = WalletRouteArgs.of(context);
     final address = args.receiveAddress;
     final amount = _amountCtrl.text.trim();
     String data;
@@ -105,7 +105,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final args = WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+    final args = WalletRouteArgs.of(context);
     final address = args.receiveAddress;
 
     return Scaffold(

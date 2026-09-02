@@ -236,6 +236,7 @@ class WalletSyncController extends ChangeNotifier {
               amount: (t['amount'] as num?)?.toInt() ?? 0,
               name: t['name']?.toString(),
               decimals: (t['decimals'] as num?)?.toInt() ?? 0,
+              iconUrl: t['iconUrl']?.toString(),
             ),
       ];
       utxoCount = (cached['utxo_count'] as num?)?.toInt() ?? 0;
@@ -326,6 +327,7 @@ class WalletSyncController extends ChangeNotifier {
               'amount': t.amount,
               'name': t.name,
               'decimals': t.decimals,
+              'iconUrl': t.iconUrl,
             },
         ],
         'transactions': recentTxs,

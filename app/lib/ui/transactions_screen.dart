@@ -10,7 +10,12 @@ import '../theme/argus_theme.dart';
 import 'transaction_detail_screen.dart';
 
 class TransactionsScreen extends StatefulWidget {
-  const TransactionsScreen({super.key});
+  const TransactionsScreen({super.key, this.embedded = false, this.args});
+
+  /// Hosted inside the home tabs: no scaffold or app bar of its own, and
+  /// wallet context comes from [args] rather than the route.
+  final bool embedded;
+  final WalletRouteArgs? args;
 
   @override
   State<TransactionsScreen> createState() => _TransactionsScreenState();
@@ -32,7 +37,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  WalletRouteArgs get _args => WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+  WalletRouteArgs get _args => widget.args ?? WalletRouteArgs.of(context);
 
   Future<void> _load() async {
     final args = _args;
@@ -193,6 +198,32 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final body = _body(context);
+    if (widget.embedded) {
+      return Column(
+        children: [
+          if (_txs.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 4, 12, 0),
+              child: Row(
+                children: [
+                  Text(
+                    '${_txs.length}${_hasMore ? '+' : ''} transactions',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: _exportCsv,
+                    icon: const Icon(Icons.file_download_outlined, size: 16),
+                    label: const Text('Export CSV'),
+                  ),
+                ],
+              ),
+            ),
+          Expanded(child: body),
+        ],
+      );
+    }
     return Scaffold(
       appBar: AppBar(
         title: const Text('Activity'),
@@ -205,7 +236,12 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             ),
         ],
       ),
-      body: _loading && _txs.isEmpty
+      body: body,
+    );
+  }
+
+  Widget _body(BuildContext context) {
+    return _loading && _txs.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : _error != null && _txs.isEmpty
               ? Center(
@@ -312,7 +348,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                       );
                     },
                   ),
-                ),
-    );
+                );
   }
 }
