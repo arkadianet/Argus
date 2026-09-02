@@ -308,6 +308,62 @@ pub fn sign_reduced_transaction(
     })
 }
 
+/// Human summary of an ErgoPay reduced transaction: inputs (with values and
+/// tokens when the node can supply the boxes), outputs classified as
+/// recipient / change / fee, and totals. See `api_ergopay_impl`.
+#[flutter_rust_bridge::frb]
+pub async fn describe_reduced_transaction(
+    handle_id: u64,
+    reduced_tx_bytes: Vec<u8>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let reduced = wallet_core::transaction::deserialize_reduced(&reduced_tx_bytes)
+        .map_err(err_str)?;
+    // Input boxes are best effort: a node without the box (spent, pruned,
+    // unreachable) still leaves the outputs and fee readable.
+    let mut input_boxes = Vec::new();
+    if let Ok(client) = node_client(node_url).await {
+        for input in reduced.unsigned_tx.inputs.iter() {
+            let id: String = input.box_id.clone().into();
+            input_boxes.push(client.get_blockchain_box_by_id(&id).await.ok());
+        }
+    } else {
+        input_boxes.resize(reduced.unsigned_tx.inputs.len(), None);
+    }
+    let summary = with_handle(handle_id, "describe_reduced_transaction", |handle| {
+        Ok(crate::api_ergopay_impl::summarize_reduced(
+            &reduced,
+            &|addr| handle.owns_address(addr).unwrap_or(false),
+            &input_boxes,
+        ))
+    })?;
+    serde_json::to_string(&summary)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Broadcast an already signed transaction (node JSON) and return its id.
+#[flutter_rust_bridge::frb]
+pub async fn submit_signed_transaction(
+    tx_json: String,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let value: serde_json::Value = serde_json::from_str(&tx_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let client = node_client(node_url).await?;
+    client
+        .submit_transaction(&value)
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())
+}
+
+/// True when `address` is an EIP-3 child of the unlocked wallet.
+#[flutter_rust_bridge::frb]
+pub fn wallet_owns_address(handle_id: u64, address: String) -> Result<bool, String> {
+    with_handle(handle_id, "wallet_owns_address", |handle| {
+        handle.owns_address(&address).map_err(err_str)
+    })
+}
+
 #[flutter_rust_bridge::frb]
 pub fn generate_mnemonic(strength: u32) -> Result<String, String> {
     use ergo_lib::wallet::mnemonic_generator::{Language, MnemonicGenerator};

@@ -416,11 +416,12 @@ String? normalizeNodeUrl(String raw) {
   if (!isAbsoluteHttpUrl(clean)) return null;
   final uri = Uri.tryParse(clean);
   if (uri == null) return null;
-  if (uri.scheme == 'http' && !_isLocalNetworkHost(uri.host)) return null;
+  if (uri.scheme == 'http' && !isLocalNetworkHost(uri.host)) return null;
   return clean;
 }
 
-bool _isLocalNetworkHost(String host) {
+/// Loopback or RFC-1918 host, where plain http is acceptable.
+bool isLocalNetworkHost(String host) {
   final h = host.toLowerCase();
   if (h == 'localhost' || h == '::1') return true;
   if (h.startsWith('127.') || h.startsWith('10.')) return true;

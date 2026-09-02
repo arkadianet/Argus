@@ -1,5 +1,6 @@
 package com.argus.argus_wallet
 
+import android.content.Intent
 import android.view.WindowManager
 import androidx.annotation.NonNull
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -24,6 +25,13 @@ class MainActivity : FlutterFragmentActivity() {
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         SecureStorageHandler.registerWith(flutterEngine, this)
+        DeepLinkHandler.registerWith(flutterEngine, intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        DeepLinkHandler.onNewIntent(intent)
     }
 
     override fun onDestroy() {

@@ -84,6 +84,37 @@ Future<String> signReducedTransaction({
   reducedTxBytes: reducedTxBytes,
 );
 
+/// Human summary of an ErgoPay reduced transaction: inputs (with values and
+/// tokens when the node can supply the boxes), outputs classified as
+/// recipient / change / fee, and totals. See `api_ergopay_impl`.
+Future<String> describeReducedTransaction({
+  required BigInt handleId,
+  required List<int> reducedTxBytes,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDescribeReducedTransaction(
+  handleId: handleId,
+  reducedTxBytes: reducedTxBytes,
+  nodeUrl: nodeUrl,
+);
+
+/// Broadcast an already signed transaction (node JSON) and return its id.
+Future<String> submitSignedTransaction({
+  required String txJson,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiSubmitSignedTransaction(
+  txJson: txJson,
+  nodeUrl: nodeUrl,
+);
+
+/// True when `address` is an EIP-3 child of the unlocked wallet.
+Future<bool> walletOwnsAddress({
+  required BigInt handleId,
+  required String address,
+}) => RustLib.instance.api.crateApiWalletOwnsAddress(
+  handleId: handleId,
+  address: address,
+);
+
 Future<String> generateMnemonic({required int strength}) =>
     RustLib.instance.api.crateApiGenerateMnemonic(strength: strength);
 

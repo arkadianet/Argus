@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'services/address_label_service.dart';
 import 'services/contacts_service.dart';
+import 'services/deep_link_channel.dart';
 import 'services/privacy_service.dart';
 import 'services/session_lock.dart';
 import 'services/watch_only_service.dart';
@@ -52,6 +53,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     walletService.unlocked.addListener(_onUnlockChanged);
+    DeepLinkChannel.start();
   }
 
   @override

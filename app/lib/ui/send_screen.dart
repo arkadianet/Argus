@@ -9,10 +9,12 @@ import 'package:url_launcher/url_launcher.dart';
 import '../format.dart';
 import '../services/contacts_service.dart';
 import '../services/dexy_service.dart';
+import '../services/ergopay_service.dart';
 import '../services/network_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
+import 'ergopay_screen.dart';
 import 'offline_banner.dart';
 import 'scan_screen.dart';
 import 'send_recipients.dart';
@@ -32,10 +34,20 @@ String dexyAmountLabel(DexyVariant variant) =>
     '${variant.shortName} amount to deliver';
 
 class SendScreen extends StatefulWidget {
-  const SendScreen({super.key, this.initialAssetId});
+  const SendScreen({
+    super.key,
+    this.initialAssetId,
+    this.initialRecipient,
+    this.initialAmountErg,
+  });
 
   /// Token id to preselect in the asset picker (e.g. from a token sheet).
   final String? initialAssetId;
+
+  /// Recipient and amount from a scanned `ergo:` payment URI; treated as a
+  /// trusted source for the clipboard-hijack gate.
+  final String? initialRecipient;
+  final String? initialAmountErg;
 
   @override
   State<SendScreen> createState() => _SendScreenState();
@@ -72,6 +84,18 @@ class _SendScreenState extends State<SendScreen> {
   final List<_RecipientEntry> _extraRecipients = [];
   bool get _multiRecipient => _extraRecipients.isNotEmpty;
 
+
+  @override
+  void initState() {
+    super.initState();
+    final r = widget.initialRecipient;
+    if (r != null && r.isNotEmpty) {
+      _recipientCtrl.text = r;
+      _recipientTrusted = true;
+    }
+    final a = widget.initialAmountErg;
+    if (a != null && a.isNotEmpty) _amountCtrl.text = a;
+  }
 
   @override
   void dispose() {
@@ -208,6 +232,13 @@ class _SendScreenState extends State<SendScreen> {
     final raw = await Navigator.push<String>(context, fadeRoute(const ScanScreen()));
     if (!mounted) return;
     if (raw == null) return;
+    if (isErgoPayLink(raw)) {
+      Navigator.push(
+        context,
+        fadeRoute(ErgoPayScreen(link: raw), settings: RouteSettings(arguments: _args)),
+      );
+      return;
+    }
     final pay = parseErgoUri(raw);
     if (pay == null) {
       _snack('Not an Ergo address');
