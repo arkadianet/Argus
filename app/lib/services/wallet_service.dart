@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -95,6 +95,20 @@ class TokenBalance {
   }
 }
 
+/// Supplies [WalletRouteArgs] to screens embedded without their own route,
+/// so they see live balances the same way pushed screens do via arguments.
+class WalletArgsScope extends InheritedWidget {
+  const WalletArgsScope({super.key, required this.args, required super.child});
+
+  final WalletRouteArgs args;
+
+  static WalletRouteArgs? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<WalletArgsScope>()?.args;
+
+  @override
+  bool updateShouldNotify(WalletArgsScope old) => old.args != args;
+}
+
 class WalletRouteArgs {
   final String senderAddress;
   final String receiveAddress;
@@ -113,6 +127,14 @@ class WalletRouteArgs {
     this.spendableNano,
     this.transaction,
   });
+
+  /// Wallet context for [context]: an enclosing [WalletArgsScope] (tabs
+  /// embedded in the home screen) or, failing that, the route arguments.
+  static WalletRouteArgs of(BuildContext context) {
+    final scoped = WalletArgsScope.maybeOf(context);
+    if (scoped != null) return scoped;
+    return from(ModalRoute.of(context)?.settings.arguments);
+  }
 
   static WalletRouteArgs from(Object? args) {
     if (args is WalletRouteArgs) return args;

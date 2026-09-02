@@ -7,6 +7,7 @@ import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/address_label_service.dart';
 import '../services/network_controller.dart';
+import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/watch_only_service.dart';
@@ -20,7 +21,9 @@ import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
 import 'settings_screen.dart';
 import 'swap_hub_screen.dart';
+import 'token_avatar.dart';
 import 'transaction_detail_screen.dart';
+import 'transactions_screen.dart';
 import 'wallets_overview_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -49,6 +52,14 @@ class _DashboardScreenState extends State<DashboardScreen>
   final _pinCtrl = TextEditingController();
   List<WalletInfo> _wallets = [];
   String? _walletId;
+
+  /// Home tabs: 0 wallet, 1 activity, 2 swap, 3 settings. Tabs are built on
+  /// first visit so unlocking doesn't fan out into every protocol screen's
+  /// network calls at once.
+  int _tab = 0;
+  final Set<int> _visitedTabs = {0};
+  SwapVenue _swapVenue = SwapVenue.dexy;
+  static const _tabTitles = ['Argus', 'Activity', 'Swap', 'Settings'];
 
   /// Poll for mempool changes (pending activity, balance, spendable UTXOs)
   /// while the dashboard is open. A tick is a light refresh on the known
@@ -132,6 +143,10 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   void _resetLocked() {
     _walletUnlocked = false;
+    _tab = 0;
+    _visitedTabs
+      ..clear()
+      ..add(0);
     _sync.reset();
     _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
   }
@@ -591,36 +606,44 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  void _go(String route) {
+  bool _guardUnlocked() {
     if (!walletService.isUnlocked || !_walletUnlocked) {
       _snack('Unlock the wallet first');
-      return;
+      return false;
     }
     if (_sync.receiveAddress == null) {
       _snack('Address is still loading');
-      return;
+      return false;
     }
+    return true;
+  }
+
+  void _go(String route) {
+    if (!_guardUnlocked()) return;
     Navigator.pushNamed(context, route, arguments: _args());
   }
 
-  /// Opens the swap hub on [venue] with the same guards and wallet route
-  /// arguments as [_go], so embedded swap screens see balances.
+  void _selectTab(int index) {
+    if (index == _tab) return;
+    if (index != 0 && !_guardUnlocked()) return;
+    final leavingSettings = _tab == 3;
+    setState(() {
+      _tab = index;
+      _visitedTabs.add(index);
+    });
+    if (leavingSettings) {
+      // PIN / biometric setup may have changed on the settings tab.
+      _refreshUnlockMethods().then((_) {
+        if (mounted) setState(() {});
+      }).catchError((_) {});
+    }
+  }
+
+  /// Switches to the swap tab on [venue]; embedded screens read balances
+  /// from the enclosing [WalletArgsScope].
   void _goHub(SwapVenue venue) {
-    if (!walletService.isUnlocked || !_walletUnlocked) {
-      _snack('Unlock the wallet first');
-      return;
-    }
-    if (_sync.receiveAddress == null) {
-      _snack('Address is still loading');
-      return;
-    }
-    Navigator.push(
-      context,
-      fadeRoute(
-        SwapHubScreen(initialTab: venue),
-        settings: RouteSettings(arguments: _args()),
-      ),
-    );
+    if (_swapVenue != venue) setState(() => _swapVenue = venue);
+    _selectTab(2);
   }
 
   void _openTx(Map<String, dynamic> tx) {
@@ -630,30 +653,25 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Future<void> _openSettings() async {
-    final switchedTo = await Navigator.push<String?>(
-      context,
-      fadeRoute(SettingsScreen(walletId: _walletId)),
-    );
+  void _openSettings() => _selectTab(3);
+
+  /// The settings tab renamed, deleted or picked another wallet. An empty id
+  /// means the wallet this screen pointed at is gone.
+  Future<void> _onSettingsWalletChanged(String switchedTo) async {
     if (!mounted) return;
-    if (switchedTo != null) {
-      // Reload first: the selected wallet may have been renamed or deleted
-      // (empty string means "the wallet this screen pointed at is gone").
-      await _loadWallets();
-      if (!mounted) return;
-      if (switchedTo.isEmpty) {
-        setState(_resetLocked);
-      } else if (switchedTo != _walletId) {
-        await _switchWallet(switchedTo);
-        return;
-      }
+    await _loadWallets();
+    if (!mounted) return;
+    if (switchedTo.isEmpty) {
+      setState(_resetLocked);
+      return;
     }
-    try {
-      await _refreshUnlockMethods();
-    } catch (_) {}
+    if (switchedTo != _walletId) {
+      _selectTab(0);
+      await _switchWallet(switchedTo);
+      return;
+    }
     if (mounted) setState(() {});
   }
-
 
   String get _activeWalletName {
     for (final w in _wallets) {
@@ -662,21 +680,22 @@ class _DashboardScreenState extends State<DashboardScreen>
     return 'Wallet';
   }
 
-  bool _balanceHidden = false;
+  bool get _balanceHidden => privacyService.hideBalances;
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('Argus')),
-        body: const Center(child: CircularProgressIndicator()),
-      );
-    }
+    if (_loading) return _splash();
 
-    return Scaffold(
+    final showTabs = _walletUnlocked;
+    return PopScope(
+      canPop: !showTabs || _tab == 0,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _selectTab(0);
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Text(
-          'Argus',
+          showTabs ? _tabTitles[_tab] : 'Argus',
           style: Theme.of(context).textTheme.headlineSmall,
         ),
         actions: [
@@ -691,15 +710,10 @@ class _DashboardScreenState extends State<DashboardScreen>
             tooltip: 'Wallets',
             onPressed: _openWalletOverview,
           ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
-            onPressed: _openSettings,
-          ),
         ],
       ),
       body: ListenableBuilder(
-        listenable: addressLabelService,
+        listenable: Listenable.merge([addressLabelService, privacyService]),
         builder: (context, _) => Column(
           children: [
             const WarningStrip(),
@@ -708,28 +722,109 @@ class _DashboardScreenState extends State<DashboardScreen>
                 duration: const Duration(milliseconds: 280),
                 switchInCurve: Curves.easeOut,
                 switchOutCurve: Curves.easeIn,
-                child: _walletUnlocked ? _ledger() : _gate(),
+                child: showTabs ? _tabs() : _gate(),
               ),
             ),
           ],
         ),
       ),
-      bottomNavigationBar: _walletUnlocked
+      bottomNavigationBar: showTabs
           ? NavigationBar(
-              selectedIndex: 0,
-              onDestinationSelected: (i) {
-                if (i == 1) _go('/transactions');
-                if (i == 2) _goHub(SwapVenue.dexy);
-                if (i == 3) _openSettings();
-              },
+              selectedIndex: _tab,
+              onDestinationSelected: _selectTab,
               destinations: const [
-                NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Wallet'),
-                NavigationDestination(icon: Icon(Icons.schedule_outlined), label: 'Activity'),
-                NavigationDestination(icon: Icon(Icons.grid_view_outlined), label: 'Discover'),
-                NavigationDestination(icon: Icon(Icons.person_outline), label: 'Settings'),
+                NavigationDestination(
+                  icon: Icon(Icons.account_balance_wallet_outlined),
+                  selectedIcon: Icon(Icons.account_balance_wallet),
+                  label: 'Wallet',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.schedule_outlined),
+                  selectedIcon: Icon(Icons.schedule),
+                  label: 'Activity',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.swap_horiz_outlined),
+                  selectedIcon: Icon(Icons.swap_horiz),
+                  label: 'Swap',
+                ),
+                NavigationDestination(
+                  icon: Icon(Icons.settings_outlined),
+                  selectedIcon: Icon(Icons.settings),
+                  label: 'Settings',
+                ),
               ],
             )
           : null,
+      ),
+    );
+  }
+
+  /// Cold-start splash while the wallet core initialises: same branding as
+  /// the gate so the app doesn't open on a bare spinner.
+  Widget _splash() {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const IrisMark(size: 72),
+            const SizedBox(height: 20),
+            Text('Argus', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 8),
+            const SizedBox(width: 48, child: Hairline(gold: true)),
+            const SizedBox(height: 28),
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// The unlocked home: tabs share one [WalletArgsScope] so embedded screens
+  /// see the same live balances a pushed route would get as arguments.
+  Widget _tabs() {
+    final args = _args();
+    Widget lazy(int i, Widget Function() build) =>
+        _visitedTabs.contains(i) ? build() : const SizedBox.shrink();
+    return WalletArgsScope(
+      key: const ValueKey('tabs'),
+      args: args,
+      child: IndexedStack(
+        index: _tab,
+        children: [
+          _ledger(),
+          lazy(
+            1,
+            () => TransactionsScreen(
+              key: ValueKey('activity-${_sync.receiveAddress}'),
+              embedded: true,
+              args: args,
+            ),
+          ),
+          lazy(
+            2,
+            () => SwapHubScreen(
+              embedded: true,
+              venue: _swapVenue,
+              onVenueChanged: (v) => _swapVenue = v,
+            ),
+          ),
+          lazy(
+            3,
+            () => SettingsScreen(
+              key: ValueKey('settings-$_walletId'),
+              embedded: true,
+              walletId: _walletId,
+              onWalletSwitched: _onSettingsWalletChanged,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -890,9 +985,10 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   // ── Ledger (unlocked home) ─────────────────────────────────────────────
 
+  static const _assetCap = 4;
+
   Widget _ledger() {
     return ListenableBuilder(
-      key: const ValueKey('ledger'),
       listenable: networkController,
       builder: (context, _) {
         final fungible = _sync.tokens.where((t) => !t.isNft).toList();
@@ -903,6 +999,8 @@ class _DashboardScreenState extends State<DashboardScreen>
           ...fungible.map(_AssetRow.token),
           ...nfts.map(_AssetRow.token),
         ];
+        final visibleAssets = assets.take(_assetCap).toList();
+        final hiddenAssets = assets.length - visibleAssets.length;
 
         return RefreshIndicator(
           onRefresh: () => _sync.refresh(discover: true),
@@ -913,7 +1011,9 @@ class _DashboardScreenState extends State<DashboardScreen>
             _walletCard(fragmented),
             const SizedBox(height: 28),
             _sectionHeader('Assets',
-                action: 'View all',
+                action: hiddenAssets > 0
+                    ? 'View all (${assets.length})'
+                    : 'View all',
                 onTap: () => Navigator.push(context,
                     fadeRoute(AssetsScreen(args: _args())))),
             const SizedBox(height: 10),
@@ -921,9 +1021,9 @@ class _DashboardScreenState extends State<DashboardScreen>
               padding: EdgeInsets.zero,
               child: Column(
                 children: [
-                  for (var i = 0; i < assets.length; i++) ...[
+                  for (var i = 0; i < visibleAssets.length; i++) ...[
                     if (i > 0) const Divider(height: 1, indent: 68),
-                    _assetTile(assets[i]),
+                    _assetTile(visibleAssets[i]),
                   ],
                 ],
               ),
@@ -931,7 +1031,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             const SizedBox(height: 28),
             _sectionHeader('Recent activity',
                 action: _sync.recentTxs.isNotEmpty ? 'View all' : null,
-                onTap: () => _go('/transactions')),
+                onTap: () => _selectTab(1)),
             const SizedBox(height: 10),
             _sync.recentTxs.isEmpty
                 ? _card(
@@ -1065,6 +1165,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     final stale = _sync.isStale;
     final syncing = _sync.isSyncing;
     final synced = !stale && !syncing && online;
+    final syncAge = formatSyncAge(_sync.lastSyncedAt);
 
     return _card(
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
@@ -1101,7 +1202,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ? Icons.visibility_off_outlined
                     : Icons.visibility_outlined,
                 onTap: () =>
-                    setState(() => _balanceHidden = !_balanceHidden),
+                    privacyService.setHideBalances(!_balanceHidden),
               ),
             ],
           ),
@@ -1110,16 +1211,26 @@ class _DashboardScreenState extends State<DashboardScreen>
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
               Flexible(
-                child: Text(
-                  _balanceHidden
-                      ? '••••••'
-                      : formatErg(_sync.balanceNano, unit: false, maxFrac: 4),
-                  style: Theme.of(context)
-                      .textTheme
-                      .displayLarge
-                      ?.copyWith(fontSize: 44),
-                  overflow: TextOverflow.ellipsis,
-                ),
+                child: _sync.balanceNano == null && _sync.isSyncing
+                    ? Container(
+                        width: 150,
+                        height: 34,
+                        margin: const EdgeInsets.only(bottom: 6),
+                        decoration: BoxDecoration(
+                          color: muted.withValues(alpha: 0.18),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      )
+                    : Text(
+                        _balanceHidden
+                            ? '••••••'
+                            : formatErg(_sync.balanceNano, unit: false, maxFrac: 4),
+                        style: Theme.of(context)
+                            .textTheme
+                            .displayLarge
+                            ?.copyWith(fontSize: 44),
+                        overflow: TextOverflow.ellipsis,
+                      ),
               ),
               const SizedBox(width: 8),
               Padding(
@@ -1228,6 +1339,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                               fragmented ? FontWeight.w600 : FontWeight.w400,
                         ),
                       ),
+                      if (!syncing && syncAge.isNotEmpty) ...[
+                        _dotSep(muted),
+                        Text(
+                          syncAge,
+                          style: TextStyle(fontSize: 12.5, color: muted),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -1337,7 +1455,11 @@ class _DashboardScreenState extends State<DashboardScreen>
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-            _tokenAvatar(asset),
+            TokenAvatar(
+              label: asset.ticker,
+              iconUrl: asset.iconUrl,
+              isErg: asset.isErg,
+            ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -1380,25 +1502,6 @@ class _DashboardScreenState extends State<DashboardScreen>
             const SizedBox(width: 4),
             Icon(Icons.chevron_right, size: 18, color: muted),
           ],
-        ),
-      ),
-    );
-  }
-
-  Widget _tokenAvatar(_AssetRow asset) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final label = asset.ticker.isNotEmpty ? asset.ticker[0].toUpperCase() : '?';
-    return CircleAvatar(
-      radius: 20,
-      backgroundColor:
-          asset.isErg ? iris.withValues(alpha: dark ? 0.25 : 0.2) : (dark ? watchfulSurface : bannerTint),
-      child: Text(
-        asset.isErg ? 'Σ' : label,
-        style: TextStyle(
-          fontFamily: 'Newsreader',
-          fontWeight: FontWeight.w600,
-          fontSize: 16,
-          color: asset.isErg ? (dark ? bone : ledgerInk) : (dark ? bone : ledgerMuted),
         ),
       ),
     );
@@ -1593,6 +1696,7 @@ class _AssetRow {
   final String name;
   final String amountText;
   final String? fiatText;
+  final String? iconUrl;
   final bool isErg;
 
   const _AssetRow({
@@ -1600,6 +1704,7 @@ class _AssetRow {
     required this.name,
     required this.amountText,
     this.fiatText,
+    this.iconUrl,
     this.isErg = false,
   });
 
@@ -1625,6 +1730,7 @@ class _AssetRow {
       ticker: ticker,
       name: hasName ? name : shorten(t.id, head: 10, tail: 6),
       amountText: formatTokenAmountGrouped(t.amount, t.decimals),
+      iconUrl: t.iconUrl,
     );
   }
 }

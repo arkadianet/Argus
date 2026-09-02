@@ -134,7 +134,7 @@ void main() {
           {'tx_id': 't1'},
         ],
         'tokens': [
-          {'id': 'tok', 'amount': 3, 'name': 'Tok', 'decimals': 0},
+          {'id': 'tok', 'amount': 3, 'name': 'Tok', 'decimals': 0, 'iconUrl': 'https://x/i.png'},
         ],
         'utxo_count': 4,
       };
@@ -146,6 +146,7 @@ void main() {
       expect(c.balanceNano, 5000);
       expect(c.recentTxs.single['tx_id'], 't1');
       expect(c.tokens.single.id, 'tok');
+      expect(c.tokens.single.iconUrl, 'https://x/i.png');
       expect(c.utxoCount, 4);
       expect(c.usedAddresses.single['address'], 'addr0');
       expect(c.senderAddress, 'addr0');
@@ -311,6 +312,7 @@ void main() {
       expect(gw.savedCache?['wallet_id'], 'addr2');
       expect(gw.savedCache?['balance_nano_erg'], 350);
       expect((gw.savedCache?['transactions'] as List).length, 2);
+      expect((gw.savedCache?['tokens'] as List).single['name'], 'Tok');
       expect(gw.savedCache?['utxo_count'], 3);
     });
 

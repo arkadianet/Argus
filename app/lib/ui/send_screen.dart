@@ -79,7 +79,7 @@ class _SendScreenState extends State<SendScreen> {
     super.dispose();
   }
 
-  WalletRouteArgs get _args => WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+  WalletRouteArgs get _args => WalletRouteArgs.of(context);
 
   TokenBalance? get _selectedToken {
     if (_assetId == null) return null;

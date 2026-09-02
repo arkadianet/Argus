@@ -40,7 +40,7 @@ class _DexyScreenState extends State<DexyScreen> {
   bool _busy = false;
 
   WalletRouteArgs get _args =>
-      WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+      WalletRouteArgs.of(context);
 
   int? get _tokenBalance {
     for (final t in _args.tokens) {
