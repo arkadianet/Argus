@@ -516,12 +516,66 @@ class WalletService {
   final ValueNotifier<bool> unlocked = ValueNotifier(false);
   final ValueNotifier<String?> currentWalletId = ValueNotifier<String?>(null);
   final Map<String, TokenBalance> _tokenMeta = {};
+  static const _tokenMetaKey = 'argus_token_meta_v1';
+  bool _tokenMetaDirty = false;
 
   Future<void> init() async {
     if (_initialized) return;
-    await RustLib.init();
+    await Future.wait([RustLib.init(), loadTokenMeta()]);
     _initialized = true;
     await _migrateLegacyIfNeeded();
+  }
+
+  int get cachedTokenMetaCount => _tokenMeta.length;
+
+  /// Caches [meta] (name, decimals, emission, icon) for its token id. Call
+  /// [persistTokenMeta] afterwards to keep it across launches.
+  void rememberTokenMeta(TokenBalance meta) {
+    _tokenMeta[meta.id] = meta;
+    _tokenMetaDirty = true;
+  }
+
+  /// Token metadata is public chain data and never changes for a given id,
+  /// so it is safe to keep in plain preferences and skip the node next time.
+  Future<void> loadTokenMeta() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_tokenMetaKey);
+      if (raw == null || raw.isEmpty) return;
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      for (final entry in map.entries) {
+        final v = entry.value;
+        if (v is! Map) continue;
+        _tokenMeta[entry.key] = TokenBalance(
+          id: entry.key,
+          amount: 0,
+          name: v['name'] as String?,
+          decimals: (v['decimals'] as num?)?.toInt() ?? 0,
+          emissionAmount: (v['emissionAmount'] as num?)?.toInt(),
+          iconUrl: v['iconUrl'] as String?,
+        );
+      }
+    } catch (_) {
+      // A corrupt cache only costs a refetch.
+    }
+  }
+
+  Future<void> persistTokenMeta() async {
+    if (!_tokenMetaDirty) return;
+    _tokenMetaDirty = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _tokenMetaKey,
+      jsonEncode({
+        for (final e in _tokenMeta.entries)
+          e.key: {
+            'name': e.value.name,
+            'decimals': e.value.decimals,
+            'emissionAmount': e.value.emissionAmount,
+            'iconUrl': e.value.iconUrl,
+          },
+      }),
+    );
   }
 
   /// Migrate pre-multi-wallet single-slot storage to a new wallet ID.
@@ -958,7 +1012,10 @@ class WalletService {
       if (id.isEmpty || amount <= 0) continue;
       jobs.add(tokenMeta(id, amount));
     }
-    return Future.wait(jobs);
+    final out = await Future.wait(jobs);
+    // Fire and forget: the write must not slow the balance refresh.
+    persistTokenMeta().catchError((_) {});
+    return out;
   }
 
   /// True when the last [loadHistory] succeeded but at least one address
@@ -1050,7 +1107,7 @@ class WalletService {
         emissionAmount: (map['emissionAmount'] as num?)?.toInt(),
         iconUrl: map['iconUrl'] as String? ?? map['icon_url'] as String?,
       );
-      _tokenMeta[id] = info;
+      rememberTokenMeta(info);
       return info;
     } catch (_) {
       return TokenBalance(id: id, amount: amount);

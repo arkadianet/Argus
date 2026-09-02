@@ -27,11 +27,15 @@ final navigatorKey = GlobalKey<NavigatorState>();
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   themeController.load().catchError((_) {});
-  await sessionLock.loadGrace().catchError((_) {});
-  await contactsService.load().catchError((_) {});
-  await addressLabelService.load().catchError((_) {});
-  await watchOnlyService.load().catchError((_) {});
-  await privacyService.load().catchError((_) {});
+  // Independent preference loads; run them together so the first frame
+  // waits on the slowest one instead of the sum.
+  await Future.wait<void>([
+    sessionLock.loadGrace().catchError((_) {}),
+    contactsService.load().catchError((_) {}),
+    addressLabelService.load().catchError((_) {}),
+    watchOnlyService.load().catchError((_) {}),
+    privacyService.load().catchError((_) {}),
+  ]);
   runApp(const ArgusApp());
 }
 
