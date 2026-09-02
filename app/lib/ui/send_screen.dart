@@ -12,8 +12,10 @@ import '../services/dexy_service.dart';
 import '../services/network_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
+import 'confirm_transaction_sheet.dart';
 import 'offline_banner.dart';
 import 'scan_screen.dart';
+import 'send_recipients.dart';
 
 /// One auto-buy route line, e.g. `≈ 3.7196 ERG via FreeMint  ·  cheapest`.
 String dexyQuoteLabel(DexyPathQuote quote, {required bool cheapest}) =>
@@ -250,140 +252,89 @@ class _SendScreenState extends State<SendScreen> {
     _snack('Contact saved');
   }
 
-   Future<void> _send() async {
+  /// Every recipient as typed, main form first. A token send with a blank
+  /// ERG field carries the minimum box value.
+  List<RecipientDraft> _drafts() {
+    final token = _selectedToken;
+    final erg = _amountCtrl.text.trim();
+    return [
+      RecipientDraft(
+        address: _recipientCtrl.text,
+        ergText: token != null && erg.isEmpty
+            ? formatErg(minBoxNano, unit: false)
+            : erg,
+        tokenId: token?.id,
+        tokenAmountText: _tokenAmtCtrl.text,
+      ),
+      for (final e in _extraRecipients)
+        RecipientDraft(
+          address: e.address,
+          ergText: e.amount,
+          tokenId: e.tokenId,
+          tokenAmountText: e.tokenAmtCtrl?.text,
+        ),
+    ];
+  }
+
+  Future<void> _send() async {
     if (!_formKey.currentState!.validate()) return;
     if (_selectedSwapVariant != null) {
       await _sendViaSwap();
       return;
     }
     final args = _args;
-    final allAddrs = _allSpendAddresses;
     final spend = _selectedSpendAddresses.isNotEmpty
         ? _selectedSpendAddresses.toList()
-        : allAddrs;
+        : _allSpendAddresses;
     if (spend.isEmpty) {
       _snack('No spendable addresses');
       return;
     }
-    final amount = _amountNano();
-    if (amount == null) return;
 
-    // Build the list of all recipients for multi-send path
-    final List<Map<String, dynamic>> allRecipients = [];
-    if (_recipientValid) {
-      final recipient = <String, dynamic>{
-        'address': _recipientCtrl.text.trim(),
-        'amount_nano_erg': amount,
-      };
-      final token = _selectedToken;
-      if (token != null) {
-        recipient['token_id'] = token.id;
-        if (token.isNft) {
-          recipient['token_amount'] = 1;
-        } else {
-          final tokenAmount = parseDecimalToBase(_tokenAmtCtrl.text, token.decimals);
-          if (tokenAmount == null || tokenAmount <= 0) {
-            _snack('Enter a token amount');
-            return;
-          }
-          recipient['token_amount'] = tokenAmount;
-        }
-      }
-      allRecipients.add(recipient);
+    final List<Map<String, dynamic>> recipients;
+    try {
+      recipients = buildRecipients(_drafts(), tokens: args.tokens);
+    } on SendFormException catch (e) {
+      _snack(e.message);
+      return;
     }
-
-    // Collect extra recipients
-    for (final entry in _extraRecipients) {
-      final entryAmount = parseErgToNano(entry.amount);
-      if (entryAmount == null) {
-        _snack('Validate all recipient amounts');
-        return;
-      }
-      if (!looksLikeErgoAddress(entry.address)) {
-        _snack('Validate all recipient addresses');
-        return;
-      }
-      final r = <String, dynamic>{
-        'address': entry.address,
-        'amount_nano_erg': entryAmount,
-      };
-      if (entry.tokenId != null && entry.tokenId!.isNotEmpty) {
-        TokenBalance? token;
-        for (final t in _args.tokens) {
-          if (t.id == entry.tokenId) {
-            token = t;
-            break;
-          }
-        }
-        if (token == null) {
-          _snack('Validate all token amounts');
-          return;
-        }
-        r['token_id'] = entry.tokenId;
-        if (entry.tokenAmtCtrl == null || entry.tokenAmtCtrl!.text.trim().isEmpty) {
-          _snack('Enter a token amount');
-          return;
-        }
-        final parsed = parseDecimalToBase(entry.tokenAmtCtrl!.text, token.decimals);
-        if (parsed == null || parsed <= 0) {
-          _snack('Validate all token amounts');
-          return;
-        }
-        r['token_amount'] = parsed;
-      }
-      allRecipients.add(r);
-    }
-
-    if (allRecipients.length < 2) {
-      // Single recipient — use legacy prepareSend
-      final token = _selectedToken;
-      int? tokenAmount;
-      if (token != null) {
-        if (token.isNft) {
-          tokenAmount = 1;
-        } else {
-          tokenAmount = parseDecimalToBase(_tokenAmtCtrl.text, token.decimals);
-          if (tokenAmount == null || tokenAmount <= 0) {
-            _snack('Enter a token amount');
-            return;
-          }
-        }
-      }
-
-      setState(() => _sending = true);
-      try {
-        final preview = await walletService.prepareSend(
-          senderAddress: args.senderAddress,
-          spendAddresses: spend,
-          changeAddress: args.changeAddress.isEmpty ? args.senderAddress : args.changeAddress,
-          recipientAddress: _recipientCtrl.text.trim(),
-          amountNanoErg: amount,
-          tokenId: token?.id,
-          tokenAmount: tokenAmount,
-          nodeUrl: networkController.activeUrl,
-          feeNanoErg: parseErgToNano(_feeCtrl.text),
-        );
-        await _confirmAndSend(ctx: context, preview: preview, token: token, spend: spend);
-      } catch (e) {
-        if (!mounted) return;
-        setState(() => _sending = false);
-        _snack('Failed: $e');
-      }
+    final spendable = args.spendableNano;
+    final fee = parseErgToNano(_feeCtrl.text) ?? minerFeeNano;
+    if (spendable != null && totalNanoErg(recipients) + fee > spendable) {
+      _snack('Amount plus fee exceeds your ${formatErg(spendable, maxFrac: 4)}');
       return;
     }
 
-    // Multi-recipient — use prepareSendMulti
+    final changeAddress =
+        args.changeAddress.isEmpty ? args.senderAddress : args.changeAddress;
+    final isMulti = recipients.length > 1;
     setState(() => _sending = true);
     try {
-      final preview = await walletService.prepareSendMulti(
-        senderAddress: args.senderAddress,
-        spendAddresses: spend,
-        changeAddress: args.changeAddress.isEmpty ? args.senderAddress : args.changeAddress,
-        recipients: allRecipients,
-        nodeUrl: networkController.activeUrl,
-        feeNanoErg: parseErgToNano(_feeCtrl.text),
-      );
-      await _confirmAndSend(ctx: context, preview: preview, token: _selectedToken, spend: spend, isMulti: true);
+      final SendPreview preview;
+      if (isMulti) {
+        preview = await walletService.prepareSendMulti(
+          senderAddress: args.senderAddress,
+          spendAddresses: spend,
+          changeAddress: changeAddress,
+          recipients: recipients,
+          nodeUrl: networkController.activeUrl,
+          feeNanoErg: parseErgToNano(_feeCtrl.text),
+        );
+      } else {
+        final r = recipients.single;
+        preview = await walletService.prepareSend(
+          senderAddress: args.senderAddress,
+          spendAddresses: spend,
+          changeAddress: changeAddress,
+          recipientAddress: r['address'] as String,
+          amountNanoErg: r['amount_nano_erg'] as int,
+          tokenId: r['token_id'] as String?,
+          tokenAmount: r['token_amount'] as int?,
+          nodeUrl: networkController.activeUrl,
+          feeNanoErg: parseErgToNano(_feeCtrl.text),
+        );
+      }
+      await _confirmAndSend(preview: preview, isMulti: isMulti);
     } catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
@@ -455,82 +406,31 @@ class _SendScreenState extends State<SendScreen> {
     if (!mounted) return;
 
     final isMint = build.action.startsWith('mint');
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Send ${variant.shortName}'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Container(
-                  width: double.infinity,
-                  margin: const EdgeInsets.only(bottom: 12),
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: rust.withValues(alpha: 0.1),
-                    border: Border.all(color: rust.withValues(alpha: 0.5)),
-                  ),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Icon(Icons.gpp_bad_outlined, color: rust, size: 20),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'You don\'t hold ${variant.shortName}, so this buys '
-                          'it first (${isMint ? 'bank mint' : 'LP swap'}) and '
-                          'forwards it. Signed and broadcast in one step.',
-                          style: Theme.of(ctx)
-                              .textTheme
-                              .bodySmall
-                              ?.copyWith(color: rustFor(context)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Text('To', style: Theme.of(ctx).textTheme.titleSmall),
-                const SizedBox(height: 4),
-                Text(_recipientCtrl.text.trim(), style: monoStyle(ctx, size: 12)),
-                const SizedBox(height: 12),
-                Text(
-                  'Recipient gets  '
-                  '${formatTokenAmount(build.tokenAmount, variant.decimals)} '
-                  '${variant.shortName}',
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'ERG cost  ${formatErg(isMint ? build.ergCostNano : build.inputAmount)}',
-                ),
-                Text('Miner fee  ${formatErg(build.minerFee)}'),
-                Text('Change to you  ${formatErg(build.changeNanoErg)}'),
-                const SizedBox(height: 8),
-                Text(
-                  networkController.activeUrl ?? 'Node not chosen yet',
-                  style: Theme.of(ctx).textTheme.bodySmall,
-                ),
-              ],
-            ),
-          ),
+    final choice = await showConfirmTransactionChoice(
+      context,
+      title: 'Send ${variant.shortName}',
+      confirmLabel: 'Buy & send',
+      recipientAddress: _recipientCtrl.text.trim(),
+      rows: [
+        ConfirmTxRow(
+          'Recipient gets',
+          '${formatTokenAmount(build.tokenAmount, variant.decimals)} '
+              '${variant.shortName}',
+          bold: true,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Buy & send'),
-          ),
-        ],
-      ),
+        ConfirmTxRow(
+          'ERG cost',
+          formatErg(isMint ? build.ergCostNano : build.inputAmount),
+        ),
+        ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
+        ConfirmTxRow('Change to you', formatErg(build.changeNanoErg)),
+      ],
+      detail: 'You don\'t hold enough ${variant.shortName}, so this buys it '
+          'first (${isMint ? 'bank mint' : 'LP swap'}) and forwards it in one '
+          'transaction.  ·  ${networkController.activeUrl ?? 'Node not chosen yet'}',
     );
     if (!mounted) return;
-    if (ok != true) {
+    if (choice != ConfirmChoice.broadcast) {
       setState(() => _sending = false);
       return;
     }
@@ -602,200 +502,87 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   Future<void> _confirmAndSend({
-    required BuildContext ctx,
     required SendPreview preview,
-    required TokenBalance? token,
-    required List<String> spend,
-    bool isMulti = false,
+    required bool isMulti,
   }) async {
     if (!isMulti) {
-      final clear = await _clipboardMatchesIntent(ctx, preview.recipient);
+      final clear = await _clipboardMatchesIntent(context, preview.recipient);
       if (!clear) {
         setState(() => _sending = false);
         return;
       }
     }
-    final ok = await showDialog<dynamic>(
-      context: ctx,
-      builder: (context) {
-        var showUtxos = true;
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: Text(isMulti ? 'Confirm multi-recipient send' : 'Confirm send'),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: SingleChildScrollView(
-child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          width: double.infinity,
-                          margin: const EdgeInsets.only(bottom: 12),
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: rust.withValues(alpha: 0.1),
-                            border: Border.all(
-                              color: rust.withValues(alpha: 0.5),
-                            ),
-                          ),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Icon(
-                                Icons.gpp_bad_outlined,
-                                color: rust,
-                                size: 20,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  'This will sign and broadcast a transaction '
-                                  'to the network. It cannot be undone once '
-                                  'confirmed.',
-                                  style: Theme.of(ctx)
-                                      .textTheme
-                                      .bodySmall
-                                      ?.copyWith(color: rustFor(context)),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        if (isMulti) ..._multiRecipientSummary(ctx, preview) else ...[
-                         Text('To', style: Theme.of(ctx).textTheme.titleSmall),
-                         const SizedBox(height: 4),
-                         SelectableText(preview.recipient, style: monoStyle(ctx, size: 12)),
-                        const SizedBox(height: 12),
-                        Text('Amount  ${formatErg(preview.amountNanoErg)}'),
-                        const SizedBox(height: 8),
-                      ],
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: Theme.of(ctx).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                const Text('Miner fee', style: TextStyle(fontWeight: FontWeight.w600)),
-                                Text(formatErg(preview.minerFee), style: monoStyle(ctx, size: 12)),
-                              ],
-                            ),
-                            if (preview.inputCount > 0)
-                              Text(
-                                '${preview.inputCount} inputs selected  ·  Network-computed',
-                                style: Theme.of(ctx).textTheme.bodySmall?.copyWith(fontSize: 11),
-                              ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text('Change  ${formatErg(preview.changeNanoErg)}'),
-                      if (!isMulti && preview.tokenId != null && preview.tokenId!.isNotEmpty)
-                        Text('Token  ${token?.label ?? preview.tokenId}  × ${preview.tokenAmount}'),
-                      if (preview.inputBoxes.isNotEmpty) ...[
-                        const SizedBox(height: 12),
-                        CheckboxListTile(
-                          contentPadding: EdgeInsets.zero,
-                          value: showUtxos,
-                          onChanged: (v) => setDialogState(() => showUtxos = v ?? false),
-                          title: const Text('Show UTXOs'),
-                          controlAffinity: ListTileControlAffinity.leading,
-                        ),
-                        if (showUtxos) _InputBoxList(preview.inputBoxes, token),
-                      ],
-                      const SizedBox(height: 12),
-                      Text(
-                        networkController.activeUrl ?? 'Node not chosen yet',
-                        style: Theme.of(ctx).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-                TextButton.icon(
-                  onPressed: () => Navigator.pop(context, 'sign_only'),
-                  icon: const Icon(Icons.save, size: 16),
-                  label: const Text('Sign only'),
-                ),
-                FilledButton(
-                  style: FilledButton.styleFrom(
-                    backgroundColor: rust,
-                    foregroundColor: bone,
-                  ),
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Sign & broadcast'),
-                ),
-              ],
-            );
-          },
-        );
-      },
+    if (!mounted) return;
+    final token = _selectedToken;
+    final tokenId = preview.tokenId;
+    final rows = <ConfirmTxRow>[
+      if (isMulti)
+        for (final r in preview.recipients ?? const <Map<String, dynamic>>[])
+          ConfirmTxRow(
+            shorten(r['address']?.toString() ?? '', head: 8, tail: 6),
+            '${formatErg((r['amount_nano_erg'] as num?)?.toInt() ?? 0)}'
+            '${r['token_id'] != null ? ' + ${_tokenLabel((r['token_amount'] as num?)?.toInt() ?? 0, r['token_id'] as String)}' : ''}',
+          ),
+      ConfirmTxRow(
+        isMulti ? 'Total sent' : 'Amount',
+        formatErg(preview.amountNanoErg),
+        bold: true,
+      ),
+      if (!isMulti && tokenId != null && tokenId.isNotEmpty)
+        ConfirmTxRow('Token', _tokenLabel(preview.tokenAmount ?? 0, tokenId), bold: true),
+      ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
+      ConfirmTxRow('Change to you', formatErg(preview.changeNanoErg)),
+    ];
+    final fiat = networkController.fiatText(preview.amountNanoErg);
+    final choice = await showConfirmTransactionChoice(
+      context,
+      title: isMulti ? 'Confirm multi-recipient send' : 'Confirm send',
+      rows: rows,
+      recipientAddress: isMulti ? null : preview.recipient,
+      detail: [
+        if (fiat != null) fiat,
+        networkController.activeUrl ?? 'Node not chosen yet',
+      ].join('  ·  '),
+      allowSignOnly: true,
+      expandableTitle: 'Show ${preview.inputBoxes.length} input UTXOs',
+      expandable: preview.inputBoxes.isEmpty
+          ? null
+          : _InputBoxList(preview.inputBoxes, token),
     );
     if (!mounted) return;
-    if (ok != true && ok != 'sign_only') {
-      setState(() => _sending = false);
-      return;
-    }
-    try {
-      if (ok == 'sign_only') {
-        final rawTxJson = await walletService.signPreparation(preparationId: preview.preparationId);
-        if (!mounted) return;
-        _showRawTx(rawTxJson);
+    switch (choice) {
+      case ConfirmChoice.cancel:
         setState(() => _sending = false);
-      } else {
-        final txId = await walletService.sendErg(preparationId: preview.preparationId);
-        if (!mounted) return;
-        HapticFeedback.mediumImpact();
-        setState(() {
-          _resultTxId = txId;
-          _sending = false;
-        });
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _sending = false);
-      if (ok == 'sign_only') {
-        _snack('Signing failed: $e');
-      } else {
-        _snack('Broadcast may have failed. Check activity before sending again.');
-      }
+      case ConfirmChoice.signOnly:
+        try {
+          final rawTxJson = await walletService.signPreparation(
+            preparationId: preview.preparationId,
+          );
+          if (!mounted) return;
+          _showRawTx(rawTxJson);
+          setState(() => _sending = false);
+        } catch (e) {
+          if (!mounted) return;
+          setState(() => _sending = false);
+          _snack('Signing failed: $e');
+        }
+      case ConfirmChoice.broadcast:
+        try {
+          final txId = await walletService.sendErg(
+            preparationId: preview.preparationId,
+          );
+          if (!mounted) return;
+          HapticFeedback.mediumImpact();
+          setState(() {
+            _resultTxId = txId;
+            _sending = false;
+          });
+        } catch (_) {
+          if (!mounted) return;
+          setState(() => _sending = false);
+          _snack('Broadcast may have failed. Check activity before sending again.');
+        }
     }
-  }
-
-  List<Widget> _multiRecipientSummary(BuildContext ctx, SendPreview preview) {
-    final recips = preview.recipients ?? [];
-    return [
-      Text('Recipients (${recips.length})', style: Theme.of(ctx).textTheme.titleSmall),
-      const SizedBox(height: 4),
-      ...recips.asMap().entries.map((e) {
-        final r = e.value;
-        final nano = r['amount_nano_erg'] as int? ?? 0;
-        final tokenId = r['token_id'] as String?;
-        final tokenAmt = r['token_amount'] as int?;
-        final suffix = tokenId != null
-            ? ' + ${_tokenLabel(tokenAmt ?? 0, tokenId)}'
-            : '';
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 2),
-          child: Text(
-            '${r['address']}: ${formatErg(nano)}$suffix',
-            style: monoStyle(ctx, size: 12),
-          ),
-        );
-      }),
-      const SizedBox(height: 12),
-      Text('Total sent  ${formatErg(preview.amountNanoErg)}'),
-      const SizedBox(height: 8),
-    ];
   }
 
   String _tokenLabel(int amount, String tokenId) {
@@ -804,6 +591,38 @@ child: Column(
     }
     return '$tokenId: $amount';
   }
+
+  /// "Available 12.3456 ERG  ·  ≈ $4.20 USD" under the amount field; the
+  /// fiat part tracks what is typed.
+  String? _amountHelper() {
+    final parts = <String>[];
+    final spendable = _args.spendableNano;
+    if (spendable != null) {
+      parts.add('Available ${formatErg(spendable, maxFrac: 4)}');
+    }
+    final fiat = networkController.fiatText(_amountNano());
+    if (fiat != null) parts.add(fiat);
+    return parts.isEmpty ? null : parts.join('  ·  ');
+  }
+
+  String _advancedSummary() {
+    final all = _allSpendAddresses.length;
+    final picked = _selectedSpendAddresses.length;
+    final fee = parseErgToNano(_feeCtrl.text) ?? minerFeeNano;
+    return [
+      picked == 0 ? 'All $all addresses' : '$picked of $all addresses',
+      'Fee ${formatErg(fee, unit: false)} ERG',
+    ].join('  ·  ');
+  }
+
+  TokenBalance? _tokenById(String? id) {
+    if (id == null || id.isEmpty) return null;
+    for (final t in _args.tokens) {
+      if (t.id == id) return t;
+    }
+    return null;
+  }
+
   void _snack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
@@ -1050,40 +869,44 @@ child: Column(
                       _buildSwapSection(swapVariant)
                     else ...[
                       const SizedBox(height: 12),
-                      TextFormField(
-                        controller: _amountCtrl,
-                        decoration: InputDecoration(
-                          labelText: token == null ? 'Amount (ERG)' : 'ERG for the output box',
-                          hintText: '0.001',
-                          suffixIcon: TextButton(onPressed: _applyMaxErg, child: const Text('MAX')),
-                        ),
-                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                        validator: (v) {
-                          final n = parseErgToNano(v ?? '');
-                          if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
-                          return null;
-                        },
-                      ),
-                      if (token != null && !token.isNft) ...[
-                        const SizedBox(height: 12),
+                      if (token == null)
+                        TextFormField(
+                          controller: _amountCtrl,
+                          decoration: InputDecoration(
+                            labelText: 'Amount (ERG)',
+                            hintText: '0.001',
+                            helperText: _amountHelper(),
+                            suffixIcon: TextButton(onPressed: _applyMaxErg, child: const Text('MAX')),
+                          ),
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          onChanged: (_) => setState(() {}),
+                          validator: (v) {
+                            final n = parseErgToNano(v ?? '');
+                            if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
+                            return null;
+                          },
+                        )
+                      else if (!token.isNft)
                         TextFormField(
                           controller: _tokenAmtCtrl,
                           decoration: InputDecoration(
                             labelText: '${token.label} amount',
+                            helperText:
+                                'Available ${formatTokenAmount(token.amount, token.decimals)} ${token.label}',
                             suffixIcon: TextButton(onPressed: _applyMaxToken, child: const Text('MAX')),
                           ),
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
                           validator: (v) {
                             final n = parseDecimalToBase(v ?? '', token.decimals);
                             if (n == null || n <= 0) return 'Enter an amount';
+                            if (n > token.amount) {
+                              return 'You hold ${formatTokenAmount(token.amount, token.decimals)}';
+                            }
                             return null;
                           },
-                        ),
-                      ],
-                      if (token != null && token.isNft) ...[
-                        const SizedBox(height: 12),
+                        )
+                      else
                         Text('Sends 1 ${token.label}', style: Theme.of(context).textTheme.bodySmall),
-                      ],
                     ],
                     const SizedBox(height: 16),
                     if (_multiRecipient && swapVariant == null)
@@ -1098,6 +921,7 @@ child: Column(
                           ..._extraRecipients.asMap().entries.map((e) {
                             final idx = e.key;
                             final entry = e.value;
+                            final entryToken = _tokenById(entry.tokenId);
                             return Card(
                               margin: const EdgeInsets.symmetric(vertical: 6),
                               child: Padding(
@@ -1152,15 +976,25 @@ child: Column(
                                           setState(() {});
                                         },
                                       ),
-                                      if (entry.tokenId != null &&
-                                          entry.tokenId!.isNotEmpty &&
-                                          entry.tokenAmtCtrl != null) ...[
+                                      if (entryToken != null && entry.tokenAmtCtrl != null) ...[
                                         const SizedBox(height: 12),
                                         TextFormField(
                                           controller: entry.tokenAmtCtrl,
-                                          decoration: const InputDecoration(labelText: 'Token amount'),
-                                          keyboardType: const TextInputType.numberWithOptions(),
+                                          decoration: InputDecoration(
+                                            labelText: '${entryToken.label} amount',
+                                            helperText:
+                                                'Available ${formatTokenAmount(entryToken.amount, entryToken.decimals)}',
+                                          ),
+                                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                           onChanged: (_) => setState(() {}),
+                                          validator: (v) {
+                                            final n = parseDecimalToBase(v ?? '', entryToken.decimals);
+                                            if (n == null || n <= 0) return 'Enter a token amount';
+                                            if (n > entryToken.amount) {
+                                              return 'You hold ${formatTokenAmount(entryToken.amount, entryToken.decimals)}';
+                                            }
+                                            return null;
+                                          },
                                         ),
                                       ],
                                     ],
@@ -1204,24 +1038,53 @@ child: Column(
                       ),
                     const SizedBox(height: 16),
                     ExpansionTile(
-                      title: const Text('Spend addresses'),
+                      title: const Text('Advanced'),
                       subtitle: Text(
-                        _selectedSpendAddresses.isEmpty
-                            ? 'All ${_allSpendAddresses.length} wallet addresses'
-                            : '${_selectedSpendAddresses.length} of ${_allSpendAddresses.length} selected',
+                        _advancedSummary(),
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
+                      tilePadding: EdgeInsets.zero,
+                      childrenPadding: const EdgeInsets.only(bottom: 8),
                       onExpansionChanged: (_) => setState(() {}),
                       children: [
-                        const Padding(
-                          padding: EdgeInsets.only(bottom: 8),
+                        if (token != null && swapVariant == null) ...[
+                          TextFormField(
+                            controller: _amountCtrl,
+                            decoration: InputDecoration(
+                              labelText: 'ERG carried with the token',
+                              hintText: formatErg(minBoxNano, unit: false),
+                              helperText:
+                                  'Leave blank for the minimum box value of ${formatErg(minBoxNano)}.',
+                            ),
+                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                            validator: (v) {
+                              if (v == null || v.trim().isEmpty) return null;
+                              final n = parseErgToNano(v);
+                              if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
+                              return null;
+                            },
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                        Align(
+                          alignment: Alignment.centerLeft,
                           child: Text(
-                            'Select which wallet addresses to spend from. Deselecting excludes those addresses from coin selection.',
-                            style: TextStyle(fontSize: 11),
+                            'Spend from',
+                            style: Theme.of(context).textTheme.titleSmall,
                           ),
                         ),
+                        const SizedBox(height: 4),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Deselected addresses are excluded from coin selection.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
                         Wrap(
                           spacing: 8,
+                          runSpacing: 4,
                           children: _allSpendAddresses.map((addr) {
                               final sel = _selectedSpendAddresses.contains(addr);
                               return FilterChip(
@@ -1243,22 +1106,29 @@ child: Column(
                             }).toList(),
                         ),
                         if (_selectedSpendAddresses.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 12),
+                          Align(
+                            alignment: Alignment.centerLeft,
                             child: TextButton(
                               onPressed: () => setState(() => _selectedSpendAddresses.clear()),
                               child: const Text('Use all addresses'),
                             ),
                           ),
-                        const Divider(height: 24),
+                        const SizedBox(height: 12),
                         TextFormField(
                           controller: _feeCtrl,
                           decoration: InputDecoration(
-                            labelText: 'Custom miner fee (optional)',
-                            hintText: 'e.g. 0.0011',
-                             helperText: 'Default: ${formatErg(minerFeeNano, unit: false)} ERG. Leave blank for default.',
+                            labelText: 'Miner fee (ERG)',
+                            hintText: formatErg(minerFeeNano, unit: false),
+                            helperText: 'Leave blank for the default ${formatErg(minerFeeNano)}.',
                           ),
                           keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          onChanged: (_) => setState(() {}),
+                          validator: (v) {
+                            if (v == null || v.trim().isEmpty) return null;
+                            final n = parseErgToNano(v);
+                            if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
+                            return null;
+                          },
                         ),
                       ],
                     ),
