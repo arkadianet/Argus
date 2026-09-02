@@ -22,9 +22,7 @@ class ActivityTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final muted = Theme.of(context).brightness == Brightness.dark
-        ? watchfulMuted
-        : ledgerMuted;
+    final muted = ArgusColors.of(context).muted;
     final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
     final outgoing = nano < 0;
     final ts = (tx['timestamp'] as num?)?.toInt();

@@ -288,7 +288,7 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> {
 
   Widget _ready() {
     final s = _summary!;
-    final muted = Theme.of(context).brightness == Brightness.dark ? watchfulMuted : ledgerMuted;
+    final muted = ArgusColors.of(context).muted;
     final warning = s.warning;
     final rows = s.confirmRows(tokens: _args.tokens);
     return ListView(

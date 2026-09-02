@@ -365,4 +365,17 @@ void main() {
     expect(c.utxoCount, 0);
     expect(c.phase, SyncPhase.idle);
   });
+
+  test('routeArgs mirrors the synced state for pushed screens', () async {
+    gw.balances = {
+      'addr0': {'balance_nano_erg': 5, 'tokens': []},
+    };
+    await c.hydrateAfterUnlock();
+    await c.refresh(discover: false);
+
+    final a = c.routeArgs;
+    expect(a.receiveAddress, 'addr0');
+    expect(a.spendableNano, 5);
+    expect(a.historyAddresses, ['addr0']);
+  });
 }

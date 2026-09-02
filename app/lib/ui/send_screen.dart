@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../format.dart';
 import '../services/contacts_service.dart';
+import '../services/dexy_quote_controller.dart';
 import '../services/dexy_service.dart';
 import '../services/ergopay_service.dart';
 import '../services/network_controller.dart';
@@ -78,7 +79,7 @@ class _SendScreenState extends State<SendScreen> {
   bool _sending = false;
   String? _resultTxId;
   late String? _assetId = widget.initialAssetId;
-  List<DexyPathQuote>? _swapQuotes;
+  final _quotes = DexyQuoteController();
   Set<String> _selectedSpendAddresses = {};
   final _feeCtrl = TextEditingController();
   final List<_RecipientEntry> _extraRecipients = [];
@@ -88,6 +89,7 @@ class _SendScreenState extends State<SendScreen> {
   @override
   void initState() {
     super.initState();
+    _quotes.addListener(_onQuotes);
     final r = widget.initialRecipient;
     if (r != null && r.isNotEmpty) {
       _recipientCtrl.text = r;
@@ -99,7 +101,8 @@ class _SendScreenState extends State<SendScreen> {
 
   @override
   void dispose() {
-    _quoteDebounce?.cancel();
+    _quotes.removeListener(_onQuotes);
+    _quotes.dispose();
     _recipientCtrl.dispose();
     _amountCtrl.dispose();
     _tokenAmtCtrl.dispose();
@@ -141,39 +144,14 @@ class _SendScreenState extends State<SendScreen> {
     return null;
   }
 
-  Timer? _quoteDebounce;
-  int _quoteGeneration = 0;
-
-  void _scheduleQuotes() {
-    _quoteDebounce?.cancel();
-    _quoteDebounce = Timer(const Duration(milliseconds: 300), _refreshQuotes);
+  void _onQuotes() {
+    if (mounted) setState(() {});
   }
 
-  Future<void> _refreshQuotes() async {
+  void _scheduleQuotes() {
     final variant = _selectedSwapVariant;
     if (variant == null) return;
-    final gen = ++_quoteGeneration;
-    final amount =
-        parseDecimalToBase(_tokenAmtCtrl.text, variant.decimals);
-    if (amount == null || amount <= 0) {
-      if (mounted && gen == _quoteGeneration) {
-        setState(() => _swapQuotes = null);
-      }
-      return;
-    }
-    try {
-      final quotes = await dexService.quoteTokenSend(
-        variant,
-        amount,
-        heldTokens: _heldFor(variant),
-      );
-      if (!mounted || gen != _quoteGeneration) return;
-      setState(() => _swapQuotes = quotes);
-    } catch (_) {
-      if (mounted && gen == _quoteGeneration) {
-        setState(() => _swapQuotes = null);
-      }
-    }
+    _quotes.request(variant, _tokenAmtCtrl.text, held: _heldFor(variant));
   }
 
   List<String> get _allSpendAddresses {
@@ -713,7 +691,7 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   Widget _buildSwapSection(DexyVariant variant) {
-    final quotes = _swapQuotes;
+    final quotes = _quotes.quotes;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -896,7 +874,7 @@ class _SendScreenState extends State<SendScreen> {
                       onChanged: (v) => setState(() {
                         _assetId = v;
                         _tokenAmtCtrl.clear();
-                        _swapQuotes = null;
+                        _quotes.clear();
                       }),
                     ),
                     if (swapVariant != null)

@@ -4,13 +4,10 @@ import 'package:flutter/services.dart';
 
 import '../format.dart';
 import '../services/network_controller.dart';
+import '../services/utxo_tools_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
-
-enum UtxoFilter { all, ergOnly, withTokens, dust }
-
-const _dustThresholdNano = 100000000;
 
 class UtxoManagementScreen extends StatefulWidget {
   const UtxoManagementScreen({super.key});
@@ -22,24 +19,28 @@ class UtxoManagementScreen extends StatefulWidget {
 class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
   bool _loading = true;
   String? _error;
-  List<InputBoxInput> _boxes = [];
-  final Set<String> _selectedBoxIds = {};
-  UtxoFilter _activeFilter = UtxoFilter.all;
+  final _tools = UtxoToolsController();
   final TextEditingController _searchCtrl = TextEditingController();
-  String _searchQuery = '';
   bool _busy = false;
+
+  List<InputBoxInput> get _boxes => _tools.boxes;
 
   @override
   void initState() {
     super.initState();
-    _searchCtrl.addListener(() {
-      setState(() => _searchQuery = _searchCtrl.text.trim().toLowerCase());
-    });
-    _loadBoxes();
+    _tools.addListener(_onToolsChanged);
+    _searchCtrl.addListener(() => _tools.setSearch(_searchCtrl.text));
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadBoxes());
+  }
+
+  void _onToolsChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    _tools.removeListener(_onToolsChanged);
+    _tools.dispose();
     _searchCtrl.dispose();
     super.dispose();
   }
@@ -54,11 +55,8 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       final addresses = await _getWalletAddresses();
       if (!mounted) return;
       if (addresses.isEmpty) {
-        setState(() {
-          _boxes = [];
-          _selectedBoxIds.clear();
-          _loading = false;
-        });
+        _tools.setBoxes(const []);
+        setState(() => _loading = false);
         return;
       }
       final boxes = await walletService.listUnspentBoxes(
@@ -66,11 +64,8 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
         nodeUrl: networkController.activeUrl,
       );
       if (!mounted) return;
-      setState(() {
-        _boxes = boxes;
-        _loading = false;
-        _selectedBoxIds.retainAll(boxes.map((b) => b.boxId));
-      });
+      _tools.setBoxes(boxes);
+      setState(() => _loading = false);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -80,7 +75,23 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     }
   }
 
+  /// The wallet's addresses from the live route context; falls back to a
+  /// discovery only when the context is empty (deep-linked open).
   Future<List<String>> _getWalletAddresses() async {
+    final args = WalletRouteArgs.of(context);
+    if (args.historyAddresses.isNotEmpty) {
+      final list = <String>[
+        if (args.receiveAddress.isNotEmpty) args.receiveAddress,
+      ];
+      for (final a in args.historyAddresses) {
+        if (!list.contains(a)) list.add(a);
+      }
+      return list;
+    }
+    return _discoverAddresses();
+  }
+
+  Future<List<String>> _discoverAddresses() async {
     final list = <String>[];
     try {
       final pinnedIndex = await walletService.getPinnedAddressIndex();
@@ -108,53 +119,8 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     return list;
   }
 
-  List<InputBoxInput> get _filteredBoxes {
-    return _boxes.where((box) {
-      switch (_activeFilter) {
-        case UtxoFilter.all:
-          break;
-        case UtxoFilter.ergOnly:
-          if (box.assets.isNotEmpty) return false;
-          break;
-        case UtxoFilter.withTokens:
-          if (box.assets.isEmpty) return false;
-          break;
-        case UtxoFilter.dust:
-          if (box.valueNanoErg >= BigInt.from(_dustThresholdNano)) return false;
-          break;
-      }
-      if (_searchQuery.isNotEmpty) {
-        final matchId = box.boxId.toLowerCase().contains(_searchQuery);
-        final matchToken = box.assets.any(
-          (a) => a.tokenId.toLowerCase().contains(_searchQuery),
-        );
-        if (!matchId && !matchToken) return false;
-      }
-      return true;
-    }).toList();
-  }
-
-  void _toggleSelect(String boxId) {
-    setState(() {
-      if (_selectedBoxIds.contains(boxId)) {
-        _selectedBoxIds.remove(boxId);
-      } else {
-        _selectedBoxIds.add(boxId);
-      }
-    });
-  }
-
-  void _selectAllFiltered() {
-    setState(() {
-      for (final b in _filteredBoxes) {
-        _selectedBoxIds.add(b.boxId);
-      }
-    });
-  }
-
-  void _clearSelection() {
-    setState(() => _selectedBoxIds.clear());
-  }
+  List<InputBoxInput> get _filteredBoxes => _tools.filtered;
+  Set<String> get _selectedBoxIds => _tools.selectedIds;
 
   void _snack(String msg, {bool isError = false}) {
     if (!mounted) return;
@@ -164,9 +130,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
   }
 
   Future<void> _openConsolidateFlow() async {
-    final targets = _selectedBoxIds.isNotEmpty
-        ? _boxes.where((b) => _selectedBoxIds.contains(b.boxId)).toList()
-        : _boxes;
+    final targets = _tools.consolidateTargets;
 
     if (targets.length < 2) {
       _snack('Consolidation requires at least 2 boxes', isError: true);
@@ -181,9 +145,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     try {
       final preview = await walletService.prepareConsolidate(
         spendAddresses: addrs,
-        selectedBoxIds: _selectedBoxIds.isNotEmpty
-            ? _selectedBoxIds.toList()
-            : null,
+        selectedBoxIds: _tools.selectedBoxIdsOrNull,
         changeAddress: changeAddress,
         nodeUrl: networkController.activeUrl,
       );
@@ -552,7 +514,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                           hintText: 'Search box ID or token...',
                           prefixIcon: const Icon(Icons.search, size: 20),
                           isDense: true,
-                          suffixIcon: _searchQuery.isNotEmpty
+                          suffixIcon: _tools.search.isNotEmpty
                               ? IconButton(
                                   icon: const Icon(Icons.clear, size: 18),
                                   onPressed: () => _searchCtrl.clear(),
@@ -584,17 +546,17 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                           const SizedBox(width: 6),
                       _filterChip(
                         UtxoFilter.dust,
-                        'Dust (${_boxes.where((b) => b.valueNanoErg < BigInt.from(_dustThresholdNano)).length})',
+                        'Dust (${_boxes.where((b) => b.valueNanoErg < BigInt.from(dustThresholdNano)).length})',
                       ),
                           const SizedBox(width: 12),
                           if (_selectedBoxIds.isNotEmpty) ...[
                             TextButton(
-                              onPressed: _clearSelection,
+                              onPressed: _tools.clearSelection,
                               child: Text('Clear (${_selectedBoxIds.length})'),
                             ),
                           ] else ...[
                             TextButton(
-                              onPressed: _selectAllFiltered,
+                              onPressed: _tools.selectAllFiltered,
                               child: const Text('Select All'),
                             ),
                           ],
@@ -619,7 +581,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                                 return _UtxoCard(
                                   box: box,
                                   isSelected: isSelected,
-                                  onToggle: () => _toggleSelect(box.boxId),
+                                  onToggle: () => _tools.toggle(box.boxId),
                                 );
                               },
                             ),
@@ -660,7 +622,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
   }
 
   Widget _filterChip(UtxoFilter filter, String label) {
-    final active = _activeFilter == filter;
+    final active = _tools.filter == filter;
     return ChoiceChip(
       label: Text(
         label,
@@ -668,7 +630,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       ),
       selected: active,
       selectedColor: iris,
-      onSelected: (_) => setState(() => _activeFilter = filter),
+      onSelected: (_) => _tools.setFilter(filter),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
     );
   }
