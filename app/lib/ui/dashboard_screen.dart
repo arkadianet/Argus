@@ -19,12 +19,16 @@ import 'create_wallet_screen.dart';
 import 'offline_banner.dart';
 import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
+import 'send_screen.dart';
 import 'settings_screen.dart';
 import 'swap_hub_screen.dart';
-import 'token_avatar.dart';
 import 'transaction_detail_screen.dart';
 import 'transactions_screen.dart';
 import 'wallets_overview_screen.dart';
+import 'widgets/activity_tile.dart';
+import 'widgets/asset_tile.dart';
+import 'widgets/soft_card.dart';
+import 'widgets/token_detail_sheet.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -653,6 +657,24 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
+  void _openToken(TokenBalance t) {
+    showTokenDetailSheet(
+      context,
+      token: t,
+      explorerUrl: networkController.explorerToken(t.id),
+      onSend: (token) {
+        if (!_guardUnlocked()) return;
+        Navigator.push(
+          context,
+          fadeRoute(
+            SendScreen(initialAssetId: token.id),
+            settings: RouteSettings(arguments: _args()),
+          ),
+        );
+      },
+    );
+  }
+
   void _openSettings() => _selectTab(3);
 
   /// The settings tab renamed, deleted or picked another wallet. An empty id
@@ -994,10 +1016,21 @@ class _DashboardScreenState extends State<DashboardScreen>
         final fungible = _sync.tokens.where((t) => !t.isNft).toList();
         final nfts = _sync.tokens.where((t) => t.isNft).toList();
         final fragmented = _sync.utxoCount > utxoFragmentationThreshold;
-        final assets = [
-          _AssetRow.erg(balanceNano: _sync.balanceNano),
-          ...fungible.map(_AssetRow.token),
-          ...nfts.map(_AssetRow.token),
+        Widget tokenTile(TokenBalance t) => AssetTile.token(
+              t,
+              hidden: _balanceHidden,
+              onTap: () => _openToken(t),
+            );
+        final assets = <Widget>[
+          AssetTile.erg(
+            balanceNano: _sync.balanceNano,
+            fiatText: networkController.fiatText(_sync.balanceNano),
+            hidden: _balanceHidden,
+            onTap: () => Navigator.push(
+                context, fadeRoute(AssetsScreen(args: _args()))),
+          ),
+          ...fungible.map(tokenTile),
+          ...nfts.map(tokenTile),
         ];
         final visibleAssets = assets.take(_assetCap).toList();
         final hiddenAssets = assets.length - visibleAssets.length;
@@ -1017,16 +1050,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                 onTap: () => Navigator.push(context,
                     fadeRoute(AssetsScreen(args: _args())))),
             const SizedBox(height: 10),
-            _card(
+            SoftCard(
               padding: EdgeInsets.zero,
-              child: Column(
-                children: [
-                  for (var i = 0; i < visibleAssets.length; i++) ...[
-                    if (i > 0) const Divider(height: 1, indent: 68),
-                    _assetTile(visibleAssets[i]),
-                  ],
-                ],
-              ),
+              child: DividedColumn(children: visibleAssets),
             ),
             const SizedBox(height: 28),
             _sectionHeader('Recent activity',
@@ -1034,20 +1060,22 @@ class _DashboardScreenState extends State<DashboardScreen>
                 onTap: () => _selectTab(1)),
             const SizedBox(height: 10),
             _sync.recentTxs.isEmpty
-                ? _card(
+                ? SoftCard(
                     child: Text(
                       'No activity yet. Receive to your address to get started.',
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   )
-                : _card(
+                : SoftCard(
                     padding: EdgeInsets.zero,
-                    child: Column(
+                    child: DividedColumn(
                       children: [
-                        for (var i = 0; i < _sync.recentTxs.length; i++) ...[
-                          if (i > 0) const Divider(height: 1, indent: 68),
-                          _activityTile(_sync.recentTxs[i]),
-                        ],
+                        for (final tx in _sync.recentTxs)
+                          ActivityTile(
+                            tx: tx,
+                            hidden: _balanceHidden,
+                            onTap: () => _openTx(tx),
+                          ),
                       ],
                     ),
                   ),
@@ -1085,7 +1113,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               const SizedBox(height: 28),
               _sectionHeader('Addresses'),
               const SizedBox(height: 10),
-              _card(
+              SoftCard(
                 padding: EdgeInsets.zero,
                 child: Column(
                   children: [
@@ -1101,22 +1129,6 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
         );
       },
-    );
-  }
-
-  Widget _card({required Widget child, EdgeInsets? padding}) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      width: double.infinity,
-      padding: padding ?? const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: dark ? const Color(0xFF262C29) : const Color(0xFFEDE4D3),
-        ),
-      ),
-      child: child,
     );
   }
 
@@ -1167,7 +1179,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     final synced = !stale && !syncing && online;
     final syncAge = formatSyncAge(_sync.lastSyncedAt);
 
-    return _card(
+    return SoftCard(
       padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1443,137 +1455,6 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _assetTile(_AssetRow asset) {
-    final muted = Theme.of(context).brightness == Brightness.dark
-        ? watchfulMuted
-        : ledgerMuted;
-    return InkWell(
-      onTap: () =>
-          Navigator.push(context, fadeRoute(AssetsScreen(args: _args()))),
-      borderRadius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            TokenAvatar(
-              label: asset.ticker,
-              iconUrl: asset.iconUrl,
-              isErg: asset.isErg,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    asset.ticker,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 15),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    asset.name,
-                    style: TextStyle(fontSize: 12.5, color: muted),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  _balanceHidden
-                      ? '••••'
-                      : '${asset.amountText} ${asset.ticker}',
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w500, fontSize: 14.5),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  _balanceHidden
-                      ? '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}'
-                      : asset.fiatText ?? '',
-                  style: TextStyle(fontSize: 12, color: muted),
-                ),
-              ],
-            ),
-            const SizedBox(width: 4),
-            Icon(Icons.chevron_right, size: 18, color: muted),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _activityTile(Map<String, dynamic> tx) {
-    final muted = Theme.of(context).brightness == Brightness.dark
-        ? watchfulMuted
-        : ledgerMuted;
-    final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
-    final outgoing = nano < 0;
-    final ts = (tx['timestamp'] as num?)?.toInt();
-    final confirmed = ((tx['height'] as num?)?.toInt() ?? 0) > 0;
-    final icon = outgoing ? Icons.arrow_upward : Icons.arrow_downward;
-    final tint = outgoing ? rust : moss;
-
-    return InkWell(
-      onTap: () => _openTx(tx),
-      borderRadius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: tint.withValues(alpha: 0.12),
-              child: Icon(icon, size: 17, color: tint),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    outgoing ? 'Sent' : 'Received',
-                    style: const TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 15),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    _balanceHidden
-                        ? '••••'
-                        : formatErg(nano.abs(), unit: true, maxFrac: 4),
-                    style: TextStyle(fontSize: 12.5, color: muted),
-                  ),
-                ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  formatActivityTime(ts),
-                  style: TextStyle(fontSize: 12, color: muted),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  confirmed ? 'Confirmed' : 'Pending',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: confirmed ? moss : iris,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _discoverCard({
     required String title,
     required String subtitle,
@@ -1690,48 +1571,3 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 }
-
-class _AssetRow {
-  final String ticker;
-  final String name;
-  final String amountText;
-  final String? fiatText;
-  final String? iconUrl;
-  final bool isErg;
-
-  const _AssetRow({
-    required this.ticker,
-    required this.name,
-    required this.amountText,
-    this.fiatText,
-    this.iconUrl,
-    this.isErg = false,
-  });
-
-  factory _AssetRow.erg({int? balanceNano}) {
-    return _AssetRow(
-      ticker: 'ERG',
-      name: 'Ergo',
-      amountText: formatErg(balanceNano, unit: false, maxFrac: 4),
-      fiatText: networkController.fiatText(balanceNano),
-      isErg: true,
-    );
-  }
-
-  factory _AssetRow.token(TokenBalance t) {
-    final name = t.name?.trim();
-    final hasName = name != null && name.isNotEmpty;
-    // Derive a short ticker from the name (first word) so the bold title and
-    // the muted subtitle don't repeat the same string.
-    final ticker = hasName
-        ? (name.contains(' ') ? name.split(' ').first : name)
-        : (t.id.length > 6 ? t.id.substring(0, 6).toUpperCase() : t.id);
-    return _AssetRow(
-      ticker: ticker,
-      name: hasName ? name : shorten(t.id, head: 10, tail: 6),
-      amountText: formatTokenAmountGrouped(t.amount, t.decimals),
-      iconUrl: t.iconUrl,
-    );
-  }
-}
-

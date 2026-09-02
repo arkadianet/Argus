@@ -65,6 +65,13 @@ class TransactionDetailScreen extends StatelessWidget {
               ),
             ],
           ),
+          if (networkController.fiatText(nano?.abs()) != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              networkController.fiatText(nano?.abs())!,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
           const SizedBox(height: 8),
           Text(
             confirmed ? 'Confirmed ${formatHeight(height)}' : 'Not yet in a block',

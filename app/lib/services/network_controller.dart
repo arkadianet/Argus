@@ -159,6 +159,7 @@ class NetworkController extends ChangeNotifier {
   }
 
   String explorerTx(String txId) => explorerTransactionUrl(explorer, txId);
+  String explorerToken(String tokenId) => explorerTokenUrl(explorer, tokenId);
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -390,6 +391,17 @@ String explorerTransactionUrl(String explorer, String txId) {
     return 'https://explorer.ergoplatform.com/en/transactions/$txId';
   }
   return '${explorer.replaceAll(RegExp(r'/$'), '')}/en/transactions/$txId';
+}
+
+String explorerTokenUrl(String explorer, String tokenId) {
+  final host = Uri.tryParse(explorer)?.host ?? '';
+  if (host.endsWith('sigmaspace.io')) {
+    return 'https://sigmaspace.io/en/token/$tokenId';
+  }
+  if (host.endsWith('ergoplatform.com')) {
+    return 'https://explorer.ergoplatform.com/en/token/$tokenId';
+  }
+  return '${explorer.replaceAll(RegExp(r'/$'), '')}/en/token/$tokenId';
 }
 
 /// Accepts `https://host` or a bare `host[:port]` (upgraded to https).
