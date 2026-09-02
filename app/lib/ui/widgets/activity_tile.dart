@@ -1,0 +1,118 @@
+import 'package:flutter/material.dart';
+
+import '../../format.dart';
+import '../../theme/argus_theme.dart';
+
+/// One transaction row shared by the home card and the Activity tab.
+class ActivityTile extends StatelessWidget {
+  const ActivityTile({
+    super.key,
+    required this.tx,
+    this.hidden = false,
+    this.onTap,
+    this.showTxId = false,
+  });
+
+  final Map<String, dynamic> tx;
+  final bool hidden;
+  final VoidCallback? onTap;
+
+  /// Activity tab: show the shortened id under the amount.
+  final bool showTxId;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = Theme.of(context).brightness == Brightness.dark
+        ? watchfulMuted
+        : ledgerMuted;
+    final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
+    final outgoing = nano < 0;
+    final ts = (tx['timestamp'] as num?)?.toInt();
+    final height = (tx['height'] as num?)?.toInt() ?? 0;
+    final confirmed = height > 0;
+    final tokenCount = (tx['tokens_received'] as List?)?.length ?? 0;
+    final txId = tx['tx_id']?.toString() ?? '';
+    final tint = outgoing ? rust : moss;
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(cardRadius),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 18,
+              backgroundColor: tint.withValues(alpha: 0.12),
+              child: Icon(
+                outgoing ? Icons.arrow_upward : Icons.arrow_downward,
+                size: 17,
+                color: tint,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        outgoing ? 'Sent' : 'Received',
+                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                      ),
+                      if (tokenCount > 0) ...[
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest
+                                .withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '$tokenCount token${tokenCount == 1 ? '' : 's'}',
+                            style: TextStyle(fontSize: 10, color: muted),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    hidden ? '••••' : formatErg(nano.abs(), unit: true, maxFrac: 4),
+                    style: TextStyle(fontSize: 12.5, color: muted),
+                  ),
+                  if (showTxId && txId.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      shorten(txId, head: 10, tail: 8),
+                      style: monoStyle(context, size: 11).copyWith(color: muted),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(formatActivityTime(ts), style: TextStyle(fontSize: 12, color: muted)),
+                const SizedBox(height: 3),
+                Text(
+                  confirmed ? 'Confirmed' : 'Pending',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: confirmed ? moss : iris,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

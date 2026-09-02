@@ -32,7 +32,10 @@ String dexyAmountLabel(DexyVariant variant) =>
     '${variant.shortName} amount to deliver';
 
 class SendScreen extends StatefulWidget {
-  const SendScreen({super.key});
+  const SendScreen({super.key, this.initialAssetId});
+
+  /// Token id to preselect in the asset picker (e.g. from a token sheet).
+  final String? initialAssetId;
 
   @override
   State<SendScreen> createState() => _SendScreenState();
@@ -62,7 +65,7 @@ class _SendScreenState extends State<SendScreen> {
   final _tokenAmtCtrl = TextEditingController();
   bool _sending = false;
   String? _resultTxId;
-  String? _assetId;
+  late String? _assetId = widget.initialAssetId;
   List<DexyPathQuote>? _swapQuotes;
   Set<String> _selectedSpendAddresses = {};
   final _feeCtrl = TextEditingController();
@@ -81,7 +84,7 @@ class _SendScreenState extends State<SendScreen> {
     super.dispose();
   }
 
-  WalletRouteArgs get _args => WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+  WalletRouteArgs get _args => WalletRouteArgs.of(context);
 
   TokenBalance? get _selectedToken {
     if (_assetId == null) return null;

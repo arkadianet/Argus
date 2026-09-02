@@ -36,3 +36,6 @@ app/ios/Frameworks/.serena/
 
 # Local tooling (not repo state)
 /.serena/
+
+# MCP server logs
+logs/

@@ -13,7 +13,7 @@ class TransactionDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final args = WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+    final args = WalletRouteArgs.of(context);
     final tx = args.transaction ?? const {};
     final txId = tx['tx_id']?.toString() ?? '';
     final height = (tx['height'] as num?)?.toInt();
@@ -65,6 +65,13 @@ class TransactionDetailScreen extends StatelessWidget {
               ),
             ],
           ),
+          if (networkController.fiatText(nano?.abs()) != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              networkController.fiatText(nano?.abs())!,
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+          ],
           const SizedBox(height: 8),
           Text(
             confirmed ? 'Confirmed ${formatHeight(height)}' : 'Not yet in a block',

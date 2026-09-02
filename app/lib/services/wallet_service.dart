@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -95,6 +95,20 @@ class TokenBalance {
   }
 }
 
+/// Supplies [WalletRouteArgs] to screens embedded without their own route,
+/// so they see live balances the same way pushed screens do via arguments.
+class WalletArgsScope extends InheritedWidget {
+  const WalletArgsScope({super.key, required this.args, required super.child});
+
+  final WalletRouteArgs args;
+
+  static WalletRouteArgs? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<WalletArgsScope>()?.args;
+
+  @override
+  bool updateShouldNotify(WalletArgsScope old) => old.args != args;
+}
+
 class WalletRouteArgs {
   final String senderAddress;
   final String receiveAddress;
@@ -113,6 +127,14 @@ class WalletRouteArgs {
     this.spendableNano,
     this.transaction,
   });
+
+  /// Wallet context for [context]: an enclosing [WalletArgsScope] (tabs
+  /// embedded in the home screen) or, failing that, the route arguments.
+  static WalletRouteArgs of(BuildContext context) {
+    final scoped = WalletArgsScope.maybeOf(context);
+    if (scoped != null) return scoped;
+    return from(ModalRoute.of(context)?.settings.arguments);
+  }
 
   static WalletRouteArgs from(Object? args) {
     if (args is WalletRouteArgs) return args;
@@ -516,12 +538,66 @@ class WalletService {
   final ValueNotifier<bool> unlocked = ValueNotifier(false);
   final ValueNotifier<String?> currentWalletId = ValueNotifier<String?>(null);
   final Map<String, TokenBalance> _tokenMeta = {};
+  static const _tokenMetaKey = 'argus_token_meta_v1';
+  bool _tokenMetaDirty = false;
 
   Future<void> init() async {
     if (_initialized) return;
-    await RustLib.init();
+    await Future.wait([RustLib.init(), loadTokenMeta()]);
     _initialized = true;
     await _migrateLegacyIfNeeded();
+  }
+
+  int get cachedTokenMetaCount => _tokenMeta.length;
+
+  /// Caches [meta] (name, decimals, emission, icon) for its token id. Call
+  /// [persistTokenMeta] afterwards to keep it across launches.
+  void rememberTokenMeta(TokenBalance meta) {
+    _tokenMeta[meta.id] = meta;
+    _tokenMetaDirty = true;
+  }
+
+  /// Token metadata is public chain data and never changes for a given id,
+  /// so it is safe to keep in plain preferences and skip the node next time.
+  Future<void> loadTokenMeta() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_tokenMetaKey);
+      if (raw == null || raw.isEmpty) return;
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      for (final entry in map.entries) {
+        final v = entry.value;
+        if (v is! Map) continue;
+        _tokenMeta[entry.key] = TokenBalance(
+          id: entry.key,
+          amount: 0,
+          name: v['name'] as String?,
+          decimals: (v['decimals'] as num?)?.toInt() ?? 0,
+          emissionAmount: (v['emissionAmount'] as num?)?.toInt(),
+          iconUrl: v['iconUrl'] as String?,
+        );
+      }
+    } catch (_) {
+      // A corrupt cache only costs a refetch.
+    }
+  }
+
+  Future<void> persistTokenMeta() async {
+    if (!_tokenMetaDirty) return;
+    _tokenMetaDirty = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _tokenMetaKey,
+      jsonEncode({
+        for (final e in _tokenMeta.entries)
+          e.key: {
+            'name': e.value.name,
+            'decimals': e.value.decimals,
+            'emissionAmount': e.value.emissionAmount,
+            'iconUrl': e.value.iconUrl,
+          },
+      }),
+    );
   }
 
   /// Migrate pre-multi-wallet single-slot storage to a new wallet ID.
@@ -958,7 +1034,10 @@ class WalletService {
       if (id.isEmpty || amount <= 0) continue;
       jobs.add(tokenMeta(id, amount));
     }
-    return Future.wait(jobs);
+    final out = await Future.wait(jobs);
+    // Fire and forget: the write must not slow the balance refresh.
+    persistTokenMeta().catchError((_) {});
+    return out;
   }
 
   /// True when the last [loadHistory] succeeded but at least one address
@@ -1050,7 +1129,7 @@ class WalletService {
         emissionAmount: (map['emissionAmount'] as num?)?.toInt(),
         iconUrl: map['iconUrl'] as String? ?? map['icon_url'] as String?,
       );
-      _tokenMeta[id] = info;
+      rememberTokenMeta(info);
       return info;
     } catch (_) {
       return TokenBalance(id: id, amount: amount);

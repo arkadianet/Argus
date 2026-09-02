@@ -67,7 +67,7 @@ class _SwapScreenState extends State<SwapScreen> {
   String _lastEdited = 'from';
 
   WalletRouteArgs get _args =>
-      WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+      WalletRouteArgs.of(context);
 
   List<String> get _spendAddresses {
     final args = _args;

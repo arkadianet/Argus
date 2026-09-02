@@ -15,7 +15,18 @@ import 'pin_fields.dart';
 
 class SettingsScreen extends StatefulWidget {
   final String? walletId;
-  const SettingsScreen({super.key, this.walletId});
+  const SettingsScreen({
+    super.key,
+    this.walletId,
+    this.embedded = false,
+    this.onWalletSwitched,
+  });
+
+  /// Hosted as a home tab: no app bar, and wallet switches are reported via
+  /// [onWalletSwitched] instead of popping the route. An empty id means the
+  /// wallet this screen showed was deleted.
+  final bool embedded;
+  final ValueChanged<String>? onWalletSwitched;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -226,7 +237,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (w.walletId == _walletId) {
         // The wallet this screen was opened for is gone — pop so the
         // dashboard re-loads onto the first remaining wallet (or none).
-        Navigator.pop(context, remaining.isNotEmpty ? remaining.first.walletId : '');
+        _handOff(remaining.isNotEmpty ? remaining.first.walletId : '');
         return;
       }
       _refreshWallets();
@@ -449,10 +460,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _snack('Pinned index $index · ${shorten(addr, head: 10, tail: 8)}');
   }
 
+  void _handOff(String walletId) {
+    final cb = widget.onWalletSwitched;
+    if (cb != null) {
+      cb(walletId);
+    } else {
+      Navigator.pop(context, walletId);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: widget.embedded ? null : AppBar(title: const Text('Settings')),
       body: ListenableBuilder(
         listenable: Listenable.merge([
           themeController,
@@ -838,7 +858,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             // Tapping another wallet switches to it: pop with
                             // its id so the dashboard runs the switch flow.
                             if (w.walletId != currentId) {
-                              Navigator.pop(context, w.walletId);
+                              _handOff(w.walletId);
                             }
                           },
                         ),

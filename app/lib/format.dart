@@ -169,3 +169,14 @@ String formatRelativeTime(DateTime? when, {DateTime? now}) {
   if (dayDiff < 7) return '${dayDiff} days ago';
   return '${when.month}/${when.day}/${when.year}';
 }
+
+/// Relative age of the last successful sync: 'just now', '3m ago', '2h ago',
+/// '3d ago'. Empty when there has been none.
+String formatSyncAge(DateTime? at, {DateTime? now}) {
+  if (at == null) return '';
+  final diff = (now ?? DateTime.now()).difference(at);
+  if (diff.inMinutes < 1) return 'just now';
+  if (diff.inHours < 1) return '${diff.inMinutes}m ago';
+  if (diff.inDays < 1) return '${diff.inHours}h ago';
+  return '${diff.inDays}d ago';
+}

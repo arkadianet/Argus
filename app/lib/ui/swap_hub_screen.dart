@@ -11,21 +11,41 @@ enum SwapVenue { dexy, spectrum, ageusd }
 /// Hosts the three protocol screens as embedded bodies (no nested app bars)
 /// behind a segmented control, preserving each tab's state while switching.
 class SwapHubScreen extends StatefulWidget {
-  const SwapHubScreen({super.key, this.initialTab = SwapVenue.dexy});
+  const SwapHubScreen({
+    super.key,
+    this.initialTab = SwapVenue.dexy,
+    this.embedded = false,
+    this.venue,
+    this.onVenueChanged,
+  });
 
   final SwapVenue initialTab;
+
+  /// Hosted as a home tab: no app bar of its own.
+  final bool embedded;
+
+  /// When set, the selected venue is controlled by the parent.
+  final SwapVenue? venue;
+  final ValueChanged<SwapVenue>? onVenueChanged;
 
   @override
   State<SwapHubScreen> createState() => _SwapHubScreenState();
 }
 
 class _SwapHubScreenState extends State<SwapHubScreen> {
-  late SwapVenue _tab = widget.initialTab;
+  late SwapVenue _tab = widget.venue ?? widget.initialTab;
+
+  @override
+  void didUpdateWidget(SwapHubScreen old) {
+    super.didUpdateWidget(old);
+    final v = widget.venue;
+    if (v != null && v != old.venue) _tab = v;
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Swap')),
+      appBar: widget.embedded ? null : AppBar(title: const Text('Swap')),
       body: SafeArea(
         child: Column(
           children: [
@@ -51,7 +71,10 @@ class _SwapHubScreenState extends State<SwapHubScreen> {
                 ],
                 selected: {_tab},
                 showSelectedIcon: false,
-                onSelectionChanged: (s) => setState(() => _tab = s.first),
+                onSelectionChanged: (s) {
+                  setState(() => _tab = s.first);
+                  widget.onVenueChanged?.call(s.first);
+                },
               ),
             ),
             Expanded(

@@ -39,7 +39,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
   String? _previewError;
 
   WalletRouteArgs get _args =>
-      WalletRouteArgs.from(ModalRoute.of(context)?.settings.arguments);
+      WalletRouteArgs.of(context);
 
   int? get _sigUsdBalance {
     for (final t in _args.tokens) {
