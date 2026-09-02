@@ -59,9 +59,7 @@ class _ConfirmTransactionSheetState extends State<ConfirmTransactionSheet> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final muted = theme.brightness == Brightness.dark
-        ? watchfulMuted
-        : ledgerMuted;
+    final muted = ArgusColors.of(context).muted;
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
@@ -106,7 +104,7 @@ class _ConfirmTransactionSheetState extends State<ConfirmTransactionSheet> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: theme.brightness == Brightness.dark ? ink : paper,
+                  color: ArgusColors.of(context).inset,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: SelectableText(

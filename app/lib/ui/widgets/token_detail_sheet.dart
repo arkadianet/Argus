@@ -25,7 +25,7 @@ class TokenDetailSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final muted = theme.brightness == Brightness.dark ? watchfulMuted : ledgerMuted;
+    final muted = ArgusColors.of(context).muted;
     final ticker = tokenTicker(token);
     final amount = token.isNft ? '1' : formatTokenAmountGrouped(token.amount, token.decimals);
     return SafeArea(
@@ -72,7 +72,7 @@ class TokenDetailSheet extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: theme.brightness == Brightness.dark ? ink : paper,
+                color: ArgusColors.of(context).inset,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: SelectableText(token.id, style: monoStyle(context, size: 12)),

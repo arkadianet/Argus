@@ -27,6 +27,67 @@ Color rustFor(BuildContext context) =>
 const cardRadius = 20.0;
 const buttonRadius = 14.0;
 
+/// Palette-dependent colours that screens used to re-derive by hand from
+/// `Theme.of(context).brightness`.
+class ArgusColors extends ThemeExtension<ArgusColors> {
+  const ArgusColors({
+    required this.muted,
+    required this.cardBorder,
+    required this.inset,
+    required this.chip,
+  });
+
+  /// Secondary text.
+  final Color muted;
+
+  /// Hairline around soft cards.
+  final Color cardBorder;
+
+  /// Recessed panel inside a card (status strip, address box).
+  final Color inset;
+
+  /// Small tinted container (icon wells, badges).
+  final Color chip;
+
+  static const light = ArgusColors(
+    muted: ledgerMuted,
+    cardBorder: Color(0xFFEDE4D3),
+    inset: paper,
+    chip: bannerTint,
+  );
+
+  static const dark = ArgusColors(
+    muted: watchfulMuted,
+    cardBorder: Color(0xFF262C29),
+    inset: ink,
+    chip: watchfulSurface,
+  );
+
+  static ArgusColors of(BuildContext context) =>
+      Theme.of(context).extension<ArgusColors>() ??
+      (Theme.of(context).brightness == Brightness.dark ? dark : light);
+
+  @override
+  ArgusColors copyWith({Color? muted, Color? cardBorder, Color? inset, Color? chip}) =>
+      ArgusColors(
+        muted: muted ?? this.muted,
+        cardBorder: cardBorder ?? this.cardBorder,
+        inset: inset ?? this.inset,
+        chip: chip ?? this.chip,
+      );
+
+  @override
+  ArgusColors lerp(ThemeExtension<ArgusColors>? other, double t) {
+    if (other is! ArgusColors) return this;
+    return ArgusColors(
+      muted: Color.lerp(muted, other.muted, t)!,
+      cardBorder: Color.lerp(cardBorder, other.cardBorder, t)!,
+      inset: Color.lerp(inset, other.inset, t)!,
+      chip: Color.lerp(chip, other.chip, t)!,
+    );
+  }
+}
+
 ThemeData argusTheme({required bool watchful}) {
   final scheme = ColorScheme(
     brightness: watchful ? Brightness.dark : Brightness.light,
@@ -97,6 +158,7 @@ ThemeData argusTheme({required bool watchful}) {
   );
 
   return base.copyWith(
+    extensions: [watchful ? ArgusColors.dark : ArgusColors.light],
     textTheme: text,
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,

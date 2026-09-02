@@ -132,9 +132,12 @@ class WalletRouteArgs {
   /// Wallet context for [context]: an enclosing [WalletArgsScope] (tabs
   /// embedded in the home screen) or, failing that, the route arguments.
   static WalletRouteArgs of(BuildContext context) {
+    final routeArgs = ModalRoute.of(context)?.settings.arguments;
     final scoped = WalletArgsScope.maybeOf(context);
-    if (scoped != null) return scoped;
-    return from(ModalRoute.of(context)?.settings.arguments);
+    if (scoped == null) return from(routeArgs);
+    // Balances come from the live scope; a transaction is route-specific.
+    final tx = routeArgs is WalletRouteArgs ? routeArgs.transaction : null;
+    return tx == null ? scoped : scoped.copyWith(transaction: tx);
   }
 
   static WalletRouteArgs from(Object? args) {

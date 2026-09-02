@@ -48,7 +48,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   /// Gate-screen message (locked / no wallet / unlock errors). The synced
   /// ledger reads its state from [_sync] instead.
   String _status = 'Initializing...';
-  final _sync = WalletSyncController(const LiveWalletSyncGateway());
+  final _sync = walletSyncController;
   bool _walletUnlocked = false;
   bool _hasSeed = false;
   bool _hasPin = false;
@@ -183,7 +183,6 @@ class _DashboardScreenState extends State<DashboardScreen>
     watchOnlyService.removeListener(_onWatchOnlyChanged);
     _sync.removeListener(_onSyncChanged);
     deepLinkController.removeListener(_onDeepLink);
-    _sync.dispose();
     _pinCtrl.dispose();
     super.dispose();
   }
@@ -1246,9 +1245,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _walletCard(bool fragmented) {
-    final muted = Theme.of(context).brightness == Brightness.dark
-        ? watchfulMuted
-        : ledgerMuted;
+    final muted = ArgusColors.of(context).muted;
     final online = networkController.activeUrl != null;
     final stale = _sync.isStale;
     final syncing = _sync.isSyncing;
@@ -1376,9 +1373,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             padding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
             decoration: BoxDecoration(
-              color: Theme.of(context).brightness == Brightness.dark
-                  ? ink
-                  : paper,
+              color: ArgusColors.of(context).inset,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Wrap(
@@ -1538,9 +1533,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     VoidCallback? onTap,
     bool comingSoon = false,
   }) {
-    final muted = Theme.of(context).brightness == Brightness.dark
-        ? watchfulMuted
-        : ledgerMuted;
+    final muted = ArgusColors.of(context).muted;
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: 168,
@@ -1553,9 +1546,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           decoration: BoxDecoration(
             color: Theme.of(context).colorScheme.surface,
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: dark ? const Color(0xFF262C29) : const Color(0xFFEDE4D3),
-            ),
+            border: Border.all(color: ArgusColors.of(context).cardBorder),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1608,9 +1599,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _addressTile(Map<String, dynamic> a) {
-    final muted = Theme.of(context).brightness == Brightness.dark
-        ? watchfulMuted
-        : ledgerMuted;
+    final muted = ArgusColors.of(context).muted;
     final addr = a['address']?.toString() ?? '';
     final nano = (a['balance_nano_erg'] as num?)?.toInt();
     final label = addressLabelService.labelFor(addr);

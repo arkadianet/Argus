@@ -12,16 +12,13 @@ class SoftCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: double.infinity,
       padding: padding ?? const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(cardRadius),
-        border: Border.all(
-          color: dark ? const Color(0xFF262C29) : const Color(0xFFEDE4D3),
-        ),
+        border: Border.all(color: ArgusColors.of(context).cardBorder),
       ),
       child: child,
     );

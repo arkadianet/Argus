@@ -7,6 +7,7 @@ import 'services/privacy_service.dart';
 import 'services/session_lock.dart';
 import 'services/watch_only_service.dart';
 import 'services/wallet_service.dart';
+import 'services/wallet_sync_controller.dart';
 import 'theme/argus_theme.dart';
 import 'theme/theme_controller.dart';
 import 'ui/ageusd_screen.dart';
@@ -88,12 +89,21 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
           themeMode: themeController.themeMode,
           // Densities in the wallet card assume at most ~1.6x text; larger
           // system font scales would overflow fixed rows.
+          // Every route sees live wallet context through WalletArgsScope, so
+          // a pushed screen's balances update instead of freezing at push
+          // time. Route arguments still carry per-route data (a transaction).
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(context).copyWith(
               textScaler:
                   MediaQuery.textScalerOf(context).clamp(maxScaleFactor: 1.6),
             ),
-            child: child!,
+            child: ListenableBuilder(
+              listenable: walletSyncController,
+              builder: (context, _) => WalletArgsScope(
+                args: walletSyncController.routeArgs,
+                child: child!,
+              ),
+            ),
           ),
           onGenerateRoute: (settings) {
             final page = switch (settings.name) {

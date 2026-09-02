@@ -172,6 +172,19 @@ class WalletSyncController extends ChangeNotifier {
   /// True while a refresh is in flight; the dashboard poll skips ticks.
   bool get busy => _inFlight != null;
 
+  /// Wallet context for pushed screens, mirroring the synced state.
+  WalletRouteArgs get routeArgs {
+    final receive = receiveAddress ?? '';
+    return WalletRouteArgs(
+      senderAddress: senderAddress ?? receive,
+      receiveAddress: receive,
+      changeAddress: changeAddress ?? receive,
+      historyAddresses: historyAddresses,
+      tokens: tokens,
+      spendableNano: balanceNano,
+    );
+  }
+
   /// Addresses whose activity and balances make up the wallet view.
   List<String> get historyAddresses {
     final out = <String>[];
@@ -458,3 +471,8 @@ class _BalanceResult {
   final List<TokenBalance> tokens;
   final int failed;
 }
+
+/// The app's one sync controller: the home screen drives it and the
+/// navigator-level [WalletArgsScope] in `main.dart` reads from it.
+final walletSyncController =
+    WalletSyncController(const LiveWalletSyncGateway());

@@ -74,9 +74,7 @@ class AssetTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final muted = Theme.of(context).brightness == Brightness.dark
-        ? watchfulMuted
-        : ledgerMuted;
+    final muted = ArgusColors.of(context).muted;
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(cardRadius),
