@@ -1,8 +1,9 @@
 # Argus future work
 
-Date: 2026-09-02
-Status: plan (ordered backlog, no implementation plans yet)
-Build context: `v1.0.0-alpha.18` (versionCode 4019), debug-signed
+Date: 2026-09-02 (updated the same day after Phases B–E landed)
+Status: plan; Phases B, C, D and E.3 shipped in alpha.19, Phase A deferred by
+decision, E.1 and E.2 deferred for the reasons under "Deferred"
+Build context: `v1.0.0-alpha.19` (versionCode 4020), debug-signed
 
 This follows the 2026-08-15 go-to-wallet roadmap. That document set four
 layers: money always works, dApps open Argus, craft, DeFi. As of alpha.18
@@ -138,6 +139,30 @@ Items from the 2026-09-02 audit not yet done, in order of user impact:
    ErgoPay against Argus without real funds.
 3. **Watch-only wallets as first-class entries** in the wallet list
    (today they are a summed balance on the gate only).
+
+## Status after alpha.19
+
+| Phase | State |
+|---|---|
+| A trust | Deferred by decision. Still the first thing to do before wider testing. |
+| B ErgoPay | Shipped (#30). ErgoAuth and `#MULTIPLE_ADDRESSES#` not built. |
+| C code health | Shipped (#31). `flutter_rust_bridge` still 2.11: the bump needs a matching codegen install and native rebuild. |
+| D craft | Shipped (#32). |
+| E.1 iOS | Deferred: needs a Mac. |
+| E.2 testnet | Deferred: see below. |
+| E.3 watch-only entries | Shipped (#33). |
+
+### Deferred: testnet toggle
+
+A network toggle is not a Settings switch. The mainnet prefix is baked
+into address derivation (`wallet-core/derivation.rs`), address parsing
+(`wallet-net/client.rs`), the ErgoPay summariser, the Dart address regex,
+and the per-wallet address cache inside the unlocked handle; every stored
+`address0` and cache snapshot is mainnet; and the Dexy, AgeUSD and AMM
+contract constants exist only on mainnet, so those screens would have to
+be hidden. Landing that without a device to test address correctness on
+is the wrong trade. Do it as its own spec after Phase A, with the
+protocol screens gated off on testnet.
 
 ## Explicitly not now
 
