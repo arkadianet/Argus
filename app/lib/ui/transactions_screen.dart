@@ -8,6 +8,7 @@ import '../format.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'transaction_detail_screen.dart';
+import 'widgets/activity_tile.dart';
 
 class TransactionsScreen extends StatefulWidget {
   const TransactionsScreen({super.key, this.embedded = false, this.args});
@@ -110,39 +111,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         });
       }
     }
-  }
-
-  /// Inflow/outflow marker mirroring the dashboard activity tile.
-  Widget _directionBadge(int? nano) {
-    final outgoing = nano != null && nano < 0;
-    final color = outgoing ? rust : moss;
-    return Container(
-      width: 34,
-      height: 34,
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.14),
-        shape: BoxShape.circle,
-      ),
-      child: Icon(
-        outgoing ? Icons.arrow_upward : Icons.arrow_downward,
-        size: 17,
-        color: color,
-      ),
-    );
-  }
-
-  Widget _tokenChip(int count) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Text(
-        '$count token${count == 1 ? '' : 's'}',
-        style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 10),
-      ),
-    );
   }
 
   void _open(Map<String, dynamic> tx) {
@@ -285,9 +253,6 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         );
                       }
                       final tx = _txs[i];
-                      final txId = tx['tx_id']?.toString() ?? '';
-                      final nano = (tx['value_nano_erg'] as num?)?.toInt();
-                      final height = (tx['height'] as num?)?.toInt();
                       final day = dayKey((tx['timestamp'] as num?)?.toInt());
                       final showDay = i == 0 ||
                           dayKey((_txs[i - 1]['timestamp'] as num?)?.toInt()) != day;
@@ -296,53 +261,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         children: [
                           if (showDay)
                             Padding(
-                              padding: const EdgeInsets.only(top: 12, bottom: 6),
+                              padding: const EdgeInsets.only(top: 14, bottom: 6),
                               child: Text(day, style: Theme.of(context).textTheme.bodySmall),
-                            ),
-                          if (i > 0 && !showDay) const Hairline(),
-                          InkWell(
+                            )
+                          else
+                            const Divider(height: 1, indent: 68),
+                          ActivityTile(
+                            tx: tx,
+                            showTxId: true,
                             onTap: () => _open(tx),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _directionBadge(nano),
-                                  const SizedBox(width: 10),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Text(
-                                              '${nano != null && nano < 0 ? 'Sent' : 'Received'} '
-                                              '${formatErg(nano?.abs())}',
-                                              style: Theme.of(context).textTheme.titleMedium,
-                                            ),
-                                            if ((tx['tokens_received'] as List?)?.isNotEmpty ?? false)
-                                              Padding(
-                                                padding: const EdgeInsets.only(left: 8),
-                                                child: _tokenChip(
-                                                    (tx['tokens_received'] as List).length),
-                                              ),
-                                          ],
-                                        ),
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          shorten(txId, head: 12, tail: 10),
-                                          style: monoStyle(context, size: 11),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  Text(
-                                    formatHeight(height),
-                                    style: Theme.of(context).textTheme.bodySmall,
-                                  ),
-                                ],
-                              ),
-                            ),
                           ),
                         ],
                       );
