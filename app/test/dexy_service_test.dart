@@ -55,6 +55,7 @@ DexyState _useState({
 }
 
 void main() {
+  _lpRateTests();
   // 1 display USE == 1000 raw units at 3 decimals.
   const oneUse = 1000;
   const minerFeeReserveNano = 1100000 + argusFeeNano; // miner + Argus app fee
@@ -216,5 +217,17 @@ void main() {
     test('one display DexyGold is pegged to one milligram', () {
       expect(DexyVariant.gold.peg, '1 DexyGold = 1 mg of gold');
     });
+  });
+}
+
+// LP pool rate per whole token
+void _lpRateTests() {
+  test('lpErgPerToken applies the token decimals', () {
+    DexyState make(DexyVariant v) => DexyState.fromJson({
+          'state': {'lp_erg_reserves': 282885139149292, 'lp_dexy_reserves': 74997176},
+          'rates': {'variant': v.code},
+        });
+    expect(lpErgPerToken(make(DexyVariant.usd)), closeTo(3.7719, 0.001));
+    expect(lpErgPerToken(make(DexyVariant.gold)), closeTo(0.0037719, 0.000001));
   });
 }

@@ -804,3 +804,13 @@ class DexyService {
 }
 
 final dexService = DexyService();
+
+/// LP pool price in ERG per whole token (decimals applied), from reserves.
+double lpErgPerToken(DexyState st) {
+  if (st.lpDexyReserves <= 0) return 0;
+  var scale = 1.0;
+  for (var i = 0; i < st.variant.decimals; i++) {
+    scale *= 10;
+  }
+  return st.lpErgReserves / st.lpDexyReserves / 1e9 * scale;
+}
