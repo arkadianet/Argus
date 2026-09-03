@@ -161,6 +161,10 @@ class WalletSyncController extends ChangeNotifier {
   List<TokenBalance> tokens = const [];
   List<Map<String, dynamic>> recentTxs = const [];
   List<Map<String, dynamic>> usedAddresses = const [];
+
+  /// Derived addresses from index 0 to the usage frontier, set by
+  /// discovery. Always included in balance queries.
+  List<String> frontierAddresses = const [];
   int utxoCount = 0;
   DateTime? lastSyncedAt;
 
@@ -199,6 +203,9 @@ class WalletSyncController extends ChangeNotifier {
       final a = used['address']?.toString();
       if (a != null && a.isNotEmpty) out.add(a);
     }
+    for (final a in frontierAddresses) {
+      if (!out.contains(a)) out.add(a);
+    }
     final receive = receiveAddress;
     if (receive != null && !out.contains(receive)) out.add(receive);
     return out;
@@ -214,6 +221,7 @@ class WalletSyncController extends ChangeNotifier {
     tokens = const [];
     recentTxs = const [];
     usedAddresses = const [];
+    frontierAddresses = const [];
     utxoCount = 0;
     pinIssue = null;
     lastSyncedAt = null;
@@ -387,25 +395,38 @@ class WalletSyncController extends ChangeNotifier {
           pinned > 0 ? await _gw.tryDeriveAddress(pinned) : null;
       pinIssue = pinned > 0 && pinnedReceive == null ? _pinIssueFor(pinned) : null;
 
-      // The pinned address stays the main address while it sits at or beyond
-      // the usage frontier; once the wallet has moved past it, the next
-      // unused address takes over.
+      // Reuse mode (default): everything goes to the main address, which is
+      // the pinned one or index 0. Fresh mode (Nautilus-style): receive and
+      // change move to the next unused address, except that a pinned
+      // address at or beyond the frontier stays the receive address.
+      final main = pinnedReceive ?? await _gw.deriveAddress(0);
+      final fresh = _gw.useUnusedChangeAddress(_gw.activeWalletId);
       final String receive;
-      if (pinnedReceive != null && (next == 0 || pinned >= next)) {
-        receive = pinnedReceive;
-      } else if (next == 0) {
-        receive = receiveAddress ?? await _gw.deriveAddress(0);
+      final String change;
+      if (!fresh) {
+        receive = main;
+        change = main;
       } else {
-        receive = await _gw.deriveAddress(next);
+        if (pinnedReceive != null && pinned >= next) {
+          receive = pinnedReceive;
+        } else {
+          receive = next == 0 ? main : await _gw.deriveAddress(next);
+        }
+        change = await _gw.deriveAddress(next);
       }
-      final change = await _gw.deriveAddress(
-        _gw.useUnusedChangeAddress(_gw.activeWalletId) ? next : 0,
-      );
+      // Every index up to the frontier is queried for balances even when
+      // discovery saw no confirmed history there: a node whose index lags
+      // would otherwise hide funds the wallet itself just sent to a new
+      // address.
+      final frontier = <String>[
+        for (var i = 0; i <= next && i < 64; i++) await _gw.deriveAddress(i),
+      ];
       if (!_gw.isUnlocked) {
         reset();
         return false;
       }
       usedAddresses = used;
+      frontierAddresses = frontier;
       receiveAddress = receive;
       changeAddress = change;
       senderAddress = _bestSender(receive);

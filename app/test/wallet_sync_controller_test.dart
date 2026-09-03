@@ -216,9 +216,10 @@ void main() {
 
       expect(gw.discoverCalls, 1);
       expect(gw.probeCalls, 1);
-      expect(c.receiveAddress, 'addr2');
+      expect(c.receiveAddress, 'addr0');
       expect(c.changeAddress, 'addr0');
       expect(c.usedAddresses.map((a) => a['address']), ['addr0', 'addr1']);
+      expect(c.frontierAddresses, ['addr0', 'addr1', 'addr2']);
       expect(c.balanceNano, 350);
       expect(c.tokens.single.amount, 5);
       expect(c.recentTxs.map((t) => t['tx_id']), ['t1', 't2']);
@@ -241,21 +242,50 @@ void main() {
       expect(c.balanceNano, 1099);
     });
 
-    test('privacy mode sends change to the next unused address', () async {
+    test('fresh mode receives and sends change on the next unused address', () async {
       gw.unusedChange = true;
 
       await c.refresh(discover: true);
 
+      expect(c.receiveAddress, 'addr2');
       expect(c.changeAddress, 'addr2');
     });
 
-    test('a pinned index at or beyond the frontier stays the receive address',
+    test('reuse mode keeps receive and change on the pinned address', () async {
+      gw.pinnedIndex = 1;
+
+      await c.refresh(discover: true);
+
+      expect(c.receiveAddress, 'addr1');
+      expect(c.changeAddress, 'addr1');
+    });
+
+    test('fresh mode: a pinned index at or beyond the frontier stays the receive address',
         () async {
+      gw.unusedChange = true;
       gw.pinnedIndex = 4;
 
       await c.refresh(discover: true);
 
       expect(c.receiveAddress, 'addr4');
+      expect(c.changeAddress, 'addr2');
+    });
+
+    test('an address up to the frontier is queried even without confirmed history',
+        () async {
+      // Discovery saw history only at index 0 but the frontier is 3 (the
+      // node's index lags a consolidation that paid index 2).
+      gw.discovered = [
+        {'index': 0, 'address': 'addr0', 'balance_nano_erg': 100, 'tokens': []},
+      ];
+      gw.nextUnused = 3;
+      gw.balances['addr2'] = {'balance_nano_erg': 700, 'tokens': []};
+      gw.balances['addr3'] = {'balance_nano_erg': 0, 'tokens': []};
+
+      await c.refresh(discover: true);
+
+      expect(gw.balanceCalls.toSet(), containsAll(['addr0', 'addr1', 'addr2', 'addr3']));
+      expect(c.balanceNano, 100 + 250 + 700);
     });
 
     test('keeps the previous balance and reports failure when every node call fails',

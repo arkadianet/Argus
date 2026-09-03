@@ -139,8 +139,8 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
               ),
               SettingsRow(
                 icon: Icons.shuffle,
-                title: 'Fresh change addresses',
-                subtitle: 'Send change to unused addresses instead of your first address.',
+                title: 'Fresh addresses',
+                subtitle: 'Receive and change on a new address each time, like Nautilus. Off: everything uses your pinned or first address.',
                 trailing: Switch(
                   value: privacyService.useUnusedChangeAddress(_walletId),
                   onChanged: (v) async {
