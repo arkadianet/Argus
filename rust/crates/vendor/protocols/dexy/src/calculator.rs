@@ -189,17 +189,13 @@ pub fn calculate_lp_swap_price_impact(
     if reserves_sold == 0 || reserves_bought == 0 || input_amount == 0 {
         return 0.0;
     }
-    let output = calculate_lp_swap_output(
-        input_amount,
-        reserves_sold,
-        reserves_bought,
-        fee_num,
-        fee_denom,
-    );
-    let spot_rate = reserves_bought as f64 / reserves_sold as f64;
-    let effective_rate = output as f64 / input_amount as f64;
-    let fee_adjusted_spot = spot_rate * (1.0 - fee_num as f64 / fee_denom as f64);
-    ((fee_adjusted_spot - effective_rate) / fee_adjusted_spot * 100.0).abs()
+    // Constant product: the effective price sits below the fee-adjusted spot
+    // by input_f / (reserves + input_f). Computed from reserves, not from the
+    // integer output, so a 0-decimal token with a tiny output does not report
+    // its rounding as impact.
+    let input_f = input_amount as f64 * (fee_denom - fee_num) as f64 / fee_denom as f64;
+    let _ = reserves_bought;
+    input_f / (reserves_sold as f64 + input_f) * 100.0
 }
 
 #[cfg(test)]
@@ -386,6 +382,14 @@ mod tests {
             assert!(validate_lp_swap(
                 reserves_x, reserves_y, delta_x, -delta_y, 3, 1000
             ));
+        }
+
+        #[test]
+        fn zero_decimal_output_rounding_is_not_impact() {
+            // 0.15 ERG into 1000 ERG / 10 000 DexyGold buys 1 whole token after
+            // flooring; the old output-based formula reported ~40% here.
+            let impact = calculate_lp_swap_price_impact(150_000_000, 1_000_000_000_000, 10_000, 3, 1000);
+            assert!(impact < 0.02, "impact {impact}");
         }
 
         #[test]

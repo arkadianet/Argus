@@ -424,17 +424,19 @@ mod tests {
     /// `resolved_dev_fee_config` caches into a process-global `OnceLock` on
     /// first call, so this must be the only test in the crate that resolves it.
     #[test]
-    fn argus_never_levies_the_citadel_dev_fee() {
+    fn argus_levies_its_own_fee_never_citadels() {
         crate::api::init_app();
 
         let cfg = ergo_tx::resolved_dev_fee_config();
 
-        assert!(!cfg.enabled, "Citadel dev fee must stay disabled in Argus");
-        assert_eq!(cfg.budget(), 0, "disabled fee must budget 0 nanoERG");
+        assert!(cfg.enabled, "the Argus app fee must be installed at init");
+        assert_eq!(cfg.budget(), crate::api::ARGUS_FEE_NANO);
         assert_ne!(
             cfg.recipient_ergo_tree, CITADEL_DEV_FEE_TREE,
             "Argus must never target the Citadel fee address"
         );
+        let expected = wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
+        assert_eq!(cfg.recipient_ergo_tree, expected);
     }
 
     #[test]

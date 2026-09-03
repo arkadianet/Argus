@@ -1,3 +1,5 @@
+import 'widgets/error_sheet.dart';
+import '../services/app_fee.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -318,6 +320,7 @@ class _SwapScreenState extends State<SwapScreen> {
             bold: quote.priceImpactPct > priceImpactWarnPct,
           ),
           ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
+          argusFeeRow(),
           ConfirmTxRow('Total cost', formatErg(build.totalErgCost)),
         ],
         detail: [
@@ -354,7 +357,7 @@ class _SwapScreenState extends State<SwapScreen> {
       HapticFeedback.mediumImpact();
     } catch (e) {
       if (!mounted) return;
-      _snack('Broadcast may have failed. Check activity before retrying. $e');
+      showErrorSheet(context, title: 'Broadcast may have failed. Check activity before retrying.', message: '$e');
     }
   }
 

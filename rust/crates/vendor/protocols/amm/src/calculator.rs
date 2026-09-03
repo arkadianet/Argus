@@ -120,14 +120,13 @@ pub fn calculate_price_impact(
         return 0.0;
     }
 
-    let spot_price = calculate_spot_price(reserves_in, reserves_out);
-    let execution_price = output_amount as f64 / input_amount as f64;
-
-    if spot_price == 0.0 {
+    if reserves_in == 0 || reserves_out == 0 {
         return 0.0;
     }
-
-    ((spot_price - execution_price) / spot_price).abs() * 100.0
+    // Reserve-based: how far the price moves for this input. Not derived
+    // from the integer output, which understates the rate for small outputs
+    // of low-decimal tokens and showed as a spurious 40%+ impact.
+    input_amount as f64 / (reserves_in as f64 + input_amount as f64) * 100.0
 }
 
 pub fn calculate_effective_rate(input_amount: u64, output_amount: u64) -> f64 {
@@ -359,9 +358,13 @@ mod tests {
 
     #[test]
     fn test_calculate_price_impact() {
+        // Reserve-based: 100 into 1000 moves the price by 100/1100 = 9.09%.
         let impact = calculate_price_impact(1000, 2000, 100, 180);
-        // Spot price = 2.0, execution price = 1.8, impact = 10%
-        assert!((impact - 10.0).abs() < 0.1);
+        assert!((impact - 9.09).abs() < 0.05, "impact {impact}");
+        // A rounded-down integer output must not inflate the number: paying
+        // 0.15 ERG into a 1000 ERG pool for 1 whole token is a tiny move.
+        let tiny = calculate_price_impact(1_000_000_000_000, 10_000, 150_000_000, 1);
+        assert!(tiny < 0.02, "tiny {tiny}");
     }
 
     #[test]

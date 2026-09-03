@@ -1,5 +1,6 @@
 import '../bridge/argus_error.dart';
 import 'amm_service.dart';
+import 'app_fee.dart';
 import 'dexy_service.dart';
 import 'route_display.dart';
 import 'sigmausd_service.dart';
@@ -270,7 +271,7 @@ class AgeUsdRouteProvider implements RouteProvider {
         tokenId: tokenId,
         acquire: acquire,
         held: held,
-        ergCostNano: p.totalCostNano,
+        ergCostNano: p.totalCostNano + argusFeeNano,
         minerFeeNano: p.txFeeNano,
         protocolFeeNano: p.protocolFeeNano,
         note: 'oracle rate',
@@ -330,7 +331,7 @@ class SpectrumRouteProvider implements RouteProvider {
         tokenId: tokenId,
         acquire: acquire,
         held: held,
-        ergCostNano: q.ergIn + _routeMinerFeeNano + 1000000,
+        ergCostNano: q.ergIn + _routeMinerFeeNano + argusFeeNano + 1000000,
         minerFeeNano: _routeMinerFeeNano,
         poolId: q.poolId,
         ergIn: q.ergIn,

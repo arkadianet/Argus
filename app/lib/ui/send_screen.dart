@@ -1,3 +1,5 @@
+import 'widgets/error_sheet.dart';
+import '../services/app_fee.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -200,7 +202,7 @@ class _SendScreenState extends State<SendScreen> {
       _snack('Spendable balance is unknown');
       return;
     }
-    final max = spendable - minerFeeNano - minBoxNano;
+    final max = spendable - minerFeeNano - argusFeeNano - minBoxNano;
     if (max < minBoxNano) {
       _snack('Not enough ERG for fee and change');
       return;
@@ -320,12 +322,12 @@ class _SendScreenState extends State<SendScreen> {
     try {
       recipients = buildRecipients(_drafts(), tokens: args.tokens);
     } on SendFormException catch (e) {
-      _snack(e.message);
+      showErrorSheet(context, message: e.message);
       return;
     }
     final spendable = args.spendableNano;
     final fee = parseErgToNano(_feeCtrl.text) ?? minerFeeNano;
-    if (spendable != null && totalNanoErg(recipients) + fee > spendable) {
+    if (spendable != null && totalNanoErg(recipients) + fee + argusFeeNano > spendable) {
       _snack('Amount plus fee exceeds your ${formatErg(spendable, maxFrac: 4)}');
       return;
     }
@@ -363,7 +365,7 @@ class _SendScreenState extends State<SendScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
-      _snack('Failed: $e');
+      showErrorSheet(context, title: 'Could not prepare the send', message: '$e');
     }
   }
 
@@ -420,7 +422,7 @@ class _SendScreenState extends State<SendScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
-      _snack('Could not build a route: ${e is NoRouteException ? e.message : e}');
+      showErrorSheet(context, title: 'Could not build a route', message: e is NoRouteException ? e.message : '$e');
       return;
     }
     if (!mounted) return;
@@ -440,6 +442,7 @@ class _SendScreenState extends State<SendScreen> {
         if (build.priceImpactPct != null)
           ConfirmTxRow('Price impact', '${build.priceImpactPct!.toStringAsFixed(2)}%', bold: build.priceImpactPct! > priceImpactWarnPct),
         ConfirmTxRow('Miner fee', formatErg(build.minerFeeNano)),
+        argusFeeRow(),
         if (build.changeNanoErg > 0) ConfirmTxRow('Change to you', formatErg(build.changeNanoErg)),
       ],
       detail: [
@@ -550,6 +553,7 @@ class _SendScreenState extends State<SendScreen> {
       if (!isMulti && tokenId != null && tokenId.isNotEmpty)
         ConfirmTxRow('Token', _tokenLabel(preview.tokenAmount ?? 0, tokenId), bold: true),
       ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
+      argusFeeRow(),
       ConfirmTxRow('Change to you', formatErg(preview.changeNanoErg)),
     ];
     final fiat = networkController.fiatText(preview.amountNanoErg);
@@ -583,7 +587,7 @@ class _SendScreenState extends State<SendScreen> {
         } catch (e) {
           if (!mounted) return;
           setState(() => _sending = false);
-          _snack('Signing failed: $e');
+          showErrorSheet(context, title: 'Signing failed', message: '$e');
         }
       case ConfirmChoice.broadcast:
         try {

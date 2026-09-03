@@ -9,11 +9,10 @@ double? priceImpactPct({
   required int ergReserves,
   required int tokenReserves,
 }) {
-  if (ergReserves <= 0 || tokenReserves <= 0 || tokensOut <= 0) return null;
-  final spot = ergReserves / tokenReserves;
-  final effective = ergIn / tokensOut;
-  if (spot <= 0) return null;
-  return (effective / spot - 1) * 100;
+  if (ergReserves <= 0 || tokenReserves <= 0 || tokensOut <= 0 || ergIn <= 0) return null;
+  // Reserve-based, so an integer output of a low-decimal token does not
+  // report its rounding as impact.
+  return ergIn / (ergReserves + ergIn) * 100;
 }
 
 /// Above this, a route is flagged so the user reads the number.

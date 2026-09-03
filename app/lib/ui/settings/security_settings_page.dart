@@ -1,3 +1,4 @@
+import '../widgets/error_sheet.dart';
 import 'package:flutter/material.dart';
 
 import '../../bridge/argus_error.dart';
@@ -203,7 +204,7 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         } catch (_) {}
         _snack('Incorrect PIN');
       } else {
-        _snack('${e.code}: ${e.message}');
+        showErrorSheet(context, code: e.code, message: e.message);
       }
     } catch (_) {
       _snack('Could not change PIN');

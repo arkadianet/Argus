@@ -34,7 +34,8 @@ pub use burn::{
     MultiBurnBuildResult, MultiBurnSummary,
 };
 pub use dev_fee::{
-    append_dev_fee_output, dev_fee_budget, resolved_config as resolved_dev_fee_config,
+    append_dev_fee_output, dev_fee_budget, install_config as install_dev_fee_config,
+    resolved_config as resolved_dev_fee_config,
     try_load_from_env as try_load_dev_fee_config, with_test_dev_fee, DevFeeConfig, DevFeeError,
     DEFAULT_DEV_FEE_ADDRESS, DEFAULT_DEV_FEE_ERGO_TREE,
 };

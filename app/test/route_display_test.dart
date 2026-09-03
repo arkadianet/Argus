@@ -3,10 +3,11 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('price impact from reserves and an exact-output quote', () {
-    // Pool 100 ERG / 100 000 tokens, spot 0.001 ERG per token; paying 0.011
-    // ERG for 10 tokens is 0.0011 each: 10% over spot.
-    final pct = priceImpactPct(ergIn: 11000000, tokensOut: 10, ergReserves: 100000000000, tokenReserves: 100000);
-    expect(pct, closeTo(10.0, 0.01));
+    // 10 ERG into a 100 ERG pool moves the price by 10/110.
+    final pct = priceImpactPct(ergIn: 10000000000, tokensOut: 10, ergReserves: 100000000000, tokenReserves: 100000);
+    expect(pct, closeTo(9.09, 0.01));
+    // A whole-token output that floors must not read as impact.
+    expect(priceImpactPct(ergIn: 150000000, tokensOut: 1, ergReserves: 1000000000000, tokenReserves: 10000)!, lessThan(0.02));
     expect(priceImpactPct(ergIn: 1, tokensOut: 1, ergReserves: 0, tokenReserves: 1), isNull);
   });
 

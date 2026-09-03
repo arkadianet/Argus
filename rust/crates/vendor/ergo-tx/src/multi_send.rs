@@ -126,7 +126,10 @@ pub fn build_multi_send_tx_with_fee(
         }
     }
 
+    let fee_cfg = crate::dev_fee::resolved_config();
+    let app_fee = fee_cfg.budget();
     let required_erg = i64::checked_add(total_send_erg, fee_nano)
+        .and_then(|v| v.checked_add(app_fee))
         .ok_or(MultiSendError::InsufficientErg {
             have: total_erg,
             need: i64::MAX,
@@ -151,7 +154,7 @@ pub fn build_multi_send_tx_with_fee(
     }
 
     let has_token_change = !input_tokens.is_empty();
-    let raw_change = total_erg - total_send_erg - fee_nano;
+    let raw_change = total_erg - total_send_erg - fee_nano - app_fee;
     // Dust change folds into the miner fee instead of failing the send.
     let dust_to_fee = if !has_token_change && raw_change > 0 && raw_change < MIN_BOX_VALUE {
         raw_change
@@ -204,6 +207,8 @@ pub fn build_multi_send_tx_with_fee(
         ));
     }
 
+    // Cannot fail once enabled with a tree; budget was reserved above.
+    let _ = crate::dev_fee::append_dev_fee_output(&mut outputs, &fee_cfg, current_height);
     outputs.push(Eip12Output::fee(effective_fee, current_height));
 
     let unsigned_tx = Eip12UnsignedTx {

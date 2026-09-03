@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import '../bridge/api.dart' as api;
 import '../bridge/argus_error.dart';
+import 'app_fee.dart' show argusFeeNano;
 import 'network_controller.dart';
 import 'ttl_cache.dart';
 import 'wallet_service.dart';
@@ -463,7 +464,8 @@ class DexyPathQuote {
   const DexyPathQuote({required this.path, required this.ergCostNano});
 }
 
-const _minerFeeReserveNano = 1100000;
+/// Miner fee plus the Argus app fee, reserved on every quote.
+const _minerFeeReserveNano = 1100000 + argusFeeNano;
 
 /// Eligibility and cost estimates per route, shared by quoting and building.
 class _RoutePlan {
