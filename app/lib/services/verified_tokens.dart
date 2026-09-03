@@ -1,4 +1,5 @@
 import 'dexy_service.dart';
+import 'rosen_tokens.dart';
 import 'sigmausd_service.dart';
 
 /// A token whose id was checked against the chain: name, decimals and
@@ -34,7 +35,7 @@ class VerifiedToken {
 /// statistics used to reject copies (several "SigUSD", "NETA", "Paideia",
 /// "CYPX" and "rsBTC" tokens exist with one holder or a mocking
 /// description). Protocol tokens come from the pinned protocol constants.
-const verifiedTokens = <VerifiedToken>[
+const curatedTokens = <VerifiedToken>[
   VerifiedToken(id: SigmaUsdTokens.sigUsd, ticker: 'SigUSD', name: 'SigmaUSD', project: 'AgeUSD', decimals: 2),
   VerifiedToken(id: SigmaUsdTokens.sigRsv, ticker: 'SigRSV', name: 'SigmaRSV', project: 'AgeUSD', decimals: 0),
   VerifiedToken(id: '6122f7289e7bb2df2de273e09d4b2756cda6aeb0f40438dc9d257688f45183ad', ticker: 'DexyGold', name: 'DexyGold', project: 'Dexy', decimals: 0),
@@ -62,6 +63,17 @@ const verifiedTokens = <VerifiedToken>[
   VerifiedToken(id: 'b0b312cde931c8bbdac0dac5bfd8e2c03bf4611275dc967988c8d15bd5ec20e0', ticker: 'Bober', name: 'Bober', project: 'Bober', decimals: 3),
   VerifiedToken(id: 'e8b20745ee9d18817305f32eb21015831a48f02d40980de6e849f886dca7f807', ticker: 'Flux', name: 'Flux', project: 'Flux', decimals: 8),
 ];
+
+/// Curated entries first, then Rosen's map; a curated entry wins on the
+/// same id so the NETA caution and project names stay as written here.
+final List<VerifiedToken> verifiedTokens = () {
+  final seen = <String>{};
+  final out = <VerifiedToken>[];
+  for (final t in [...curatedTokens, ...rosenNativeTokens, ...rosenWrappedTokens]) {
+    if (seen.add(t.id)) out.add(t);
+  }
+  return out;
+}();
 
 final _byId = {for (final t in verifiedTokens) t.id: t};
 final _byTicker = {for (final t in verifiedTokens) t.ticker.toLowerCase(): t};

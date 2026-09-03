@@ -38,4 +38,11 @@ void main() {
     expect(verifiedTokenLabels().containsKey(neta), isFalse);
     expect(impersonatedToken(tokenId: neta, name: 'NETA'), isNull);
   });
+
+  test('Rosen map entries are present and well-formed', () {
+    expect(isVerifiedToken('e023c5f382b6e96fbd878f6811aac73345489032157ad5affb84aefd4956c297'), isTrue); // rsADA
+    expect(isVerifiedToken('886b7721bef42f60c6317d37d8752da8aca01898cae7dae61808c4a14225edc8'), isTrue); // GluonW GAU
+    expect(verifiedToken('203ef3066a912f35c488487cc2cb94bdb0d30680dab22551c7e6fdbc70dfcc8e')?.project, 'Rosen Bridge'); // rsETH
+    expect(verifiedTokens.length, greaterThan(50));
+  });
 }
