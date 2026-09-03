@@ -30,4 +30,12 @@ void main() {
     expect(labels['8b08cdd5449a9592a9e79711d7d79249d7a03c535d17efaee83e216e80a44c4b'], 'RSN (Rosen Bridge)');
     expect(labels['0cd8c9f416e5b1ca9f986a7f10a84191dfb85941619e49e53c0dc30ebf83324b'], 'COMET');
   });
+
+  test('cautioned tokens are known but not verified', () {
+    const neta = '472c3d4ecaa08fb7392ff041ee2e6af75f4a558810a74b28600549d5392810e8';
+    expect(isVerifiedToken(neta), isFalse);
+    expect(cautionedToken(neta)?.note, contains('abandoned'));
+    expect(verifiedTokenLabels().containsKey(neta), isFalse);
+    expect(impersonatedToken(tokenId: neta, name: 'NETA'), isNull);
+  });
 }

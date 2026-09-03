@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-export 'verified_tokens.dart' show isVerifiedToken, verifiedTokenLabels, verifiedToken, impersonatedToken;
+export 'verified_tokens.dart' show isVerifiedToken, verifiedTokenLabels, verifiedToken, cautionedToken, impersonatedToken;
 
 import 'package:shared_preferences/shared_preferences.dart';
 
