@@ -6,10 +6,12 @@ import 'package:flutter/services.dart';
 
 import '../format.dart';
 import '../services/network_controller.dart';
+import '../services/utxo_plans.dart';
 import '../services/utxo_tools_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
+import 'widgets/soft_card.dart';
 
 class UtxoManagementScreen extends StatefulWidget {
   const UtxoManagementScreen({super.key});
@@ -68,6 +70,12 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       if (!mounted) return;
       _tools.setBoxes(boxes);
       setState(() => _loading = false);
+      final ids = {for (final b in boxes) for (final a in b.assets) a.tokenId};
+      if (ids.isNotEmpty) {
+        walletService.prefetchTokenMeta(ids).then((_) {
+          if (mounted) setState(() {});
+        }).catchError((_) {});
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -131,67 +139,87 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     );
   }
 
+  /// Consolidates the selection (or everything) into one box per batch of
+  /// [consolidationMaxInputs] inputs. Several batches mean several
+  /// transactions, each signed and sent in turn.
   Future<void> _openConsolidateFlow() async {
     final targets = _tools.consolidateTargets;
-
-    if (targets.length < 2) {
-      _snack('Consolidation requires at least 2 boxes', isError: true);
+    final chunks = consolidationChunks(targets.map((b) => b.boxId).toList());
+    if (chunks.isEmpty) {
+      _snack('Consolidation needs at least 2 boxes', isError: true);
       return;
     }
-
     final addrs = await _getWalletAddresses();
     if (!mounted || addrs.isEmpty) return;
     final changeAddress = addrs.first;
+    final totalIn = targets.fold(BigInt.zero, (s, b) => s + b.valueNanoErg);
+    final tokenTypes = {for (final b in targets) for (final a in b.assets) a.tokenId}.length;
+    final fees = (minerFeeNano + argusFeeNano) * chunks.length;
+
+    final confirmed = await showConfirmTransactionSheet(
+      context,
+      title: chunks.length == 1 ? 'Consolidate UTXOs' : 'Consolidate in ${chunks.length} transactions',
+      rows: [
+        ConfirmTxRow('Boxes merged', '${targets.length}'),
+        ConfirmTxRow('Into', '${chunks.length} ${chunks.length == 1 ? 'box' : 'boxes'}'),
+        ConfirmTxRow('Total value in', formatNanoErg(totalIn)),
+        if (tokenTypes > 0) ConfirmTxRow('Token types carried', '$tokenTypes'),
+        ConfirmTxRow('Miner fee', formatErg(minerFeeNano * chunks.length)),
+        ConfirmTxRow('Argus fee', formatErg(argusFeeNano * chunks.length)),
+        ConfirmTxRow('Value after fees', formatNanoErg(totalIn - BigInt.from(fees)), bold: true),
+      ],
+      detail: chunks.length == 1
+          ? 'Every selected box is spent into one new box holding all its ERG and tokens.'
+          : 'Ergo transactions are kept under $consolidationMaxInputs inputs each, so this runs as ${chunks.length} transactions back to back. You can consolidate the results again afterwards.',
+      confirmLabel: chunks.length == 1 ? 'Sign & broadcast' : 'Sign & broadcast ${chunks.length}',
+    );
+    if (!confirmed || !mounted) return;
 
     setState(() => _busy = true);
+    var done = 0;
     try {
-      final preview = await walletService.prepareConsolidate(
-        spendAddresses: addrs,
-        selectedBoxIds: _tools.selectedBoxIdsOrNull,
-        changeAddress: changeAddress,
-        nodeUrl: networkController.activeUrl,
-      );
-
-      if (!mounted) return;
-      setState(() => _busy = false);
-
-      final confirmed = await showConfirmTransactionSheet(
-        context,
-        title: 'Consolidate UTXOs',
-        rows: [
-          ConfirmTxRow('Inputs Merged', '${preview.inputCount} boxes'),
-          ConfirmTxRow('Total Value In', formatErg(preview.totalErgIn)),
-          ConfirmTxRow('Tokens Included', '${preview.tokenCount} token types'),
-          ConfirmTxRow('Miner Fee', formatErg(preview.minerFee)),
-          argusFeeRow(),
-        ],
-        detail:
-            'Token-bearing inputs may be included in this consolidation. '
-            'Fee is computed by the transaction builder.',
-        confirmLabel: 'Sign & broadcast consolidation',
-      );
-
-      if (confirmed == true) {
-        setState(() => _busy = true);
-        try {
-          final txId = await walletService.sendErg(
-            preparationId: preview.preparationId,
-          );
-          _snack(
-            'Consolidation broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}',
-          );
-        await Future.delayed(const Duration(seconds: 1));
-        await _loadBoxes();
-        } finally {
-          if (mounted) setState(() => _busy = false);
-        }
+      for (final chunk in chunks) {
+        final preview = await walletService.prepareConsolidate(
+          spendAddresses: addrs,
+          selectedBoxIds: chunk,
+          changeAddress: changeAddress,
+          nodeUrl: networkController.activeUrl,
+        );
+        final txId = await walletService.sendErg(preparationId: preview.preparationId);
+        done++;
+        if (!mounted) return;
+        _snack(chunks.length == 1
+            ? 'Consolidation broadcast · ${shorten(txId, head: 8, tail: 6)}'
+            : 'Transaction $done of ${chunks.length} broadcast · ${shorten(txId, head: 8, tail: 6)}');
       }
+      _tools.clearSelection();
+      await Future.delayed(const Duration(seconds: 1));
+      await _loadBoxes();
     } catch (e) {
       if (mounted) {
-        setState(() => _busy = false);
-        showErrorSheet(context, title: 'Consolidation failed', message: '$e');
+        showErrorSheet(
+          context,
+          title: done == 0 ? 'Consolidation failed' : 'Stopped after $done of ${chunks.length}',
+          message: '$e',
+        );
       }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
+  }
+
+  /// Selects every dust box and opens consolidation.
+  Future<void> _sweepDust() async {
+    final dust = _boxes.where((b) => b.valueNanoErg < BigInt.from(dustThresholdNano)).toList();
+    if (dust.length < 2) {
+      _snack('Fewer than two dust boxes to sweep');
+      return;
+    }
+    _tools.clearSelection();
+    for (final b in dust) {
+      _tools.toggle(b.boxId);
+    }
+    await _openConsolidateFlow();
   }
 
   Future<void> _openSplitFlow() async {
@@ -368,18 +396,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     final totalErgNano = _boxes.fold(BigInt.zero, (s, b) => s + b.valueNanoErg);
     final totalTokensCount = _boxes.fold(0, (s, b) => s + b.assets.length);
 
-    String healthLabel;
-    Color healthColor;
-    if (_boxes.length <= 20) {
-      healthLabel = 'Optimal';
-      healthColor = const Color(0xFF5B9E6D);
-    } else if (_boxes.length <= 80) {
-      healthLabel = 'Moderate';
-      healthColor = iris;
-    } else {
-      healthLabel = 'Fragmented';
-      healthColor = rust;
-    }
+    final health = utxoHealth(_boxes.length);
+    final healthLabel = health.label;
+    final healthColor = health.color;
+    final dustCount = _boxes.where((b) => b.valueNanoErg < BigInt.from(dustThresholdNano)).length;
 
     return Scaffold(
       appBar: AppBar(
@@ -418,15 +438,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
               : Column(
                   children: [
                     // Overview Summary Card
-                    Container(
-                      margin: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                      child: SoftCard(
                       padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surface,
-                    border: Border.all(
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
-                      ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -457,6 +472,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                                 decoration: BoxDecoration(
                                   color: healthColor.withValues(alpha: 0.15),
                                   border: Border.all(color: healthColor),
+                                  borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(
                                   healthLabel,
@@ -469,7 +485,12 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                               ),
                             ],
                           ),
-                          const SizedBox(height: 16),
+                          const SizedBox(height: 8),
+                          Text(
+                            '${health.hint}${dustCount > 0 ? ' $dustCount dust ${dustCount == 1 ? 'box' : 'boxes'} under ${formatErg(dustThresholdNano)}.' : ''}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 14),
                           const Hairline(),
                           const SizedBox(height: 12),
                           // Quick Actions Row
@@ -506,8 +527,17 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                               ),
                             ],
                           ),
+                          if (dustCount >= 2) ...[
+                            const SizedBox(height: 8),
+                            OutlinedButton.icon(
+                              icon: const Icon(Icons.cleaning_services_outlined, size: 16),
+                              label: Text('Sweep $dustCount dust boxes into one'),
+                              onPressed: _busy ? null : _sweepDust,
+                            ),
+                          ],
                         ],
                       ),
+                    ),
                     ),
 
                     // Filter & Search
@@ -641,6 +671,12 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
   }
 }
 
+String _tokenAmount(InputAsset a) {
+  final meta = walletService.cachedTokenMeta(a.tokenId);
+  if (meta == null || a.amount > BigInt.from(0x7FFFFFFFFFFFFFFF)) return a.amount.toString();
+  return formatTokenAmount(a.amount.toInt(), meta.decimals);
+}
+
 class _UtxoCard extends StatelessWidget {
   const _UtxoCard({
     required this.box,
@@ -742,7 +778,7 @@ class _UtxoCard extends StatelessWidget {
                         border: Border.all(color: iris.withValues(alpha: 0.4)),
                       ),
                       child: Text(
-                        '${a.amount} ${shorten(a.tokenId, head: 4, tail: 4)}',
+                        '${_tokenAmount(a)} ${walletService.cachedTokenMeta(a.tokenId)?.label ?? shorten(a.tokenId, head: 4, tail: 4)}',
                         style: const TextStyle(
                           fontSize: 11,
                           fontFamily: 'IBMPlexMono',
@@ -775,170 +811,242 @@ class _SplitConfigSheet extends StatefulWidget {
   State<_SplitConfigSheet> createState() => _SplitConfigSheetState();
 }
 
+enum _SplitMode { equal, fixed, token }
+
 class _SplitConfigSheetState extends State<_SplitConfigSheet> {
-  bool _isToken = false;
-  int _count = 2;
-  final TextEditingController _amountCtrl = TextEditingController();
+  static const _presets = [2, 5, 10, 25, 50, 100];
+  static const _maxOutputs = 100;
+
+  _SplitMode _mode = _SplitMode.equal;
+  int _count = 5;
+  final _countCtrl = TextEditingController(text: '5');
+  final _amountCtrl = TextEditingController();
   String? _selectedTokenId;
 
+  List<InputBoxInput> get _source => widget.selectedBoxIds.isNotEmpty
+      ? widget.boxes.where((b) => widget.selectedBoxIds.contains(b.boxId)).toList()
+      : widget.boxes;
+
+  BigInt get _totalNano => _source.fold(BigInt.zero, (s, b) => s + b.valueNanoErg);
+
   List<String> get _availableTokenIds {
-    final source = widget.selectedBoxIds.isNotEmpty
-        ? widget.boxes.where((b) => widget.selectedBoxIds.contains(b.boxId))
-        : widget.boxes;
-    final ids = source
-        .expand((box) => box.assets.map((asset) => asset.tokenId))
-        .toSet()
-        .toList();
+    final ids = _source.expand((box) => box.assets.map((a) => a.tokenId)).toSet().toList();
     ids.sort();
     return ids;
   }
 
+  BigInt _tokenTotal(String id) => _source.fold(
+      BigInt.zero, (s, b) => s + b.assets.where((a) => a.tokenId == id).fold(BigInt.zero, (t, a) => t + a.amount));
+
   @override
   void initState() {
     super.initState();
-    _amountCtrl.text = '1.0';
     final tokenIds = _availableTokenIds;
     _selectedTokenId = tokenIds.isEmpty ? null : tokenIds.first;
   }
 
   @override
   void dispose() {
+    _countCtrl.dispose();
     _amountCtrl.dispose();
     super.dispose();
   }
 
-  void _setTokenMode(bool isToken) {
-    if (_isToken == isToken) return;
+  void _setCount(int n) {
+    final clamped = n.clamp(2, _maxOutputs);
     setState(() {
-      _isToken = isToken;
-      _amountCtrl.clear();
-      if (isToken && !_availableTokenIds.contains(_selectedTokenId)) {
-        final tokenIds = _availableTokenIds;
-        _selectedTokenId = tokenIds.isEmpty ? null : tokenIds.first;
-      }
+      _count = clamped;
+      if (_countCtrl.text != '$clamped') _countCtrl.text = '$clamped';
     });
   }
 
-  void _showValidation(String message) {
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+  int? get _equalPerBox => equalSplitAmount(
+        totalNano: _totalNano.toInt(),
+        count: _count,
+        feesNano: minerFeeNano + argusFeeNano,
+      );
+
+  String _tokenLabel(String id) => walletService.cachedTokenMeta(id)?.label ?? shorten(id, head: 8, tail: 6);
+  int _tokenDecimals(String id) => walletService.cachedTokenMeta(id)?.decimals ?? 0;
+
+  String? get _summary {
+    switch (_mode) {
+      case _SplitMode.equal:
+        final per = _equalPerBox;
+        if (per == null) return null;
+        final change = _totalNano.toInt() - minerFeeNano - argusFeeNano - per * _count;
+        return '$_count boxes of ${formatErg(per, maxFrac: 4)}'
+            '${change > 0 ? ' · ${formatErg(change, maxFrac: 4)} change' : ''}';
+      case _SplitMode.fixed:
+        final per = parseErgToNano(_amountCtrl.text);
+        if (per == null || per < minBoxNano) return null;
+        final change = _totalNano.toInt() - minerFeeNano - argusFeeNano - per * _count;
+        if (change < 0) return null;
+        return '$_count boxes of ${formatErg(per, maxFrac: 4)} · ${formatErg(change, maxFrac: 4)} change';
+      case _SplitMode.token:
+        final id = _selectedTokenId;
+        if (id == null) return null;
+        final per = parseDecimalToBase(_amountCtrl.text, _tokenDecimals(id));
+        if (per == null || per <= 0) return null;
+        final total = _tokenTotal(id);
+        final need = BigInt.from(per) * BigInt.from(_count);
+        if (need > total) return null;
+        return '$_count boxes of ${formatTokenAmount(per, _tokenDecimals(id))} ${_tokenLabel(id)}, '
+            'each with ${formatErg(minBoxNano)}';
+    }
+  }
+
+  void _submit() {
+    final summary = _summary;
+    if (summary == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(switch (_mode) {
+          _SplitMode.equal => 'Not enough ERG for $_count boxes after fees',
+          _SplitMode.fixed => 'Enter an amount of at least 0.001 ERG that fits the selection',
+          _SplitMode.token => 'Enter a token amount that fits the selection',
+        }),
+      ));
+      return;
+    }
+    switch (_mode) {
+      case _SplitMode.equal:
+        Navigator.pop(context, {
+          'is_token': false,
+          'count': _count,
+          'amount_nano_erg': _equalPerBox,
+          'selected_box_ids': widget.selectedBoxIds.toList(),
+        });
+      case _SplitMode.fixed:
+        Navigator.pop(context, {
+          'is_token': false,
+          'count': _count,
+          'amount_nano_erg': parseErgToNano(_amountCtrl.text),
+          'selected_box_ids': widget.selectedBoxIds.toList(),
+        });
+      case _SplitMode.token:
+        final id = _selectedTokenId!;
+        Navigator.pop(context, {
+          'is_token': true,
+          'count': _count,
+          'token_id': id,
+          'amount_per_box': BigInt.from(parseDecimalToBase(_amountCtrl.text, _tokenDecimals(id))!),
+          'erg_per_box_nano': minBoxNano,
+          'selected_box_ids': widget.selectedBoxIds.toList(),
+        });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final colors = ArgusColors.of(context);
+    final summary = _summary;
     return Padding(
-      padding: EdgeInsets.fromLTRB(
-        24,
-        20,
-        24,
-        MediaQuery.of(context).viewInsets.bottom + 24,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Split UTXO', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              ChoiceChip(
-                label: const Text('Split ERG'),
-                selected: !_isToken,
-                onSelected: (_) => _setTokenMode(false),
-                selectedColor: iris,
-              ),
-              const SizedBox(width: 8),
-              ChoiceChip(
-                label: const Text('Split Token'),
-                selected: _isToken,
-                onSelected: (_) => _setTokenMode(true),
-                selectedColor: iris,
-              ),
-            ],
-          ),
-          const SizedBox(height: 16),
-          if (_isToken) ...[
-            DropdownButtonFormField<String>(
-              initialValue: _selectedTokenId,
-              decoration: const InputDecoration(
-                labelText: 'Token',
-                isDense: true,
-              ),
-              items: _availableTokenIds
-                  .map(
-                    (id) => DropdownMenuItem(
-                      value: id,
-                      child: Text(shorten(id, head: 8, tail: 6)),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (id) => setState(() => _selectedTokenId = id),
+      padding: EdgeInsets.fromLTRB(24, 20, 24, MediaQuery.of(context).viewInsets.bottom + 24),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Split', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text(
+              'From ${_source.length} ${_source.length == 1 ? 'box' : 'boxes'} holding ${formatNanoErg(_totalNano)}.',
+              style: TextStyle(fontSize: 12.5, color: colors.muted),
+            ),
+            const SizedBox(height: 14),
+            SegmentedButton<_SplitMode>(
+              segments: [
+                const ButtonSegment(value: _SplitMode.equal, label: Text('Equal parts')),
+                const ButtonSegment(value: _SplitMode.fixed, label: Text('Amount each')),
+                if (_availableTokenIds.isNotEmpty) const ButtonSegment(value: _SplitMode.token, label: Text('Token')),
+              ],
+              selected: {_mode},
+              showSelectedIcon: false,
+              onSelectionChanged: (s) => setState(() {
+                _mode = s.first;
+                _amountCtrl.clear();
+              }),
             ),
             const SizedBox(height: 16),
-          ],
-          TextField(
-            controller: _amountCtrl,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(
-              labelText: _isToken
-                  ? 'Amount per box (raw integer)'
-                  : 'ERG amount per box',
-              isDense: true,
+            Text('HOW MANY BOXES', style: Theme.of(context).textTheme.titleSmall?.copyWith(color: colors.muted)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: [
+                for (final n in _presets)
+                  ChoiceChip(
+                    label: Text('$n'),
+                    selected: _count == n,
+                    selectedColor: iris,
+                    labelStyle: TextStyle(color: _count == n ? ink : null),
+                    onSelected: (_) => _setCount(n),
+                  ),
+                SizedBox(
+                  width: 96,
+                  child: TextField(
+                    controller: _countCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(labelText: 'Custom', isDense: true, hintText: '2–100'),
+                    onChanged: (v) {
+                      final n = int.tryParse(v);
+                      if (n != null) _setCount(n);
+                    },
+                  ),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Number of Outputs: $_count',
-            style: const TextStyle(fontWeight: FontWeight.w500),
-          ),
-          Slider(
-            value: _count.toDouble(),
-            min: 2,
-            max: 20,
-            divisions: 18,
-            label: '$_count',
-            onChanged: (v) => setState(() => _count = v.toInt()),
-          ),
-          const SizedBox(height: 16),
-          FilledButton(
-            onPressed: () {
-              if (!_isToken) {
-                final nano = parseErgToNano(_amountCtrl.text);
-                if (nano == null || nano <= 0) {
-                  _showValidation('Enter a valid ERG amount');
-                  return;
-                }
-                Navigator.pop(context, {
-                  'is_token': false,
-                  'count': _count,
-                  'amount_nano_erg': nano,
-                  'selected_box_ids': widget.selectedBoxIds.toList(),
-                });
-              } else {
-                final tokenId = _selectedTokenId;
-                final amt = BigInt.tryParse(_amountCtrl.text);
-                if (tokenId == null || !_availableTokenIds.contains(tokenId)) {
-                  _showValidation('Select a token to split');
-                  return;
-                }
-                if (amt == null || amt <= BigInt.zero) {
-                  _showValidation('Enter a valid whole token amount');
-                  return;
-                }
-                Navigator.pop(context, {
-                  'is_token': true,
-                  'count': _count,
-                  'token_id': tokenId,
-                  'amount_per_box': amt,
-                  'erg_per_box_nano': minBoxNano,
-                  'selected_box_ids': widget.selectedBoxIds.toList(),
-                });
-              }
-            },
-            child: const Text('Preview Split'),
-          ),
-        ],
+            const SizedBox(height: 16),
+            if (_mode == _SplitMode.token) ...[
+              DropdownButtonFormField<String>(
+                initialValue: _selectedTokenId,
+                decoration: const InputDecoration(labelText: 'Token', isDense: true),
+                items: [
+                  for (final id in _availableTokenIds)
+                    DropdownMenuItem(
+                      value: id,
+                      child: Text('${_tokenLabel(id)} · ${formatTokenAmount(_tokenTotal(id).toInt(), _tokenDecimals(id))} available'),
+                    ),
+                ],
+                onChanged: (id) => setState(() => _selectedTokenId = id),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _amountCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: '${_selectedTokenId == null ? 'Token' : _tokenLabel(_selectedTokenId!)} per box',
+                  isDense: true,
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+            ] else if (_mode == _SplitMode.fixed) ...[
+              TextField(
+                controller: _amountCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'ERG per box', isDense: true, hintText: '1.0'),
+                onChanged: (_) => setState(() {}),
+              ),
+            ],
+            const SizedBox(height: 14),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(color: colors.inset, borderRadius: BorderRadius.circular(12)),
+              child: Text(
+                summary ?? 'Adjust the count or amount until it fits the selection.',
+                style: TextStyle(fontSize: 13, color: summary == null ? rustFor(context) : null),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Fees: ${formatErg(minerFeeNano)} miner + ${formatErg(argusFeeNano)} Argus. Remaining ERG and every token return to you as change.',
+              style: TextStyle(fontSize: 12, color: colors.muted),
+            ),
+            const SizedBox(height: 16),
+            FilledButton(onPressed: summary == null ? null : _submit, child: const Text('Preview split')),
+          ],
+        ),
       ),
     );
   }

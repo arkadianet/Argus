@@ -7,8 +7,8 @@ use citadel_core::constants::{MIN_BOX_VALUE_NANO as MIN_BOX_VALUE, TX_FEE_NANO a
 
 // App UX caps — Ergo protocol allows up to 32_767 inputs/outputs per tx;
 // block cost/size may still limit practical size before that hard ceiling.
-const MAX_SPLIT_OUTPUTS: usize = 30;
-const MAX_RESTRUCTURE_OUTPUTS: usize = 120;
+const MAX_SPLIT_OUTPUTS: usize = 100;
+const MAX_RESTRUCTURE_OUTPUTS: usize = 150;
 const MAX_TOKENS_PER_BOX: usize = 255;
 
 #[derive(Debug, thiserror::Error)]
@@ -899,9 +899,9 @@ mod tests {
         let mode = SplitMode::Erg {
             amount_per_box: 1_000_000_000,
         };
-        let err = build_split_tx(&inputs, &mode, 31, USER_TREE, 50000).unwrap_err();
+        let err = build_split_tx(&inputs, &mode, 101, USER_TREE, 50000).unwrap_err();
         match err {
-            UtxoManagementError::TooManyOutputs { count: 31, max: 30 } => {}
+            UtxoManagementError::TooManyOutputs { count: 101, max: 100 } => {}
             _ => panic!("Expected TooManyOutputs, got {:?}", err),
         }
     }
