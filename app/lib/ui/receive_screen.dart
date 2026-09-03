@@ -173,7 +173,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                 decoration: BoxDecoration(
                   color: paper,
                   borderRadius: BorderRadius.circular(cardRadius),
-                  border: Border.all(color: iris.withValues(alpha: 0.45)),
+                  border: Border.all(color: accentOf(context).withValues(alpha: 0.45)),
                 ),
                 padding: const EdgeInsets.all(18),
                 child: QrImageView(
@@ -206,10 +206,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                         decoration: BoxDecoration(
-                          color: iris.withValues(alpha: 0.15),
+                          color: accentOf(context).withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Text(label, style: const TextStyle(color: iris, fontSize: 12)),
+                        child: Text(label, style: TextStyle(color: accentOf(context), fontSize: 12)),
                       ),
                     if (label != null) const SizedBox(width: 8),
                     TextButton.icon(

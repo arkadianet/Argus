@@ -323,11 +323,11 @@ class _DexyScreenState extends State<DexyScreen> {
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
                   color: selected
-                      ? iris.withValues(alpha: 0.14)
+                      ? accentOf(context).withValues(alpha: 0.14)
                       : Theme.of(context).colorScheme.surface,
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: selected ? iris : ArgusColors.of(context).cardBorder,
+                    color: selected ? accentOf(context) : ArgusColors.of(context).cardBorder,
                     width: selected ? 1.5 : 1,
                   ),
                 ),
@@ -523,7 +523,7 @@ class _DexyScreenState extends State<DexyScreen> {
               width: 36,
               height: 36,
               decoration: BoxDecoration(color: colors.chip, borderRadius: BorderRadius.circular(10)),
-              child: Icon(icon, size: 19, color: iris),
+              child: Icon(icon, size: 19, color: accentOf(context)),
             ),
             const SizedBox(width: 14),
             Expanded(

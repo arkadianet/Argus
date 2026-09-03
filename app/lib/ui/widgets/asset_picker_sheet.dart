@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../format.dart';
 import '../../services/token_router.dart';
+import '../../services/verified_tokens.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 import '../token_avatar.dart';
@@ -118,7 +119,16 @@ class _AssetPickerSheetState extends State<AssetPickerSheet> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(b.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Flexible(child: Text(b.name, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                                    if (isVerifiedToken(b.id)) ...[
+                                      const SizedBox(width: 4),
+                                      Icon(Icons.verified, size: 15, color: accentOf(context)),
+                                    ],
+                                  ],
+                                ),
                                 const SizedBox(height: 2),
                                 Text(shorten(b.id, head: 10, tail: 6), style: TextStyle(fontSize: 12.5, color: colors.muted)),
                               ],

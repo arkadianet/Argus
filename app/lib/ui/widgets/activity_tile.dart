@@ -36,7 +36,7 @@ class ActivityTile extends StatelessWidget {
     final tint = switch (kind) {
       ActivityKind.received => moss,
       ActivityKind.sent => rust,
-      ActivityKind.swap => iris,
+      ActivityKind.swap => accentOf(context),
       _ => muted,
     };
     final icon = switch (kind) {
@@ -109,7 +109,7 @@ class ActivityTile extends StatelessWidget {
                   confirmed ? 'Confirmed' : 'Pending',
                   style: TextStyle(
                     fontSize: 12,
-                    color: confirmed ? moss : iris,
+                    color: confirmed ? moss : accentOf(context),
                     fontWeight: FontWeight.w500,
                   ),
                 ),

@@ -30,20 +30,20 @@ class TokenAvatar extends StatelessWidget {
           child: Image.network(
             url,
             fit: BoxFit.cover,
-            errorBuilder: (_, _, _) => _letter(dark),
+            errorBuilder: (ctx, _, _) => _letter(ctx, dark),
           ),
         ),
       );
     }
-    return _letter(dark);
+    return _letter(context, dark);
   }
 
-  Widget _letter(bool dark) {
+  Widget _letter(BuildContext context, bool dark) {
     final letter = label.isNotEmpty ? label[0].toUpperCase() : '?';
     return CircleAvatar(
       radius: radius,
       backgroundColor: isErg
-          ? iris.withValues(alpha: dark ? 0.25 : 0.2)
+          ? accentOf(context).withValues(alpha: dark ? 0.25 : 0.2)
           : (dark ? watchfulSurface : bannerTint),
       child: Text(
         isErg ? 'Σ' : letter,

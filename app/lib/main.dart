@@ -86,8 +86,8 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
           title: 'Argus',
           navigatorKey: navigatorKey,
           debugShowCheckedModeBanner: false,
-          theme: argusTheme(watchful: false),
-          darkTheme: argusTheme(watchful: true),
+          theme: themeController.lightTheme,
+          darkTheme: themeController.darkTheme,
           themeMode: themeController.themeMode,
           // Densities in the wallet card assume at most ~1.6x text; larger
           // system font scales would overflow fixed rows.

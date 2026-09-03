@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../format.dart';
+import '../../services/verified_tokens.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 import '../token_avatar.dart';
@@ -28,6 +29,7 @@ class AssetTile extends StatelessWidget {
     this.hidden = false,
     this.onTap,
     this.showChevron = true,
+    this.verified = false,
   });
 
   AssetTile.erg({
@@ -43,7 +45,8 @@ class AssetTile extends StatelessWidget {
             ? '—'
             : _ergAmount(balanceNano),
         iconUrl = null,
-        isErg = true;
+        isErg = true,
+        verified = true;
 
   AssetTile.token(
     TokenBalance t, {
@@ -58,7 +61,8 @@ class AssetTile extends StatelessWidget {
         amountText = t.isNft ? '1' : formatTokenAmountGrouped(t.amount, t.decimals),
         fiatText = null,
         iconUrl = t.iconUrl,
-        isErg = false;
+        isErg = false,
+        verified = isVerifiedToken(t.id);
 
   final String ticker;
   final String name;
@@ -69,6 +73,9 @@ class AssetTile extends StatelessWidget {
   final bool hidden;
   final VoidCallback? onTap;
   final bool showChevron;
+
+  /// Shows a check next to the ticker for on-chain-verified tokens.
+  final bool verified;
 
   static String _ergAmount(int nano) => formatErg(nano, unit: false, maxFrac: 4);
 
@@ -88,11 +95,22 @@ class AssetTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    ticker,
-                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          ticker,
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (verified && !isErg) ...[
+                        const SizedBox(width: 4),
+                        Icon(Icons.verified, size: 15, color: accentOf(context)),
+                      ],
+                    ],
                   ),
                   const SizedBox(height: 2),
                   Text(

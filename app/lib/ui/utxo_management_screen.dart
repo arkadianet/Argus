@@ -664,7 +664,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
         style: TextStyle(fontSize: 12, color: active ? ink : null),
       ),
       selected: active,
-      selectedColor: iris,
+      selectedColor: accentOf(context),
       onSelected: (_) => _tools.setFilter(filter),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
     );
@@ -694,7 +694,7 @@ class _UtxoCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 8),
       shape: RoundedRectangleBorder(
         side: BorderSide(
-          color: isSelected ? iris : Theme.of(context).colorScheme.outline,
+          color: isSelected ? accentOf(context) : Theme.of(context).colorScheme.outline,
           width: isSelected ? 1.5 : 1,
         ),
       ),
@@ -710,7 +710,7 @@ class _UtxoCard extends StatelessWidget {
                   Checkbox(
                     value: isSelected,
                     onChanged: (_) => onToggle(),
-                    activeColor: iris,
+                    activeColor: accentOf(context),
                   ),
                   const SizedBox(width: 4),
                   Expanded(
@@ -774,8 +774,8 @@ class _UtxoCard extends StatelessWidget {
                         vertical: 2,
                       ),
                       decoration: BoxDecoration(
-                        color: iris.withValues(alpha: 0.12),
-                        border: Border.all(color: iris.withValues(alpha: 0.4)),
+                        color: accentOf(context).withValues(alpha: 0.12),
+                        border: Border.all(color: accentOf(context).withValues(alpha: 0.4)),
                       ),
                       child: Text(
                         '${_tokenAmount(a)} ${walletService.cachedTokenMeta(a.tokenId)?.label ?? shorten(a.tokenId, head: 4, tail: 4)}',
@@ -978,7 +978,7 @@ class _SplitConfigSheetState extends State<_SplitConfigSheet> {
                   ChoiceChip(
                     label: Text('$n'),
                     selected: _count == n,
-                    selectedColor: iris,
+                    selectedColor: accentOf(context),
                     labelStyle: TextStyle(color: _count == n ? ink : null),
                     onSelected: (_) => _setCount(n),
                   ),

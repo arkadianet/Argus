@@ -375,14 +375,14 @@ class DexySwapSheetState extends State<DexySwapSheet> {
                 label: const Text('ERG →'),
                 selected: _ergInput,
                 onSelected: (_) => _setDirection('erg_to_dexy'),
-                selectedColor: iris,
+                selectedColor: accentOf(context),
               ),
               const SizedBox(width: 8),
               ChoiceChip(
                 label: Text('← ${variant.shortName}'),
                 selected: !_ergInput,
                 onSelected: (_) => _setDirection('dexy_to_erg'),
-                selectedColor: iris,
+                selectedColor: accentOf(context),
               ),
             ],
           ),
@@ -649,7 +649,7 @@ class DexyLiquiditySheetState extends State<DexyLiquiditySheet> {
                   _preview = null;
                   _previewError = null;
                 }),
-                selectedColor: iris,
+                selectedColor: accentOf(context),
               ),
               const SizedBox(width: 8),
               ChoiceChip(
@@ -660,7 +660,7 @@ class DexyLiquiditySheetState extends State<DexyLiquiditySheet> {
                   _preview = null;
                   _previewError = null;
                 }),
-                selectedColor: iris,
+                selectedColor: accentOf(context),
               ),
             ],
           ),

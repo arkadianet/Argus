@@ -274,7 +274,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
       shape: RoundedRectangleBorder(
         side: BorderSide(
           color: selected
-              ? iris
+              ? accentOf(context)
               : Theme.of(context).colorScheme.outline,
           width: selected ? 1.5 : 1,
         ),
@@ -288,7 +288,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
               Icon(
                 Icons.account_balance_wallet_outlined,
                 size: 22,
-                color: selected ? iris : Theme.of(context).colorScheme.primary,
+                color: selected ? accentOf(context) : Theme.of(context).colorScheme.primary,
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -313,13 +313,13 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                               vertical: 2,
                             ),
                             decoration: BoxDecoration(
-                              color: iris.withValues(alpha: 0.15),
-                              border: Border.all(color: iris),
+                              color: accentOf(context).withValues(alpha: 0.15),
+                              border: Border.all(color: accentOf(context)),
                             ),
                             child: Text(
                               w.isUnlocked ? 'Active' : 'Selected',
-                              style: const TextStyle(
-                                color: iris,
+                              style: TextStyle(
+                                color: accentOf(context),
                                 fontSize: 10,
                                 fontWeight: FontWeight.w600,
                               ),
