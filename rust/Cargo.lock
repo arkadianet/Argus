@@ -3045,6 +3045,7 @@ dependencies = [
  "ergo-tx",
  "ergopay-core",
  "flutter_rust_bridge",
+ "futures",
  "hex",
  "once_cell",
  "rand 0.8.7",

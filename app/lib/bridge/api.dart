@@ -528,11 +528,15 @@ Future<String> sigmausdBuild({
 /// Discovered Spectrum pools with token metadata. Read-only; never touches the
 /// wallet handle. `truncated` is true when discovery hit its 1000-box cap and
 /// some pools may be missing.
-Future<String> ammPools({String? nodeUrl, required bool forceRefresh}) =>
-    RustLib.instance.api.crateApiAmmPools(
-      nodeUrl: nodeUrl,
-      forceRefresh: forceRefresh,
-    );
+Future<String> ammPools({
+  String? nodeUrl,
+  required bool forceRefresh,
+  String? knownTokensJson,
+}) => RustLib.instance.api.crateApiAmmPools(
+  nodeUrl: nodeUrl,
+  forceRefresh: forceRefresh,
+  knownTokensJson: knownTokensJson,
+);
 
 /// Quote a single-hop swap. `from_token`/`to_token` are `None` for ERG,
 /// matching how the Send screen encodes ERG as a null asset id.

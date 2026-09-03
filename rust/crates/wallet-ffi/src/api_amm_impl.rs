@@ -109,6 +109,104 @@ pub(crate) fn min_output_for(output: u64) -> u64 {
     (output as f64 * keep).floor() as u64
 }
 
+/// Which parser a pool box needs, from its token layout: N2T boxes carry
+/// [NFT, LP, Y], T2T boxes [NFT, LP, X, Y].
+pub(crate) fn pool_kind_for_token_count(n: usize) -> Option<amm::PoolType> {
+    match n {
+        3 => Some(amm::PoolType::N2T),
+        n if n >= 4 => Some(amm::PoolType::T2T),
+        _ => None,
+    }
+}
+
+pub(crate) fn parse_pool_box(
+    ergo_box: &ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox,
+) -> Result<AmmPool, String> {
+    let n = ergo_box.tokens.as_ref().map(|t| t.len()).unwrap_or(0);
+    match pool_kind_for_token_count(n) {
+        Some(amm::PoolType::N2T) => amm::fetch::parse_n2t_pool(ergo_box),
+        Some(amm::PoolType::T2T) => amm::fetch::parse_t2t_pool(ergo_box),
+        None => return Err("box does not have a pool token layout".into()),
+    }
+    .map_err(|e| e.to_string())
+}
+
+/// The current box of one pool by its pool NFT: one indexed request instead
+/// of re-downloading every Spectrum pool to find it.
+pub(crate) async fn fetch_pool(
+    client: &ergo_node_client::NodeClient,
+    pool_id: &str,
+) -> Result<(AmmPool, ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox), String> {
+    let caps = client
+        .require_capabilities()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    if caps.has_extra_index == Some(false) {
+        return Err(extra_index_error());
+    }
+    let ergo_box = client
+        .get_box_by_token_id(&caps, &citadel_core::TokenId::new(pool_id))
+        .await
+        .map_err(|_| {
+            ArgusError::Generic("POOL_MOVED: pool no longer available, re-quote".into())
+                .to_json_string()
+        })?;
+    let pool = parse_pool_box(&ergo_box)
+        .map_err(|e| ArgusError::Generic(format!("POOL_MOVED: {e}")).to_json_string())?;
+    if pool.pool_id != pool_id {
+        return Err(
+            ArgusError::Generic("POOL_MOVED: pool box did not match, re-quote".into())
+                .to_json_string(),
+        );
+    }
+    Ok((pool, ergo_box))
+}
+
+/// Seeds the token cache from metadata the app persisted on a previous
+/// launch, so a fresh process does not re-ask the node for every token.
+pub(crate) fn seed_token_cache(known_tokens_json: &str) {
+    let parsed: serde_json::Value = match serde_json::from_str(known_tokens_json) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let Some(map) = parsed.as_object() else { return };
+    let mut cache = recover(TOKEN_CACHE.write());
+    for (id, v) in map {
+        let Some(name) = v.get("name").and_then(|n| n.as_str()) else { continue };
+        if name.is_empty() {
+            continue;
+        }
+        let decimals = v
+            .get("decimals")
+            .and_then(|d| d.as_u64())
+            .and_then(|d| u8::try_from(d).ok())
+            .unwrap_or(0);
+        cache
+            .entry(id.clone())
+            .or_insert(TokenMeta { name: name.to_string(), decimals });
+    }
+}
+
+/// Metadata for many tokens with bounded concurrency; cache hits are free.
+pub(crate) async fn token_meta_many(
+    client: &ergo_node_client::NodeClient,
+    ids: Vec<String>,
+) -> Vec<(String, TokenMeta)> {
+    const CONCURRENCY: usize = 8;
+    let mut out = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(CONCURRENCY) {
+        let futs = chunk.iter().map(|id| {
+            let id = id.clone();
+            async move {
+                let meta = token_meta(client, &id).await;
+                (id, meta)
+            }
+        });
+        out.extend(futures::future::join_all(futs).await);
+    }
+    out
+}
+
 /// Every token id a pool references, for metadata prefetch.
 pub(crate) fn pool_token_ids(pool: &AmmPool) -> Vec<String> {
     let mut ids = vec![pool.token_y.token_id.clone()];
@@ -259,6 +357,24 @@ pub(crate) fn pays_citadel_dev_fee(output_trees: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pool_kind_follows_the_token_layout() {
+        // N2T boxes carry [NFT, LP, Y]; T2T boxes carry [NFT, LP, X, Y].
+        assert_eq!(pool_kind_for_token_count(3), Some(amm::PoolType::N2T));
+        assert_eq!(pool_kind_for_token_count(4), Some(amm::PoolType::T2T));
+        assert_eq!(pool_kind_for_token_count(2), None);
+        assert_eq!(pool_kind_for_token_count(5), Some(amm::PoolType::T2T));
+    }
+
+    #[test]
+    fn known_tokens_seed_the_cache_without_a_node() {
+        seed_token_cache(r#"{"abc":{"name":"ABC","decimals":3},"bad":"x"}"#);
+        let hit = recover(TOKEN_CACHE.read()).get("abc").cloned().expect("seeded");
+        assert_eq!(hit.name, "ABC");
+        assert_eq!(hit.decimals, 3);
+        assert!(recover(TOKEN_CACHE.read()).get("bad").is_none());
+    }
 
     #[test]
     fn dexy_pools_are_excluded_from_spectrum_discovery() {

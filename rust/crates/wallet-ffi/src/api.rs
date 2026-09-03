@@ -2449,7 +2449,14 @@ pub async fn sigmausd_build(
 /// wallet handle. `truncated` is true when discovery hit its 1000-box cap and
 /// some pools may be missing.
 #[flutter_rust_bridge::frb]
-pub async fn amm_pools(node_url: Option<String>, force_refresh: bool) -> Result<String, String> {
+pub async fn amm_pools(
+    node_url: Option<String>,
+    force_refresh: bool,
+    known_tokens_json: Option<String>,
+) -> Result<String, String> {
+    if let Some(known) = known_tokens_json.as_deref() {
+        crate::api_amm_impl::seed_token_cache(known);
+    }
     let set = crate::api_amm_impl::load_pools(node_url.clone(), force_refresh).await?;
     let client = crate::api_dexy_impl::dexy_client(node_url).await?;
 
@@ -2465,8 +2472,7 @@ pub async fn amm_pools(node_url: Option<String>, force_refresh: bool) -> Result<
     }
 
     let mut tokens = serde_json::Map::new();
-    for id in unique_ids {
-        let meta = crate::api_amm_impl::token_meta(&client, &id).await;
+    for (id, meta) in crate::api_amm_impl::token_meta_many(&client, unique_ids).await {
         tokens.insert(
             id,
             serde_json::to_value(meta)
@@ -2544,15 +2550,12 @@ pub async fn amm_build_swap(
     let (recipient_tree, change_tree) =
         resolve_dexy_destinations(handle_id, "amm_build_swap", &recipient_address, &change_address)?;
 
-    let set = crate::api_amm_impl::load_pools(node_url.clone(), true).await?;
-    let pool = set
-        .pools
-        .iter()
-        .find(|p| p.pool_id == pool_id)
-        .ok_or_else(|| {
-            ArgusError::Generic("POOL_MOVED: pool no longer available, re-quote".into())
-                .to_json_string()
-        })?;
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    // The pool's current box by its NFT: one indexed request, always fresh,
+    // instead of re-downloading every Spectrum pool to locate it.
+    let (pool_owned, pool_ergo_box) =
+        crate::api_amm_impl::fetch_pool(&client, &pool_id).await?;
+    let pool = &pool_owned;
 
     // The builders derive the output from the pool box alone — the N2T path
     // destructures `SwapInput::Token { amount, .. }` and never checks the token
@@ -2564,16 +2567,6 @@ pub async fn amm_build_swap(
         )
         .to_json_string());
     }
-
-    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
-    // One node fetch serves both the builder (EIP-12) and the preparation
-    // cache (raw ErgoBox needed by sign_prepared_tx).
-    let pool_ergo_box = client
-        .get_box_by_id(&citadel_core::BoxId::new(&pool.box_id))
-        .await
-        .map_err(|_| {
-            ArgusError::Generic("POOL_MOVED: pool box was spent, re-quote".into()).to_json_string()
-        })?;
     let creation = client
         .get_box_creation_info(&pool_ergo_box.box_id().to_string())
         .await

@@ -126,12 +126,17 @@ fn wire__crate__api__amm_pools_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             let api_force_refresh = <bool>::sse_decode(&mut deserializer);
+            let api_known_tokens_json = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
                     (move || async move {
-                        let output_ok =
-                            crate::api::amm_pools(api_node_url, api_force_refresh).await?;
+                        let output_ok = crate::api::amm_pools(
+                            api_node_url,
+                            api_force_refresh,
+                            api_known_tokens_json,
+                        )
+                        .await?;
                         Ok(output_ok)
                     })()
                     .await,

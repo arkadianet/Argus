@@ -196,9 +196,20 @@ class _SwapScreenState extends State<SwapScreen> {
 
   Future<void> _loadPools() async {
     setState(() {
-      _loading = true;
+      _loading = _set == null;
       _error = null;
     });
+    if (_set == null) {
+      // Paint the last known pools straight away; the fresh list replaces
+      // them when discovery finishes.
+      final cached = await ammService.cachedPools();
+      if (mounted && cached != null && _set == null) {
+        setState(() {
+          _set = cached;
+          _loading = false;
+        });
+      }
+    }
     try {
       final set = await ammService.pools();
       if (!mounted) return;
