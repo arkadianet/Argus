@@ -22,6 +22,7 @@ pub(crate) fn build_n2t_direct_swap(
     current_height: i32,
     recipient_ergo_tree: Option<&str>,
     miner_fee: u64,
+    recipient_held_tokens: u64,
 ) -> Result<DirectSwapBuildResult, AmmError> {
     let pool_erg: u64 = pool_box
         .value
@@ -143,6 +144,14 @@ pub(crate) fn build_n2t_direct_swap(
         additional_registers: pool_box.additional_registers.clone(),
     };
 
+    // Held tokens ride only on the ERG-funded leg: the user already owns
+    // them and they leave with the swapped ones in a single box.
+    let held = if is_erg_to_token { recipient_held_tokens } else { 0 };
+    if !is_erg_to_token && recipient_held_tokens > 0 {
+        return Err(AmmError::TxBuildError(
+            "held tokens can only be forwarded when paying with ERG".to_string(),
+        ));
+    }
     let output_tree = recipient_ergo_tree.unwrap_or(user_ergo_tree);
     let user_swap_output = if is_erg_to_token {
         Eip12Output::change(
@@ -150,7 +159,7 @@ pub(crate) fn build_n2t_direct_swap(
             output_tree,
             vec![Eip12Asset {
                 token_id: pool.token_y.token_id.clone(),
-                amount: output_amount.to_string(),
+                amount: (output_amount + held).to_string(),
             }],
             current_height,
         )
@@ -175,6 +184,7 @@ pub(crate) fn build_n2t_direct_swap(
     };
 
     let token_requirement = match input {
+        SwapInput::Erg { .. } if held > 0 => Some((pool.token_y.token_id.as_str(), held)),
         SwapInput::Erg { .. } => None,
         SwapInput::Token { token_id, amount } => Some((token_id.as_str(), *amount)),
     };
@@ -182,7 +192,10 @@ pub(crate) fn build_n2t_direct_swap(
         .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
 
     let change_erg = selected.total_erg - user_erg_needed;
+    // The held amount is spent into the recipient box, so it must be
+    // subtracted from change or it would be duplicated.
     let spent_token = match input {
+        SwapInput::Erg { .. } if held > 0 => Some((pool.token_y.token_id.as_str(), held)),
         SwapInput::Erg { .. } => None,
         SwapInput::Token { token_id, amount } => Some((token_id.as_str(), *amount)),
     };
@@ -201,7 +214,7 @@ pub(crate) fn build_n2t_direct_swap(
         let mut user_tokens = if is_erg_to_token {
             vec![Eip12Asset {
                 token_id: pool.token_y.token_id.clone(),
-                amount: output_amount.to_string(),
+                amount: (output_amount + held).to_string(),
             }]
         } else {
             vec![]

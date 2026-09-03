@@ -2,7 +2,6 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:argus_wallet/services/dexy_service.dart';
 import 'package:argus_wallet/ui/dexy_screen.dart';
-import 'package:argus_wallet/ui/send_screen.dart';
 
 /// Builds a USE (3-decimal) market snapshot in the same JSON shape the Rust
 /// bridge returns. [effectiveRate] is ERG per *display* token, matching
@@ -190,32 +189,6 @@ void main() {
     test('nothing is pairable without a balance on both sides', () {
       expect(maxPairableDexy(pool(), tokenBalance: 0, ergAvailable: 5000000000), 0);
       expect(maxPairableErg(pool(), ergAvailable: 0, tokenBalance: 260), 0);
-    });
-  });
-
-  group('send screen labels', () {
-    test('quote line states the ERG unit exactly once', () {
-      final label = dexyQuoteLabel(
-        const DexyPathQuote(path: 'FreeMint', ergCostNano: 3719600000),
-        cheapest: true,
-      );
-
-      expect(label, '≈ 3.7196 ERG via FreeMint  ·  cheapest');
-      expect('ERG'.allMatches(label), hasLength(1));
-    });
-
-    test('quote line marks only the cheapest route', () {
-      final label = dexyQuoteLabel(
-        const DexyPathQuote(path: 'LP Swap', ergCostNano: 3700970000),
-        cheapest: false,
-      );
-
-      expect(label, '≈ 3.70097 ERG via LP Swap');
-    });
-
-    test('asset labels name the token, not the protocol', () {
-      expect(dexyAssetLabel(DexyVariant.usd), 'USE · buy & send');
-      expect(dexyAmountLabel(DexyVariant.usd), 'USE amount to deliver');
     });
   });
 

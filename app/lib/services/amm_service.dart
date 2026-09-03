@@ -176,6 +176,26 @@ class AmmQuote {
       );
 }
 
+/// ERG needed for an exact token output from the cheapest Spectrum pool.
+class AmmExactQuote {
+  const AmmExactQuote({required this.poolId, required this.boxId, required this.ergIn, required this.outputAmount, required this.feeNum, required this.feeDenom});
+  final String poolId;
+  final String boxId;
+  final int ergIn;
+  final int outputAmount;
+  final int feeNum;
+  final int feeDenom;
+
+  factory AmmExactQuote.fromJson(Map<String, dynamic> j) => AmmExactQuote(
+        poolId: j['pool_id'] as String? ?? '',
+        boxId: j['box_id'] as String? ?? '',
+        ergIn: (j['erg_in'] as num?)?.toInt() ?? 0,
+        outputAmount: (j['output_amount'] as num?)?.toInt() ?? 0,
+        feeNum: (j['fee_num'] as num?)?.toInt() ?? 0,
+        feeDenom: (j['fee_denom'] as num?)?.toInt() ?? 0,
+      );
+}
+
 class AmmSwapBuild {
   final int preparationId;
   final int inputAmount;
@@ -255,6 +275,11 @@ class AmmService {
     return AmmQuote.fromJson((jsonDecode(raw) as Map).cast());
   }
 
+  Future<AmmExactQuote> quoteExactOutput({required String toToken, required int outputAmount}) async {
+    final raw = await api.ammQuoteExactOutput(toToken: toToken, outputAmount: outputAmount, nodeUrl: _node);
+    return AmmExactQuote.fromJson((jsonDecode(raw) as Map).cast());
+  }
+
   Future<AmmSwapBuild> buildSwap({
     String? fromToken,
     String? toToken,
@@ -264,6 +289,7 @@ class AmmService {
     required String recipient,
     required String changeAddress,
     required List<String> spendAddresses,
+    int heldTokens = 0,
   }) async {
     final raw = await api.ammBuildSwap(
       handleId: _requireHandle(),
@@ -276,6 +302,7 @@ class AmmService {
       changeAddress: changeAddress,
       spendAddresses: spendAddresses,
       nodeUrl: _node,
+      heldTokens: heldTokens,
     );
     return AmmSwapBuild.fromJson((jsonDecode(raw) as Map).cast());
   }

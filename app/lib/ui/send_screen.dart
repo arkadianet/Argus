@@ -8,7 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../format.dart';
 import '../services/contacts_service.dart';
-import '../services/dexy_quote_controller.dart';
+import '../services/route_quote_controller.dart';
+import '../services/token_router.dart';
 import '../services/dexy_service.dart';
 import '../services/ergopay_service.dart';
 import '../services/network_controller.dart';
@@ -20,20 +21,16 @@ import 'offline_banner.dart';
 import 'scan_screen.dart';
 import 'send_recipients.dart';
 import 'widgets/amount_entry.dart';
+import 'widgets/asset_picker_sheet.dart';
 
-/// One auto-buy route line, e.g. `≈ 3.7196 ERG via FreeMint  ·  cheapest`.
-String dexyQuoteLabel(DexyPathQuote quote, {required bool cheapest}) =>
-    '≈ ${formatErg(quote.ergCostNano)} via ${quote.path}'
+/// One buy-and-send route line, e.g. `≈ 3.7196 ERG · Dexy FreeMint  ·  cheapest`.
+String routeQuoteLabel(RouteQuote quote, {required bool cheapest}) =>
+    '≈ ${formatErg(quote.ergCostNano)} · ${quote.protocol} ${quote.path}'
+    '${quote.note != null ? ' (${quote.note})' : ''}'
     '${cheapest ? '  ·  cheapest' : ''}';
 
-/// Asset-picker entry for a variant the wallet doesn't hold yet. Names the
-/// token (USE), not the protocol implementation (DexyUSD).
-String dexyAssetLabel(DexyVariant variant) =>
-    '${variant.shortName} · buy & send';
-
-/// Amount-field label for the auto-buy flow.
-String dexyAmountLabel(DexyVariant variant) =>
-    '${variant.shortName} amount to deliver';
+/// Amount-field label for the buy-and-send flow.
+String buyAmountLabel(BuyableToken token) => '${token.name} amount to deliver';
 
 class SendScreen extends StatefulWidget {
   const SendScreen({
@@ -80,7 +77,8 @@ class _SendScreenState extends State<SendScreen> {
   bool _sending = false;
   String? _resultTxId;
   late String? _assetId = widget.initialAssetId;
-  final _quotes = DexyQuoteController();
+  final _quotes = RouteQuoteController();
+  List<BuyableToken> _buyable = const [];
   Set<String> _selectedSpendAddresses = {};
   final _feeCtrl = TextEditingController();
   final List<_RecipientEntry> _extraRecipients = [];
@@ -91,6 +89,9 @@ class _SendScreenState extends State<SendScreen> {
   void initState() {
     super.initState();
     _quotes.addListener(_onQuotes);
+    buyableTokens().then((list) {
+      if (mounted) setState(() => _buyable = list);
+    }).catchError((_) {});
     final r = widget.initialRecipient;
     if (r != null && r.isNotEmpty) {
       _recipientCtrl.text = r;
@@ -122,25 +123,29 @@ class _SendScreenState extends State<SendScreen> {
     return null;
   }
 
-  static const _dexyPrefix = 'dexy:';
+  static const _buyPrefix = 'buy:';
 
-  /// Raw balance already held for [variant], which the auto-buy route delivers
+  /// Raw balance already held for [tokenId]; buy-and-send delivers it
   /// alongside whatever it acquires.
-  int _heldFor(DexyVariant variant) {
+  int _heldFor(String tokenId) {
     for (final t in _args.tokens) {
-      if (t.id == variant.tokenId) return t.amount;
+      if (t.id == tokenId) return t.amount;
     }
     return 0;
   }
 
-  /// A swap-supported asset selected that the wallet does not hold. Sending
-  /// it auto-buys via the cheapest Dexy route (mint or LP swap) first.
-  DexyVariant? get _selectedSwapVariant {
+  /// A buy-and-send asset is selected: any shortfall is bought on the
+  /// cheapest route and forwarded with the held balance in one transaction.
+  BuyableToken? get _selectedBuy {
     final id = _assetId;
-    if (id == null || !id.startsWith(_dexyPrefix)) return null;
-    final code = id.substring(_dexyPrefix.length);
-    for (final v in DexyVariant.values) {
-      if (v.code == code) return v;
+    if (id == null || !id.startsWith(_buyPrefix)) return null;
+    final tokenId = id.substring(_buyPrefix.length);
+    for (final b in _buyable) {
+      if (b.id == tokenId) return b;
+    }
+    // Picked before the list loaded: fall back to held-token metadata.
+    for (final t in _args.tokens) {
+      if (t.id == tokenId) return BuyableToken(id: t.id, name: t.label, decimals: t.decimals, protocol: '');
     }
     return null;
   }
@@ -150,9 +155,9 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   void _scheduleQuotes() {
-    final variant = _selectedSwapVariant;
-    if (variant == null) return;
-    _quotes.request(variant, _tokenAmtCtrl.text, held: _heldFor(variant));
+    final buy = _selectedBuy;
+    if (buy == null) return;
+    _quotes.request(buy.id, _tokenAmtCtrl.text, decimals: buy.decimals, held: _heldFor(buy.id));
   }
 
   List<String> get _allSpendAddresses {
@@ -291,8 +296,8 @@ class _SendScreenState extends State<SendScreen> {
 
   Future<void> _send() async {
     if (!_formKey.currentState!.validate()) return;
-    if (_selectedSwapVariant != null) {
-      await _sendViaSwap();
+    if (_selectedBuy != null) {
+      await _sendViaRoute();
       return;
     }
     final args = _args;
@@ -357,8 +362,8 @@ class _SendScreenState extends State<SendScreen> {
 
   /// Auto-buy via the cheapest Dexy route, delivering the tokens straight to
   /// the recipient; ERG change returns to the wallet's change address.
-  Future<void> _sendViaSwap() async {
-    final variant = _selectedSwapVariant!;
+  Future<void> _sendViaRoute() async {
+    final buy = _selectedBuy!;
     final args = _args;
     final spend = _selectedSpendAddresses.isNotEmpty
         ? _selectedSpendAddresses.toList()
@@ -367,80 +372,69 @@ class _SendScreenState extends State<SendScreen> {
       _snack('No spendable addresses');
       return;
     }
-    final tokenAmount =
-        parseDecimalToBase(_tokenAmtCtrl.text, variant.decimals);
-    if (tokenAmount == null || tokenAmount <= 0) {
+    final wanted = parseDecimalToBase(_tokenAmtCtrl.text, buy.decimals);
+    if (wanted == null || wanted <= 0) {
       _snack('Enter a token amount');
       return;
     }
-    // Nothing to acquire: the auto-buy routes have no shortfall to price and
-    // would fail with NO_ROUTE. Hand the user the ordinary token send instead,
-    // which spends the balance they already hold.
-    if (shortfallFor(wanted: tokenAmount, held: _heldFor(variant)) == 0) {
+    final held = _heldFor(buy.id);
+    // Nothing to acquire: hand the user the ordinary token send, which
+    // spends the balance they already hold.
+    if (shortfallFor(wanted: wanted, held: held) == 0) {
       final outputErg = _amountNano();
       if (outputErg == null || outputErg < minBoxNano) {
         _amountCtrl.text = formatErg(minBoxNano, unit: false);
       }
-      setState(() => _assetId = variant.tokenId);
-      _snack('You already hold enough ${variant.shortName} — '
-          'sending it directly. Review to continue.');
+      setState(() => _assetId = buy.id);
+      _snack('You already hold enough ${buy.name} — sending it directly. Review to continue.');
       return;
     }
 
-    final changeAddr = args.changeAddress.isNotEmpty
-        ? args.changeAddress
-        : args.senderAddress;
+    final changeAddr = args.changeAddress.isNotEmpty ? args.changeAddress : args.senderAddress;
 
     // The token send carries a user-supplied recipient too — run the same
     // clipboard-hijack gate as the ordinary flow.
     if (!_recipientTrusted) {
-      final clear =
-          await _clipboardMatchesIntent(context, _recipientCtrl.text.trim());
+      final clear = await _clipboardMatchesIntent(context, _recipientCtrl.text.trim());
       if (!clear) return;
     }
 
     setState(() => _sending = true);
-    DexyBuildResult build;
+    RouteBuild build;
     try {
-      build = await dexService.buildTokenSend(
-        variant: variant,
-        tokenAmount: tokenAmount,
+      build = await tokenRouter.build(
+        buy.id,
+        wanted: wanted,
+        held: held,
         recipient: _recipientCtrl.text.trim(),
         changeAddress: changeAddr,
         spendAddresses: spend,
-        heldTokens: _heldFor(variant),
       );
     } catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
-      _snack('Could not build a route: $e');
+      _snack('Could not build a route: ${e is NoRouteException ? e.message : e}');
       return;
     }
     if (!mounted) return;
 
-    final isMint = build.action.startsWith('mint');
+    String tok(int n) => '${formatTokenAmount(n, buy.decimals)} ${buy.name}';
     final choice = await showConfirmTransactionChoice(
       context,
-      title: 'Send ${variant.shortName}',
+      title: 'Send ${buy.name}',
       confirmLabel: 'Buy & send',
       recipientAddress: _recipientCtrl.text.trim(),
       rows: [
-        ConfirmTxRow(
-          'Recipient gets',
-          '${formatTokenAmount(build.tokenAmount, variant.decimals)} '
-              '${variant.shortName}',
-          bold: true,
-        ),
-        ConfirmTxRow(
-          'ERG cost',
-          formatErg(isMint ? build.ergCostNano : build.inputAmount),
-        ),
-        ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
-        ConfirmTxRow('Change to you', formatErg(build.changeNanoErg)),
+        ConfirmTxRow('Recipient gets', tok(build.delivered), bold: true),
+        if (build.held > 0) ConfirmTxRow('From your wallet', tok(build.held)),
+        ConfirmTxRow('Bought', '${tok(build.acquired)} via ${build.protocol} ${build.path}'),
+        ConfirmTxRow('ERG paid', formatErg(build.ergCostNano)),
+        if (build.protocolFeeNano > 0) ConfirmTxRow('Protocol fee', formatErg(build.protocolFeeNano)),
+        ConfirmTxRow('Miner fee', formatErg(build.minerFeeNano)),
+        if (build.changeNanoErg > 0) ConfirmTxRow('Change to you', formatErg(build.changeNanoErg)),
       ],
-      detail: 'You don\'t hold enough ${variant.shortName}, so this buys it '
-          'first (${isMint ? 'bank mint' : 'LP swap'}) and forwards it in one '
-          'transaction.  ·  ${networkController.activeUrl ?? 'Node not chosen yet'}',
+      detail: 'You hold ${tok(held)}; the rest is bought on the cheapest route and '
+          'forwarded in one transaction.  ·  ${networkController.activeUrl ?? 'Node not chosen yet'}',
     );
     if (!mounted) return;
     if (choice != ConfirmChoice.broadcast) {
@@ -685,8 +679,41 @@ class _SendScreenState extends State<SendScreen> {
     );
   }
 
-  Widget _buildSwapSection(DexyVariant variant) {
+  /// Current asset as a tappable field; opens the picker sheet.
+  Widget _assetPickerButton(TokenBalance? token, BuyableToken? buy) {
+    final label = buy != null
+        ? '${buy.name}${_heldFor(buy.id) > 0 ? '' : ' · buy & send'}'
+        : (token?.label ?? 'ERG');
+    final sub = buy != null
+        ? (buy.protocol.isEmpty ? 'From your wallet, topped up if short' : 'Bought via ${buy.protocol} if short')
+        : (token != null ? 'From your wallet' : 'Ergo');
+    return InkWell(
+      onTap: () async {
+        final choice = await showAssetPicker(context, held: _args.tokens, buyable: _buyable, current: _assetId);
+        if (choice == null || !mounted) return;
+        setState(() {
+          _assetId = choice.assetId;
+          _tokenAmtCtrl.clear();
+          _quotes.clear();
+        });
+      },
+      borderRadius: BorderRadius.circular(buttonRadius),
+      child: InputDecorator(
+        decoration: const InputDecoration(labelText: 'Asset', suffixIcon: Icon(Icons.expand_more)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
+            Text(sub, style: TextStyle(fontSize: 12, color: ArgusColors.of(context).muted)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSwapSection(BuyableToken buy) {
     final quotes = _quotes.quotes;
+    final held = _heldFor(buy.id);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -694,33 +721,29 @@ class _SendScreenState extends State<SendScreen> {
         TextFormField(
           controller: _tokenAmtCtrl,
           decoration: InputDecoration(
-            labelText: dexyAmountLabel(variant),
-            helperText: _heldFor(variant) > 0
-                ? 'You hold ${formatTokenAmount(_heldFor(variant), variant.decimals)} '
-                    '${variant.shortName} — only the shortfall is bought.'
-                : 'You don\'t hold ${variant.shortName} — it is bought automatically at the best rate.',
+            labelText: buyAmountLabel(buy),
+            helperText: held > 0
+                ? 'You hold ${formatTokenAmount(held, buy.decimals)} ${buy.name} — only the shortfall is bought.'
+                : "You don't hold ${buy.name} — it is bought automatically at the best rate.",
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           onChanged: (_) => _scheduleQuotes(),
           validator: (v) {
-            final n = parseDecimalToBase(v ?? '', variant.decimals);
+            final n = parseDecimalToBase(v ?? '', buy.decimals);
             if (n == null || n <= 0) return 'Enter an amount';
             return null;
           },
         ),
         const SizedBox(height: 12),
         if (quotes == null)
-          Text(
-            'Enter an amount to see the ERG cost.',
-            style: Theme.of(context).textTheme.bodySmall,
-          )
+          Text('Enter an amount to see the ERG cost.', style: Theme.of(context).textTheme.bodySmall)
         else if (quotes.isEmpty)
           Text(
-            'No route available for this amount right now.',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: rustFor(context)),
+            held > 0 && parseDecimalToBase(_tokenAmtCtrl.text, buy.decimals) != null &&
+                    shortfallFor(wanted: parseDecimalToBase(_tokenAmtCtrl.text, buy.decimals)!, held: held) == 0
+                ? 'You already hold this much — it will be sent directly.'
+                : 'No route available for this amount right now.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rustFor(context)),
           )
         else
           for (final (i, q) in quotes.indexed)
@@ -728,17 +751,10 @@ class _SendScreenState extends State<SendScreen> {
               padding: const EdgeInsets.only(bottom: 4),
               child: Row(
                 children: [
-                  Icon(
-                    i == 0 ? Icons.star : Icons.alt_route,
-                    size: 16,
-                    color: i == 0 ? iris : null,
-                  ),
+                  Icon(i == 0 ? Icons.star : Icons.alt_route, size: 16, color: i == 0 ? iris : null),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      dexyQuoteLabel(q, cheapest: i == 0),
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+                    child: Text(routeQuoteLabel(q, cheapest: i == 0), style: Theme.of(context).textTheme.bodySmall),
                   ),
                 ],
               ),
@@ -750,7 +766,7 @@ class _SendScreenState extends State<SendScreen> {
   @override
   Widget build(BuildContext context) {
     final token = _selectedToken;
-    final swapVariant = _selectedSwapVariant;
+    final swapVariant = _selectedBuy;
     return Scaffold(
       appBar: AppBar(
         title: const Text('Send'),
@@ -847,31 +863,7 @@ class _SendScreenState extends State<SendScreen> {
                     const SizedBox(height: 24),
                     const SectionLabel('Asset'),
                     const SizedBox(height: 12),
-                    DropdownButtonFormField<String?>(
-                      initialValue: _assetId,
-                      decoration: const InputDecoration(labelText: 'Asset'),
-                      items: [
-                        const DropdownMenuItem(value: null, child: Text('ERG')),
-                        ..._args.tokens.map(
-                          (t) => DropdownMenuItem(value: t.id, child: Text(t.label)),
-                        ),
-                        // Offered even when a balance exists: holding some but
-                        // not enough used to hide this route and dead-end the
-                        // send. Any shortfall is topped up, so the held balance
-                        // rides along rather than being ignored.
-                        ...DexyVariant.values.map(
-                          (v) => DropdownMenuItem(
-                            value: '$_dexyPrefix${v.code}',
-                            child: Text(dexyAssetLabel(v)),
-                          ),
-                        ),
-                      ],
-                      onChanged: (v) => setState(() {
-                        _assetId = v;
-                        _tokenAmtCtrl.clear();
-                        _quotes.clear();
-                      }),
-                    ),
+                    _assetPickerButton(token, swapVariant),
                     if (swapVariant != null)
                       _buildSwapSection(swapVariant)
                     else ...[
