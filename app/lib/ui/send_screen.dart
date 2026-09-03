@@ -767,7 +767,7 @@ class _SendScreenState extends State<SendScreen> {
               padding: const EdgeInsets.only(bottom: 4),
               child: Row(
                 children: [
-                  Icon(i == 0 ? Icons.star : Icons.alt_route, size: 16, color: i == 0 ? iris : null),
+                  Icon(i == 0 ? Icons.star : Icons.alt_route, size: 16, color: i == 0 ? accentOf(context) : null),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(routeQuoteLabel(q, cheapest: i == 0), style: Theme.of(context).textTheme.bodySmall),

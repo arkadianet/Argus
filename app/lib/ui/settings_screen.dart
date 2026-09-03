@@ -118,7 +118,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       SettingsRow(
                         icon: Icons.palette_outlined,
                         title: 'Display',
-                        subtitle: '${_paletteName(themeController.palette)} · ${networkController.fiatCode.toUpperCase()}',
+                        subtitle: '${_appearanceName()} · ${networkController.fiatCode.toUpperCase()}',
                         onTap: () => _open(const DisplaySettingsPage()),
                       ),
                       SettingsRow(
@@ -157,10 +157,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  static String _paletteName(ArgusPalette p) => switch (p) {
-        ArgusPalette.system => 'System palette',
-        ArgusPalette.watchful => 'Watchful',
-        ArgusPalette.ledger => 'Ledger',
+  static String _appearanceName() => switch (themeController.mode) {
+        ArgusThemeMode.system => '${themeController.darkPalette.name} / ${themeController.lightPalette.name}',
+        ArgusThemeMode.dark => themeController.darkPalette.name,
+        ArgusThemeMode.light => themeController.lightPalette.name,
       };
 
   Widget _walletHeader(BuildContext context, String name, int count, WalletInfo? current) {
@@ -174,10 +174,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: iris.withValues(alpha: 0.18),
+              color: accentOf(context).withValues(alpha: 0.18),
               borderRadius: BorderRadius.circular(14),
             ),
-            child: const Icon(Icons.account_balance_wallet_outlined, color: iris),
+            child: Icon(Icons.account_balance_wallet_outlined, color: accentOf(context)),
           ),
           const SizedBox(width: 14),
           Expanded(

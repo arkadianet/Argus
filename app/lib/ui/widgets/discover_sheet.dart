@@ -84,7 +84,7 @@ Future<void> showDiscoverSheet(BuildContext context, {required SwapVenue venue, 
                     children: [
                       Padding(
                         padding: const EdgeInsets.only(top: 7, right: 10),
-                        child: Container(width: 5, height: 5, decoration: const BoxDecoration(color: iris, shape: BoxShape.circle)),
+                        child: Container(width: 5, height: 5, decoration: BoxDecoration(color: accentOf(context), shape: BoxShape.circle)),
                       ),
                       Expanded(child: Text(t, style: const TextStyle(fontSize: 14, height: 1.4))),
                     ],

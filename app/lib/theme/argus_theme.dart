@@ -27,6 +27,109 @@ Color rustFor(BuildContext context) =>
 const cardRadius = 20.0;
 const buttonRadius = 14.0;
 
+/// Accent colour for the current palette (gold on Watchful and Ledger).
+Color accentOf(BuildContext context) => ArgusColors.of(context).accent;
+
+/// One complete palette. Two ship as the defaults (Watchful, Ledger); the
+/// rest are alternatives the user can pick per brightness.
+class PaletteSpec {
+  const PaletteSpec({
+    required this.id,
+    required this.name,
+    required this.hint,
+    required this.brightness,
+    required this.background,
+    required this.surface,
+    required this.surfaceHigh,
+    required this.ink,
+    required this.muted,
+    required this.outline,
+    required this.cardBorder,
+    required this.chip,
+    required this.accent,
+    required this.onAccent,
+    required this.accentText,
+  });
+
+  final String id;
+  final String name;
+  final String hint;
+  final Brightness brightness;
+  final Color background;
+  final Color surface;
+  final Color surfaceHigh;
+  final Color ink;
+  final Color muted;
+  final Color outline;
+  final Color cardBorder;
+  final Color chip;
+  final Color accent;
+  final Color onAccent;
+
+  /// Accent as text on this background, contrast-safe.
+  final Color accentText;
+
+  bool get isDark => brightness == Brightness.dark;
+}
+
+const watchfulPalette = PaletteSpec(
+  id: 'watchful', name: 'Watchful', hint: 'Ink ground, bone type, gold', brightness: Brightness.dark,
+  background: ink, surface: watchfulSurface, surfaceHigh: Color(0xFF1E2421), ink: bone, muted: watchfulMuted,
+  outline: Color(0xFF2C3330), cardBorder: Color(0xFF262C29), chip: watchfulSurface,
+  accent: iris, onAccent: ink, accentText: iris,
+);
+
+const ledgerPalette = PaletteSpec(
+  id: 'ledger', name: 'Ledger', hint: 'Warm paper, dark ink, gold', brightness: Brightness.light,
+  background: paper, surface: ledgerSurface, surfaceHigh: Color(0xFFEDE4D4), ink: ledgerInk, muted: ledgerMuted,
+  outline: Color(0xFFD4C8B4), cardBorder: Color(0xFFEDE4D3), chip: bannerTint,
+  accent: iris, onAccent: ink, accentText: irisDeep,
+);
+
+const obsidianPalette = PaletteSpec(
+  id: 'obsidian', name: 'Obsidian', hint: 'True black, steel accent', brightness: Brightness.dark,
+  background: Color(0xFF000000), surface: Color(0xFF111214), surfaceHigh: Color(0xFF1A1C1F), ink: Color(0xFFE9EAEC), muted: Color(0xFF8B9096),
+  outline: Color(0xFF2A2D31), cardBorder: Color(0xFF232629), chip: Color(0xFF17191C),
+  accent: Color(0xFF9DB8CC), onAccent: Color(0xFF0B1216), accentText: Color(0xFF9DB8CC),
+);
+
+const harborPalette = PaletteSpec(
+  id: 'harbor', name: 'Harbor', hint: 'Deep navy, teal accent', brightness: Brightness.dark,
+  background: Color(0xFF0B1220), surface: Color(0xFF141D2E), surfaceHigh: Color(0xFF1B2638), ink: Color(0xFFE3E8F0), muted: Color(0xFF8592A6),
+  outline: Color(0xFF283449), cardBorder: Color(0xFF222D40), chip: Color(0xFF182233),
+  accent: Color(0xFF5FB3A4), onAccent: Color(0xFF06201C), accentText: Color(0xFF7CC9BB),
+);
+
+const emberPalette = PaletteSpec(
+  id: 'ember', name: 'Ember', hint: 'Warm charcoal, copper accent', brightness: Brightness.dark,
+  background: Color(0xFF151210), surface: Color(0xFF201B18), surfaceHigh: Color(0xFF29221E), ink: Color(0xFFEDE3D9), muted: Color(0xFF9A8E84),
+  outline: Color(0xFF3A312C), cardBorder: Color(0xFF302925), chip: Color(0xFF261F1B),
+  accent: Color(0xFFD48A5A), onAccent: Color(0xFF1E120A), accentText: Color(0xFFE0A07A),
+);
+
+const parchmentPalette = PaletteSpec(
+  id: 'parchment', name: 'Parchment', hint: 'Cream, sage accent', brightness: Brightness.light,
+  background: Color(0xFFFAF6EC), surface: Color(0xFFFFFDF8), surfaceHigh: Color(0xFFF0EADA), ink: Color(0xFF2A2318), muted: Color(0xFF6F675A),
+  outline: Color(0xFFD9D0BC), cardBorder: Color(0xFFEAE3D2), chip: Color(0xFFF1EBDC),
+  accent: Color(0xFF5E8A6A), onAccent: Color(0xFFF6FBF6), accentText: Color(0xFF3F6B4C),
+);
+
+const frostPalette = PaletteSpec(
+  id: 'frost', name: 'Frost', hint: 'Cool white, slate-blue accent', brightness: Brightness.light,
+  background: Color(0xFFF3F5F8), surface: Color(0xFFFFFFFF), surfaceHigh: Color(0xFFE8ECF2), ink: Color(0xFF1B1F26), muted: Color(0xFF6B7380),
+  outline: Color(0xFFCFD6E0), cardBorder: Color(0xFFE2E7EE), chip: Color(0xFFEDF0F5),
+  accent: Color(0xFF4A6FA5), onAccent: Color(0xFFF7F9FD), accentText: Color(0xFF3C5D8C),
+);
+
+const allPalettes = [watchfulPalette, ledgerPalette, obsidianPalette, harborPalette, emberPalette, parchmentPalette, frostPalette];
+
+PaletteSpec paletteById(String? id, {required Brightness fallback}) {
+  for (final p in allPalettes) {
+    if (p.id == id) return p;
+  }
+  return fallback == Brightness.dark ? watchfulPalette : ledgerPalette;
+}
+
 /// Palette-dependent colours that screens used to re-derive by hand from
 /// `Theme.of(context).brightness`.
 class ArgusColors extends ThemeExtension<ArgusColors> {
@@ -35,7 +138,27 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
     required this.cardBorder,
     required this.inset,
     required this.chip,
+    this.accent = iris,
+    this.onAccent = ink,
+    this.accentText = iris,
   });
+
+  factory ArgusColors.fromSpec(PaletteSpec p) => ArgusColors(
+        muted: p.muted,
+        cardBorder: p.cardBorder,
+        inset: p.background,
+        chip: p.chip,
+        accent: p.accent,
+        onAccent: p.onAccent,
+        accentText: p.accentText,
+      );
+
+  /// Primary accent (buttons, links, selected states).
+  final Color accent;
+  final Color onAccent;
+
+  /// Accent used as text on the page background.
+  final Color accentText;
 
   /// Secondary text.
   final Color muted;
@@ -54,6 +177,7 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
     cardBorder: Color(0xFFEDE4D3),
     inset: paper,
     chip: bannerTint,
+    accentText: irisDeep,
   );
 
   static const dark = ArgusColors(
@@ -68,12 +192,15 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
       (Theme.of(context).brightness == Brightness.dark ? dark : light);
 
   @override
-  ArgusColors copyWith({Color? muted, Color? cardBorder, Color? inset, Color? chip}) =>
+  ArgusColors copyWith({Color? muted, Color? cardBorder, Color? inset, Color? chip, Color? accent, Color? onAccent, Color? accentText}) =>
       ArgusColors(
         muted: muted ?? this.muted,
         cardBorder: cardBorder ?? this.cardBorder,
         inset: inset ?? this.inset,
         chip: chip ?? this.chip,
+        accent: accent ?? this.accent,
+        onAccent: onAccent ?? this.onAccent,
+        accentText: accentText ?? this.accentText,
       );
 
   @override
@@ -84,31 +211,38 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
       cardBorder: Color.lerp(cardBorder, other.cardBorder, t)!,
       inset: Color.lerp(inset, other.inset, t)!,
       chip: Color.lerp(chip, other.chip, t)!,
+      accent: Color.lerp(accent, other.accent, t)!,
+      onAccent: Color.lerp(onAccent, other.onAccent, t)!,
+      accentText: Color.lerp(accentText, other.accentText, t)!,
     );
   }
 }
 
-ThemeData argusTheme({required bool watchful}) {
+ThemeData argusTheme({required bool watchful}) =>
+    argusThemeFor(watchful ? watchfulPalette : ledgerPalette);
+
+ThemeData argusThemeFor(PaletteSpec p) {
+  final watchful = p.isDark;
   final scheme = ColorScheme(
-    brightness: watchful ? Brightness.dark : Brightness.light,
-    primary: iris,
-    onPrimary: ink,
-    secondary: iris,
-    onSecondary: ink,
+    brightness: p.brightness,
+    primary: p.accent,
+    onPrimary: p.onAccent,
+    secondary: p.accent,
+    onSecondary: p.onAccent,
     error: rust,
     onError: bone,
-    surface: watchful ? watchfulSurface : ledgerSurface,
-    onSurface: watchful ? bone : ledgerInk,
-    surfaceContainerHighest: watchful ? const Color(0xFF1E2421) : const Color(0xFFEDE4D4),
-    outline: watchful ? const Color(0xFF2C3330) : const Color(0xFFD4C8B4),
+    surface: p.surface,
+    onSurface: p.ink,
+    surfaceContainerHighest: p.surfaceHigh,
+    outline: p.outline,
   );
 
   final base = ThemeData(
     useMaterial3: true,
     brightness: scheme.brightness,
     colorScheme: scheme,
-    scaffoldBackgroundColor: watchful ? ink : paper,
-    canvasColor: watchful ? ink : paper,
+    scaffoldBackgroundColor: p.background,
+    canvasColor: p.background,
     fontFamily: 'Karla',
   );
 
@@ -153,23 +287,23 @@ ThemeData argusTheme({required bool watchful}) {
       letterSpacing: 0.4,
     ),
   ).apply(
-    bodyColor: watchful ? bone : ledgerInk,
-    displayColor: watchful ? bone : ledgerInk,
+    bodyColor: p.ink,
+    displayColor: p.ink,
   );
 
   return base.copyWith(
-    extensions: [watchful ? ArgusColors.dark : ArgusColors.light],
+    extensions: [ArgusColors.fromSpec(p)],
     textTheme: text,
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,
-      foregroundColor: watchful ? bone : ledgerInk,
+      foregroundColor: p.ink,
       elevation: 0,
       scrolledUnderElevation: 0,
       centerTitle: false,
       titleTextStyle: text.titleLarge,
     ),
     cardTheme: CardThemeData(
-      color: watchful ? watchfulSurface : ledgerSurface,
+      color: p.surface,
       elevation: 0,
       margin: EdgeInsets.zero,
       shape: RoundedRectangleBorder(
@@ -177,13 +311,13 @@ ThemeData argusTheme({required bool watchful}) {
       ),
     ),
     dividerTheme: DividerThemeData(
-      color: watchful ? const Color(0xFF2C3330) : const Color(0xFFE9E1D2),
+      color: watchful ? p.outline : p.cardBorder,
       thickness: 1,
       space: 1,
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: watchful ? watchfulSurface : ledgerSurface,
+      fillColor: p.surface,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(buttonRadius),
       ),
@@ -193,14 +327,14 @@ ThemeData argusTheme({required bool watchful}) {
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(buttonRadius),
-        borderSide: const BorderSide(color: iris, width: 1.2),
+        borderSide: BorderSide(color: p.accent, width: 1.2),
       ),
-      labelStyle: TextStyle(color: watchful ? watchfulMuted : ledgerMuted),
+      labelStyle: TextStyle(color: p.muted),
     ),
     filledButtonTheme: FilledButtonThemeData(
       style: FilledButton.styleFrom(
-        backgroundColor: iris,
-        foregroundColor: ink,
+        backgroundColor: p.accent,
+        foregroundColor: p.onAccent,
         elevation: 0,
         minimumSize: const Size.fromHeight(52),
         shape: RoundedRectangleBorder(
@@ -215,9 +349,9 @@ ThemeData argusTheme({required bool watchful}) {
     ),
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: OutlinedButton.styleFrom(
-        foregroundColor: watchful ? bone : ledgerInk,
+        foregroundColor: p.ink,
         minimumSize: const Size.fromHeight(52),
-        side: const BorderSide(color: iris),
+        side: BorderSide(color: p.accent),
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(buttonRadius),
         ),
@@ -225,12 +359,12 @@ ThemeData argusTheme({required bool watchful}) {
     ),
     textButtonTheme: TextButtonThemeData(
       style: TextButton.styleFrom(
-        foregroundColor: watchful ? iris : irisDeep,
+        foregroundColor: p.accentText,
       ),
     ),
     navigationBarTheme: NavigationBarThemeData(
-      backgroundColor: watchful ? ink : paper,
-      indicatorColor: iris.withValues(alpha: 0.18),
+      backgroundColor: p.background,
+      indicatorColor: p.accent.withValues(alpha: 0.18),
       elevation: 0,
       height: 68,
       labelTextStyle: WidgetStatePropertyAll(
@@ -238,12 +372,12 @@ ThemeData argusTheme({required bool watchful}) {
       ),
     ),
     snackBarTheme: SnackBarThemeData(
-      backgroundColor: watchful ? watchfulSurface : ledgerInk,
-      contentTextStyle: TextStyle(fontFamily: 'Karla', color: watchful ? bone : paper),
+      backgroundColor: watchful ? p.surface : p.ink,
+      contentTextStyle: TextStyle(fontFamily: 'Karla', color: watchful ? p.ink : p.background),
     ),
-    progressIndicatorTheme: const ProgressIndicatorThemeData(color: iris),
+    progressIndicatorTheme: ProgressIndicatorThemeData(color: p.accent),
     dialogTheme: DialogThemeData(
-      backgroundColor: watchful ? watchfulSurface : ledgerSurface,
+      backgroundColor: p.surface,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(cardRadius),
       ),

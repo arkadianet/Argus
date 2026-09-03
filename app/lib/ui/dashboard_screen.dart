@@ -1335,9 +1335,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                       style: Theme.of(context)
                           .textTheme
                           .bodyMedium
-                          ?.copyWith(color: iris)),
+                          ?.copyWith(color: accentOf(context))),
                   const SizedBox(width: 2),
-                  const Icon(Icons.chevron_right, size: 18, color: iris),
+                  Icon(Icons.chevron_right, size: 18, color: accentOf(context)),
                 ],
               ),
             ),
@@ -1396,7 +1396,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     children: [
                       Icon(Icons.circle,
                           size: 8,
-                          color: synced ? moss : (stale ? rust : iris)),
+                          color: synced ? moss : (stale ? rust : accentOf(context))),
                       const SizedBox(width: 6),
                       Text(
                         synced
@@ -1849,7 +1849,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   color: dark ? watchfulSurface : bannerTint,
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: Icon(icon, size: 19, color: iris),
+                child: Icon(icon, size: 19, color: accentOf(context)),
               ),
               const SizedBox(height: 10),
               Text(
@@ -1883,9 +1883,9 @@ class _DashboardScreenState extends State<DashboardScreen>
               else
                 Row(
                   children: [
-                    Text('What is this?', style: TextStyle(fontSize: 12, color: iris)),
+                    Text('What is this?', style: TextStyle(fontSize: 12, color: accentOf(context))),
                     const SizedBox(width: 4),
-                    const Icon(Icons.arrow_forward, size: 14, color: iris),
+                    Icon(Icons.arrow_forward, size: 14, color: accentOf(context)),
                   ],
                 ),
             ],

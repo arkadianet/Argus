@@ -198,13 +198,13 @@ class _AmountEntryState extends State<AmountEntry> {
         height: 1.1,
       );
 
-  InputDecoration _decoration(BuildContext context) => const InputDecoration(
+  InputDecoration _decoration(BuildContext context) => InputDecoration(
         hintText: '0',
         filled: false,
-        border: UnderlineInputBorder(),
-        enabledBorder: UnderlineInputBorder(borderSide: BorderSide(color: Color(0x33000000))),
-        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: iris, width: 1.4)),
-        contentPadding: EdgeInsets.symmetric(vertical: 6),
+        border: const UnderlineInputBorder(),
+        enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0x33000000))),
+        focusedBorder: UnderlineInputBorder(borderSide: BorderSide(color: accentOf(context), width: 1.4)),
+        contentPadding: const EdgeInsets.symmetric(vertical: 6),
         isDense: true,
       );
 }

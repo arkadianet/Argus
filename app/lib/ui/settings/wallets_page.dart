@@ -126,7 +126,7 @@ class _WalletsPageState extends State<WalletsPage> {
                                 Icon(
                                   Icons.account_balance_wallet_outlined,
                                   size: 22,
-                                  color: w.walletId == currentId ? iris : colors.muted,
+                                  color: w.walletId == currentId ? accentOf(context) : colors.muted,
                                 ),
                                 const SizedBox(width: 12),
                                 Expanded(

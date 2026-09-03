@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../format.dart';
 import '../../services/media_url.dart';
+import '../../services/verified_tokens.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 import '../token_avatar.dart';
@@ -30,6 +31,8 @@ class TokenDetailSheet extends StatelessWidget {
     final ticker = tokenTicker(token);
     final amount = token.isNft ? '1' : formatTokenAmountGrouped(token.amount, token.decimals);
     final media = token.isNft ? resolveMediaUrl(token.iconUrl) : null;
+    final verified = verifiedToken(token.id);
+    final impersonates = impersonatedToken(tokenId: token.id, name: token.name);
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
@@ -45,11 +48,21 @@ class TokenDetailSheet extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(token.label, style: theme.textTheme.titleLarge),
+                      Row(
+                        children: [
+                          Flexible(child: Text(token.label, style: theme.textTheme.titleLarge, maxLines: 1, overflow: TextOverflow.ellipsis)),
+                          if (verified != null) ...[
+                            const SizedBox(width: 6),
+                            Icon(Icons.verified, size: 18, color: accentOf(context)),
+                          ],
+                        ],
+                      ),
                       const SizedBox(height: 2),
                       Text(
-                        token.isNft ? 'NFT' : 'Token · ${token.decimals} decimals',
-                        style: TextStyle(fontSize: 12.5, color: muted),
+                        verified != null
+                            ? 'Verified · ${verified.project}${token.isNft ? '' : ' · ${token.decimals} decimals'}'
+                            : (token.isNft ? 'NFT' : 'Token · ${token.decimals} decimals'),
+                        style: TextStyle(fontSize: 12.5, color: verified != null ? accentOf(context) : muted),
                       ),
                     ],
                   ),
@@ -74,6 +87,31 @@ class TokenDetailSheet extends StatelessWidget {
                       child: Text('Artwork unavailable', style: TextStyle(color: muted, fontSize: 12.5)),
                     ),
                   ),
+                ),
+              ),
+            ],
+            if (impersonates != null) ...[
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: rust.withValues(alpha: 0.1),
+                  border: Border.all(color: rust.withValues(alpha: 0.5)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.gpp_bad_outlined, color: rust, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'This token is named like ${impersonates.ticker}, but it is not the verified ${impersonates.ticker} from ${impersonates.project}. Check the id before trusting it.',
+                        style: TextStyle(fontSize: 13, color: rustFor(context)),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],

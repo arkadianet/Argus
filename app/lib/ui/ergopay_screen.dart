@@ -245,7 +245,7 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> {
     if (msg == null) return const SizedBox.shrink();
     final color = switch (r!.severity) {
       ErgoPaySeverity.error => rust,
-      ErgoPaySeverity.warning => iris,
+      ErgoPaySeverity.warning => accentOf(context),
       _ => moss,
     };
     final icon = switch (r.severity) {

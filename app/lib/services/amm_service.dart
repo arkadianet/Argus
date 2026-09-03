@@ -1,12 +1,12 @@
 import 'dart:convert';
 
+export 'verified_tokens.dart' show isVerifiedToken, verifiedTokenLabels, verifiedToken, impersonatedToken;
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../bridge/api.dart' as api;
 import '../bridge/argus_error.dart';
-import 'dexy_service.dart';
 import 'network_controller.dart';
-import 'sigmausd_service.dart';
 import 'wallet_service.dart';
 
 /// Tolerance absorbing pool movement between the cached quote and the
@@ -313,19 +313,6 @@ class AmmService {
 }
 
 final ammService = AmmService();
-
-/// Curated mainnet token ids treated as verified in swap pickers, with
-/// display labels. Sources are protocol constants already pinned in this
-/// codebase (AgeUSD bank tokens, Dexy variant tokens) — never hand-typed.
-Map<String, String> verifiedTokenLabels() => {
-      SigmaUsdTokens.sigUsd: 'SigUSD',
-      SigmaUsdTokens.sigRsv: 'SigRSV',
-      for (final v in DexyVariant.values)
-        if (v.tokenId.isNotEmpty) v.tokenId: '${v.shortName} (Dexy)',
-    };
-
-bool isVerifiedToken(String tokenId) =>
-    verifiedTokenLabels().containsKey(tokenId);
 
 /// The two tradable sides of a pool as `(tokenId, reserveAmount)` pairs;
 /// `null` tokenId is ERG.
