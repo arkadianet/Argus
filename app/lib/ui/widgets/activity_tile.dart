@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../format.dart';
+import '../../services/activity_classifier.dart';
+import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 
 /// One transaction row shared by the home card and the Activity tab.
@@ -24,14 +26,37 @@ class ActivityTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final muted = ArgusColors.of(context).muted;
     final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
-    final outgoing = nano < 0;
+    final kind = classifyActivity(tx);
+    final outgoing = kind == ActivityKind.sent || (kind != ActivityKind.received && nano < 0);
     final ts = (tx['timestamp'] as num?)?.toInt();
     final height = (tx['height'] as num?)?.toInt() ?? 0;
     final confirmed = height > 0;
-    final tokenCount = (tx['tokens_received'] as List?)?.length ?? 0;
     final txId = tx['tx_id']?.toString() ?? '';
     final counterparty = tx['counterparty']?.toString();
-    final tint = outgoing ? rust : moss;
+    final tint = switch (kind) {
+      ActivityKind.received => moss,
+      ActivityKind.sent => rust,
+      ActivityKind.swap => iris,
+      _ => muted,
+    };
+    final icon = switch (kind) {
+      ActivityKind.received => Icons.arrow_downward,
+      ActivityKind.sent => Icons.arrow_upward,
+      ActivityKind.swap => Icons.swap_horiz,
+      ActivityKind.selfTransfer => Icons.sync_alt,
+      ActivityKind.contract => Icons.code,
+    };
+    final line = activityLine(
+      tx,
+      hidden: hidden,
+      name: (id) => walletService.cachedTokenMeta(id)?.name,
+      decimals: (id) => walletService.cachedTokenMeta(id)?.decimals ?? 0,
+    );
+    final who = counterparty == null || counterparty.isEmpty
+        ? null
+        : (isContractAddress(counterparty)
+            ? (kind == ActivityKind.swap ? null : 'contract ${shorten(counterparty, head: 6, tail: 4)}')
+            : '${outgoing ? 'to' : 'from'} ${shorten(counterparty, head: 6, tail: 4)}');
 
     return InkWell(
       onTap: onTap,
@@ -43,11 +68,7 @@ class ActivityTile extends StatelessWidget {
             CircleAvatar(
               radius: 18,
               backgroundColor: tint.withValues(alpha: 0.12),
-              child: Icon(
-                outgoing ? Icons.arrow_upward : Icons.arrow_downward,
-                size: 17,
-                color: tint,
-              ),
+              child: Icon(icon, size: 17, color: tint),
             ),
             const SizedBox(width: 12),
             Expanded(
@@ -57,35 +78,14 @@ class ActivityTile extends StatelessWidget {
                   Row(
                     children: [
                       Text(
-                        outgoing ? 'Sent' : 'Received',
+                        activityTitle(kind),
                         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
                       ),
-                      if (tokenCount > 0) ...[
-                        const SizedBox(width: 8),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context)
-                                .colorScheme
-                                .surfaceContainerHighest
-                                .withValues(alpha: 0.6),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            '$tokenCount token${tokenCount == 1 ? '' : 's'}',
-                            style: TextStyle(fontSize: 10, color: muted),
-                          ),
-                        ),
-                      ],
                     ],
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    [
-                      hidden ? '••••' : formatErg(nano.abs(), unit: true, maxFrac: 4),
-                      if (counterparty != null && counterparty.isNotEmpty)
-                        '${outgoing ? 'to' : 'from'} ${shorten(counterparty, head: 6, tail: 4)}',
-                    ].join(' '),
+                    [line, if (who != null) who].join(' '),
                     style: TextStyle(fontSize: 12.5, color: muted),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,

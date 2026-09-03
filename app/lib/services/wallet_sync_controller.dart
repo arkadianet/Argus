@@ -53,6 +53,9 @@ abstract class WalletSyncGateway {
   Future<Map<String, dynamic>?> loadCachedState(String walletKey);
   Future<void> saveCachedState(Map<String, dynamic> snapshot);
   void probeNetwork();
+
+  /// Learns names and decimals for tokens seen in activity, best effort.
+  Future<void> prefetchTokenMeta(Iterable<String> ids);
 }
 
 /// Production gateway over the app's singleton services.
@@ -131,6 +134,10 @@ class LiveWalletSyncGateway implements WalletSyncGateway {
   void probeNetwork() {
     networkController.probe();
   }
+
+  @override
+  Future<void> prefetchTokenMeta(Iterable<String> ids) =>
+      walletService.prefetchTokenMeta(ids).catchError((_) {});
 }
 
 /// Owns the unlocked wallet's synced view: addresses, balances, activity and
@@ -236,7 +243,7 @@ class WalletSyncController extends ChangeNotifier {
     receiveAddress ??= receive;
     changeAddress ??= receive;
 
-    final cached = await _gw.loadCachedState(receive);
+    final cached = await _gw.loadCachedState(_cacheKey(receive));
     if (cached != null) {
       usedAddresses = _mapList(cached['used_addresses']);
       balanceNano = (cached['balance_nano_erg'] as num?)?.toInt();
@@ -326,10 +333,22 @@ class WalletSyncController extends ChangeNotifier {
     }
     notifyListeners();
 
+    // Names for tokens that moved, so activity rows can say "1 SigUSD".
+    final tokenIds = <String>{
+      for (final tx in recentTxs)
+        for (final key in const ['tokens_received', 'tokens_sent'])
+          for (final t in (tx[key] as List? ?? const []))
+            if (t is Map) t['token_id']?.toString() ?? '',
+    }..remove('');
+    if (tokenIds.isNotEmpty) {
+      await _gw.prefetchTokenMeta(tokenIds);
+      notifyListeners();
+    }
+
     final receive = receiveAddress;
     if (receive != null && phase != SyncPhase.failed) {
       await _gw.saveCachedState({
-        'wallet_id': receive,
+        'wallet_id': _cacheKey(receive),
         'primary_address': receive,
         'used_addresses': usedAddresses,
         'balance_nano_erg': balanceNano ?? 0,
@@ -453,6 +472,9 @@ class WalletSyncController extends ChangeNotifier {
     }
     return best;
   }
+
+  /// Snapshots are stored per wallet id; older code keyed them by address.
+  String _cacheKey(String receive) => _gw.activeWalletId ?? receive;
 
   static String _pinIssueFor(int index) =>
       "Pinned index $index can't be derived "

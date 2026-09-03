@@ -89,7 +89,7 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
       _snack("Wallet can't derive index $index");
       return;
     }
-    await walletService.setPinnedAddressIndex(wid, index);
+    await walletService.setPinnedAddressIndex(wid, index, address: addr);
     _refresh();
     _snack('Pinned index $index · ${shorten(addr, head: 10, tail: 8)}');
   }

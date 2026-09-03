@@ -12,6 +12,7 @@ import 'confirm_transaction_sheet.dart';
 import 'dexy/dexy_confirm.dart';
 import 'dexy/dexy_sheets.dart';
 import 'offline_banner.dart';
+import 'widgets/soft_card.dart';
 
 /// Mint card and confirm-sheet title for a variant. Names the token (USE), not
 /// the protocol implementation (DexyUSD).
@@ -80,13 +81,13 @@ class _DexyScreenState extends State<DexyScreen> {
     _load();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool fresh = false}) async {
     setState(() {
-      _loading = true;
+      _loading = _state == null;
       _error = null;
     });
     try {
-      final state = await dexService.state(_variant);
+      final state = await dexService.state(_variant, fresh: fresh);
       if (!mounted) return;
       setState(() {
         _state = state;
@@ -262,7 +263,7 @@ class _DexyScreenState extends State<DexyScreen> {
         const OfflineBanner(),
         Expanded(
           child: RefreshIndicator(
-            onRefresh: _load,
+            onRefresh: () => _load(fresh: true),
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 8, 20, 40),
               children: [
@@ -317,19 +318,16 @@ class _DexyScreenState extends State<DexyScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: InkWell(
               onTap: () => _switchVariant(v),
+              borderRadius: BorderRadius.circular(14),
               child: Container(
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
                   color: selected
-                      ? Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withValues(alpha: 0.14)
+                      ? iris.withValues(alpha: 0.14)
                       : Theme.of(context).colorScheme.surface,
+                  borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: selected
-                        ? iris
-                        : Theme.of(context).colorScheme.outline,
+                    color: selected ? iris : ArgusColors.of(context).cardBorder,
                     width: selected ? 1.5 : 1,
                   ),
                 ),
@@ -367,12 +365,8 @@ class _DexyScreenState extends State<DexyScreen> {
   Widget _balanceCard(BuildContext context) {
     final bal = _tokenBalance;
     final st = _state!;
-    return Container(
+    return SoftCard(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border.all(color: Theme.of(context).colorScheme.outline),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -411,12 +405,8 @@ class _DexyScreenState extends State<DexyScreen> {
         : 0.0;
     final tokensPerErg = st.rates.tokensPerErg;
     final diff = st.rateDifferencePct;
-    return Container(
+    return SoftCard(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border.all(color: Theme.of(context).colorScheme.outline),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -450,6 +440,7 @@ class _DexyScreenState extends State<DexyScreen> {
       decoration: BoxDecoration(
         color: col.withValues(alpha: 0.08),
         border: Border.all(color: col.withValues(alpha: 0.35)),
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -470,12 +461,8 @@ class _DexyScreenState extends State<DexyScreen> {
 
   Widget _statsCard(BuildContext context) {
     final st = _state!;
-    return Container(
+    return SoftCard(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border.all(color: Theme.of(context).colorScheme.outline),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -500,12 +487,8 @@ class _DexyScreenState extends State<DexyScreen> {
   }
 
   Widget _actionsCard(BuildContext context) {
-    return Container(
+    return SoftCard(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        border: Border.all(color: Theme.of(context).colorScheme.outline),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -528,13 +511,20 @@ class _DexyScreenState extends State<DexyScreen> {
 
   Widget _actionTile(BuildContext context, IconData icon, String title,
       String subtitle, VoidCallback onTap) {
+    final colors = ArgusColors.of(context);
     return InkWell(
       onTap: _busy ? null : onTap,
+      borderRadius: BorderRadius.circular(12),
       child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+        padding: const EdgeInsets.symmetric(vertical: 10),
         child: Row(
           children: [
-            Icon(icon, size: 22, color: Theme.of(context).colorScheme.primary),
+            Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(color: colors.chip, borderRadius: BorderRadius.circular(10)),
+              child: Icon(icon, size: 19, color: iris),
+            ),
             const SizedBox(width: 14),
             Expanded(
               child: Column(
@@ -586,6 +576,7 @@ class _DexyScreenState extends State<DexyScreen> {
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
         border: Border.all(color: color),
+        borderRadius: BorderRadius.circular(8),
       ),
       child: Text(label,
           style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600)),

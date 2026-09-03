@@ -10,6 +10,7 @@ import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
 import 'offline_banner.dart';
+import 'widgets/soft_card.dart';
 
 /// AgeUSD (SigmaUSD) hub. Mint and redeem SigUSD / SigRSV against the bank at
 /// the live oracle rate. Every action builds through the shared confirm sheet
@@ -74,13 +75,13 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool fresh = false}) async {
     setState(() {
       _loading = true;
       _error = null;
     });
     try {
-      final state = await sigmaUsdService.state();
+      final state = await sigmaUsdService.state(fresh: fresh);
       if (!mounted) return;
       setState(() {
         _state = state;
@@ -282,7 +283,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
                         ),
                       )
                     : RefreshIndicator(
-                        onRefresh: _load,
+                        onRefresh: () => _load(fresh: true),
                         child: ListView(
                           physics: const AlwaysScrollableScrollPhysics(),
                           padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
@@ -379,12 +380,8 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     final ergUsd = st.oracleNanoErgPerUsd > 0
         ? 1e9 / st.oracleNanoErgPerUsd
         : 0.0;
-    return Container(
+    return SoftCard(
       padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        border: Border.all(color: Theme.of(context).dividerColor),
-        borderRadius: BorderRadius.circular(10),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -452,11 +449,8 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest
-            .withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(8),
+        color: ArgusColors.of(context).inset,
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -501,11 +495,8 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Theme.of(context)
-            .colorScheme
-            .surfaceContainerHighest
-            .withValues(alpha: 0.3),
-        borderRadius: BorderRadius.circular(8),
+        color: ArgusColors.of(context).inset,
+        borderRadius: BorderRadius.circular(12),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

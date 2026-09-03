@@ -18,6 +18,7 @@ import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/sigmausd_service.dart';
 import '../services/watch_only_service.dart';
+import '../services/wallet_database_service.dart';
 import '../services/wallet_service.dart';
 import '../services/wallet_sync_controller.dart';
 import '../theme/argus_theme.dart';
@@ -33,9 +34,11 @@ import 'settings_screen.dart';
 import 'swap_hub_screen.dart';
 import 'transaction_detail_screen.dart';
 import 'transactions_screen.dart';
+import 'wallet_dialogs.dart';
 import 'wallets_overview_screen.dart';
 import 'widgets/activity_tile.dart';
 import 'widgets/asset_tile.dart';
+import 'widgets/discover_sheet.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/soft_card.dart';
 import 'widgets/token_detail_sheet.dart';
@@ -66,6 +69,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   /// Balances of wallets other than the active one, from each wallet's first
   /// public address (as the overview does). Refreshed with the wallet list.
   final Map<String, int?> _otherBalances = {};
+  final Map<String, LastKnownBalance> _lastKnown = {};
   int _otherGeneration = 0;
   bool _watchOnlyLoading = false;
   int _watchOnlyGeneration = 0;
@@ -301,8 +305,16 @@ class _DashboardScreenState extends State<DashboardScreen>
   Future<void> _refreshOtherBalances() async {
     final gen = ++_otherGeneration;
     final others = _wallets.where((w) => w.walletId != _walletId).toList();
+    // Last synced totals first: they cover every address of that wallet,
+    // where a live query of one address would not.
+    for (final w in others) {
+      final known = await WalletDatabaseService.lastKnownBalance(w.walletId);
+      if (known != null) _lastKnown[w.walletId] = known;
+    }
+    if (mounted) setState(() {});
     final results = await Future.wait(others.map((w) async {
-      final addr = w.address0;
+      if (_lastKnown.containsKey(w.walletId)) return null;
+      final addr = w.displayAddress;
       if (addr == null || addr.isEmpty) return null;
       try {
         return await walletService.getBalanceNano(addr, nodeUrl: networkController.activeUrl);
@@ -1243,6 +1255,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 children: [
                   _discoverCard(
                     title: 'Dexy',
+                    onLearn: () => _openDiscover(SwapVenue.dexy),
                     subtitle: _positionLine(
                           ids: [
                             for (final v in DexyVariant.values) ...[v.tokenId, v.lpTokenId],
@@ -1254,6 +1267,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                   _discoverCard(
                     title: 'AgeUSD',
+                    onLearn: () => _openDiscover(SwapVenue.ageusd),
                     subtitle: _positionLine(ids: const [SigmaUsdTokens.sigUsd, SigmaUsdTokens.sigRsv]) ??
                         'The decentralized stablecoin on Ergo.',
                     icon: Icons.attach_money,
@@ -1261,6 +1275,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                   _discoverCard(
                     title: 'DEX',
+                    onLearn: () => _openDiscover(SwapVenue.spectrum),
                     subtitle: 'Permissionless token swaps on Ergo.',
                     icon: Icons.swap_horiz,
                     onTap: () => _goHub(SwapVenue.spectrum),
@@ -1555,10 +1570,16 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _walletRow(WalletInfo w) {
     final colors = ArgusColors.of(context);
     final isActive = w.walletId == _walletId && walletService.isUnlocked;
-    final balance = isActive ? _sync.balanceNano : _otherBalances[w.walletId];
-    final addr = w.address0;
+    final known = _lastKnown[w.walletId];
+    final balance = isActive ? _sync.balanceNano : (known?.balanceNano ?? _otherBalances[w.walletId]);
+    final addr = isActive ? (_sync.receiveAddress ?? w.displayAddress) : w.displayAddress;
+    final asOf = !isActive && known != null ? formatSyncAge(DateTime.now().subtract(known.age)) : null;
     return InkWell(
       onTap: isActive ? null : () => _switchWallet(w.walletId),
+      onLongPress: () async {
+        if (await renameWalletDialog(context, w) && mounted) await _loadWallets();
+        if (mounted) setState(() {});
+      },
       borderRadius: BorderRadius.circular(cardRadius),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
@@ -1626,7 +1647,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               ),
             ),
             const SizedBox(width: 8),
-            _rowBalance(balance, isActive ? _sync.isSyncing : false),
+            _rowBalance(balance, isActive ? _sync.isSyncing : false, asOf: asOf),
             const SizedBox(width: 4),
             Icon(Icons.chevron_right, size: 18, color: colors.muted),
           ],
@@ -1683,12 +1704,15 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _rowBalance(int? nano, bool loading) {
+  Widget _rowBalance(int? nano, bool loading, {String? asOf}) {
     final colors = ArgusColors.of(context);
     final text = nano == null
         ? (loading ? '…' : '—')
         : (_balanceHidden ? '••••' : formatErg(nano, unit: false, maxFrac: 2));
-    final fiat = nano == null || _balanceHidden ? null : networkController.fiatText(nano);
+    final fiatText = nano == null || _balanceHidden ? null : networkController.fiatText(nano);
+    final fiat = asOf != null && asOf.isNotEmpty
+        ? [if (fiatText != null) fiatText, 'as of $asOf'].join(' · ')
+        : fiatText;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
@@ -1787,11 +1811,16 @@ class _DashboardScreenState extends State<DashboardScreen>
     return 'You hold ${held.take(2).join(' · ')}';
   }
 
+  void _openDiscover(SwapVenue venue) {
+    showDiscoverSheet(context, venue: venue, onGo: () => _goHub(venue));
+  }
+
   Widget _discoverCard({
     required String title,
     required String subtitle,
     required IconData icon,
     VoidCallback? onTap,
+    VoidCallback? onLearn,
     bool comingSoon = false,
   }) {
     final muted = ArgusColors.of(context).muted;
@@ -1800,7 +1829,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       width: 168,
       margin: const EdgeInsets.only(right: 12),
       child: InkWell(
-        onTap: comingSoon ? null : onTap,
+        onTap: comingSoon ? null : (onLearn ?? onTap),
         borderRadius: BorderRadius.circular(20),
         child: Container(
           padding: const EdgeInsets.all(14),
@@ -1851,7 +1880,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                 )
               else
-                const Icon(Icons.arrow_forward, size: 16, color: iris),
+                Row(
+                  children: [
+                    Text('What is this?', style: TextStyle(fontSize: 12, color: iris)),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.arrow_forward, size: 14, color: iris),
+                  ],
+                ),
             ],
           ),
         ),

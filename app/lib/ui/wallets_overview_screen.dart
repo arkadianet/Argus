@@ -3,9 +3,11 @@ import 'package:flutter/material.dart';
 import '../format.dart';
 import '../services/address_label_service.dart';
 import '../services/network_controller.dart';
+import '../services/wallet_database_service.dart';
 import '../services/watch_only_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
+import 'wallet_dialogs.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/soft_card.dart';
 
@@ -122,12 +124,15 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
     if (isActiveUnlocked) {
       return Future.value(widget.activeBalanceNano);
     }
-    final addr = w.address0;
-    if (addr == null || addr.isEmpty) return Future.value(null);
-    return walletService
-        .getBalanceNano(addr, nodeUrl: networkController.activeUrl)
-        .then<int?>((n) => n)
-        .catchError((Object _) => null);
+    return WalletDatabaseService.lastKnownBalance(w.walletId).then((known) {
+      if (known != null) return Future<int?>.value(known.balanceNano);
+      final addr = w.displayAddress;
+      if (addr == null || addr.isEmpty) return Future<int?>.value(null);
+      return walletService
+          .getBalanceNano(addr, nodeUrl: networkController.activeUrl)
+          .then<int?>((n) => n)
+          .catchError((Object _) => null);
+    });
   }
 
   void _snack(String msg) {
@@ -198,9 +203,9 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                         ],
                         const SizedBox(height: 20),
                         Text(
-                          'Balances shown for locked wallets come from each '
-                          'wallet\u2019s first address. Full balances require '
-                          'unlocking that wallet.',
+                          'Locked wallets show their last synced total, or the '
+                          'balance of their primary address if they have never '
+                          'been opened on this device.',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
@@ -325,8 +330,8 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      w.address0 != null
-                          ? shorten(w.address0!, head: 12, tail: 10)
+                      w.displayAddress != null
+                          ? shorten(w.displayAddress!, head: 12, tail: 10)
                           : 'wallet_id: ${w.walletId.length >= 8 ? w.walletId.substring(0, 8) : w.walletId}\u2026',
                       style: monoStyle(context, size: 11),
                     ),
@@ -356,7 +361,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                     bal == null
                         ? (isActiveUnlocked
                             ? 'Syncing'
-                            : (w.address0 != null
+                            : (w.displayAddress != null
                                 ? 'Unavailable'
                                 : 'Unlock to view'))
                         : 'ERG',
@@ -368,6 +373,13 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                 ],
               ),
               const SizedBox(width: 4),
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, size: 20),
+                tooltip: 'Rename wallet',
+                onPressed: () async {
+                  if (await renameWalletDialog(context, w)) _load();
+                },
+              ),
               IconButton(
                 icon: const Icon(Icons.delete_outline, size: 20),
                 tooltip: 'Remove wallet',

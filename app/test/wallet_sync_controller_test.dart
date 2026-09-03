@@ -109,6 +109,10 @@ class FakeGateway implements WalletSyncGateway {
   void probeNetwork() {
     probeCalls++;
   }
+
+  final prefetched = <String>[];
+  @override
+  Future<void> prefetchTokenMeta(Iterable<String> ids) async => prefetched.addAll(ids);
 }
 
 void main() {
@@ -125,7 +129,7 @@ void main() {
         () async {
       gw.pinnedIndex = 2;
       gw.cached = {
-        'wallet_id': 'addr2',
+        'wallet_id': 'w1',
         'balance_nano_erg': 5000,
         'used_addresses': [
           {'address': 'addr0', 'balance_nano_erg': 5000},
@@ -306,10 +310,10 @@ void main() {
       expect(c.isStale, isFalse);
     });
 
-    test('persists a cache snapshot keyed by the receive address', () async {
+    test('persists a cache snapshot keyed by the wallet id', () async {
       await c.refresh(discover: true);
 
-      expect(gw.savedCache?['wallet_id'], 'addr2');
+      expect(gw.savedCache?['wallet_id'], 'w1');
       expect(gw.savedCache?['balance_nano_erg'], 350);
       expect((gw.savedCache?['transactions'] as List).length, 2);
       expect((gw.savedCache?['tokens'] as List).single['name'], 'Tok');

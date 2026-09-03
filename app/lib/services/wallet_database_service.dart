@@ -15,8 +15,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// never encrypted. This is acceptable solely because the payload is public
 /// chain data; never store secrets through this service. FLAG_SECURE guards
 /// the screen, not storage, and is irrelevant here.
+/// A wallet's last synced total, for rows the app cannot sync right now.
+class LastKnownBalance {
+  const LastKnownBalance({required this.balanceNano, required this.age});
+  final int balanceNano;
+  final Duration age;
+}
+
 class WalletDatabaseService {
-  static const _keyDbSnapshot = 'argus_local_wallet_db_v2';
+  /// One snapshot per wallet id (v3); the older single slot is ignored.
+  static String _snapshotKey(String walletId) => 'argus_local_wallet_db_v3_$walletId';
   static const _keyTrackedLineages = 'argus_tracked_lineages_v2';
 
   /// Obfuscate plaintext with a wallet-specific deterministic keystream.
@@ -57,7 +65,7 @@ class WalletDatabaseService {
   }) async {
     if (expectedWalletId.isEmpty) return null;
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_keyDbSnapshot);
+    final raw = prefs.getString(_snapshotKey(expectedWalletId));
     if (raw == null || raw.isEmpty) return null;
 
     try {
@@ -101,7 +109,22 @@ class WalletDatabaseService {
     };
 
     final obfuscated = _obfuscate(jsonEncode(snapshot), walletId);
-    await prefs.setString(_keyDbSnapshot, obfuscated);
+    await prefs.setString(_snapshotKey(walletId), obfuscated);
+  }
+
+  static Future<LastKnownBalance?> lastKnownBalance(String walletId) async {
+    final map = await loadCachedState(expectedWalletId: walletId);
+    if (map == null) return null;
+    final at = (map['last_sync_timestamp'] as num?)?.toInt();
+    return LastKnownBalance(
+      balanceNano: (map['balance_nano_erg'] as num?)?.toInt() ?? 0,
+      age: at == null ? Duration.zero : DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(at)),
+    );
+  }
+
+  static Future<void> clearWallet(String walletId) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_snapshotKey(walletId));
   }
 
   /// Record or update a tracked DeFi singleton contract lineage.
@@ -145,7 +168,9 @@ class WalletDatabaseService {
   /// Clear cached local state (e.g. on wallet reset).
   static Future<void> clearAll() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_keyDbSnapshot);
+    for (final k in prefs.getKeys().where((k) => k.startsWith('argus_local_wallet_db_')).toList()) {
+      await prefs.remove(k);
+    }
     await prefs.remove(_keyTrackedLineages);
   }
 }

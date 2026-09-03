@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import '../bridge/api.dart' as api;
 import '../bridge/argus_error.dart';
 import 'network_controller.dart';
+import 'ttl_cache.dart';
 import 'wallet_service.dart';
 
 /// Dexy protocol variant (DexyGold / DexyUSD).
@@ -493,9 +494,15 @@ class DexyService {
     return handle;
   }
 
-  Future<DexyState> state(DexyVariant variant) async {
-    final raw = await api.dexyState(variant: variant.code, nodeUrl: _node);
-    return DexyState.fromJson((jsonDecode(raw) as Map).cast());
+  /// Protocol state moves with every block; 30 s is fresh enough for quotes
+  /// and lets the Dexy tab, the send router and the sheets share one fetch.
+  final _stateCache = TtlCache<String, DexyState>(ttl: const Duration(seconds: 30));
+
+  Future<DexyState> state(DexyVariant variant, {bool fresh = false}) {
+    return _stateCache.get('${variant.code}@${_node ?? ''}', () async {
+      final raw = await api.dexyState(variant: variant.code, nodeUrl: _node);
+      return DexyState.fromJson((jsonDecode(raw) as Map).cast());
+    }, fresh: fresh);
   }
 
   Future<DexyMintPreview> previewMint(DexyVariant variant, int amount) async {

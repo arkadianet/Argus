@@ -69,6 +69,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         _loadingMore = false;
         _error = null;
       });
+      _prefetchNames(all);
     } catch (_) {
       if (!mounted || gen != _loadGeneration) return;
       setState(() {
@@ -78,6 +79,21 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         _error = 'Could not load activity';
       });
     }
+  }
+
+  /// Learns token names for the rows on screen, then repaints.
+  Future<void> _prefetchNames(List<Map<String, dynamic>> txs) async {
+    final ids = <String>{
+      for (final tx in txs)
+        for (final key in const ['tokens_received', 'tokens_sent'])
+          for (final t in (tx[key] as List? ?? const []))
+            if (t is Map) t['token_id']?.toString() ?? '',
+    }..remove('');
+    if (ids.isEmpty) return;
+    try {
+      await walletService.prefetchTokenMeta(ids);
+    } catch (_) {}
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadMore() async {
@@ -104,6 +120,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         _txs = [..._txs, ...deduped];
         _loadingMore = false;
       });
+      _prefetchNames(deduped);
     } catch (_) {
       if (mounted && gen == _loadGeneration) {
         setState(() {

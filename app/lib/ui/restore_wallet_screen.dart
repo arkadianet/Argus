@@ -19,6 +19,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
   final _passCtrl = TextEditingController();
   final _pinCtrl = TextEditingController();
   final _pinConfirmCtrl = TextEditingController();
+  final _nameCtrl = TextEditingController();
   bool _busy = false;
   int _step = 0;
 
@@ -39,6 +40,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
     _passCtrl.dispose();
     _pinCtrl.dispose();
     _pinConfirmCtrl.dispose();
+    _nameCtrl.dispose();
     super.dispose();
   }
 
@@ -73,6 +75,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
         phrase: phrase,
         passphrase: _passCtrl.text,
         pin: _pinCtrl.text,
+        name: _nameCtrl.text,
       );
       if (!mounted) return null;
       Navigator.pop(context, walletId);
@@ -182,6 +185,15 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
         const Text('The PIN unwraps the key on this device. It is not a backup.'),
         const SizedBox(height: 20),
         PinFields(pin: _pinCtrl, confirm: _pinConfirmCtrl),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _nameCtrl,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            labelText: 'Wallet name (optional)',
+            hintText: 'e.g. Savings, Trading',
+          ),
+        ),
         const SizedBox(height: 20),
         FilledButton(
           onPressed: _busy ? null : _restore,
