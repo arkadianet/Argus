@@ -3,6 +3,7 @@ import 'dart:convert';
 import '../bridge/api.dart' as api;
 import '../bridge/argus_error.dart';
 import 'network_controller.dart';
+import 'ttl_cache.dart';
 import 'wallet_service.dart';
 
 /// One of the four AgeUSD bank actions.
@@ -218,9 +219,13 @@ class SigmaUsdService {
     return handle;
   }
 
-  Future<SigmaUsdStateData> state() async {
-    final raw = await api.sigmausdState(nodeUrl: _node);
-    return SigmaUsdStateData.fromJson((jsonDecode(raw) as Map).cast());
+  final _stateCache = TtlCache<String, SigmaUsdStateData>(ttl: const Duration(seconds: 30));
+
+  Future<SigmaUsdStateData> state({bool fresh = false}) {
+    return _stateCache.get(_node ?? '', () async {
+      final raw = await api.sigmausdState(nodeUrl: _node);
+      return SigmaUsdStateData.fromJson((jsonDecode(raw) as Map).cast());
+    }, fresh: fresh);
   }
 
   Future<SigmaUsdPreview> preview(SigmaUsdAction action, int amount) async {
