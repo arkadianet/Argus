@@ -35,6 +35,7 @@ ergo-rest = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f92761
 ergo-node-interface = { git = "https://github.com/arkadianet/ergo-node-interface-rust", rev = "0264f6ffcb954da135960460d942f4c804ed65c9" }
 
 # ─── Async ───────────────────────────────────────────────────────────────
+futures = "0.3"
 tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "sync"] }
 
 # ─── Serialization ───────────────────────────────────────────────────────

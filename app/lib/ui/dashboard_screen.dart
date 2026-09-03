@@ -13,6 +13,7 @@ import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
+import '../services/sigmausd_service.dart';
 import '../services/watch_only_service.dart';
 import '../services/wallet_service.dart';
 import '../services/wallet_sync_controller.dart';
@@ -35,12 +36,6 @@ import 'widgets/asset_tile.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/soft_card.dart';
 import 'widgets/token_detail_sheet.dart';
-
-/// Mainnet SigmaUSD token ids (EIP-15 bank), for the Discover position line.
-const sigUsdTokenId =
-    '03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04';
-const sigRsvTokenId =
-    '003bd19d0187117f130b62e1bcab0939929ff5c7709f843c5c4dd158949285d0';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -1188,7 +1183,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                   _discoverCard(
                     title: 'AgeUSD',
-                    subtitle: _positionLine(ids: const [sigUsdTokenId, sigRsvTokenId]) ??
+                    subtitle: _positionLine(ids: const [SigmaUsdTokens.sigUsd, SigmaUsdTokens.sigRsv]) ??
                         'The decentralized stablecoin on Ergo.',
                     icon: Icons.attach_money,
                     onTap: () => _goHub(SwapVenue.ageusd),

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../bridge/api.dart' as api;
 import '../bridge/argus_error.dart';
 import 'dexy_service.dart';
@@ -24,6 +26,8 @@ class AmmTokenMeta {
 
   const AmmTokenMeta({required this.name, required this.decimals});
 
+  Map<String, dynamic> toJson() => {'name': name, 'decimals': decimals};
+
   factory AmmTokenMeta.fromJson(Map<String, dynamic> json) => AmmTokenMeta(
         name: json['name'] as String? ?? '',
         decimals: (json['decimals'] as num?)?.toInt() ?? 0,
@@ -42,6 +46,12 @@ class AmmPoolSet {
     required this.tokens,
   });
 
+  Map<String, dynamic> toJson() => {
+        'truncated': truncated,
+        'pools': pools,
+        'tokens': tokens.map((k, v) => MapEntry(k, v.toJson())),
+      };
+
   factory AmmPoolSet.fromJson(Map<String, dynamic> json) => AmmPoolSet(
         truncated: json['truncated'] as bool? ?? false,
         pools: ((json['pools'] as List?) ?? const [])
@@ -54,6 +64,78 @@ class AmmPoolSet {
           ),
         ),
       );
+}
+
+/// A pool set read back from disk, with how old it is.
+class CachedPoolSet {
+  const CachedPoolSet({required this.set, required this.nodeUrl, required this.age});
+  final AmmPoolSet set;
+  final String? nodeUrl;
+  final Duration age;
+}
+
+/// On-disk copies of the last pool list and every token's metadata, so the
+/// swap picker paints at once and the Rust side skips token lookups it has
+/// already done on a previous launch.
+class AmmPoolCache {
+  static const _poolsKey = 'argus_amm_pools_v1';
+  static const _tokensKey = 'argus_amm_tokens_v1';
+
+  static Future<void> save(AmmPoolSet set, {String? nodeUrl}) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _poolsKey,
+      jsonEncode({
+        'saved_at': DateTime.now().millisecondsSinceEpoch,
+        'node_url': nodeUrl,
+        'set': set.toJson(),
+      }),
+    );
+    await rememberTokens(set.tokens);
+  }
+
+  static Future<CachedPoolSet?> load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_poolsKey);
+    if (raw == null) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      final savedAt = DateTime.fromMillisecondsSinceEpoch((map['saved_at'] as num).toInt());
+      return CachedPoolSet(
+        set: AmmPoolSet.fromJson((map['set'] as Map).cast<String, dynamic>()),
+        nodeUrl: map['node_url'] as String?,
+        age: DateTime.now().difference(savedAt),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static Future<void> rememberTokens(Map<String, AmmTokenMeta> tokens) async {
+    if (tokens.isEmpty) return;
+    final prefs = await SharedPreferences.getInstance();
+    final existing = _decodeTokens(prefs.getString(_tokensKey));
+    for (final e in tokens.entries) {
+      if (e.value.name.isNotEmpty) existing[e.key] = e.value.toJson();
+    }
+    await prefs.setString(_tokensKey, jsonEncode(existing));
+  }
+
+  /// JSON map of token id → {name, decimals}, for seeding the Rust cache.
+  static Future<String?> knownTokensJson() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_tokensKey);
+    return raw == null || raw.isEmpty ? null : raw;
+  }
+
+  static Map<String, dynamic> _decodeTokens(String? raw) {
+    if (raw == null || raw.isEmpty) return {};
+    try {
+      return (jsonDecode(raw) as Map).cast<String, dynamic>();
+    } catch (_) {
+      return {};
+    }
+  }
 }
 
 class AmmQuote {
@@ -144,9 +226,20 @@ class AmmService {
   }
 
   Future<AmmPoolSet> pools({bool forceRefresh = false}) async {
-    final raw = await api.ammPools(nodeUrl: _node, forceRefresh: forceRefresh);
-    return AmmPoolSet.fromJson((jsonDecode(raw) as Map).cast());
+    final raw = await api.ammPools(
+      nodeUrl: _node,
+      forceRefresh: forceRefresh,
+      knownTokensJson: await AmmPoolCache.knownTokensJson(),
+    );
+    final set = AmmPoolSet.fromJson((jsonDecode(raw) as Map).cast());
+    // Fire and forget: the write must not delay the picker.
+    AmmPoolCache.save(set, nodeUrl: _node).catchError((_) {});
+    return set;
   }
+
+  /// Last pool list from disk, for an instant first paint while [pools]
+  /// refreshes. Null when nothing was cached yet.
+  Future<AmmPoolSet?> cachedPools() async => (await AmmPoolCache.load())?.set;
 
   Future<AmmQuote> quote({
     String? fromToken,

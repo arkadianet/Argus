@@ -93,6 +93,7 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiAmmPools({
     String? nodeUrl,
     required bool forceRefresh,
+    String? knownTokensJson,
   });
 
   Future<String> crateApiAmmQuote({
@@ -459,6 +460,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<String> crateApiAmmPools({
     String? nodeUrl,
     required bool forceRefresh,
+    String? knownTokensJson,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -466,6 +468,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_opt_String(nodeUrl, serializer);
           sse_encode_bool(forceRefresh, serializer);
+          sse_encode_opt_String(knownTokensJson, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -478,7 +481,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiAmmPoolsConstMeta,
-        argValues: [nodeUrl, forceRefresh],
+        argValues: [nodeUrl, forceRefresh, knownTokensJson],
         apiImpl: this,
       ),
     );
@@ -486,7 +489,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiAmmPoolsConstMeta => const TaskConstMeta(
     debugName: "amm_pools",
-    argNames: ["nodeUrl", "forceRefresh"],
+    argNames: ["nodeUrl", "forceRefresh", "knownTokensJson"],
   );
 
   @override
