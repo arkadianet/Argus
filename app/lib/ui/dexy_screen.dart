@@ -401,9 +401,7 @@ class _DexyScreenState extends State<DexyScreen> {
 
   Widget _ratesCard(BuildContext context) {
     final st = _state!;
-    final lpPerToken = st.lpDexyReserves > 0
-        ? st.lpErgReserves / st.lpDexyReserves / 1e9
-        : 0.0;
+    final lpPerToken = lpErgPerToken(st);
     final tokensPerErg = st.rates.tokensPerErg;
     final diff = st.rateDifferencePct;
     return SoftCard(
@@ -478,7 +476,8 @@ class _DexyScreenState extends State<DexyScreen> {
                   '${formatTokenAmount(st.dexyCirculating, _variant.decimals)} ${_variant.shortName}'),
               _stat('Pooled',
                   '${formatTokenAmount(st.lpDexyReserves, _variant.decimals)} ${_variant.shortName}'),
-              _stat('Free mint today', _fmt(st.freeMintAvailable)),
+              _stat('Free mint today',
+                  '${formatTokenAmount(st.freeMintAvailable, _variant.decimals)} ${_variant.shortName}'),
               _stat('LP supply', _fmt(st.lpCirculating)),
             ],
           ),

@@ -139,7 +139,25 @@ pub(crate) async fn preview_mint(
             0,
             0,
             false,
-            Some(format!("Amount exceeds available: {}", state.dexy_in_bank)),
+            Some(format!(
+                "Amount exceeds the bank's {} {}",
+                fmt_units(state.dexy_in_bank, dexy_variant.decimals()),
+                dexy_variant.token_name()
+            )),
+        ));
+    }
+    if state.free_mint_available > 0 && amount > state.free_mint_available {
+        return Ok(preview_mint_json(
+            dexy_variant,
+            amount,
+            0,
+            0,
+            false,
+            Some(format!(
+                "Only {} {} can be minted at the oracle rate right now; the allowance refills each period",
+                fmt_units(state.free_mint_available, dexy_variant.decimals()),
+                dexy_variant.token_name()
+            )),
         ));
     }
 
@@ -154,6 +172,18 @@ pub(crate) async fn preview_mint(
         true,
         None,
     ))
+}
+
+/// Base units as a decimal string, e.g. 749971 with 3 decimals → "749.971".
+pub(crate) fn fmt_units(amount: i64, decimals: u8) -> String {
+    if decimals == 0 {
+        return amount.to_string();
+    }
+    let scale = 10_i64.pow(decimals as u32);
+    let whole = amount / scale;
+    let frac = (amount % scale).abs();
+    let s = format!("{whole}.{frac:0width$}", width = decimals as usize);
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
 fn preview_mint_json(
@@ -449,5 +479,36 @@ mod lp_live_tests {
         run(DexyVariant::Usd, usd, 300_000_000, 2000, false).await;
         run(DexyVariant::Usd, usd, 300_000_000, 2000, true).await;
         run(DexyVariant::Usd, usd, 1_000_000_000, 7999, true).await;
+    }
+}
+
+#[cfg(test)]
+mod fmt_units_tests {
+    #[test]
+    fn formats_base_units_with_decimals() {
+        assert_eq!(super::fmt_units(749971, 3), "749.971");
+        assert_eq!(super::fmt_units(1000, 3), "1");
+        assert_eq!(super::fmt_units(59, 0), "59");
+        assert_eq!(super::fmt_units(5, 3), "0.005");
+    }
+}
+
+#[cfg(test)]
+mod dexy_state_live_tests {
+    /// Prints live state, rates and a 1-token mint preview per variant.
+    /// `cargo test -p wallet-ffi dexy_state_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn dexy_state_live_dump() {
+        let node = Some("https://ergo-node.eutxo.de".to_string());
+        for (variant, one_token) in [("gold", 1i64), ("usd", 1000i64)] {
+            let raw = crate::api::dexy_state(variant.to_string(), node.clone()).await.expect("state");
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            println!("[{variant}] oracle_rate_nano={} lp_rate_nano={} free_mint_available={} dexy_in_bank={} lp_erg={} lp_dexy={}",
+                v["state"]["oracle_rate_nano"], v["state"]["lp_rate_nano"], v["state"]["free_mint_available"], v["state"]["dexy_in_bank"], v["state"]["lp_erg_reserves"], v["state"]["lp_dexy_reserves"]);
+            println!("[{variant}] rates erg_per_token={} tokens_per_erg={} decimals={}", v["rates"]["erg_per_token"], v["rates"]["tokens_per_erg"], v["rates"]["token_decimals"]);
+            let p = crate::api::dexy_preview_mint(variant.to_string(), one_token, node.clone()).await.expect("preview");
+            println!("[{variant}] preview mint {one_token} base units: {p}");
+        }
     }
 }
