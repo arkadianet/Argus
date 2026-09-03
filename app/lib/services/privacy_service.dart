@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'secure_storage.dart';
+
 /// Change-address policy for outgoing transactions, stored per wallet.
 ///
 /// Default sends change back to the first derived address. When enabled,
@@ -14,6 +16,7 @@ class PrivacyService extends ChangeNotifier {
   static const _legacyKey = 'argus_privacy_unused_change';
 
   static const _hideBalancesKey = 'argus_hide_balances';
+  static const _blockScreenshotsKey = 'argus_block_screenshots';
 
   final Map<String, bool> _byWallet = {};
   bool? _legacyDefault;
@@ -27,6 +30,26 @@ class PrivacyService extends ChangeNotifier {
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_hideBalancesKey, value);
+  }
+
+  /// App-wide: FLAG_SECURE on the window (no screenshots, no recents
+  /// thumbnail). Default on. Seed-phrase screens force it on regardless
+  /// and restore this value when they close.
+  bool blockScreenshots = true;
+
+  /// Applies [blockScreenshots] to the window. Seed-phrase screens call
+  /// this on close to undo their forced-on state.
+  Future<void> applyScreenshotPolicy() async {
+    await SecureStorageService.setSecureFlag(blockScreenshots);
+  }
+
+  Future<void> setBlockScreenshots(bool value) async {
+    if (value == blockScreenshots) return;
+    blockScreenshots = value;
+    notifyListeners();
+    await applyScreenshotPolicy();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_blockScreenshotsKey, value);
   }
 
   bool? get legacyDefault => _legacyDefault;
@@ -49,6 +72,8 @@ class PrivacyService extends ChangeNotifier {
     }
     _legacyDefault = prefs.getBool(_legacyKey);
     hideBalances = prefs.getBool(_hideBalancesKey) ?? false;
+    blockScreenshots = prefs.getBool(_blockScreenshotsKey) ?? true;
+    if (!blockScreenshots) await applyScreenshotPolicy();
     notifyListeners();
   }
 

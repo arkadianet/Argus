@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import '../../services/app_fee.dart';
+
 import '../../format.dart';
 import '../../services/dexy_service.dart';
 import '../../services/wallet_service.dart';
@@ -44,8 +46,13 @@ class DexyMintSheetState extends State<DexyMintSheet> {
     super.dispose();
   }
 
+  /// Set when the ERG typed does not divide into whole token units, so the
+  /// sheet can say what the entered ERG actually buys.
+  String? _roundingNote;
+
   void _onErgChanged() {
     final parsed = double.tryParse(_ergCtrl.text.trim());
+    _roundingNote = null;
     if (parsed != null && parsed > 0 && _effectiveRate > 0) {
       final decimals = widget.variant.decimals;
       final tokenVal = parsed / _effectiveRate;
@@ -55,6 +62,13 @@ class DexyMintSheetState extends State<DexyMintSheet> {
       }
       final baseUnits = (tokenVal * scale).floor();
       _tokenCtrl.text = formatScaled(baseUnits, decimals);
+      _roundingNote = mintRoundingNote(
+        ergTyped: parsed,
+        baseUnits: baseUnits,
+        decimals: decimals,
+        ergPerToken: _effectiveRate,
+        shortName: widget.variant.shortName,
+      );
     } else {
       _tokenCtrl.clear();
     }
@@ -63,6 +77,7 @@ class DexyMintSheetState extends State<DexyMintSheet> {
 
   void _onTokenChanged() {
     final parsed = double.tryParse(_tokenCtrl.text.trim());
+    _roundingNote = null;
     if (parsed != null && parsed > 0 && _effectiveRate > 0) {
       final ergVal = parsed * _effectiveRate;
       _ergCtrl.text = ergVal.toStringAsFixed(4);
@@ -75,7 +90,7 @@ class DexyMintSheetState extends State<DexyMintSheet> {
   void _applyMax() {
     final spendable = widget.spendableNano;
     if (spendable == null || _effectiveRate <= 0) return;
-    final maxNano = spendable - minerFeeNano - minBoxNano;
+    final maxNano = spendable - minerFeeNano - argusFeeNano - minBoxNano;
     if (maxNano > 0) {
       _ergCtrl.text = formatErg(maxNano, unit: false, maxFrac: 4);
       _onErgChanged();
@@ -169,7 +184,9 @@ class DexyMintSheetState extends State<DexyMintSheet> {
             onChanged: (_) => _onTokenChanged(),
             decoration: InputDecoration(
               labelText: 'You receive (${variant.shortName})',
-              helperText: 'Fixed oracle rate: ${_effectiveRate.toStringAsFixed(4)} ERG / ${variant.shortName}',
+              helperText: _roundingNote ??
+                  'Fixed oracle rate: ${_effectiveRate.toStringAsFixed(4)} ERG / ${variant.shortName}',
+              helperMaxLines: 3,
             ),
           ),
           const SizedBox(height: 12),
@@ -186,8 +203,8 @@ class DexyMintSheetState extends State<DexyMintSheet> {
               ],
             )
           else if (_preview != null && _preview!.canExecute) ...[
-            _sheetRow('ERG cost', formatErg(_preview!.totalCostNano)),
-            _sheetRow('Miner fee', formatErg(_preview!.txFeeNano, unit: false)),
+            for (final r in mintCostRows(_preview!, shortName: variant.shortName))
+              _sheetRow(r.$1, r.$2),
           ] else if (_previewError != null)
             Text(_previewError!,
                 style: TextStyle(color: rustFor(context), fontSize: 12)),
@@ -822,4 +839,43 @@ Widget _sheetRow(String label, String value) {
       ],
     ),
   );
+}
+
+/// Explains what a typed ERG amount buys when the token only mints in
+/// whole units (DexyGold has no decimals). Null when nothing is lost.
+String? mintRoundingNote({
+  required double ergTyped,
+  required int baseUnits,
+  required int decimals,
+  required double ergPerToken,
+  required String shortName,
+}) {
+  var scale = 1;
+  for (var i = 0; i < decimals; i++) {
+    scale *= 10;
+  }
+  final costErg = baseUnits / scale * ergPerToken;
+  final leftover = ergTyped - costErg;
+  if (baseUnits <= 0) {
+    return '${ergTyped.toStringAsFixed(4)} ERG is less than one $shortName '
+        '(${ergPerToken.toStringAsFixed(4)} ERG)';
+  }
+  if (leftover < 0.00005) return null;
+  final units = formatScaled(baseUnits, decimals);
+  return '$shortName mints in ${decimals == 0 ? 'whole units' : 'steps of 1/$scale'}: '
+      '$units for ${costErg.toStringAsFixed(4)} ERG, '
+      '${leftover.toStringAsFixed(4)} ERG stays in your wallet';
+}
+
+/// Cost breakdown for the mint preview: token cost, box minimum when the
+/// preview reserves one, miner fee, Argus fee, and the total you spend.
+List<(String, String)> mintCostRows(DexyMintPreview p, {required String shortName}) {
+  final boxMin = p.totalCostNano - p.ergCostNano - p.txFeeNano;
+  return [
+    ('$shortName cost', formatErg(p.ergCostNano)),
+    if (boxMin > 0) ('Token box minimum', formatErg(boxMin, unit: false)),
+    ('Miner fee', formatErg(p.txFeeNano, unit: false)),
+    ('Argus fee', formatErg(argusFeeNano, unit: false)),
+    ('Total', formatErg(p.totalCostNano + argusFeeNano)),
+  ];
 }
