@@ -4,7 +4,9 @@ import 'services/address_label_service.dart';
 import 'services/contacts_service.dart';
 import 'services/deep_link_channel.dart';
 import 'services/notification_service.dart';
+import 'services/network_controller.dart';
 import 'services/privacy_service.dart';
+import 'services/token_pricer.dart';
 import 'services/session_lock.dart';
 import 'services/watch_only_service.dart';
 import 'services/wallet_service.dart';
@@ -38,7 +40,9 @@ Future<void> main() async {
     addressLabelService.load().catchError((_) {}),
     watchOnlyService.load().catchError((_) {}),
     privacyService.load().catchError((_) {}),
+    tokenPricer.load().catchError((_) {}),
   ]);
+  networkController.priceRefresher = tokenPricer.refresh;
   runApp(const ArgusApp());
 }
 

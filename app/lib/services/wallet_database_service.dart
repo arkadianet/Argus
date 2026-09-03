@@ -17,9 +17,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// the screen, not storage, and is irrelevant here.
 /// A wallet's last synced total, for rows the app cannot sync right now.
 class LastKnownBalance {
-  const LastKnownBalance({required this.balanceNano, required this.age});
+  const LastKnownBalance({required this.balanceNano, required this.age, this.tokens = const []});
   final int balanceNano;
   final Duration age;
+
+  /// Token holdings from the same snapshot, for portfolio valuation.
+  final List<({String id, int amount, int decimals})> tokens;
 }
 
 class WalletDatabaseService {
@@ -119,6 +122,15 @@ class WalletDatabaseService {
     return LastKnownBalance(
       balanceNano: (map['balance_nano_erg'] as num?)?.toInt() ?? 0,
       age: at == null ? Duration.zero : DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(at)),
+      tokens: [
+        for (final t in (map['tokens'] as List? ?? const []))
+          if (t is Map && t['id'] is String)
+            (
+              id: t['id'] as String,
+              amount: (t['amount'] as num?)?.toInt() ?? 0,
+              decimals: (t['decimals'] as num?)?.toInt() ?? 0,
+            ),
+      ],
     );
   }
 

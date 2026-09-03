@@ -97,7 +97,6 @@ class NetworkController extends ChangeNotifier {
   int? height;
   bool probing = false;
   double? usdPerErg;
-  double? audPerErg;
 
   /// Display currency for fiat conversions (CoinGecko vs_currency code).
   String fiatCode = 'usd';
@@ -128,13 +127,10 @@ class NetworkController extends ChangeNotifier {
     if (!fiatOptions.containsKey(code) || code == fiatCode) return;
     fiatCode = code;
     fiatPerErg = null;
-    _priceAt = null;
-    // Invalidate any in-flight price fetch for the previous currency so a
-    // late response cannot overwrite the new currency's rate.
-    _fiatGen++;
+    notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_fiatPrefKey, code);
-    await refreshPrice();
+    await refreshPrice(force: true);
   }
 
   Future<void> _loadFiatCurrency() async {
@@ -282,41 +278,33 @@ class NetworkController extends ChangeNotifier {
     }
   }
 
-  DateTime? _priceAt;
-  static const _priceTtl = Duration(minutes: 5);
   static const _fiatPrefKey = 'argus_fiat_currency';
 
-  /// Bumped on currency change so a stale in-flight [refreshPrice] response
-  /// for the previous currency is discarded instead of applied.
-  int _fiatGen = 0;
+  /// Installed by the token pricer; it owns every price fetch and reports
+  /// the ERG rate back through [setErgRate].
+  Future<void> Function({bool force})? priceRefresher;
 
-  Future<void> refreshPrice() async {
-    final now = DateTime.now();
-    if (_priceAt != null && now.difference(_priceAt!) < _priceTtl) return;
-    final gen = _fiatGen;
-    final code = fiatCode.toLowerCase();
+  Future<void> refreshPrice({bool force = false}) async {
+    final r = priceRefresher;
+    if (r == null) return;
     try {
-      final res = await http
-          .get(Uri.parse(
-              'https://api.coingecko.com/api/v3/simple/price?ids=ergo&vs_currencies=$code'))
-          .timeout(const Duration(seconds: 8));
-      final stillCurrent = gen == _fiatGen && code == fiatCode.toLowerCase();
-      if (!stillCurrent) return;
-      if (res.statusCode != 200) {
-        notifyListeners();
-        return;
-      }
-      final map = jsonDecode(res.body) as Map<String, dynamic>;
-      final ergo = map['ergo'] as Map?;
-      final value = ergo?[code];
-      if (value is num) {
-        fiatPerErg = value.toDouble();
-        if (code == 'usd') usdPerErg = value.toDouble();
-        if (code == 'aud') audPerErg = value.toDouble();
-        _priceAt = now;
-      }
+      await r(force: force);
     } catch (_) {}
+  }
+
+  void setErgRate({required double? fiatPerErg, required double? usdPerErg}) {
+    this.fiatPerErg = fiatPerErg;
+    usdPerErg = usdPerErg;
     notifyListeners();
+  }
+
+  /// Formatted display-currency text for a USD amount, or null when the
+  /// USD→display rate is unknown.
+  String? fiatFromUsd(double? usd, {required double fiatPerUsd, int maxFrac = 2}) {
+    if (usd == null) return null;
+    final v = usd * fiatPerUsd;
+    final digits = fiatCode == 'jpy' ? 0 : (v != 0 && v.abs() < 0.01 ? maxFrac : 2);
+    return '≈ $fiatSymbol${v.toStringAsFixed(digits)}';
   }
 
   Future<String?> addNode(String url) async {

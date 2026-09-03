@@ -53,6 +53,7 @@ class AssetTile extends StatelessWidget {
   AssetTile.token(
     TokenBalance t, {
     super.key,
+    this.fiatText,
     this.hidden = false,
     this.onTap,
     this.showChevron = true,
@@ -61,7 +62,6 @@ class AssetTile extends StatelessWidget {
             ? t.name!.trim()
             : shorten(t.id, head: 10, tail: 6),
         amountText = t.isNft ? '1' : formatTokenAmountGrouped(t.amount, t.decimals),
-        fiatText = null,
         iconUrl = t.iconUrl,
         isErg = false,
         verified = isVerifiedToken(t.id),

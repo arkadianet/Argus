@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../../services/network_controller.dart';
 import '../../services/privacy_service.dart';
+import '../../services/token_pricer.dart';
+import '../../services/token_pricing.dart';
 import '../../theme/argus_theme.dart';
 import '../../theme/theme_controller.dart';
 import 'settings_shared.dart';
@@ -44,10 +46,54 @@ class DisplaySettingsPage extends StatelessWidget {
     await networkController.setFiatCurrency(picked);
   }
 
+  Future<void> _pickPriceSource(BuildContext context) async {
+    final current = tokenPricer.source;
+    final picked = await showDialog<PriceSource>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Price source'),
+        children: [
+          for (final s in PriceSource.values)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, s),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(s.label, style: Theme.of(ctx).textTheme.titleSmall),
+                        const SizedBox(height: 2),
+                        Text(s.blurb, style: TextStyle(fontSize: 12.5, color: ArgusColors.of(ctx).muted)),
+                      ],
+                    ),
+                  ),
+                  if (s == current) ...[
+                    const SizedBox(width: 8),
+                    const Icon(Icons.check, size: 18),
+                  ],
+                ],
+              ),
+            ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 4),
+            child: Text(
+              'SigUSD and USE are always \$1; SigRSV and DexyGold follow their protocol oracles. Pool prices count towards totals only for verified tokens. A non-USD display currency converts through one CoinGecko rate.',
+              style: TextStyle(fontSize: 12, color: ArgusColors.of(ctx).muted),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (picked == null || picked == current) return;
+    await tokenPricer.setSource(picked);
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([themeController, networkController, privacyService]),
+      listenable: Listenable.merge([themeController, networkController, privacyService, tokenPricer]),
       builder: (context, _) => SettingsPage(
         title: 'Display',
         children: [
@@ -103,6 +149,15 @@ class DisplaySettingsPage extends StatelessWidget {
                 subtitle: 'ERG price shown in ${networkController.fiatCode.toUpperCase()}',
                 trailing: Text(networkController.fiatSymbol, style: Theme.of(context).textTheme.titleMedium),
                 onTap: () => _pickFiatCurrency(context),
+              ),
+              SettingsRow(
+                icon: Icons.price_change_outlined,
+                title: 'Price source',
+                subtitle: tokenPricer.result.ergVia == null
+                    ? tokenPricer.source.label
+                    : '${tokenPricer.source.label} · ERG via ${tokenPricer.result.ergVia}${tokenPricer.stale ? ' · stale' : ''}',
+                trailing: const Icon(Icons.chevron_right, size: 20),
+                onTap: () => _pickPriceSource(context),
               ),
               SettingsRow(
                 icon: Icons.visibility_off_outlined,

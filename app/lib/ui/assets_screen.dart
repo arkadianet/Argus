@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
+import '../services/token_pricer.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'send_screen.dart';
@@ -40,7 +41,7 @@ class AssetsScreen extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('Assets')),
       body: ListenableBuilder(
-        listenable: Listenable.merge([networkController, privacyService]),
+        listenable: Listenable.merge([networkController, privacyService, tokenPricer]),
         builder: (context, _) {
           final hidden = privacyService.hideBalances;
           return ListView(
@@ -64,6 +65,7 @@ class AssetsScreen extends StatelessWidget {
                       for (final t in fungible)
                         AssetTile.token(
                           t,
+                          fiatText: tokenPricer.fiatTextFor(tokenId: t.id, amount: t.amount, decimals: t.decimals),
                           hidden: hidden,
                           onTap: () => _openToken(context, t),
                         ),

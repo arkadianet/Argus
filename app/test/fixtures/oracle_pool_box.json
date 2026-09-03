@@ -1,0 +1,30 @@
+[
+  {
+    "globalIndex" : 57267236,
+    "inclusionHeight" : 1865322,
+    "address" : "PViBL5acX6PmcLAsSXs28sVwRvGDWo54AFUenax4vGf7yNX58TXrAUQUcKAL3HuKz8Rhvzm3ZUGkuZAdtFcjehTV7To1EF8QKX2hCLm5ZUkDuB2zynJvTmzD7AqaH25ooDph189uGp4nRPtvs843",
+    "spentTransactionId" : null,
+    "spendingProof" : null,
+    "boxId" : "6e34d9f594c6ca2fdae25422f0d3462c12b2b0a6100308f7bf5aad712b544ac9",
+    "value" : 10000000,
+    "ergoTree" : "1004040204000e2026d40e6fb9a6ee2556473036e6d6bfb083c4afae21baeae4bba4969747b1dab70e20e6d4ce279d87110f553e135fabaa3b5ce2d86e625beff0f3e47c8eca99a5c60ad801d6018cb2db6308b2a473000073010001d1ec93720173029372017303",
+    "assets" : [
+      {
+        "tokenId" : "f7f008ad8fcaad4490d8e78ab6d3f11efe7213a13f7b243795818b155e1acc92",
+        "amount" : 1
+      },
+      {
+        "tokenId" : "05965018a4525add81bdf6feb6dc4621dcef6789802fa53cebe39505a3b8588d",
+        "amount" : 9885328
+      }
+    ],
+    "creationHeight" : 1865320,
+    "additionalRegisters" : {
+      "R4" : "04fada01",
+      "R5" : "64f48e6c5a6b7d05c747dfc1e7c6945f05677cb67cea6a56c082f3c83ba826291305072000",
+      "R6" : "042a"
+    },
+    "transactionId" : "33b3aa46539920628e3dabc828fc5bed052d196a3cbb0918c9ca14e90b14bec0",
+    "index" : 0
+  }
+]
