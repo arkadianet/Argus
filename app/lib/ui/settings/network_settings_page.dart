@@ -77,6 +77,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
               child: DividedColumn(
                 indent: 16,
                 children: [
+                  _autoRow(context),
                   for (var i = 0; i < nodes.length; i++) _nodeRow(context, i, nodes[i]),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 10, 16, 14),
@@ -95,8 +96,43 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
             ),
             const SizedBox(height: 8),
             const SettingsNote(
-              'Built-in nodes are HTTPS. You can add http://ip:port for a node you run or trust; that traffic is not encrypted. The first healthy node in this order is used.',
+              'Tap a node to use it. Automatic picks the reachable node with extraIndex and the smallest index lag. Built-in nodes are HTTPS; you can add http://ip:port for a node you run or trust, unencrypted.',
             ),
+            const SectionLabel('Find more nodes', scope: 'App-wide'),
+            const SizedBox(height: 10),
+            SoftCard(
+              padding: EdgeInsets.zero,
+              child: DividedColumn(
+                indent: 16,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            networkController.discovering
+                                ? 'Asking the connected node for peers and checking each…'
+                                : networkController.discovered.isEmpty
+                                    ? 'Peers of the connected node that publish a REST API.'
+                                    : '${networkController.discovered.length} reachable, best first.',
+                            style: TextStyle(fontSize: 12.5, color: colors.muted),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: networkController.discovering || networkController.activeUrl == null
+                              ? null
+                              : networkController.discoverNodes,
+                          child: Text(networkController.discovering ? 'Searching…' : 'Search'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  for (final p in networkController.discovered) _discoveredRow(context, p),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
             const SectionLabel('Explorer', scope: 'App-wide'),
             const SizedBox(height: 10),
             SoftCard(
@@ -124,46 +160,107 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
     );
   }
 
-  Widget _nodeRow(BuildContext context, int i, NodeEntry n) {
-    final colors = ArgusColors.of(context);
-    final active = n.url == networkController.activeUrl;
-    final last = i == networkController.nodes.length - 1;
-    final isLastEnabled = n.enabled && networkController.enabledUrls.length <= 1;
+  Widget _radio(BuildContext context, bool on) => Container(
+        width: 14,
+        height: 14,
+        decoration: BoxDecoration(
+          color: on ? accentOf(context) : Colors.transparent,
+          border: Border.all(color: accentOf(context), width: 1.2),
+        ),
+      );
+
+  Widget _autoRow(BuildContext context) {
+    final auto = networkController.preferredUrl == null;
+    final active = networkController.activeUrl;
+    final host = active == null ? null : Uri.tryParse(active)?.host;
+    return InkWell(
+      onTap: auto ? null : () => networkController.setPreferredNode(null),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        child: Row(
+          children: [
+            _radio(context, auto),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Automatic', style: Theme.of(context).textTheme.titleMedium),
+                  Text(
+                    auto
+                        ? (host == null ? 'Best reachable extraIndex node' : 'Using $host')
+                        : 'Best reachable extraIndex node',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _discoveredRow(BuildContext context, NodeProbe p) {
+    final host = Uri.tryParse(p.url)?.host ?? p.url;
+    final lag = p.indexLag;
+    final detail = [
+      if (p.extraIndex == true) (lag != null && lag > 2 ? 'extraIndex, lag $lag' : 'extraIndex') else 'no extraIndex',
+      if (p.height != null) '#${p.height}',
+    ].join('  ·  ');
     return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 4, 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(host, style: Theme.of(context).textTheme.titleMedium),
+                Text(detail, style: Theme.of(context).textTheme.bodySmall),
+              ],
+            ),
+          ),
+          TextButton(onPressed: () => networkController.addNode(p.url), child: const Text('Add')),
+        ],
+      ),
+    );
+  }
+
+  Widget _nodeRow(BuildContext context, int i, NodeEntry n) {
+    final active = n.url == networkController.activeUrl;
+    final preferred = n.url == networkController.preferredUrl;
+    final isLastEnabled = n.enabled && networkController.enabledUrls.length <= 1;
+    return InkWell(
+      onTap: !n.enabled || preferred ? null : () => networkController.setPreferredNode(n.url),
+      child: Padding(
       padding: const EdgeInsets.fromLTRB(16, 8, 4, 8),
       child: Row(
         children: [
-          Container(
-            width: 8,
-            height: 8,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: active ? moss : (n.enabled ? colors.muted : Colors.transparent),
-              border: n.enabled ? null : Border.all(color: colors.muted),
-            ),
-          ),
+          _radio(context, preferred),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(Uri.tryParse(n.url)?.host ?? n.url, style: Theme.of(context).textTheme.titleMedium),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(Uri.tryParse(n.url)?.host ?? n.url,
+                          style: Theme.of(context).textTheme.titleMedium, overflow: TextOverflow.ellipsis),
+                    ),
+                    if (active) ...[
+                      const SizedBox(width: 8),
+                      Container(width: 8, height: 8, decoration: const BoxDecoration(shape: BoxShape.circle, color: moss)),
+                    ],
+                  ],
+                ),
                 Text(
-                  describeNode(n, networkController.probes[n.url], active: active),
+                  describeNode(n, networkController.probes[n.url], active: active, preferred: preferred),
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ],
             ),
-          ),
-          IconButton(
-            tooltip: 'Up',
-            onPressed: i == 0 ? null : () => networkController.moveNode(i, -1),
-            icon: const Icon(Icons.keyboard_arrow_up, size: 20),
-          ),
-          IconButton(
-            tooltip: 'Down',
-            onPressed: last ? null : () => networkController.moveNode(i, 1),
-            icon: const Icon(Icons.keyboard_arrow_down, size: 20),
           ),
           IconButton(
             tooltip: n.enabled ? 'Disable' : 'Enable',
@@ -176,6 +273,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
             icon: const Icon(Icons.close, size: 20),
           ),
         ],
+      ),
       ),
     );
   }
