@@ -167,7 +167,10 @@ fn load_from_env_or_default() -> DevFeeConfig {
         .filter(|s| !s.is_empty());
 
     match address {
-        None => DevFeeConfig::enabled_default(),
+        // Argus: with no installed config and no explicit override there is
+        // no fee at all. The vendored behaviour paid the Citadel address by
+        // default, which must never happen from this wallet.
+        None => DevFeeConfig::disabled(),
         Some(addr) if addr == DEFAULT_DEV_FEE_ADDRESS => DevFeeConfig::enabled_default(),
         Some(addr) => match address_to_tree(&addr) {
             Ok(tree) => DevFeeConfig {

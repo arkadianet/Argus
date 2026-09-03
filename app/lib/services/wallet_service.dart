@@ -562,6 +562,9 @@ class WalletService {
   Future<void> init() async {
     if (_initialized) return;
     await Future.wait([RustLib.init(), loadTokenMeta()]);
+    // Belt and braces with the frb(init) attribute: the app fee config must
+    // be installed before any transaction is built.
+    await RustLib.instance.api.crateApiInitApp();
     _initialized = true;
     await _migrateLegacyIfNeeded();
   }

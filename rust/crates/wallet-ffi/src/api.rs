@@ -18,13 +18,17 @@ use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
 
 use crate::error::ArgusError;
 
-#[flutter_rust_bridge::frb(init)]
 /// Argus app fee: paid on every transaction the wallet builds (sends, UTXO
 /// tools, swaps, mints). ErgoPay transactions are built by the dApp and are
 /// not touched. Disclosed on every confirm sheet and in Settings → About.
 pub const ARGUS_FEE_ADDRESS: &str = "9iArkadiaZAPVxbUp2XQ8SVA1zGA29rCPhbpVuUaaKW6fWspUZA";
 pub const ARGUS_FEE_NANO: i64 = 1_100_000;
 
+/// Runs at bridge start (`frb(init)`) and is also called explicitly from
+/// Dart right after `RustLib.init`, so the fee config is installed before
+/// any builder resolves it. The attribute used to sit above the constants
+/// and never applied, which left the vendored default in force.
+#[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
     // Never the inherited Citadel fee; the Argus fee is installed instead.
     std::env::set_var("CITADEL_DEV_FEE_ENABLED", "false");
