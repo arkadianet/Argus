@@ -467,9 +467,35 @@ pub async fn get_balance(address: String, node_url: Option<String>) -> Result<St
 
 #[flutter_rust_bridge::frb]
 pub async fn get_token_info(token_id: String, explorer_url: Option<String>) -> Result<String, String> {
-    let info = wallet_net::client::get_token_info(&token_id, explorer_url.as_deref())
+    let mut info = wallet_net::client::get_token_info(&token_id, explorer_url.as_deref())
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    // EIP-4 media: the issuance box (IndexedToken.boxId) carries the asset
+    // type in R7 and a link in R9. Best effort — a plain token has neither.
+    if let Some(box_id) = info.get("boxId").and_then(|b| b.as_str()).map(str::to_string) {
+        if let Ok(client) = node_client(None).await {
+            if let Ok(bx) = client.get_blockchain_box_by_id(&box_id).await {
+                let regs = bx.get("additionalRegisters");
+                let kind = regs
+                    .and_then(|r| r.get("R7"))
+                    .and_then(|v| v.as_str())
+                    .and_then(crate::api_ergopay_impl::eip4_media_kind);
+                let link = regs
+                    .and_then(|r| r.get("R9"))
+                    .and_then(|v| v.as_str())
+                    .and_then(crate::api_ergopay_impl::decode_coll_byte_register)
+                    .filter(|l| crate::api_ergopay_impl::is_media_link(l));
+                if let Some(obj) = info.as_object_mut() {
+                    if let Some(k) = kind {
+                        obj.insert("mediaKind".into(), serde_json::Value::String(k.into()));
+                    }
+                    if let Some(l) = link {
+                        obj.insert("iconUrl".into(), serde_json::Value::String(l.trim().into()));
+                    }
+                }
+            }
+        }
+    }
     serde_json::to_string(&info)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }

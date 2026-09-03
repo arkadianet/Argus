@@ -542,7 +542,7 @@ class WalletService {
   final ValueNotifier<bool> unlocked = ValueNotifier(false);
   final ValueNotifier<String?> currentWalletId = ValueNotifier<String?>(null);
   final Map<String, TokenBalance> _tokenMeta = {};
-  static const _tokenMetaKey = 'argus_token_meta_v1';
+  static const _tokenMetaKey = 'argus_token_meta_v2';
   bool _tokenMetaDirty = false;
 
   Future<void> init() async {

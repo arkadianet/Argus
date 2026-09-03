@@ -279,3 +279,76 @@ mod tests {
         assert!(s["inputs"][0]["value_nano_erg"].is_null());
     }
 }
+
+/// EIP-4 token media from an issuance box's registers: R7 marks the asset
+/// type (`0e020101` picture, `0e020102` audio, `0e020103` video) and R9
+/// carries a link as a serialised `Coll[Byte]`.
+pub(crate) fn decode_coll_byte_register(hex_value: &str) -> Option<String> {
+    let bytes = hex::decode(hex_value.trim()).ok()?;
+    // 0x0e = SColl(SByte); then a VLQ length, then the bytes.
+    if bytes.first() != Some(&0x0e) {
+        return None;
+    }
+    let mut i = 1;
+    let mut len: usize = 0;
+    let mut shift = 0;
+    loop {
+        let b = *bytes.get(i)?;
+        i += 1;
+        len |= ((b & 0x7f) as usize) << shift;
+        if b & 0x80 == 0 {
+            break;
+        }
+        shift += 7;
+        if shift > 28 {
+            return None;
+        }
+    }
+    let slice = bytes.get(i..i + len)?;
+    String::from_utf8(slice.to_vec()).ok()
+}
+
+/// `picture` / `audio` / `video` for an EIP-4 R7 value, else None.
+pub(crate) fn eip4_media_kind(r7_hex: &str) -> Option<&'static str> {
+    match r7_hex.trim() {
+        "0e020101" => Some("picture"),
+        "0e020102" => Some("audio"),
+        "0e020103" => Some("video"),
+        _ => None,
+    }
+}
+
+/// A usable media link: http(s) or ipfs.
+pub(crate) fn is_media_link(s: &str) -> bool {
+    let t = s.trim();
+    t.starts_with("https://") || t.starts_with("http://") || t.starts_with("ipfs://")
+}
+
+#[cfg(test)]
+mod media_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_a_coll_byte_link_register() {
+        // 0e + len(0x1b = 27) + "ipfs://bafyexampleexample12"
+        let link = "ipfs://bafyexampleexample12";
+        let hex = format!("0e{:02x}{}", link.len(), hex::encode(link));
+        assert_eq!(decode_coll_byte_register(&hex).as_deref(), Some(link));
+    }
+
+    #[test]
+    fn rejects_non_coll_registers_and_bad_lengths() {
+        assert!(decode_coll_byte_register("0402").is_none());
+        assert!(decode_coll_byte_register("0eff").is_none());
+        assert!(decode_coll_byte_register("zz").is_none());
+    }
+
+    #[test]
+    fn classifies_eip4_media_kinds() {
+        assert_eq!(eip4_media_kind("0e020101"), Some("picture"));
+        assert_eq!(eip4_media_kind("0e020103"), Some("video"));
+        assert_eq!(eip4_media_kind("0e020199"), None);
+        assert!(is_media_link("ipfs://x"));
+        assert!(!is_media_link("javascript:alert(1)"));
+    }
+}
