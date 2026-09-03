@@ -2,6 +2,7 @@ import 'widgets/error_sheet.dart';
 import 'package:flutter/material.dart';
 
 import '../bridge/argus_error.dart';
+import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -32,7 +33,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
 
   @override
   void dispose() {
-    SecureStorageService.setSecureFlag(false);
+    privacyService.applyScreenshotPolicy();
     _phraseCtrl.clear();
     _passCtrl.clear();
     _pinCtrl.clear();

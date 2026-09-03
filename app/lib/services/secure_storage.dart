@@ -183,7 +183,8 @@ class SecureStorageService {
   static Future<bool> setSecureFlag(bool enable) async {
     try {
       return await _channel.invokeMethod<bool>('setSecureFlag', {'enable': enable}) ?? false;
-    } on PlatformException catch (_) {
+    } catch (_) {
+      // PlatformException on old devices, MissingPluginException in tests.
       return false;
     }
   }

@@ -19,4 +19,16 @@ void main() {
     await second.load();
     expect(second.hideBalances, isTrue);
   });
+
+  test('blockScreenshots defaults to on and persists when turned off', () async {
+    SharedPreferences.setMockInitialValues({});
+    final first = PrivacyService();
+    await first.load();
+    expect(first.blockScreenshots, isTrue);
+    await first.setBlockScreenshots(false);
+
+    final second = PrivacyService();
+    await second.load();
+    expect(second.blockScreenshots, isFalse);
+  });
 }

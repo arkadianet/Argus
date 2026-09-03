@@ -2,6 +2,7 @@ import '../widgets/error_sheet.dart';
 import 'package:flutter/material.dart';
 
 import '../../bridge/argus_error.dart';
+import '../../services/privacy_service.dart';
 import '../../services/secure_storage.dart';
 import '../../services/session_lock.dart';
 import '../../services/wallet_service.dart';
@@ -314,6 +315,29 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         ),
         const SettingsNote(
           'Five wrong PINs lock the gate for a while. Argus never stores the PIN; it only unwraps the key that decrypts the seed.',
+        ),
+        ListenableBuilder(
+          listenable: privacyService,
+          builder: (context, _) => SettingsGroup(
+            title: 'Screen',
+            scope: 'App-wide',
+            children: [
+              SettingsRow(
+                icon: Icons.screenshot_monitor_outlined,
+                title: 'Block screenshots',
+                subtitle: privacyService.blockScreenshots
+                    ? 'Screens cannot be captured or recorded'
+                    : 'Off: you can capture screens to report issues',
+                trailing: Switch(
+                  value: privacyService.blockScreenshots,
+                  onChanged: (v) => privacyService.setBlockScreenshots(v),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SettingsNote(
+          'Seed phrase screens always block capture, whatever this setting says.',
         ),
       ],
     );
