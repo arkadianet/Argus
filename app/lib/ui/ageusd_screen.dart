@@ -255,7 +255,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
       await _load();
     } catch (e) {
       if (!mounted) return;
-      _snack('Broadcast may have failed. Check activity before retrying. $e');
+      await showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _busy = false);
     }

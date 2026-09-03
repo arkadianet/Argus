@@ -17,3 +17,6 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 base16 = "0.2"
+
+[dev-dependencies]
+hex = { workspace = true }

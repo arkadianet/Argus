@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../bridge/argus_error.dart';
 import 'package:flutter/services.dart';
 
 import '../../theme/argus_theme.dart';
@@ -64,4 +66,45 @@ Future<void> showErrorSheet(
       );
     },
   );
+}
+
+/// How a failed sign-and-broadcast should be reported.
+class TxFailure {
+  const TxFailure({required this.title, required this.message, this.code});
+  final String title;
+  final String message;
+  final String? code;
+}
+
+/// Classifies an error from signing or broadcasting. Reduction, signing
+/// and build failures happen before anything reaches the network, so the
+/// user can retry freely; a node error after signing may or may not have
+/// broadcast, so the user is told to check activity first.
+TxFailure classifyTxFailure(Object error) {
+  final raw = error is ArgusException ? error : ArgusException.fromJson('$error');
+  final code = raw.code;
+  final msg = raw.message;
+  final lower = '$code $msg'.toLowerCase();
+  final beforeNetwork = code == 'TX_REDUCTION_FAILED' ||
+      code == 'SIGNING_FAILED' ||
+      code == 'TX_BUILD_FAILED' ||
+      code == 'WALLET_LOCKED' ||
+      lower.contains('reduced to false') ||
+      lower.contains('prover');
+  if (beforeNetwork) {
+    final why = lower.contains('reduced to false')
+        ? 'A contract rejected this transaction, so it was not signed. Nothing was sent.'
+        : 'Nothing was sent.';
+    return TxFailure(title: 'Signing failed', message: '$why\n\n$msg', code: code == 'GENERIC' ? null : code);
+  }
+  return TxFailure(
+    title: 'Broadcast may have failed',
+    message: 'Check Activity before retrying; the transaction may already be in the mempool.\n\n$msg',
+    code: code == 'GENERIC' ? null : code,
+  );
+}
+
+Future<void> showTxFailureSheet(BuildContext context, Object error) {
+  final f = classifyTxFailure(error);
+  return showErrorSheet(context, title: f.title, message: f.message, code: f.code);
 }

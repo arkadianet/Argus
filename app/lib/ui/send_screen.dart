@@ -467,7 +467,7 @@ class _SendScreenState extends State<SendScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
-      _snack('Broadcast may have failed. Check activity before retrying.');
+      await showTxFailureSheet(context, e);
     }
   }
 
@@ -600,10 +600,10 @@ class _SendScreenState extends State<SendScreen> {
             _resultTxId = txId;
             _sending = false;
           });
-        } catch (_) {
+        } catch (e) {
           if (!mounted) return;
           setState(() => _sending = false);
-          _snack('Broadcast may have failed. Check activity before sending again.');
+          await showTxFailureSheet(context, e);
         }
     }
   }
