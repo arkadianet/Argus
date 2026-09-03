@@ -3,6 +3,7 @@ import 'package:argus_wallet/ui/dexy/dexy_sheets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  _rateGuardTests();
   test('whole-unit token: 1 ERG buys 1 DexyGold and says what stays', () {
     final note = mintRoundingNote(ergTyped: 1, baseUnits: 1, decimals: 0, ergPerToken: 0.542, shortName: 'DexyGold');
     expect(note, 'DexyGold mints in whole units: 1 for 0.5420 ERG, 0.4580 ERG stays in your wallet');
@@ -37,5 +38,14 @@ void main() {
     expect(rows.map((r) => r.$1), ['DexyGold cost', 'Token box minimum', 'Miner fee', 'Argus fee', 'Total']);
     expect(rows.last.$2, '0.545109519 ERG');
     expect(rows[3].$2, '0.0011');
+  });
+}
+
+// Rate guard (added after a USE mint sheet opened against DexyGold state)
+void _rateGuardTests() {
+  test('mintRateFor refuses a state from the other variant', () {
+    final gold = DexyState.fromJson({'state': {}, 'rates': {'variant': 'gold', 'erg_per_token': 0.5454}});
+    expect(mintRateFor(gold, DexyVariant.gold), 0.5454);
+    expect(mintRateFor(gold, DexyVariant.usd), 0);
   });
 }

@@ -111,9 +111,18 @@ class _DexyScreenState extends State<DexyScreen> {
 
   void _switchVariant(DexyVariant v) {
     if (v == _variant) return;
-    setState(() => _variant = v);
+    // Drop the old variant's state so nothing can open a sheet against
+    // DexyGold rates while USE is still loading, or the other way round.
+    setState(() {
+      _variant = v;
+      _state = null;
+    });
     _load();
   }
+
+  /// The loaded state, only when it belongs to the selected variant.
+  DexyState? get _stateForVariant =>
+      _state != null && _state!.variant == _variant ? _state : null;
 
   void _snack(String msg) {
     if (!mounted) return;
@@ -145,13 +154,15 @@ class _DexyScreenState extends State<DexyScreen> {
   // ── Actions ────────────────────────────────────────────────────────────
 
   Future<void> _openMint() async {
+    final st = _stateForVariant;
+    if (st == null) return;
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
       isScrollControlled: true,
       builder: (ctx) => DexyMintSheet(
         variant: _variant,
-        state: _state!,
+        state: st,
         spendableNano: _args.spendableNano,
         onBuild: (amount) => dexService.buildMint(
           variant: _variant,
@@ -176,13 +187,15 @@ class _DexyScreenState extends State<DexyScreen> {
   }
 
   Future<void> _openSwap() async {
+    final st = _stateForVariant;
+    if (st == null) return;
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
       isScrollControlled: true,
       builder: (ctx) => DexySwapSheet(
         variant: _variant,
-        state: _state!,
+        state: st,
         tokenBalance: _tokenBalance,
         spendableNano: _args.spendableNano,
         onBuild: (direction, amount, minOutput) => dexService.buildSwap(
@@ -210,13 +223,15 @@ class _DexyScreenState extends State<DexyScreen> {
   }
 
   Future<void> _openLiquidity({String initialAction = 'deposit'}) async {
+    final st = _stateForVariant;
+    if (st == null) return;
     final result = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
       isScrollControlled: true,
       builder: (ctx) => DexyLiquiditySheet(
         variant: _variant,
-        state: _state!,
+        state: st,
         initialAction: initialAction,
         tokenBalance: _tokenBalance,
         lpBalance: _lpBalance,
