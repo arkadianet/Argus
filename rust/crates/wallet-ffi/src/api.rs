@@ -2297,7 +2297,13 @@ pub async fn sigmausd_build(
     change_address: String,
     spend_addresses: Vec<String>,
     node_url: Option<String>,
+    held_tokens: i64,
 ) -> Result<String, String> {
+    if held_tokens < 0 {
+        return Err(
+            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string()
+        );
+    }
     use citadel_core::BoxId;
     use sigmausd::fetch::fetch_tx_context;
     use sigmausd::state::{BankBoxData, OracleBoxData, SigmaUsdState};
@@ -2385,6 +2391,7 @@ pub async fn sigmausd_build(
                 user_inputs: eip12,
                 current_height: height,
                 recipient_ergo_tree: Some(recipient_tree),
+                recipient_held_tokens: held_tokens,
             },
             &ctx,
             &state,
@@ -2409,6 +2416,7 @@ pub async fn sigmausd_build(
                 user_inputs: eip12,
                 current_height: height,
                 recipient_ergo_tree: Some(recipient_tree),
+                recipient_held_tokens: held_tokens,
             },
             &ctx,
             &state,
@@ -2467,6 +2475,8 @@ pub async fn sigmausd_build(
         "change_nano_erg": change_erg,
         "recipient": recipient_address,
         "change_address": change_address,
+        "held_amount": held_tokens,
+        "delivered_amount": built.summary.token_amount + held_tokens,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -2553,6 +2563,39 @@ pub async fn amm_quote(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+/// ERG needed to receive exactly `output_amount` of `to_token` from the
+/// cheapest Spectrum N2T pool. For buy-and-send: prices a shortfall.
+#[flutter_rust_bridge::frb]
+pub async fn amm_quote_exact_output(
+    to_token: String,
+    output_amount: i64,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    if output_amount <= 0 {
+        return Err(ArgusError::Generic("Amount must be positive".into()).to_json_string());
+    }
+    let set = crate::api_amm_impl::load_pools(node_url, false).await?;
+    let (pool, erg_in) =
+        crate::api_amm_impl::best_pool_for_output(&set.pools, &to_token, output_amount as u64)
+            .ok_or_else(|| {
+                ArgusError::Generic(
+                    "NO_POOL: no Spectrum pool can deliver this amount".into(),
+                )
+                .to_json_string()
+            })?;
+    serde_json::to_string(&serde_json::json!({
+        "pool_id": pool.pool_id,
+        "box_id": pool.box_id,
+        "erg_in": erg_in,
+        "output_amount": output_amount,
+        "fee_num": pool.fee_num,
+        "fee_denom": pool.fee_denom,
+        "erg_reserves": pool.erg_reserves,
+        "token_reserves": pool.token_y.amount,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 /// Prepare a Spectrum direct swap: builds the transaction, caches it, and
 /// returns a preview JSON with the `preparation_id` for the shared confirm →
 /// broadcast flow.
@@ -2569,9 +2612,15 @@ pub async fn amm_build_swap(
     change_address: String,
     spend_addresses: Vec<String>,
     node_url: Option<String>,
+    held_tokens: i64,
 ) -> Result<String, String> {
     if amount <= 0 || min_output <= 0 {
         return Err(ArgusError::Generic("Amount must be positive".into()).to_json_string());
+    }
+    if held_tokens < 0 {
+        return Err(
+            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string()
+        );
     }
     let (recipient_tree, change_tree) =
         resolve_dexy_destinations(handle_id, "amm_build_swap", &recipient_address, &change_address)?;
@@ -2611,7 +2660,7 @@ pub async fn amm_build_swap(
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
 
     let input = crate::api_amm_impl::swap_input(from_token.as_deref(), amount as u64);
-    let built = amm::direct_swap::build_direct_swap_eip12(
+    let built = amm::direct_swap::build_direct_swap_eip12_with_held(
         &pool_box,
         pool,
         &input,
@@ -2621,6 +2670,7 @@ pub async fn amm_build_swap(
         height,
         Some(&recipient_tree),
         None,
+        held_tokens as u64,
     )
     .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
 
@@ -2675,6 +2725,8 @@ pub async fn amm_build_swap(
         "total_erg_cost": built.summary.total_erg_cost,
         "pool_id": pool_id,
         "to_token": to_token,
+        "held_amount": held_tokens,
+        "delivered_amount": built.summary.output_amount as i64 + held_tokens,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }

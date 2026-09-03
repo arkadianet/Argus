@@ -76,6 +76,9 @@ pub struct MintSigUsdRequest {
     pub current_height: i32,
     /// If set, primary output goes here instead of user_ergo_tree.
     pub recipient_ergo_tree: Option<String>,
+    /// Tokens the user already holds, delivered in the receipt box alongside
+    /// the minted ones (taken from inputs, never duplicated into change).
+    pub recipient_held_tokens: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -98,6 +101,9 @@ pub struct MintSigRsvRequest {
     pub current_height: i32,
     /// If set, primary output goes here instead of user_ergo_tree.
     pub recipient_ergo_tree: Option<String>,
+    /// Tokens the user already holds, delivered in the receipt box alongside
+    /// the minted ones (taken from inputs, never duplicated into change).
+    pub recipient_held_tokens: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -257,14 +263,22 @@ pub fn build_mint_sigusd_tx(
     let fee_cfg = resolved_dev_fee_config();
     let citadel_fee = fee_cfg.budget();
 
+    if request.recipient_held_tokens < 0 {
+        return Err(TxError::BuildFailed {
+            message: "recipient_held_tokens must not be negative".to_string(),
+        });
+    }
+    let held = request.recipient_held_tokens as u64;
     let required_erg =
         erg_cost + constants::TX_FEE_NANO + citadel_fee + constants::MIN_BOX_VALUE_NANO;
-    let selected =
-        select_inputs_for_spend(&request.user_inputs, required_erg as u64, None).map_err(|e| {
-            TxError::BuildFailed {
-                message: e.to_string(),
-            }
-        })?;
+    let selected = select_inputs_for_spend(
+        &request.user_inputs,
+        required_erg as u64,
+        if held > 0 { Some((ctx.nft_ids.sigusd_token.as_str(), held)) } else { None },
+    )
+    .map_err(|e| TxError::BuildFailed {
+        message: e.to_string(),
+    })?;
 
     // BANK BOX MUST BE INPUT 0 (contract requirement)
     let mut inputs = vec![ctx.bank_input.clone()];
@@ -296,20 +310,30 @@ pub fn build_mint_sigusd_tx(
         "R5" => encode_sigma_long(erg_cost),
     );
 
+    // R4/R5 describe the mint; the receipt may carry more of the token than
+    // was minted (held tokens forwarded to the recipient).
     outputs.push(Eip12Output {
         value: constants::MIN_BOX_VALUE_NANO.to_string(),
         ergo_tree: output_ergo_tree.to_string(),
-        assets: vec![Eip12Asset::new(&ctx.nft_ids.sigusd_token, request.amount)],
+        assets: vec![Eip12Asset::new(
+            &ctx.nft_ids.sigusd_token,
+            request.amount + held as i64,
+        )],
         creation_height: request.current_height,
         additional_registers: user_registers,
     });
 
     let erg_used = required_erg as u64;
+    let spent: Vec<(&str, u64)> = if held > 0 {
+        vec![(ctx.nft_ids.sigusd_token.as_str(), held)]
+    } else {
+        vec![]
+    };
     append_change_output(
         &mut outputs,
         &selected,
         erg_used,
-        &[],
+        &spent,
         &request.user_ergo_tree,
         request.current_height,
         constants::MIN_BOX_VALUE_NANO as u64,
@@ -496,12 +520,20 @@ pub fn build_mint_sigrsv_tx(
 
     let required_erg =
         erg_cost + constants::TX_FEE_NANO + citadel_fee + constants::MIN_BOX_VALUE_NANO;
-    let selected =
-        select_inputs_for_spend(&request.user_inputs, required_erg as u64, None).map_err(|e| {
-            TxError::BuildFailed {
-                message: e.to_string(),
-            }
-        })?;
+    if request.recipient_held_tokens < 0 {
+        return Err(TxError::BuildFailed {
+            message: "recipient_held_tokens must not be negative".to_string(),
+        });
+    }
+    let held = request.recipient_held_tokens as u64;
+    let selected = select_inputs_for_spend(
+        &request.user_inputs,
+        required_erg as u64,
+        if held > 0 { Some((ctx.nft_ids.sigrsv_token.as_str(), held)) } else { None },
+    )
+    .map_err(|e| TxError::BuildFailed {
+        message: e.to_string(),
+    })?;
 
     // BANK BOX MUST BE INPUT 0 (contract requirement)
     let mut inputs = vec![ctx.bank_input.clone()];
@@ -537,7 +569,10 @@ pub fn build_mint_sigrsv_tx(
     outputs.push(Eip12Output {
         value: constants::MIN_BOX_VALUE_NANO.to_string(),
         ergo_tree: output_ergo_tree.to_string(),
-        assets: vec![Eip12Asset::new(&ctx.nft_ids.sigrsv_token, request.amount)],
+        assets: vec![Eip12Asset::new(
+            &ctx.nft_ids.sigrsv_token,
+            request.amount + held as i64,
+        )],
         creation_height: request.current_height,
         additional_registers: user_registers,
     });
@@ -547,7 +582,11 @@ pub fn build_mint_sigrsv_tx(
         &mut outputs,
         &selected,
         erg_used,
-        &[],
+        &(if held > 0 {
+            vec![(ctx.nft_ids.sigrsv_token.as_str(), held)]
+        } else {
+            vec![]
+        }),
         &request.user_ergo_tree,
         request.current_height,
         constants::MIN_BOX_VALUE_NANO as u64,

@@ -515,6 +515,7 @@ Future<String> sigmausdBuild({
   required String changeAddress,
   required List<String> spendAddresses,
   String? nodeUrl,
+  required PlatformInt64 heldTokens,
 }) => RustLib.instance.api.crateApiSigmausdBuild(
   handleId: handleId,
   action: action,
@@ -523,6 +524,7 @@ Future<String> sigmausdBuild({
   changeAddress: changeAddress,
   spendAddresses: spendAddresses,
   nodeUrl: nodeUrl,
+  heldTokens: heldTokens,
 );
 
 /// Discovered Spectrum pools with token metadata. Read-only; never touches the
@@ -552,6 +554,18 @@ Future<String> ammQuote({
   nodeUrl: nodeUrl,
 );
 
+/// ERG needed to receive exactly `output_amount` of `to_token` from the
+/// cheapest Spectrum N2T pool. For buy-and-send: prices a shortfall.
+Future<String> ammQuoteExactOutput({
+  required String toToken,
+  required PlatformInt64 outputAmount,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmQuoteExactOutput(
+  toToken: toToken,
+  outputAmount: outputAmount,
+  nodeUrl: nodeUrl,
+);
+
 /// Prepare a Spectrum direct swap: builds the transaction, caches it, and
 /// returns a preview JSON with the `preparation_id` for the shared confirm →
 /// broadcast flow.
@@ -566,6 +580,7 @@ Future<String> ammBuildSwap({
   required String changeAddress,
   required List<String> spendAddresses,
   String? nodeUrl,
+  required PlatformInt64 heldTokens,
 }) => RustLib.instance.api.crateApiAmmBuildSwap(
   handleId: handleId,
   fromToken: fromToken,
@@ -577,4 +592,5 @@ Future<String> ammBuildSwap({
   changeAddress: changeAddress,
   spendAddresses: spendAddresses,
   nodeUrl: nodeUrl,
+  heldTokens: heldTokens,
 );

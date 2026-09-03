@@ -32,7 +32,10 @@ pub use constants::{erg, fees, lp, pool_indices, pool_templates, swap_template_b
 pub use cross_protocol::{
     compare_acquisition, AcquisitionComparison, AcquisitionOption, SigmaUsdParams,
 };
-pub use direct_swap::{build_direct_swap_eip12, DirectSwapBuildResult, DirectSwapSummary};
+pub use direct_swap::{
+    build_direct_swap_eip12, build_direct_swap_eip12_with_held, DirectSwapBuildResult,
+    DirectSwapSummary,
+};
 pub use lp_deposit::{build_lp_deposit_eip12, LpDepositBuildResult, LpDepositSummary};
 pub use lp_order::{
     build_lp_deposit_order_eip12, build_lp_redeem_order_eip12, LpOrderBuildResult, LpOrderSummary,

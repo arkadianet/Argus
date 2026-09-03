@@ -207,6 +207,35 @@ pub(crate) async fn token_meta_many(
     out
 }
 
+/// The N2T pool that delivers exactly `output` of `token` for the least ERG,
+/// with that ERG amount (excluding miner fee and the recipient box value).
+pub(crate) fn best_pool_for_output<'a>(
+    pools: &'a [AmmPool],
+    token: &str,
+    output: u64,
+) -> Option<(&'a AmmPool, u64)> {
+    let mut best: Option<(&AmmPool, u64)> = None;
+    for pool in pools {
+        if pool.pool_type != amm::PoolType::N2T || pool.token_y.token_id != token {
+            continue;
+        }
+        let Some(erg) = pool.erg_reserves else { continue };
+        let Some(erg_in) = amm::calculator::calculate_input(
+            erg,
+            pool.token_y.amount,
+            output,
+            pool.fee_num,
+            pool.fee_denom,
+        ) else {
+            continue;
+        };
+        if best.map(|(_, b)| erg_in < b).unwrap_or(true) {
+            best = Some((pool, erg_in));
+        }
+    }
+    best
+}
+
 /// Every token id a pool references, for metadata prefetch.
 pub(crate) fn pool_token_ids(pool: &AmmPool) -> Vec<String> {
     let mut ids = vec![pool.token_y.token_id.clone()];
@@ -458,6 +487,37 @@ mod tests {
             decimals: Some(0),
             name: None,
         }
+    }
+
+    fn n2t(pool_id: &str, erg: u64, token: &str, amount: u64) -> AmmPool {
+        AmmPool {
+            pool_id: pool_id.to_string(),
+            pool_type: amm::state::PoolType::N2T,
+            box_id: format!("box_{pool_id}"),
+            erg_reserves: Some(erg),
+            token_x: None,
+            token_y: amm::state::TokenAmount { token_id: token.to_string(), amount, decimals: None, name: None },
+            lp_token_id: format!("lp_{pool_id}"),
+            lp_circulating: 1,
+            fee_num: 997,
+            fee_denom: 1000,
+        }
+    }
+
+    #[test]
+    fn exact_output_picks_the_pool_needing_the_least_erg() {
+        let shallow = n2t("shallow", 1_000_000_000, "tok", 1_000);
+        let deep = n2t("deep", 100_000_000_000, "tok", 100_000);
+        let other = n2t("other", 100_000_000_000, "zzz", 100_000);
+        let pools = vec![shallow, deep, other];
+
+        let (pool, erg_in) = best_pool_for_output(&pools, "tok", 10).expect("route");
+        assert_eq!(pool.pool_id, "deep");
+        // ~10 tokens of 100_000 against 100 ERG: about 0.01 ERG plus fee.
+        assert!(erg_in > 10_000_000 && erg_in < 10_100_000, "erg_in {erg_in}");
+        // More than the pool holds: no route.
+        assert!(best_pool_for_output(&pools, "tok", 100_000).is_none());
+        assert!(best_pool_for_output(&pools, "nope", 1).is_none());
     }
 
     fn t2t(pool_id: &str, x: amm::state::TokenAmount, y: amm::state::TokenAmount) -> AmmPool {

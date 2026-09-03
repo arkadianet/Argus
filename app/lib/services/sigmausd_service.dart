@@ -238,6 +238,7 @@ class SigmaUsdService {
     required String recipient,
     required String changeAddress,
     required List<String> spendAddresses,
+    int heldTokens = 0,
   }) async {
     final raw = await api.sigmausdBuild(
       handleId: _requireHandle(),
@@ -247,6 +248,7 @@ class SigmaUsdService {
       changeAddress: changeAddress,
       spendAddresses: spendAddresses,
       nodeUrl: _node,
+      heldTokens: heldTokens,
     );
     return SigmaUsdBuildResult.fromJson((jsonDecode(raw) as Map).cast());
   }

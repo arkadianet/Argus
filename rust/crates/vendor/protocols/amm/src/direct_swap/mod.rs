@@ -56,7 +56,43 @@ pub fn build_direct_swap_eip12(
     // A custom fee must be at least the network minimum (1_000_000 nano).
     miner_fee_nano: Option<u64>,
 ) -> Result<DirectSwapBuildResult, AmmError> {
+    build_direct_swap_eip12_with_held(
+        pool_box,
+        pool,
+        input,
+        min_output,
+        user_utxos,
+        user_ergo_tree,
+        current_height,
+        recipient_ergo_tree,
+        miner_fee_nano,
+        0,
+    )
+}
+
+/// Like [`build_direct_swap_eip12`], but an ERG-funded N2T swap can also
+/// forward `recipient_held_tokens` of the output token that the user already
+/// holds, so the recipient receives `output + held` in one box. Held tokens
+/// are taken from the user's inputs and never duplicated into change.
+#[allow(clippy::too_many_arguments)]
+pub fn build_direct_swap_eip12_with_held(
+    pool_box: &Eip12InputBox,
+    pool: &AmmPool,
+    input: &SwapInput,
+    min_output: u64,
+    user_utxos: &[Eip12InputBox],
+    user_ergo_tree: &str,
+    current_height: i32,
+    recipient_ergo_tree: Option<&str>,
+    miner_fee_nano: Option<u64>,
+    recipient_held_tokens: u64,
+) -> Result<DirectSwapBuildResult, AmmError> {
     let miner_fee = resolve_miner_fee(miner_fee_nano)?;
+    if recipient_held_tokens > 0 && pool.pool_type != PoolType::N2T {
+        return Err(AmmError::TxBuildError(
+            "held tokens can only be forwarded on an ERG-funded N2T swap".to_string(),
+        ));
+    }
     match pool.pool_type {
         PoolType::N2T => build_n2t_direct_swap(
             pool_box,
@@ -68,6 +104,7 @@ pub fn build_direct_swap_eip12(
             current_height,
             recipient_ergo_tree,
             miner_fee,
+            recipient_held_tokens,
         ),
         PoolType::T2T => build_t2t_direct_swap(
             pool_box,
