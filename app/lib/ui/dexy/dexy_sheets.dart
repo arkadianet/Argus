@@ -37,7 +37,9 @@ class DexyMintSheetState extends State<DexyMintSheet> {
   String? _previewError;
   bool _building = false;
 
-  double get _effectiveRate => widget.state.rates.ergPerToken;
+  /// Oracle rate for this sheet's variant; zero when the state handed in
+  /// belongs to the other variant, so no conversion runs on wrong numbers.
+  double get _effectiveRate => mintRateFor(widget.state, widget.variant);
 
   @override
   void dispose() {
@@ -877,3 +879,7 @@ List<(String, String)> mintCostRows(DexyMintPreview p, {required String shortNam
     ('Total', formatErg(p.totalCostNano + argusFeeNano)),
   ];
 }
+
+/// ERG per whole token from [state], or 0 when [state] is not for [variant].
+double mintRateFor(DexyState state, DexyVariant variant) =>
+    state.variant == variant ? state.rates.ergPerToken : 0;
