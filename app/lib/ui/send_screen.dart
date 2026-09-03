@@ -8,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../format.dart';
 import '../services/contacts_service.dart';
+import '../services/route_display.dart';
 import '../services/route_quote_controller.dart';
 import '../services/token_router.dart';
 import '../services/dexy_service.dart';
@@ -24,10 +25,16 @@ import 'widgets/amount_entry.dart';
 import 'widgets/asset_picker_sheet.dart';
 
 /// One buy-and-send route line, e.g. `≈ 3.7196 ERG · Dexy FreeMint  ·  cheapest`.
-String routeQuoteLabel(RouteQuote quote, {required bool cheapest}) =>
-    '≈ ${formatErg(quote.ergCostNano)} · ${quote.protocol} ${quote.path}'
-    '${quote.note != null ? ' (${quote.note})' : ''}'
-    '${cheapest ? '  ·  cheapest' : ''}';
+String routeQuoteLabel(RouteQuote quote, {required bool cheapest}) {
+  final bits = <String>[
+    if (quote.note != null) quote.note!,
+    if (quote.liquidityNano != null) liquidityLabel(quote.liquidityNano),
+    if (quote.priceImpactPct != null) '${quote.priceImpactPct!.toStringAsFixed(1)}% impact',
+  ];
+  return '≈ ${formatErg(quote.ergCostNano)} · ${quote.protocol} ${quote.path}'
+      '${bits.isEmpty ? '' : ' (${bits.join(', ')})'}'
+      '${cheapest ? '  ·  cheapest' : ''}';
+}
 
 /// Amount-field label for the buy-and-send flow.
 String buyAmountLabel(BuyableToken token) => '${token.name} amount to deliver';
@@ -430,11 +437,16 @@ class _SendScreenState extends State<SendScreen> {
         ConfirmTxRow('Bought', '${tok(build.acquired)} via ${build.protocol} ${build.path}'),
         ConfirmTxRow('ERG paid', formatErg(build.ergCostNano)),
         if (build.protocolFeeNano > 0) ConfirmTxRow('Protocol fee', formatErg(build.protocolFeeNano)),
+        if (build.priceImpactPct != null)
+          ConfirmTxRow('Price impact', '${build.priceImpactPct!.toStringAsFixed(2)}%', bold: build.priceImpactPct! > priceImpactWarnPct),
         ConfirmTxRow('Miner fee', formatErg(build.minerFeeNano)),
         if (build.changeNanoErg > 0) ConfirmTxRow('Change to you', formatErg(build.changeNanoErg)),
       ],
-      detail: 'You hold ${tok(held)}; the rest is bought on the cheapest route and '
-          'forwarded in one transaction.  ·  ${networkController.activeUrl ?? 'Node not chosen yet'}',
+      detail: [
+        if (impactWarning(build.priceImpactPct) case final w?) w,
+        'You hold ${tok(held)}; the rest is bought on the cheapest route and forwarded in one transaction.',
+        networkController.activeUrl ?? 'Node not chosen yet',
+      ].join('  ·  '),
     );
     if (!mounted) return;
     if (choice != ConfirmChoice.broadcast) {
@@ -745,7 +757,7 @@ class _SendScreenState extends State<SendScreen> {
                 : 'No route available for this amount right now.',
             style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rustFor(context)),
           )
-        else
+        else ...[
           for (final (i, q) in quotes.indexed)
             Padding(
               padding: const EdgeInsets.only(bottom: 4),
@@ -759,6 +771,12 @@ class _SendScreenState extends State<SendScreen> {
                 ],
               ),
             ),
+          if (impactWarning(quotes.first.priceImpactPct) case final warning?)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(warning, style: TextStyle(fontSize: 12.5, color: rustFor(context))),
+            ),
+        ],
       ],
     );
   }

@@ -178,13 +178,15 @@ class AmmQuote {
 
 /// ERG needed for an exact token output from the cheapest Spectrum pool.
 class AmmExactQuote {
-  const AmmExactQuote({required this.poolId, required this.boxId, required this.ergIn, required this.outputAmount, required this.feeNum, required this.feeDenom});
+  const AmmExactQuote({required this.poolId, required this.boxId, required this.ergIn, required this.outputAmount, required this.feeNum, required this.feeDenom, this.ergReserves, this.tokenReserves});
   final String poolId;
   final String boxId;
   final int ergIn;
   final int outputAmount;
   final int feeNum;
   final int feeDenom;
+  final int? ergReserves;
+  final int? tokenReserves;
 
   factory AmmExactQuote.fromJson(Map<String, dynamic> j) => AmmExactQuote(
         poolId: j['pool_id'] as String? ?? '',
@@ -193,6 +195,8 @@ class AmmExactQuote {
         outputAmount: (j['output_amount'] as num?)?.toInt() ?? 0,
         feeNum: (j['fee_num'] as num?)?.toInt() ?? 0,
         feeDenom: (j['fee_denom'] as num?)?.toInt() ?? 0,
+        ergReserves: (j['erg_reserves'] as num?)?.toInt(),
+        tokenReserves: (j['token_reserves'] as num?)?.toInt(),
       );
 }
 
