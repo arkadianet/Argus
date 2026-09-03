@@ -4,6 +4,8 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../format.dart';
 import '../../services/media_url.dart';
+import '../../services/token_pricer.dart';
+import '../../services/token_pricing.dart';
 import '../../services/verified_tokens.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
@@ -74,6 +76,10 @@ class TokenDetailSheet extends StatelessWidget {
                 ),
               ],
             ),
+            if (!token.isNft) ...[
+              const SizedBox(height: 12),
+              _PriceLine(token: token),
+            ],
             if (media != null) ...[
               const SizedBox(height: 16),
               ClipRRect(
@@ -230,4 +236,36 @@ Future<void> showTokenDetailSheet(
             },
     ),
   );
+}
+
+/// "≈ $0.0125 each · ≈ $2.50 held · Spectrum pool, 500 ERG deep", or why
+/// there is no price.
+class _PriceLine extends StatelessWidget {
+  const _PriceLine({required this.token});
+  final TokenBalance token;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = ArgusColors.of(context).muted;
+    final price = tokenPricer.priceOf(token.id);
+    final unit = tokenPricer.unitFiatText(token.id);
+    final held = tokenPricer.fiatTextFor(tokenId: token.id, amount: token.amount, decimals: token.decimals);
+    final String text;
+    if (price == null || unit == null) {
+      text = tokenPricer.result.ergUsd == null
+          ? 'No price yet · ${tokenPricer.source.label} has not answered'
+          : 'No price · no ERG pool at least ${poolDepthFloorErg.toStringAsFixed(0)} ERG deep';
+    } else {
+      final via = price.depthErg == null
+          ? price.via
+          : '${price.via}, ${price.depthErg!.toStringAsFixed(0)} ERG deep';
+      text = [
+        '$unit each',
+        if (held != null) '$held held',
+        via,
+        if (!price.countsInTotal) 'not counted in totals (unverified)',
+      ].join(' · ');
+    }
+    return Text(text, style: TextStyle(fontSize: 12.5, color: muted));
+  }
 }

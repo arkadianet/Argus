@@ -21,6 +21,14 @@ void main() {
     expect(find.text('••••'), findsOneWidget);
   });
 
+  testWidgets('token row shows its fiat value and masks it when hidden', (tester) async {
+    await tester.pumpWidget(_wrap(AssetTile.token(token, fiatText: '≈ \$123.45')));
+    expect(find.text('≈ \$123.45'), findsOneWidget);
+    await tester.pumpWidget(_wrap(AssetTile.token(token, fiatText: '≈ \$123.45', hidden: true)));
+    expect(find.text('≈ \$123.45'), findsNothing);
+    expect(find.text('≈ ••••'), findsOneWidget);
+  });
+
   testWidgets('ERG row shows the sigma mark and fiat', (tester) async {
     await tester.pumpWidget(_wrap(AssetTile.erg(balanceNano: 2500000000, fiatText: '≈ \$1.00 USD')));
     expect(find.text('Σ'), findsOneWidget);

@@ -18,6 +18,8 @@ import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/sigmausd_service.dart';
+import '../services/token_pricer.dart';
+import '../services/token_pricing.dart';
 import '../services/watch_only_service.dart';
 import '../services/wallet_database_service.dart';
 import '../services/wallet_service.dart';
@@ -1168,13 +1170,14 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Widget _ledger() {
     return ListenableBuilder(
-      listenable: networkController,
+      listenable: Listenable.merge([networkController, tokenPricer]),
       builder: (context, _) {
         final fungible = _sync.tokens.where((t) => !t.isNft).toList();
         final nfts = _sync.tokens.where((t) => t.isNft).toList();
         final fragmented = _sync.utxoCount > utxoFragmentationThreshold;
         Widget tokenTile(TokenBalance t) => AssetTile.token(
               t,
+              fiatText: t.isNft ? null : tokenPricer.fiatTextFor(tokenId: t.id, amount: t.amount, decimals: t.decimals),
               hidden: _balanceHidden,
               onTap: () => _openToken(t),
             );
@@ -1479,9 +1482,25 @@ class _DashboardScreenState extends State<DashboardScreen>
       watched: watchOnlyService.addresses.length,
       unknown: portfolio.unknown,
     );
+    final value = holdingsValue(
+      ergNano: portfolio.totalNano,
+      tokens: [
+        for (final t in _sync.tokens) (id: t.id, amount: t.amount, decimals: t.decimals),
+        for (final w in _wallets)
+          if (w.walletId != _walletId) ...?_lastKnown[w.walletId]?.tokens,
+      ],
+      result: tokenPricer.result,
+    );
+    final fiatValue = tokenPricer.fiatTextForUsd(tokenPricer.result.ergUsd == null ? null : value.usd);
     final fiat = _balanceHidden
         ? '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}'
-        : networkController.fiatText(portfolio.totalNano);
+        : fiatValue == null
+            ? null
+            : [
+                '$fiatValue ${networkController.fiatCode.toUpperCase()}',
+                if (value.unpriced + value.excluded > 0) '${value.unpriced + value.excluded} unpriced',
+                if (tokenPricer.stale) 'prices stale',
+              ].join(' · ');
     return SoftCard(
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
       child: Column(
