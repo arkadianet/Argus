@@ -1,3 +1,5 @@
+import 'widgets/error_sheet.dart';
+import '../services/app_fee.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -161,6 +163,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           ConfirmTxRow('Total Value In', formatErg(preview.totalErgIn)),
           ConfirmTxRow('Tokens Included', '${preview.tokenCount} token types'),
           ConfirmTxRow('Miner Fee', formatErg(preview.minerFee)),
+          argusFeeRow(),
         ],
         detail:
             'Token-bearing inputs may be included in this consolidation. '
@@ -186,7 +189,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);
-        _snack('Consolidation failed: $e', isError: true);
+        showErrorSheet(context, title: 'Consolidation failed', message: '$e');
       }
     }
   }
@@ -258,6 +261,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           ),
           ConfirmTxRow('Change Returned', formatErg(preview.changeNanoErg)),
           ConfirmTxRow('Miner Fee', formatErg(preview.minerFee)),
+          argusFeeRow(),
         ],
         detail: 'Fee is computed by the transaction builder.',
         confirmLabel: 'Sign & broadcast split',
@@ -281,7 +285,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);
-        _snack('Split failed: $e', isError: true);
+        showErrorSheet(context, title: 'Split failed', message: '$e');
       }
     }
   }
@@ -330,6 +334,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           ConfirmTxRow('Allocated to Outputs', formatErg(preview.allocatedErg)),
           ConfirmTxRow('Change Output', formatErg(preview.changeNanoErg)),
           ConfirmTxRow('Miner Fee', formatErg(preview.minerFee)),
+          argusFeeRow(),
         ],
         detail: 'Fee is computed by the transaction builder.',
         confirmLabel: 'Sign & broadcast restructure',
@@ -353,7 +358,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);
-        _snack('Restructure failed: $e', isError: true);
+        showErrorSheet(context, title: 'Restructure failed', message: '$e');
       }
     }
   }

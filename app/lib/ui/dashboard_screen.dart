@@ -1,3 +1,4 @@
+import 'widgets/error_sheet.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -476,9 +477,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         try {
           await _pinFailed();
         } catch (_) {}
-        _snack('${e.code}: ${e.message}');
+        showErrorSheet(context, code: e.code, message: e.message);
       } on SecureStorageException catch (e) {
-        _snack(e.message);
+        showErrorSheet(context, message: e.message);
       }
     });
   }
@@ -504,9 +505,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         HapticFeedback.lightImpact();
         await _afterUnlock();
       } on ArgusException catch (e) {
-        _snack('${e.code}: ${e.message}');
+        showErrorSheet(context, code: e.code, message: e.message);
       } on SecureStorageException catch (e) {
-        _snack(e.message);
+        showErrorSheet(context, message: e.message);
       }
     });
   }
@@ -532,9 +533,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         }
         await _afterUnlock();
       } on ArgusException catch (e) {
-        _snack('${e.code}: ${e.message}');
+        showErrorSheet(context, code: e.code, message: e.message);
       } on SecureStorageException catch (e) {
-        _snack(e.message);
+        showErrorSheet(context, message: e.message);
       }
     });
   }
@@ -655,7 +656,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     } on ArgusException catch (e) {
       if (!mounted) return;
       setState(_resetLocked);
-      _snack('${e.code}: ${e.message}');
+      showErrorSheet(context, code: e.code, message: e.message);
     } catch (e) {
       if (!mounted) return;
       setState(_resetLocked);

@@ -1,3 +1,5 @@
+import 'widgets/error_sheet.dart';
+import '../services/app_fee.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -205,7 +207,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     } on ArgusException catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      _snack('${e.code}: ${e.message}');
+      showErrorSheet(context, code: e.code, message: e.message);
       return;
     } catch (e) {
       if (!mounted) return;
@@ -230,6 +232,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
         else
           ConfirmTxRow('ERG back', formatErg(build.ergAmountNano)),
         ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
+        argusFeeRow(),
       ],
       detail: isMint
           ? 'Minted against the bank at the oracle rate.'

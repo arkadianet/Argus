@@ -9,6 +9,7 @@ import 'package:uuid/uuid.dart';
 
 import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
+import 'app_fee.dart';
 import 'secure_storage.dart';
 import 'wallet_database_service.dart';
 
@@ -1304,7 +1305,7 @@ class WalletService {
     _requireUnlocked();
     if (addresses.isEmpty) return [];
 
-    final reserve = BigInt.from(minerFeeNano + minBoxNano);
+    final reserve = BigInt.from(minerFeeNano + argusFeeNano + minBoxNano);
     final txIds = <String>[];
 
     while (true) {

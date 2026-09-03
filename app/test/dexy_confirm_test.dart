@@ -8,7 +8,7 @@ void main() {
   test('mint rows show received amount, cost and fee', () {
     const b = DexyBuildResult(preparationId: 1, recipient: 'r', minerFee: 1100000, changeNanoErg: 0, ergCostNano: 2000000000, tokenAmount: 5);
     final c = dexyMintConfirm(b, v);
-    expect(c.rows.map((r) => r.label), ['Received', 'ERG cost', 'Miner fee']);
+    expect(c.rows.map((r) => r.label), ['Received', 'ERG cost', 'Miner fee', 'Argus fee']);
     expect(c.rows.first.value, '5 DexyGold');
     expect(c.confirmLabel, contains('mint'));
   });

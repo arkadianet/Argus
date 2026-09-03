@@ -33,6 +33,8 @@ pub const DEFAULT_DEV_FEE_ERGO_TREE: &str =
 pub struct DevFeeConfig {
     pub enabled: bool,
     pub recipient_ergo_tree: String,
+    /// Fee per transaction in nanoERG (defaults to the Citadel amount).
+    pub amount_nano: i64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +48,7 @@ impl DevFeeConfig {
         Self {
             enabled: false,
             recipient_ergo_tree: String::new(),
+            amount_nano: 0,
         }
     }
 
@@ -53,13 +56,24 @@ impl DevFeeConfig {
         Self {
             enabled: true,
             recipient_ergo_tree: DEFAULT_DEV_FEE_ERGO_TREE.to_string(),
+            amount_nano: DEV_FEE_NANO,
+        }
+    }
+
+    /// A fee of `amount_nano` paid to `recipient_ergo_tree` on every built
+    /// transaction.
+    pub fn custom(recipient_ergo_tree: String, amount_nano: i64) -> Self {
+        Self {
+            enabled: amount_nano > 0 && !recipient_ergo_tree.is_empty(),
+            recipient_ergo_tree,
+            amount_nano,
         }
     }
 
     /// nanoERG to budget when selecting inputs / computing change (0 if off).
     pub fn budget(&self) -> i64 {
         if self.enabled {
-            DEV_FEE_NANO
+            self.amount_nano
         } else {
             0
         }
@@ -86,11 +100,23 @@ pub fn append_dev_fee_output(
         ));
     }
     outputs.push(Eip12Output::simple(
-        DEV_FEE_NANO,
+        cfg.amount_nano,
         cfg.recipient_ergo_tree.clone(),
         height,
     ));
     Ok(())
+}
+
+/// Installs the process-wide fee config. Must run before any builder
+/// resolves it; a later call is ignored. Returns whether it took effect.
+#[cfg(not(test))]
+pub fn install_config(cfg: DevFeeConfig) -> bool {
+    CONFIG.set(cfg).is_ok()
+}
+
+#[cfg(test)]
+pub fn install_config(_cfg: DevFeeConfig) -> bool {
+    false
 }
 
 /// Resolve fee config (env override + hardcoded default). Cached after first call.
@@ -147,6 +173,7 @@ fn load_from_env_or_default() -> DevFeeConfig {
             Ok(tree) => DevFeeConfig {
                 enabled: true,
                 recipient_ergo_tree: tree,
+                amount_nano: DEV_FEE_NANO,
             },
             Err(e) => {
                 // Fail closed on bad override: keep default rather than panic in builders.
@@ -178,6 +205,7 @@ pub fn try_load_from_env() -> Result<DevFeeConfig, DevFeeError> {
     Ok(DevFeeConfig {
         enabled: true,
         recipient_ergo_tree: tree,
+        amount_nano: DEV_FEE_NANO,
     })
 }
 

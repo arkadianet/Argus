@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../build_info.dart';
+import '../../format.dart';
+import '../../services/app_fee.dart';
 import '../../theme/argus_theme.dart';
 import 'settings_shared.dart';
 
@@ -31,6 +33,11 @@ class AboutPage extends StatelessWidget {
               icon: Icons.shield_outlined,
               title: 'Unaudited prototype',
               subtitle: 'Transactions on Ergo are irreversible. Use only funds you can afford to lose.',
+            ),
+            SettingsRow(
+              icon: Icons.toll_outlined,
+              title: 'App fee ${formatErg(argusFeeNano)} per transaction',
+              subtitle: 'Paid to ${argusFeeAddress.substring(0, 12)}… on every transaction Argus builds. ErgoPay requests from dApps are not charged.',
             ),
             SettingsRow(
               icon: Icons.new_releases_outlined,

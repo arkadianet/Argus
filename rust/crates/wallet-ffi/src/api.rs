@@ -19,10 +19,30 @@ use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
 use crate::error::ArgusError;
 
 #[flutter_rust_bridge::frb(init)]
+/// Argus app fee: paid on every transaction the wallet builds (sends, UTXO
+/// tools, swaps, mints). ErgoPay transactions are built by the dApp and are
+/// not touched. Disclosed on every confirm sheet and in Settings → About.
+pub const ARGUS_FEE_ADDRESS: &str = "9iArkadiaZAPVxbUp2XQ8SVA1zGA29rCPhbpVuUaaKW6fWspUZA";
+pub const ARGUS_FEE_NANO: i64 = 1_100_000;
+
 pub fn init_app() {
-    // Argus does not levy the Citadel-style app fee. Disable it before any
-    // protocol builder (dexy, etc.) resolves the dev-fee config once.
+    // Never the inherited Citadel fee; the Argus fee is installed instead.
     std::env::set_var("CITADEL_DEV_FEE_ENABLED", "false");
+    if let Ok(tree) = address_to_ergo_tree(ARGUS_FEE_ADDRESS) {
+        ergo_tx::install_dev_fee_config(DevFeeConfig::custom(tree, ARGUS_FEE_NANO));
+    }
+}
+
+/// The app fee as the UI should display it.
+#[flutter_rust_bridge::frb(sync)]
+pub fn app_fee_info() -> String {
+    let cfg = ergo_tx::resolved_dev_fee_config();
+    serde_json::json!({
+        "address": ARGUS_FEE_ADDRESS,
+        "amount_nano": cfg.budget(),
+        "enabled": cfg.enabled,
+    })
+    .to_string()
 }
 
 fn err_str<E: Into<ArgusError>>(e: E) -> String {
@@ -1052,7 +1072,7 @@ async fn prepare(
         amount_nano_erg,
         token_ref,
         height,
-        &DevFeeConfig::disabled(),
+        &ergo_tx::resolved_dev_fee_config(),
     )
     .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
 

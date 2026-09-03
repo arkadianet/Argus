@@ -1,3 +1,4 @@
+import 'widgets/error_sheet.dart';
 import 'package:flutter/material.dart';
 
 import '../bridge/argus_error.dart';
@@ -52,7 +53,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
         _confirmCtrl.clear();
       });
     } on ArgusException catch (e) {
-      _snack('${e.code}: ${e.message}');
+      showErrorSheet(context, code: e.code, message: e.message);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -91,9 +92,9 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
       if (!mounted) return null;
       Navigator.pop(context, walletId);
     } on ArgusException catch (e) {
-      _snack('${e.code}: ${e.message}');
+      showErrorSheet(context, code: e.code, message: e.message);
     } on SecureStorageException catch (e) {
-      _snack(e.message);
+      showErrorSheet(context, message: e.message);
     } catch (_) {
       _snack('Could not create the wallet');
     } finally {
