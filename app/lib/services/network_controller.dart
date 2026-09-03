@@ -38,6 +38,10 @@ class NodeProbe {
     this.error,
   });
 
+  /// Blocks the extra index is behind the chain, when both are known.
+  int? get indexLag =>
+      height != null && indexedHeight != null ? height! - indexedHeight! : null;
+
   factory NodeProbe.fromJson(Map<String, dynamic> json) {
     return NodeProbe(
       url: json['url'] as String? ?? '',
@@ -60,13 +64,15 @@ int? indexedHeightFromJson(Map<dynamic, dynamic> json) {
   return raw is num ? raw.toInt() : null;
 }
 
-String describeNode(NodeEntry node, NodeProbe? probe, {required bool active}) {
+String describeNode(NodeEntry node, NodeProbe? probe, {required bool active, bool preferred = false}) {
   final bits = <String>[
     if (!node.enabled) 'Off' else if (active) 'In use' else 'Standby',
+    if (preferred && node.enabled) 'chosen',
   ];
   if (probe != null) {
     if (probe.extraIndex == true) {
-      bits.add('extraIndex');
+      final lag = probe.indexLag;
+      bits.add(lag != null && lag > 2 ? 'extraIndex, lag $lag' : 'extraIndex');
     } else if (probe.extraIndex == false) {
       bits.add('no extraIndex');
     }
@@ -74,6 +80,40 @@ String describeNode(NodeEntry node, NodeProbe? probe, {required bool active}) {
     if (!probe.ok) bits.add('unreachable');
   }
   return bits.join('  ·  ');
+}
+
+/// Picks the node to use. The chosen node wins while it answers; otherwise
+/// the best automatic candidate: reachable, with extraIndex, smallest index
+/// lag, then the list order as the tie-break.
+NodeProbe? chooseActive(List<NodeProbe> probes, {String? preferred}) {
+  if (preferred != null) {
+    for (final p in probes) {
+      if (p.url == preferred && p.ok) return p;
+    }
+  }
+  final ok = probes.where((p) => p.ok).toList();
+  if (ok.isEmpty) return null;
+  int score(NodeProbe p) {
+    if (p.extraIndex != true) return 1 << 30;
+    return p.indexLag ?? (1 << 20);
+  }
+  ok.sort((a, b) => score(a).compareTo(score(b)));
+  return ok.first;
+}
+
+/// REST endpoints advertised by an Ergo node's `/peers/all` list, HTTPS
+/// only, deduplicated, excluding [known].
+List<String> restApiUrlsFromPeers(List<dynamic> peers, {Iterable<String> known = const []}) {
+  final seen = <String>{...known};
+  final out = <String>[];
+  for (final p in peers) {
+    if (p is! Map) continue;
+    final raw = p['restApiUrl']?.toString() ?? '';
+    final clean = normalizeNodeUrl(raw);
+    if (clean == null || !clean.startsWith('https://')) continue;
+    if (seen.add(clean)) out.add(clean);
+  }
+  return out;
 }
 
 class NetworkController extends ChangeNotifier {
@@ -87,6 +127,14 @@ class NetworkController extends ChangeNotifier {
   static const _nodesKey = 'argus_nodes';
   static const _explorerKey = 'argus_explorer';
   static const _lastGoodKey = 'argus_last_good_node';
+  static const _preferredKey = 'argus_preferred_node';
+
+  /// Node the user chose in Settings; null means automatic selection.
+  String? preferredUrl;
+
+  /// Nodes found via the active node's peer list, not yet in [nodes].
+  List<NodeProbe> discovered = const [];
+  bool discovering = false;
 
   List<NodeEntry> nodes = [
     for (final url in defaultNodes) NodeEntry(url: url),
@@ -146,7 +194,9 @@ class NetworkController extends ChangeNotifier {
   List<String> get enabledUrls =>
       nodes.where((n) => n.enabled && n.url.isNotEmpty).map((n) => n.url).toList();
 
-  List<String> get orderedUrls => probeOrder(enabledUrls, lastGood);
+  /// Chosen node first, then the last one that worked, then list order.
+  List<String> get orderedUrls =>
+      probeOrder(probeOrder(enabledUrls, lastGood), activeUrl ?? preferredUrl);
 
   String get statusLabel {
     if (activeUrl == null || height == null) return 'Offline';
@@ -173,6 +223,7 @@ class NetworkController extends ChangeNotifier {
     }
     explorer = prefs.getString(_explorerKey) ?? defaultExplorer;
     lastGood = prefs.getString(_lastGoodKey);
+    preferredUrl = prefs.getString(_preferredKey);
     await _loadFiatCurrency();
     try {
       await apply();
@@ -186,6 +237,48 @@ class NetworkController extends ChangeNotifier {
     await prefs.setString(_explorerKey, explorer);
     if (lastGood != null && lastGood!.isNotEmpty) {
       await prefs.setString(_lastGoodKey, lastGood!);
+    }
+    if (preferredUrl == null) {
+      await prefs.remove(_preferredKey);
+    } else {
+      await prefs.setString(_preferredKey, preferredUrl!);
+    }
+  }
+
+  Future<void> setPreferredNode(String? url) async {
+    if (url == preferredUrl) return;
+    preferredUrl = url;
+    notifyListeners();
+    await persist();
+    await probe();
+  }
+
+  /// Asks the active node for peers that advertise a REST URL and probes
+  /// them. Results land in [discovered] for the user to add.
+  Future<void> discoverNodes() async {
+    final base = activeUrl;
+    if (base == null || discovering) return;
+    discovering = true;
+    notifyListeners();
+    try {
+      final res = await http.get(Uri.parse('$base/peers/all')).timeout(const Duration(seconds: 10));
+      if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
+      final peers = jsonDecode(res.body);
+      final urls = restApiUrlsFromPeers(peers is List ? peers : const [], known: nodes.map((n) => n.url));
+      final results = await Future.wait(urls.take(40).map(probeNodeDetails));
+      final good = results.where((p) => p.ok).toList();
+      good.sort((a, b) {
+        final ai = a.extraIndex == true ? 0 : 1;
+        final bi = b.extraIndex == true ? 0 : 1;
+        if (ai != bi) return ai - bi;
+        return (a.indexLag ?? 1 << 20).compareTo(b.indexLag ?? 1 << 20);
+      });
+      discovered = good;
+    } catch (_) {
+      discovered = const [];
+    } finally {
+      discovering = false;
+      notifyListeners();
     }
   }
 
@@ -209,18 +302,14 @@ class NetworkController extends ChangeNotifier {
       probes
         ..clear()
         ..addEntries(results.map((p) => MapEntry(p.url, p)));
-      NodeProbe? first;
-      for (final p in results) {
-        if (p.ok) {
-          first = p;
-          break;
-        }
-      }
-      activeUrl = first?.url;
-      height = first?.height;
+      final chosen = chooseActive(results, preferred: preferredUrl);
+      activeUrl = chosen?.url;
+      height = chosen?.height;
       if (activeUrl != null) {
         lastGood = activeUrl;
         await persist();
+        // Rust takes the list in order and uses the first that answers.
+        await apply();
       }
       try {
         await RustLib.instance.api.crateApiProbeNetwork();
@@ -312,6 +401,7 @@ class NetworkController extends ChangeNotifier {
     if (clean == null) return 'Enter https://host or http://ip:port';
     if (nodes.any((n) => n.url == clean)) return 'Node already added';
     nodes.add(NodeEntry(url: clean));
+    discovered = discovered.where((p) => p.url != clean).toList();
     await persist();
     await probe();
     return null;
@@ -321,7 +411,8 @@ class NetworkController extends ChangeNotifier {
     if (index < 0 || index >= nodes.length) return;
     final enabled = enabledUrls;
     if (nodes[index].enabled && enabled.length <= 1) return;
-    nodes.removeAt(index);
+    final removed = nodes.removeAt(index);
+    if (removed.url == preferredUrl) preferredUrl = null;
     await persist();
     await probe();
   }
