@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
 import 'secure_storage.dart';
+import 'wallet_database_service.dart';
 
 /// Metadata for a stored wallet.
 class WalletInfo {
@@ -18,6 +19,10 @@ class WalletInfo {
   final DateTime createdAt;
   final String? address0;
   final int? pinnedAddressIndex;
+
+  /// The pinned address itself, stored when pinning so a locked wallet can
+  /// still show and query its primary address.
+  final String? pinnedAddress;
   final bool isUnlocked;
 
   WalletInfo({
@@ -26,8 +31,13 @@ class WalletInfo {
     required this.createdAt,
     this.address0,
     this.pinnedAddressIndex,
+    this.pinnedAddress,
     this.isUnlocked = false,
   });
+
+  /// Address to show for this wallet when it is not the active one.
+  String? get displayAddress =>
+      (pinnedAddressIndex ?? 0) > 0 && pinnedAddress != null ? pinnedAddress : address0;
 
   WalletInfo copyWith({bool? isUnlocked}) => WalletInfo(
         walletId: walletId,
@@ -35,6 +45,7 @@ class WalletInfo {
         createdAt: createdAt,
         address0: address0,
         pinnedAddressIndex: pinnedAddressIndex,
+        pinnedAddress: pinnedAddress,
         isUnlocked: isUnlocked ?? this.isUnlocked,
       );
 
@@ -44,6 +55,7 @@ class WalletInfo {
         'createdAt': createdAt.toIso8601String(),
         'address0': address0,
         'pinnedAddressIndex': pinnedAddressIndex,
+        'pinnedAddress': pinnedAddress,
       };
 
   factory WalletInfo.fromJson(Map<String, dynamic> json) => WalletInfo(
@@ -53,6 +65,7 @@ class WalletInfo {
             DateTime.now(),
         address0: json['address0'] as String?,
         pinnedAddressIndex: json['pinnedAddressIndex'] as int?,
+        pinnedAddress: json['pinnedAddress'] as String?,
       );
 }
 
@@ -635,9 +648,11 @@ class WalletService {
     required String phrase,
     required String passphrase,
     required String pin,
+    String? name,
   }) async {
     final walletId = const Uuid().v4();
-    final name = await generateWalletName();
+    final chosen = name?.trim();
+    final walletName = chosen != null && chosen.isNotEmpty ? chosen : await generateWalletName();
     final session = await createWallet(
       phrase,
       passphrase: passphrase,
@@ -653,7 +668,7 @@ class WalletService {
       final address0 = await deriveAddress(0);
       await saveWalletInfo(
         walletId,
-        name: name,
+        name: walletName,
         createdAt: DateTime.now().toUtc(),
         address0: address0,
       );
@@ -796,7 +811,7 @@ class WalletService {
 
   /// Pin a specific address index as the primary send/receive address for this wallet.
   /// Pass `null` to reset to the default (index 0).
-  Future<void> setPinnedAddressIndex(String walletId, int? index) async {
+  Future<void> setPinnedAddressIndex(String walletId, int? index, {String? address}) async {
     final meta = await _loadWalletMeta(walletId);
     await _upsertWalletMeta(
       walletId,
@@ -804,11 +819,24 @@ class WalletService {
       createdAt: meta.createdAt,
       address0: meta.address0,
       pinnedAddressIndex: index,
+      pinnedAddress: (index ?? 0) > 0 ? address : null,
     );
+  }
+
+  /// Token metadata already known (persisted cache), without a node call.
+  TokenBalance? cachedTokenMeta(String id) => _tokenMeta[id];
+
+  /// Fetches metadata for any of [ids] not yet known and persists it.
+  Future<void> prefetchTokenMeta(Iterable<String> ids) async {
+    final missing = ids.where((id) => id.isNotEmpty && !_tokenMeta.containsKey(id)).toSet();
+    if (missing.isEmpty) return;
+    await Future.wait(missing.map((id) => tokenMeta(id, 0)));
+    await persistTokenMeta();
   }
 
   /// Delete a wallet and all its secure storage.
   Future<void> deleteWallet(String walletId) async {
+    await WalletDatabaseService.clearWallet(walletId).catchError((_) {});
     if (_handles.containsKey(walletId)) {
       await lock(walletId);
     }
@@ -1415,15 +1443,20 @@ class WalletService {
     required DateTime createdAt,
     String? address0,
     int? pinnedAddressIndex,
+    String? pinnedAddress,
   }) => _withMetaWrite(() async {
     final prior = await _loadAllWalletMeta();
     final next = Map<String, dynamic>.from(prior);
+    final existing = prior[walletId];
     next[walletId] = {
       'walletId': walletId,
       'name': name,
       'createdAt': createdAt.toIso8601String(),
       'address0': address0,
       'pinnedAddressIndex': pinnedAddressIndex,
+      // Keep a stored pinned address unless this write sets or clears it.
+      'pinnedAddress': pinnedAddress ??
+          ((pinnedAddressIndex ?? 0) > 0 && existing is Map ? existing['pinnedAddress'] : null),
     };
     await _persistMetaCache(next);
   });

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../format.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
+import '../wallet_dialogs.dart';
 import '../widgets/soft_card.dart';
 import 'settings_shared.dart';
 
@@ -42,24 +43,8 @@ class _WalletsPageState extends State<WalletsPage> {
   }
 
   Future<void> _rename(WalletInfo w) async {
-    final ctrl = TextEditingController(text: w.name);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Rename wallet'),
-        content: TextField(controller: ctrl, autofocus: true, decoration: const InputDecoration(labelText: 'Name')),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Rename')),
-        ],
-      ),
-    );
-    final name = ctrl.text.trim();
-    ctrl.dispose();
-    if (ok != true || name.isEmpty || name == w.name) return;
     try {
-      await walletService.renameWallet(w.walletId, name);
-      _refresh();
+      if (await renameWalletDialog(context, w)) _refresh();
     } catch (_) {
       _snack('Could not rename wallet');
     }
