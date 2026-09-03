@@ -187,14 +187,21 @@ class _SwapScreenState extends State<SwapScreen> {
     _scheduleQuote();
   }
 
+  /// Pools change with every swap on chain; refresh the list on a timer so
+  /// quotes and depth stay current while the tab is open.
+  Timer? _poolRefresh;
+  static const poolRefreshEvery = Duration(seconds: 45);
+
   @override
   void initState() {
     super.initState();
     _loadPools();
+    _poolRefresh = Timer.periodic(poolRefreshEvery, (_) => _loadPools());
   }
 
   @override
   void dispose() {
+    _poolRefresh?.cancel();
     _quoteDebounce?.cancel();
     _amountCtrl.dispose();
     _toAmountCtrl.dispose();
@@ -224,6 +231,11 @@ class _SwapScreenState extends State<SwapScreen> {
         _set = set;
         _loading = false;
       });
+      // An amount typed while pools were still loading has no quote yet;
+      // a refreshed list may also move the price.
+      if (_amountCtrl.text.trim().isNotEmpty || _toAmountCtrl.text.trim().isNotEmpty) {
+        _scheduleQuote();
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -269,6 +281,7 @@ class _SwapScreenState extends State<SwapScreen> {
       if (!mounted || gen != _quoteGeneration) return;
       setState(() {
         _quote = q;
+        _quoteError = null;
         // Mirror the quoted output into the want field so both sides always
         // show a consistent pair — but only when the user's last edit was on
         // the pay side; otherwise it would fight their typing.
@@ -279,9 +292,15 @@ class _SwapScreenState extends State<SwapScreen> {
       });
     } catch (e) {
       if (!mounted || gen != _quoteGeneration) return;
-      setState(() => _quote = null);
+      setState(() {
+        _quote = null;
+        _quoteError = swapQuoteError('$e');
+      });
     }
   }
+
+  /// Why the last quote attempt produced nothing, shown under the fields.
+  String? _quoteError;
 
   Future<void> _swap() async {
     final quote = _quote;
@@ -520,8 +539,10 @@ class _SwapScreenState extends State<SwapScreen> {
           Text(
             _fromToken == _toToken
                 ? 'Choose two different assets.'
-                : 'Enter an amount on either side to see the quote.',
-            style: Theme.of(context).textTheme.bodySmall,
+                : _quoteError ?? 'Enter an amount on either side to see the quote.',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: _quoteError != null ? rustFor(context) : null,
+                ),
           )
         else ...[
           Text(swapQuoteLabel(
@@ -583,7 +604,10 @@ class _SwapScreenState extends State<SwapScreen> {
     final rate = (rIn > BigInt.zero)
         ? rOut * BigInt.from(10).pow(_decimals(_fromToken)) ~/ rIn
         : BigInt.zero;
-    final verifiedIn = _fromToken != null && isVerifiedToken(_fromToken!);
+    // ERG needs no verification; either token side that is not on the
+    // verified list flags the pair, matching the picker's tick.
+    final verifiedIn = (_fromToken == null || isVerifiedToken(_fromToken!)) &&
+        (_toToken == null || isVerifiedToken(_toToken!));
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -853,4 +877,13 @@ class _AssetPickerSheetState extends State<_AssetPickerSheet> {
       ),
     );
   }
+}
+
+/// User-facing text for a failed quote.
+String swapQuoteError(String raw) {
+  if (raw.contains('NO_POOL')) return 'No Spectrum pool can trade this pair at this size.';
+  if (raw.contains('EXTRA_INDEX_REQUIRED')) return "Your node doesn't support pool discovery.";
+  if (raw.contains('Amount must be positive')) return 'Enter an amount greater than zero.';
+  final m = RegExp(r'"message"\s*:\s*"([^"]+)"').firstMatch(raw);
+  return 'Quote failed: ${m?.group(1) ?? raw.replaceAll('Exception: ', '')}';
 }
