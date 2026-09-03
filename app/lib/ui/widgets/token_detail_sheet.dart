@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../format.dart';
+import '../../services/media_url.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 import '../token_avatar.dart';
@@ -28,6 +29,7 @@ class TokenDetailSheet extends StatelessWidget {
     final muted = ArgusColors.of(context).muted;
     final ticker = tokenTicker(token);
     final amount = token.isNft ? '1' : formatTokenAmountGrouped(token.amount, token.decimals);
+    final media = token.isNft ? resolveMediaUrl(token.iconUrl) : null;
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
@@ -54,6 +56,27 @@ class TokenDetailSheet extends StatelessWidget {
                 ),
               ],
             ),
+            if (media != null) ...[
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: AspectRatio(
+                  aspectRatio: 1,
+                  child: Image.network(
+                    media,
+                    fit: BoxFit.cover,
+                    loadingBuilder: (ctx, child, progress) => progress == null
+                        ? child
+                        : Container(color: ArgusColors.of(ctx).chip),
+                    errorBuilder: (ctx, _, _) => Container(
+                      color: ArgusColors.of(ctx).chip,
+                      alignment: Alignment.center,
+                      child: Text('Artwork unavailable', style: TextStyle(color: muted, fontSize: 12.5)),
+                    ),
+                  ),
+                ),
+              ),
+            ],
             const SizedBox(height: 20),
             Text('YOU HOLD', style: theme.textTheme.titleSmall?.copyWith(color: muted)),
             const SizedBox(height: 4),

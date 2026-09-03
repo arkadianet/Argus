@@ -9,7 +9,10 @@ import '../services/address_label_service.dart';
 import '../services/deep_link_controller.dart';
 import '../services/dexy_service.dart';
 import '../services/ergopay_service.dart';
+import '../services/incoming_payment_watcher.dart';
+import '../services/notification_service.dart';
 import '../services/network_controller.dart';
+import '../services/portfolio.dart';
 import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
@@ -58,6 +61,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   bool _canBiometric = false;
   bool _unlockBusy = false;
   int _watchOnlyTotal = 0;
+  final Map<String, int?> _watchBalances = {};
+
+  /// Balances of wallets other than the active one, from each wallet's first
+  /// public address (as the overview does). Refreshed with the wallet list.
+  final Map<String, int?> _otherBalances = {};
+  int _otherGeneration = 0;
   bool _watchOnlyLoading = false;
   int _watchOnlyGeneration = 0;
   final _pinCtrl = TextEditingController();
@@ -84,6 +93,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   static const _pollInterval = Duration(seconds: 20);
   static const _probeInterval = Duration(minutes: 2);
 
+  /// Polling keeps going this long after the app leaves the foreground so an
+  /// incoming payment can still be announced; Android may stop it sooner.
+  static const _backgroundPollWindow = Duration(minutes: 10);
+  DateTime? _backgroundedAt;
+  final _incoming = IncomingPaymentWatcher();
+
   @override
   void initState() {
     super.initState();
@@ -100,6 +115,22 @@ class _DashboardScreenState extends State<DashboardScreen>
   void _onSyncChanged() {
     if (mounted) setState(() {});
     _openPendingDeepLink();
+    _announceIncoming();
+  }
+
+  /// Announces payments that appeared since the last refresh. Only fires
+  /// while the app is not in front, so the home screen itself stays quiet.
+  void _announceIncoming() {
+    if (!_walletUnlocked) return;
+    final fresh = _incoming.observe(_sync.recentTxs);
+    if (fresh.isEmpty || !_pollBackgrounded) return;
+    for (final tx in fresh) {
+      notificationService.incomingPayment(
+        nanoErg: (tx['value_nano_erg'] as num?)?.toInt() ?? 0,
+        walletName: _activeWalletName,
+        pending: ((tx['height'] as num?)?.toInt() ?? 0) == 0,
+      );
+    }
   }
 
   void _onDeepLink() {
@@ -166,8 +197,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   void _pollTick() {
-    if (!mounted || _pollBackgrounded || !_walletUnlocked || _sync.busy) {
-      return;
+    if (!mounted || !_walletUnlocked || _sync.busy) return;
+    if (_pollBackgrounded) {
+      final since = _backgroundedAt;
+      if (since == null || DateTime.now().difference(since) > _backgroundPollWindow) {
+        return;
+      }
     }
     _sync.refresh(discover: false);
   }
@@ -197,9 +232,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Pause mempool polling while backgrounded; resume on return.
-    _pollBackgrounded =
+    final backgrounded =
         state == AppLifecycleState.paused || state == AppLifecycleState.hidden;
+    if (backgrounded && !_pollBackgrounded) _backgroundedAt = DateTime.now();
+    _pollBackgrounded = backgrounded;
     if (state != AppLifecycleState.resumed) return;
+    _backgroundedAt = null;
     // Re-prompt biometrics when the session lock fired while backgrounded.
     // If the user returned within the grace window the wallet is still
     // unlocked and this is a no-op.
@@ -219,6 +257,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   void _resetLocked() {
     _walletUnlocked = false;
+    _incoming.reset();
     _tab = 0;
     _visitedTabs
       ..clear()
@@ -252,7 +291,31 @@ class _DashboardScreenState extends State<DashboardScreen>
     final total = results.fold<int>(0, (sum, bal) => sum + bal);
     if (mounted) setState(() {
       _watchOnlyTotal = total;
+      _watchBalances
+        ..clear()
+        ..addEntries([for (var i = 0; i < addrs.length; i++) MapEntry(addrs[i], results[i])]);
       _watchOnlyLoading = false;
+    });
+  }
+
+  Future<void> _refreshOtherBalances() async {
+    final gen = ++_otherGeneration;
+    final others = _wallets.where((w) => w.walletId != _walletId).toList();
+    final results = await Future.wait(others.map((w) async {
+      final addr = w.address0;
+      if (addr == null || addr.isEmpty) return null;
+      try {
+        return await walletService.getBalanceNano(addr, nodeUrl: networkController.activeUrl);
+      } catch (_) {
+        return null;
+      }
+    }));
+    if (gen != _otherGeneration || !mounted) return;
+    setState(() {
+      _otherBalances.clear();
+      for (var i = 0; i < others.length; i++) {
+        _otherBalances[others[i].walletId] = results[i];
+      }
     });
   }
 
@@ -282,6 +345,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _loadWallets() async {
     _wallets = await walletService.listWallets();
+    _refreshOtherBalances();
     if (_wallets.isNotEmpty) {
       if (_walletId == null || !_wallets.any((w) => w.walletId == _walletId)) {
         _walletId = _wallets.first.walletId;
@@ -332,6 +396,8 @@ class _DashboardScreenState extends State<DashboardScreen>
       _walletUnlocked = true;
       _status = 'Unlocked';
     });
+    _incoming.reset();
+    notificationService.requestPermission();
     // 2. Full sync (discovery + balances + activity) in the background.
     await _sync.refresh(discover: true);
   }
@@ -1119,9 +1185,14 @@ class _DashboardScreenState extends State<DashboardScreen>
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
           children: [
             const OfflineBanner(),
-            _walletCard(fragmented),
+            _portfolioCard(fragmented),
+            _sectionHeader('Wallets', action: 'Manage', onTap: _openWalletOverview),
+            const SizedBox(height: 10),
+            _walletsCard(),
+            const SizedBox(height: 12),
+            _actionsRow(),
             const SizedBox(height: 28),
-            _sectionHeader('Assets',
+            _sectionHeader('Assets · $_activeWalletName',
                 action: hiddenAssets > 0
                     ? 'View all (${assets.length})'
                     : 'View all',
@@ -1226,6 +1297,8 @@ class _DashboardScreenState extends State<DashboardScreen>
         Expanded(
           child: Text(
             title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               fontFamily: 'Newsreader',
               fontWeight: FontWeight.w600,
@@ -1257,131 +1330,36 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _walletCard(bool fragmented) {
+  /// Sync / block / UTXO strip inside the portfolio card.
+  Widget _statusStrip(bool fragmented) {
     final muted = ArgusColors.of(context).muted;
     final online = networkController.activeUrl != null;
     final stale = _sync.isStale;
     final syncing = _sync.isSyncing;
     final synced = !stale && !syncing && online;
     final syncAge = formatSyncAge(_sync.lastSyncedAt);
-
-    return SoftCard(
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              InkWell(
-                onTap: _openWalletOverview,
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _activeWalletName,
-                        style: const TextStyle(
-                          fontFamily: 'Newsreader',
-                          fontWeight: FontWeight.w600,
-                          fontSize: 17,
-                        ),
-                      ),
-                      Icon(Icons.keyboard_arrow_down, size: 20, color: muted),
-                    ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (_sync.pinIssue != null) ...[
+          InkWell(
+            onTap: _openSettings,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Icon(Icons.push_pin_outlined, size: 14, color: rust),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(_sync.pinIssue!, style: TextStyle(fontSize: 12.5, color: rust)),
                   ),
-                ),
-              ),
-              const Spacer(),
-              _iconCircle(
-                _balanceHidden
-                    ? Icons.visibility_off_outlined
-                    : Icons.visibility_outlined,
-                onTap: () =>
-                    privacyService.setHideBalances(!_balanceHidden),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Flexible(
-                child: _sync.balanceNano == null && _sync.isSyncing
-                    ? Container(
-                        width: 150,
-                        height: 34,
-                        margin: const EdgeInsets.only(bottom: 6),
-                        decoration: BoxDecoration(
-                          color: muted.withValues(alpha: 0.18),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      )
-                    : Text(
-                        _balanceHidden
-                            ? '••••••'
-                            : formatErg(_sync.balanceNano, unit: false, maxFrac: 4),
-                        style: Theme.of(context)
-                            .textTheme
-                            .displayLarge
-                            ?.copyWith(fontSize: 44),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-              ),
-              const SizedBox(width: 8),
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Text(
-                  'ERG',
-                  style: TextStyle(
-                    fontFamily: 'Newsreader',
-                    fontSize: 18,
-                    color: muted,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 2),
-          ListenableBuilder(
-            listenable: networkController,
-            builder: (context, _) {
-              if (_balanceHidden) {
-                return Text(
-                    '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}',
-                    style: TextStyle(fontSize: 14, color: muted));
-              }
-              return Text(
-                networkController.fiatText(_sync.balanceNano) ?? '',
-                style: TextStyle(fontSize: 14, color: muted),
-              );
-            },
-          ),
-          const SizedBox(height: 14),
-          if (_sync.pinIssue != null) ...[
-            InkWell(
-              onTap: _openSettings,
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Row(
-                  children: [
-                    Icon(Icons.push_pin_outlined, size: 14, color: rust),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        _sync.pinIssue!,
-                        style: TextStyle(fontSize: 12.5, color: rust),
-                      ),
-                    ),
-                  ],
-                ),
+                ],
               ),
             ),
-            const SizedBox(height: 8),
-          ],
+          ),
+          const SizedBox(height: 8),
+        ],
           Container(
             padding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
@@ -1466,31 +1444,287 @@ class _DashboardScreenState extends State<DashboardScreen>
               ],
             ),
           ),
-          const SizedBox(height: 12),
+      ],
+    );
+  }
+
+  /// Total across every wallet and watched address, with the sync strip.
+  Widget _portfolioCard(bool fragmented) {
+    final colors = ArgusColors.of(context);
+    final muted = colors.muted;
+    final portfolio = portfolioTotal([
+      _sync.balanceNano,
+      for (final w in _wallets)
+        if (w.walletId != _walletId) _otherBalances[w.walletId],
+      for (final a in watchOnlyService.addresses) _watchBalances[a],
+    ]);
+    final subtitle = portfolioSubtitle(
+      wallets: _wallets.length,
+      watched: watchOnlyService.addresses.length,
+      unknown: portfolio.unknown,
+    );
+    final fiat = _balanceHidden
+        ? '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}'
+        : networkController.fiatText(portfolio.totalNano);
+    return SoftCard(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(
-                child: _actionButton(
-                    icon: Icons.north_east, label: 'Send', onTap: () => _go('/send')),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'PORTFOLIO',
+                      style: Theme.of(context).textTheme.titleSmall?.copyWith(color: muted),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Flexible(
+                          child: _sync.balanceNano == null && _sync.isSyncing && portfolio.known == 0
+                              ? Container(
+                                  width: 150,
+                                  height: 34,
+                                  margin: const EdgeInsets.only(bottom: 6),
+                                  decoration: BoxDecoration(
+                                    color: muted.withValues(alpha: 0.18),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                )
+                              : Text(
+                                  _balanceHidden
+                                      ? '••••••'
+                                      : formatErg(portfolio.totalNano, unit: false, maxFrac: 4),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .displayLarge
+                                      ?.copyWith(fontSize: 44),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                        ),
+                        const SizedBox(width: 8),
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Text(
+                            'ERG',
+                            style: TextStyle(fontFamily: 'Newsreader', fontSize: 18, color: muted),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      [if (fiat != null) fiat, subtitle].join('  ·  '),
+                      style: TextStyle(fontSize: 14, color: muted),
+                    ),
+                  ],
+                ),
               ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _actionButton(
-                    icon: Icons.south_west,
-                    label: 'Receive',
-                    onTap: () => _go('/receive')),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _actionButton(
-                    icon: Icons.swap_horiz,
-                    label: 'Swap',
-                    onTap: () => _goHub(SwapVenue.spectrum)),
+              _iconCircle(
+                _balanceHidden ? Icons.visibility_off_outlined : Icons.visibility_outlined,
+                onTap: () => privacyService.setHideBalances(!_balanceHidden),
               ),
             ],
           ),
+          const SizedBox(height: 14),
+          _statusStrip(fragmented),
         ],
       ),
+    );
+  }
+
+  /// Every stored wallet plus watched addresses as compact rows. Tapping a
+  /// locked wallet switches to it (its unlock gate follows).
+  Widget _walletsCard() {
+    final rows = <Widget>[
+      for (final w in _wallets) _walletRow(w),
+      for (final a in watchOnlyService.addresses) _watchRow(a),
+    ];
+    return SoftCard(
+      padding: EdgeInsets.zero,
+      child: DividedColumn(indent: 16, children: rows),
+    );
+  }
+
+  Widget _walletRow(WalletInfo w) {
+    final colors = ArgusColors.of(context);
+    final isActive = w.walletId == _walletId && walletService.isUnlocked;
+    final balance = isActive ? _sync.balanceNano : _otherBalances[w.walletId];
+    final addr = w.address0;
+    return InkWell(
+      onTap: isActive ? null : () => _switchWallet(w.walletId),
+      borderRadius: BorderRadius.circular(cardRadius),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 14,
+              child: Center(
+                child: isActive
+                    ? Container(
+                        width: 10,
+                        height: 10,
+                        decoration: const BoxDecoration(color: moss, shape: BoxShape.circle),
+                      )
+                    : Container(
+                        width: 10,
+                        height: 10,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(color: colors.muted, width: 1.5),
+                        ),
+                      ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          w.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      if (isActive)
+                        const Text(
+                          'ACTIVE',
+                          style: TextStyle(fontSize: 11, letterSpacing: 1, fontWeight: FontWeight.w600, color: moss),
+                        )
+                      else
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.lock_outline, size: 12, color: colors.muted),
+                            const SizedBox(width: 3),
+                            Text(
+                              'LOCKED',
+                              style: TextStyle(fontSize: 11, letterSpacing: 1, color: colors.muted),
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
+                  if (addr != null && addr.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    Text(shorten(addr, head: 6, tail: 6), style: monoStyle(context, size: 11.5).copyWith(color: colors.muted)),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            _rowBalance(balance, isActive ? _sync.isSyncing : false),
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right, size: 18, color: colors.muted),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _watchRow(String address) {
+    final colors = ArgusColors.of(context);
+    final label = addressLabelService.labelFor(address);
+    return InkWell(
+      onTap: _openWalletOverview,
+      borderRadius: BorderRadius.circular(cardRadius),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 14,
+              child: Center(child: Icon(Icons.visibility_outlined, size: 14, color: colors.muted)),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          label != null && label.isNotEmpty ? label : 'Watched',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text('WATCH-ONLY', style: TextStyle(fontSize: 11, letterSpacing: 1, color: colors.muted)),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(shorten(address, head: 6, tail: 6), style: monoStyle(context, size: 11.5).copyWith(color: colors.muted)),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            _rowBalance(_watchBalances[address], _watchOnlyLoading),
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right, size: 18, color: colors.muted),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _rowBalance(int? nano, bool loading) {
+    final colors = ArgusColors.of(context);
+    final text = nano == null
+        ? (loading ? '…' : '—')
+        : (_balanceHidden ? '••••' : formatErg(nano, unit: false, maxFrac: 2));
+    final fiat = nano == null || _balanceHidden ? null : networkController.fiatText(nano);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.baseline,
+          textBaseline: TextBaseline.alphabetic,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              text,
+              style: const TextStyle(fontFamily: 'Newsreader', fontWeight: FontWeight.w600, fontSize: 18),
+            ),
+            const SizedBox(width: 4),
+            Text('ERG', style: TextStyle(fontSize: 12, color: colors.muted)),
+          ],
+        ),
+        if (fiat != null) Text(fiat, style: TextStyle(fontSize: 12, color: colors.muted)),
+      ],
+    );
+  }
+
+  Widget _actionsRow() {
+    return Row(
+      children: [
+        Expanded(
+          child: _actionButton(icon: Icons.north_east, label: 'Send', onTap: () => _go('/send')),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _actionButton(icon: Icons.south_west, label: 'Receive', onTap: () => _go('/receive')),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _actionButton(icon: Icons.swap_horiz, label: 'Swap', onTap: () => _goHub(SwapVenue.spectrum)),
+        ),
+      ],
     );
   }
 

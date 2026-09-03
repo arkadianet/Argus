@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/media_url.dart';
 import '../theme/argus_theme.dart';
 
 /// Round token mark: the token's icon when the node supplied one and it
@@ -21,8 +22,8 @@ class TokenAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final url = iconUrl;
-    if (url != null && url.startsWith('http')) {
+    final url = resolveMediaUrl(iconUrl);
+    if (url != null) {
       return ClipOval(
         child: SizedBox.square(
           dimension: radius * 2,
