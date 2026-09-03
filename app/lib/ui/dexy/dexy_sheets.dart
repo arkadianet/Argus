@@ -9,6 +9,7 @@ import '../../services/dexy_service.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 import '../dexy_screen.dart';
+import '../widgets/error_sheet.dart';
 
 class DexyMintSheet extends StatefulWidget {
   const DexyMintSheet({
@@ -144,8 +145,7 @@ class DexyMintSheetState extends State<DexyMintSheet> {
       Navigator.pop(context, {'build': build});
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not prepare: $e')));
+      await showErrorSheet(context, title: 'Could not prepare', message: '$e');
       setState(() => _building = false);
     }
   }
@@ -365,8 +365,7 @@ class DexySwapSheetState extends State<DexySwapSheet> {
       Navigator.of(context).pop({'final': build});
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not prepare: $e')));
+      await showErrorSheet(context, title: 'Could not prepare', message: '$e');
       setState(() => _building = false);
     }
   }
@@ -634,8 +633,7 @@ class DexyLiquiditySheetState extends State<DexyLiquiditySheet> {
       Navigator.of(context).pop({'final': build});
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Could not prepare: $e')));
+      await showErrorSheet(context, title: 'Could not prepare', message: '$e');
       setState(() => _building = false);
     }
   }

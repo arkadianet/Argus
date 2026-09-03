@@ -359,3 +359,95 @@ pub(crate) async fn preview_lp(
     }))
     .map_err(ser_err)
 }
+/// Live reproduction of the LP deposit "reduced to false" report. Builds a
+/// deposit against the mainnet DexyGold pool using a real holder's box as
+/// the user input and reduces every input script. Network access; run with
+/// `cargo test -p wallet-ffi lp_deposit_live -- --ignored --nocapture`.
+#[cfg(test)]
+mod lp_live_tests {
+    use citadel_core::BoxId;
+    use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
+    use ergo_tx::dev_fee::{with_test_dev_fee, DevFeeConfig};
+
+    async fn run(variant: dexy::constants::DexyVariant, holder_id: &str, deposit_erg: i64, deposit_dexy: i64, fee: bool) {
+        let node = "https://ergo-node.eutxo.de".to_string();
+        let client = super::dexy_client(Some(node.clone())).await.expect("client");
+        let caps = client.require_capabilities().await.expect("caps");
+        let ids = super::ids_for(variant).expect("ids");
+        let ctx = dexy::fetch::fetch_lp_tx_context(&client, &caps, &ids, dexy::fetch::LpAction::Deposit)
+            .await
+            .expect("lp ctx");
+        println!(
+            "[{variant:?} fee={fee}] LP reserves erg={} dexy={} lp={}",
+            ctx.lp_erg_reserves, ctx.lp_dexy_reserves, ctx.lp_token_reserves
+        );
+        {
+            use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
+            for (label, tree) in [("LP", &ctx.lp_box.ergo_tree), ("MINT", &ctx.action_box.ergo_tree)] {
+                let n = tree.constants_len().unwrap_or(0);
+                println!("  {label} tree constants: {n}");
+                for i in 0..n {
+                    if let Ok(c) = tree.get_constant(i) {
+                        if let Some(c) = c {
+                            let bytes = c.sigma_serialize_bytes().unwrap_or_default();
+                            println!("    [{i}] {}", hex::encode(bytes));
+                        }
+                    }
+                }
+            }
+            println!("  ids: lp_nft={} mint={} redeem={} swap={} lp_token={} dexy={}", ids.lp_nft, ids.lp_mint_nft, ids.lp_redeem_nft, ids.lp_swap_nft, ids.lp_token_id, ids.dexy_token);
+        }
+        let holder: ErgoBox = client.get_box_by_id(&BoxId::new(holder_id)).await.expect("holder box");
+        let eip12 = ergo_tx::Eip12InputBox::from_ergo_box(&holder, holder.transaction_id.to_string(), holder.index);
+        let user_tree = eip12.ergo_tree.clone();
+        let height = client.current_height().await.expect("height") as i32;
+        let request = dexy::tx_builder::LpDepositRequest {
+            variant,
+            deposit_erg,
+            deposit_dexy,
+            user_address: String::new(),
+            user_ergo_tree: user_tree.clone(),
+            user_inputs: vec![eip12],
+            current_height: height,
+            recipient_ergo_tree: Some(user_tree),
+        };
+        let build = || {
+            dexy::tx_builder::build_lp_deposit_tx(&request, &ctx, &ids.dexy_token, &ids.lp_token_id, variant.initial_lp())
+        };
+        let built = if fee {
+            let tree = wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
+            with_test_dev_fee(DevFeeConfig::custom(tree, crate::api::ARGUS_FEE_NANO), build)
+        } else {
+            build()
+        }
+        .expect("build");
+        println!("  summary: {:?} outputs={}", built.summary, built.unsigned_tx.outputs.len());
+        let boxes = vec![ctx.lp_box.clone(), ctx.action_box.clone(), holder];
+        match ergopay_core::reduce_transaction(&built.unsigned_tx, boxes, vec![], &client).await {
+            Ok(bytes) => {
+                use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
+                let reduced = ergo_lib::chain::transaction::reduced::ReducedTransaction::sigma_parse_bytes(&bytes).expect("parse");
+                for (i, input) in reduced.reduced_inputs().iter().enumerate() {
+                    println!("  input {i}: {:?}", input.sigma_prop);
+                }
+            }
+            Err(e) => println!("  REDUCTION FAILED: {e}"),
+        }
+    }
+
+    /// Live reproduction of the LP deposit "reduced to false" report against
+    /// the mainnet pools. Network access; run with
+    /// `cargo test -p wallet-ffi lp_deposit_live -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn lp_deposit_live_reduces() {
+        use dexy::constants::DexyVariant;
+        let gold = "24169a4f3dbee4f04f2c21883848910bb0171eb2d1555848f7d86594125be6f3";
+        let usd = "68baba4d2ca396acfe9cfdb0aa3ae6b2a7daf0afb3495d39009c5e2f27866125";
+        run(DexyVariant::Gold, gold, 600_000_000, 1, false).await;
+        run(DexyVariant::Gold, gold, 600_000_000, 1, true).await;
+        run(DexyVariant::Usd, usd, 300_000_000, 2000, false).await;
+        run(DexyVariant::Usd, usd, 300_000_000, 2000, true).await;
+        run(DexyVariant::Usd, usd, 1_000_000_000, 7999, true).await;
+    }
+}

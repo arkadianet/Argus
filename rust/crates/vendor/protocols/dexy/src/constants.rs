@@ -166,11 +166,11 @@ pub mod gold_mainnet {
 
     /// LP Mint NFT - identifies the LP Mint action box
     pub const LP_MINT_NFT_ID: &str =
-        "19b8281b141d19c5b3843a4a77e616d6df05f601e5908159b1eaf3d9da20e664";
+        "10b755771f7253cff9727a9ca54bb2867e22b1b236657051c47ea9556c517e10";
 
     /// LP Redeem NFT - identifies the LP Redeem action box
     pub const LP_REDEEM_NFT_ID: &str =
-        "08c47eef5e782f146cae5e8cfb5e9d26b18442f82f3c5808b1563b6e3b23f729";
+        "471057efea32bf406d529902217844a258d3d6bedfcdcd3cfbab01872cc0b74c";
 }
 
 /// DexyUSD (USE) mainnet constants
@@ -307,5 +307,54 @@ mod tests {
         let usd_ids = DexyIds::usd_mainnet();
         assert_eq!(usd_ids.variant, DexyVariant::Usd);
         assert_eq!(usd_ids.dexy_token.len(), 64);
+    }
+}
+
+/// The LP pool contract embeds the action NFTs it accepts. These tests hold
+/// the mainnet pool scripts (fetched 2026-09-04 from the unspent LP boxes)
+/// and assert the ids used to build LP transactions are the ones the pool
+/// recognises. Before this, DexyGold used an earlier deployment's mint and
+/// redeem NFTs and every LP deposit reduced to false at signing.
+#[cfg(test)]
+mod pool_constant_tests {
+    use super::*;
+    use ergo_lib::ergotree_ir::ergo_tree::ErgoTree;
+    use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
+
+    fn embedded_ids(tree_hex: &str) -> Vec<String> {
+        let bytes = hex::decode(tree_hex.trim()).expect("hex");
+        let tree = ErgoTree::sigma_parse_bytes(&bytes).expect("tree");
+        let n = tree.constants_len().expect("constants");
+        (0..n)
+            .filter_map(|i| tree.get_constant(i).ok().flatten())
+            .filter_map(|c| c.sigma_serialize_bytes().ok())
+            // Coll[Byte] of 32 bytes serialises as 0e20 + 32 bytes.
+            .filter(|b| b.len() == 34 && b[0] == 0x0e && b[1] == 0x20)
+            .map(|b| hex::encode(&b[2..]))
+            .collect()
+    }
+
+    #[test]
+    fn gold_pool_accepts_the_action_nfts_we_use() {
+        let ids = embedded_ids(include_str!("fixtures/lp_pool_gold_mainnet.ergotree.hex"));
+        for (what, id) in [
+            ("swap", gold_mainnet::LP_SWAP_NFT_ID),
+            ("mint", gold_mainnet::LP_MINT_NFT_ID),
+            ("redeem", gold_mainnet::LP_REDEEM_NFT_ID),
+        ] {
+            assert!(ids.contains(&id.to_string()), "gold LP pool does not embed the {what} NFT {id}; embedded: {ids:?}");
+        }
+    }
+
+    #[test]
+    fn use_pool_accepts_the_action_nfts_we_use() {
+        let ids = embedded_ids(include_str!("fixtures/lp_pool_use_mainnet.ergotree.hex"));
+        for (what, id) in [
+            ("swap", usd_mainnet::LP_SWAP_NFT_ID),
+            ("mint", usd_mainnet::LP_MINT_NFT_ID),
+            ("redeem", usd_mainnet::LP_REDEEM_NFT_ID),
+        ] {
+            assert!(ids.contains(&id.to_string()), "USE LP pool does not embed the {what} NFT {id}; embedded: {ids:?}");
+        }
     }
 }

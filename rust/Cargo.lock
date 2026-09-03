@@ -690,6 +690,7 @@ dependencies = [
  "ergo-lib",
  "ergo-node-client",
  "ergo-tx",
+ "hex",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

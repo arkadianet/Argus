@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../format.dart';
 import '../bridge/argus_error.dart';
+import 'widgets/error_sheet.dart';
 import '../services/dexy_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -129,7 +130,7 @@ class _DexyScreenState extends State<DexyScreen> {
       HapticFeedback.mediumImpact();
     } catch (e) {
       if (!mounted) return;
-      _snack('Broadcast may have failed. Check activity before retrying. $e');
+      await showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
