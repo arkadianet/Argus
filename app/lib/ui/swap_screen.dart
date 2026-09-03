@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/amm_service.dart';
+import '../services/route_display.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
@@ -117,13 +118,17 @@ class _SwapScreenState extends State<SwapScreen> {
   /// Deepest pool for the current pair by the reserve of whichever side the
   /// user is selling into, plus how many pools serve the pair — one scan.
   /// Recomputed per build; the pool list only changes via _loadPools.
+  /// The pool the depth card describes: the one the live quote chose when
+  /// there is a quote, otherwise the deepest on the pay side.
   (Map<String, dynamic>?, int) _pairPoolInfo() {
     Map<String, dynamic>? best;
+    Map<String, dynamic>? quoted;
     var bestDepth = BigInt.zero;
     var count = 0;
     for (final pool in _set?.pools ?? const []) {
       if (!poolSupportsPair(pool, _fromToken, _toToken)) continue;
       count++;
+      if (_quote != null && pool['pool_id'] == _quote!.poolId) quoted = pool;
       final sides = poolSides(pool);
       final rIn = sides.firstWhere((s) => s.$1 == _fromToken).$2;
       if (best == null || rIn > bestDepth) {
@@ -131,7 +136,7 @@ class _SwapScreenState extends State<SwapScreen> {
         bestDepth = rIn;
       }
     }
-    return (best, count);
+    return (quoted ?? best, count);
   }
 
   /// Desired-TO editing: derive required input from pool reserves and seed
@@ -307,12 +312,18 @@ class _SwapScreenState extends State<SwapScreen> {
             '${formatTokenAmount(build.minOutput, _decimals(_toToken))} '
             '${_symbol(_toToken)}',
           ),
+          ConfirmTxRow(
+            'Price impact',
+            '${quote.priceImpactPct.toStringAsFixed(2)}%',
+            bold: quote.priceImpactPct > priceImpactWarnPct,
+          ),
           ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
           ConfirmTxRow('Total cost', formatErg(build.totalErgCost)),
         ],
-        detail:
-            'Direct Spectrum swap — the pool is a counterparty in this '
-            'transaction.',
+        detail: [
+          if (impactWarning(quote.priceImpactPct) case final w?) w,
+          'Direct Spectrum swap — the pool is a counterparty in this transaction.',
+        ].join('  ·  '),
         confirmLabel: 'Sign & broadcast swap',
       );
       if (confirmed) await _broadcast(build);
@@ -522,6 +533,11 @@ class _SwapScreenState extends State<SwapScreen> {
             '${_symbol(_toToken)}',
             style: Theme.of(context).textTheme.bodySmall,
           ),
+          if (impactWarning(_quote!.priceImpactPct) case final warning?)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(warning, style: TextStyle(fontSize: 12.5, color: rustFor(context))),
+            ),
         ],
         const SizedBox(height: 24),
         FilledButton(
@@ -602,7 +618,9 @@ class _SwapScreenState extends State<SwapScreen> {
             Padding(
               padding: const EdgeInsets.only(top: 4),
               child: Text(
-                '$poolCount pools available — using the deepest for your direction.',
+                _quote != null
+                    ? '$poolCount pools trade this pair — quoting the one that returns the most.'
+                    : '$poolCount pools trade this pair — showing the deepest on your side.',
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),

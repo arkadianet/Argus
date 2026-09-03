@@ -1,6 +1,7 @@
 import '../bridge/argus_error.dart';
 import 'amm_service.dart';
 import 'dexy_service.dart';
+import 'route_display.dart';
 import 'sigmausd_service.dart';
 
 /// One way to acquire a token shortfall, priced.
@@ -17,7 +18,15 @@ class RouteQuote {
     this.poolId,
     this.ergIn,
     this.note,
+    this.priceImpactPct,
+    this.liquidityNano,
   });
+
+  /// Effective price over spot for pool routes; null for oracle-priced ones.
+  final double? priceImpactPct;
+
+  /// ERG side of the pool this route trades against, when it is a pool.
+  final int? liquidityNano;
 
   /// `Dexy`, `AgeUSD`, `Spectrum`.
   final String protocol;
@@ -55,8 +64,10 @@ class RouteBuild {
     required this.minerFeeNano,
     required this.protocolFeeNano,
     required this.changeNanoErg,
+    this.priceImpactPct,
   });
 
+  final double? priceImpactPct;
   final int preparationId;
   final String protocol;
   final String path;
@@ -189,6 +200,16 @@ class DexyRouteProvider implements RouteProvider {
           held: held,
           ergCostNano: q.ergCostNano,
           minerFeeNano: _routeMinerFeeNano,
+          note: q.path == 'FreeMint' ? 'oracle rate' : null,
+          liquidityNano: q.path == 'LP Swap' ? st.lpErgReserves : null,
+          priceImpactPct: q.path == 'LP Swap'
+              ? priceImpactPct(
+                  ergIn: dexService.ergInForLpSwapOutput(st, acquire),
+                  tokensOut: acquire,
+                  ergReserves: st.lpErgReserves,
+                  tokenReserves: st.lpDexyReserves,
+                )
+              : null,
         ),
     ];
   }
@@ -217,6 +238,7 @@ class DexyRouteProvider implements RouteProvider {
       minerFeeNano: b.minerFee,
       protocolFeeNano: 0,
       changeNanoErg: b.changeNanoErg,
+      priceImpactPct: q.priceImpactPct,
     );
   }
 }
@@ -251,6 +273,7 @@ class AgeUsdRouteProvider implements RouteProvider {
         ergCostNano: p.totalCostNano,
         minerFeeNano: p.txFeeNano,
         protocolFeeNano: p.protocolFeeNano,
+        note: 'oracle rate',
       ),
     ];
   }
@@ -312,6 +335,15 @@ class SpectrumRouteProvider implements RouteProvider {
         poolId: q.poolId,
         ergIn: q.ergIn,
         note: '${feePct.toStringAsFixed(1)}% pool fee',
+        liquidityNano: q.ergReserves,
+        priceImpactPct: q.ergReserves == null || q.tokenReserves == null
+            ? null
+            : priceImpactPct(
+                ergIn: q.ergIn,
+                tokensOut: acquire,
+                ergReserves: q.ergReserves!,
+                tokenReserves: q.tokenReserves!,
+              ),
       ),
     ];
   }
@@ -343,6 +375,7 @@ class SpectrumRouteProvider implements RouteProvider {
       minerFeeNano: b.minerFee,
       protocolFeeNano: 0,
       changeNanoErg: 0,
+      priceImpactPct: q.priceImpactPct,
     );
   }
 }
