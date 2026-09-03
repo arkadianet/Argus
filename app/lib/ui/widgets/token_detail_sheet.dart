@@ -32,6 +32,7 @@ class TokenDetailSheet extends StatelessWidget {
     final amount = token.isNft ? '1' : formatTokenAmountGrouped(token.amount, token.decimals);
     final media = token.isNft ? resolveMediaUrl(token.iconUrl) : null;
     final verified = verifiedToken(token.id);
+    final caution = cautionedToken(token.id);
     final impersonates = impersonatedToken(tokenId: token.id, name: token.name);
     return SafeArea(
       child: SingleChildScrollView(
@@ -54,6 +55,10 @@ class TokenDetailSheet extends StatelessWidget {
                           if (verified != null) ...[
                             const SizedBox(width: 6),
                             Icon(Icons.verified, size: 18, color: accentOf(context)),
+                          ],
+                          if (caution != null) ...[
+                            const SizedBox(width: 6),
+                            const Icon(Icons.warning_amber_rounded, size: 18, color: rust),
                           ],
                         ],
                       ),
@@ -87,6 +92,31 @@ class TokenDetailSheet extends StatelessWidget {
                       child: Text('Artwork unavailable', style: TextStyle(color: muted, fontSize: 12.5)),
                     ),
                   ),
+                ),
+              ),
+            ],
+            if (caution != null) ...[
+              const SizedBox(height: 14),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: rust.withValues(alpha: 0.1),
+                  border: Border.all(color: rust.withValues(alpha: 0.5)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.warning_amber_rounded, color: rust, size: 20),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Caution: ${caution.note ?? 'this token is flagged.'}',
+                        style: TextStyle(fontSize: 13, color: rustFor(context)),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],

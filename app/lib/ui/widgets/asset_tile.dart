@@ -30,6 +30,7 @@ class AssetTile extends StatelessWidget {
     this.onTap,
     this.showChevron = true,
     this.verified = false,
+    this.caution = false,
   });
 
   AssetTile.erg({
@@ -46,7 +47,8 @@ class AssetTile extends StatelessWidget {
             : _ergAmount(balanceNano),
         iconUrl = null,
         isErg = true,
-        verified = true;
+        verified = true,
+        caution = false;
 
   AssetTile.token(
     TokenBalance t, {
@@ -62,7 +64,8 @@ class AssetTile extends StatelessWidget {
         fiatText = null,
         iconUrl = t.iconUrl,
         isErg = false,
-        verified = isVerifiedToken(t.id);
+        verified = isVerifiedToken(t.id),
+        caution = cautionedToken(t.id) != null;
 
   final String ticker;
   final String name;
@@ -76,6 +79,9 @@ class AssetTile extends StatelessWidget {
 
   /// Shows a check next to the ticker for on-chain-verified tokens.
   final bool verified;
+
+  /// Shows a warning next to the ticker for cautioned tokens.
+  final bool caution;
 
   static String _ergAmount(int nano) => formatErg(nano, unit: false, maxFrac: 4);
 
@@ -109,6 +115,10 @@ class AssetTile extends StatelessWidget {
                       if (verified && !isErg) ...[
                         const SizedBox(width: 4),
                         Icon(Icons.verified, size: 15, color: accentOf(context)),
+                      ],
+                      if (caution) ...[
+                        const SizedBox(width: 4),
+                        const Icon(Icons.warning_amber_rounded, size: 15, color: rust),
                       ],
                     ],
                   ),

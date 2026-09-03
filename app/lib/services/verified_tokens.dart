@@ -3,6 +3,8 @@ import 'sigmausd_service.dart';
 
 /// A token whose id was checked against the chain: name, decimals and
 /// emission match the issuer's, and holder counts rule out look-alikes.
+enum TokenStatus { verified, caution }
+
 class VerifiedToken {
   const VerifiedToken({
     required this.id,
@@ -10,6 +12,8 @@ class VerifiedToken {
     required this.name,
     required this.project,
     required this.decimals,
+    this.status = TokenStatus.verified,
+    this.note,
   });
 
   final String id;
@@ -17,6 +21,12 @@ class VerifiedToken {
   final String name;
   final String project;
   final int decimals;
+
+  /// Verified tokens get a check; cautioned ones a warning with [note].
+  final TokenStatus status;
+  final String? note;
+
+  bool get isVerified => status == TokenStatus.verified;
 }
 
 /// Verified 2026-09-04 against the Ergo explorer: each id was searched by
@@ -34,7 +44,17 @@ const verifiedTokens = <VerifiedToken>[
   VerifiedToken(id: '9a06d9e545a41fd51eeffc5e20d818073bf820c635e2a9d922269913e0de369d', ticker: 'SPF', name: 'Spectrum Finance', project: 'Spectrum', decimals: 6),
   VerifiedToken(id: 'd71693c49a84fbbecd4908c94813b46514b18b67a99952dc1e6e4791556de413', ticker: 'ergopad', name: 'ErgoPad', project: 'ErgoPad', decimals: 2),
   VerifiedToken(id: '1fd6e032e8476c4aa54c18c1a308dce83940e8f4a28f576440513ed7326ad489', ticker: 'Paideia', name: 'Paideia DAO', project: 'Paideia', decimals: 4),
-  VerifiedToken(id: '472c3d4ecaa08fb7392ff041ee2e6af75f4a558810a74b28600549d5392810e8', ticker: 'NETA', name: 'anetaBTC', project: 'anetaBTC', decimals: 6),
+  // The genuine NETA id (3,560 holders) is kept so the warning targets the
+  // real token and not only look-alikes.
+  VerifiedToken(
+    id: '472c3d4ecaa08fb7392ff041ee2e6af75f4a558810a74b28600549d5392810e8',
+    ticker: 'NETA',
+    name: 'anetaBTC',
+    project: 'anetaBTC',
+    decimals: 6,
+    status: TokenStatus.caution,
+    note: 'The anetaBTC project was abandoned by its team and holders were left without the promised product. Treat NETA as having no backing.',
+  ),
   VerifiedToken(id: '0cd8c9f416e5b1ca9f986a7f10a84191dfb85941619e49e53c0dc30ebf83324b', ticker: 'COMET', name: 'COMET', project: 'COMET', decimals: 0),
   VerifiedToken(id: '00b1e236b60b95c2c6f8007a9d89bc460fc9e78f98b09faec9449007b40bccf3', ticker: 'EGIO', name: 'ErgoGames.io', project: 'ErgoGames', decimals: 4),
   VerifiedToken(id: 'fcfca7654fb0da57ecf9a3f489bcbeb1d43b56dce7e73b352f7bc6f2561d2a1b', ticker: 'ErgOne', name: 'ErgOne', project: 'ErgOne', decimals: 8),
@@ -46,14 +66,27 @@ const verifiedTokens = <VerifiedToken>[
 final _byId = {for (final t in verifiedTokens) t.id: t};
 final _byTicker = {for (final t in verifiedTokens) t.ticker.toLowerCase(): t};
 
-VerifiedToken? verifiedToken(String tokenId) => _byId[tokenId];
+/// Registry entry for [tokenId], verified or cautioned.
+VerifiedToken? knownToken(String tokenId) => _byId[tokenId];
 
-bool isVerifiedToken(String tokenId) => _byId.containsKey(tokenId);
+/// Only tokens that earn a check.
+VerifiedToken? verifiedToken(String tokenId) {
+  final t = _byId[tokenId];
+  return t != null && t.isVerified ? t : null;
+}
+
+/// A cautioned token, with the reason.
+VerifiedToken? cautionedToken(String tokenId) {
+  final t = _byId[tokenId];
+  return t != null && !t.isVerified ? t : null;
+}
+
+bool isVerifiedToken(String tokenId) => verifiedToken(tokenId) != null;
 
 /// A verified token whose ticker this unverified token's name imitates, so
 /// the UI can warn ("named like SigUSD, but not the verified SigUSD").
 VerifiedToken? impersonatedToken({required String tokenId, String? name}) {
-  if (isVerifiedToken(tokenId) || name == null) return null;
+  if (knownToken(tokenId) != null || name == null) return null;
   final n = name.trim().toLowerCase();
   if (n.isEmpty) return null;
   final hit = _byTicker[n] ?? _byTicker[n.split(' ').first];
@@ -63,7 +96,8 @@ VerifiedToken? impersonatedToken({required String tokenId, String? name}) {
 /// Ticker for the swap picker; unchanged behaviour for callers that only
 /// need a label.
 Map<String, String> verifiedTokenLabels() => {
-      for (final t in verifiedTokens) t.id: '${t.ticker}${t.project == t.ticker || t.project == t.name ? '' : ' (${t.project})'}',
+      for (final t in verifiedTokens)
+        if (t.isVerified) t.id: '${t.ticker}${t.project == t.ticker || t.project == t.name ? '' : ' (${t.project})'}',
     };
 
 // Keep DexyVariant referenced so a constant drift between the pinned Dexy
