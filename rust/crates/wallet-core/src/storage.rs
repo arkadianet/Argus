@@ -127,7 +127,11 @@ impl WalletDatabase {
 
     /// Upsert unspent boxes, updating existing ones.
     pub fn upsert_boxes(&mut self, new_boxes: Vec<StoredBox>) {
-        let mut map: HashMap<String, StoredBox> = self.boxes.drain(..).map(|b| (b.box_id.clone(), b)).collect();
+        let mut map: HashMap<String, StoredBox> = self
+            .boxes
+            .drain(..)
+            .map(|b| (b.box_id.clone(), b))
+            .collect();
         for b in new_boxes {
             map.insert(b.box_id.clone(), b);
         }
@@ -146,7 +150,10 @@ impl WalletDatabase {
 
     /// Return all active unspent boxes.
     pub fn get_unspent_boxes(&self) -> Vec<&StoredBox> {
-        self.boxes.iter().filter(|b| b.is_unspent && b.spent_tx_id.is_none()).collect()
+        self.boxes
+            .iter()
+            .filter(|b| b.is_unspent && b.spent_tx_id.is_none())
+            .collect()
     }
 
     /// Calculate total nanoERG and token balances from unspent boxes.
@@ -162,10 +169,13 @@ impl WalletDatabase {
         let mut tokens_map: HashMap<String, (u64, Option<String>, u32)> = HashMap::new();
         for b in unspent {
             for t in &b.tokens {
-                let entry = tokens_map.entry(t.id.clone()).or_insert((0, t.name.clone(), t.decimals));
-                entry.0 = entry.0
-                    .checked_add(t.amount)
-                    .ok_or_else(|| CoreError::Overflow(format!("Token {} amount overflow", t.id)))?;
+                let entry =
+                    tokens_map
+                        .entry(t.id.clone())
+                        .or_insert((0, t.name.clone(), t.decimals));
+                entry.0 = entry.0.checked_add(t.amount).ok_or_else(|| {
+                    CoreError::Overflow(format!("Token {} amount overflow", t.id))
+                })?;
                 if entry.1.is_none() && t.name.is_some() {
                     entry.1 = t.name.clone();
                 }
@@ -189,19 +199,28 @@ impl WalletDatabase {
 
     /// Upsert transactions.
     pub fn upsert_transactions(&mut self, txs: Vec<StoredTx>) {
-        let mut map: HashMap<String, StoredTx> = self.transactions.drain(..).map(|t| (t.tx_id.clone(), t)).collect();
+        let mut map: HashMap<String, StoredTx> = self
+            .transactions
+            .drain(..)
+            .map(|t| (t.tx_id.clone(), t))
+            .collect();
         for t in txs {
             map.insert(t.tx_id.clone(), t);
         }
         let mut list: Vec<StoredTx> = map.into_values().collect();
         // Sort descending by timestamp / height
-        list.sort_by(|a, b| b.timestamp.cmp(&a.timestamp).then_with(|| b.height.cmp(&a.height)));
+        list.sort_by(|a, b| {
+            b.timestamp
+                .cmp(&a.timestamp)
+                .then_with(|| b.height.cmp(&a.height))
+        });
         self.transactions = list;
     }
 
     /// Upsert a tracked singleton contract lineage.
     pub fn upsert_lineage(&mut self, lineage: TrackedLineage) {
-        self.lineages.insert(lineage.singleton_token_id.clone(), lineage);
+        self.lineages
+            .insert(lineage.singleton_token_id.clone(), lineage);
     }
 
     /// Get a tracked contract lineage by singleton token ID.

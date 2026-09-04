@@ -13,5 +13,7 @@ pub use encryption::EncryptedSeed;
 pub use error::CoreError;
 pub use pin::PinWrappedKey;
 pub use seed::SeedBox;
-pub use storage::{AddressRecord, StoredBox, StoredToken, StoredTx, SyncCheckpoint, TrackedLineage, WalletDatabase};
+pub use storage::{
+    AddressRecord, StoredBox, StoredToken, StoredTx, SyncCheckpoint, TrackedLineage, WalletDatabase,
+};
 pub use wallet::WalletHandle;

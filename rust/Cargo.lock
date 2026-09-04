@@ -3052,6 +3052,7 @@ dependencies = [
  "stealth",
  "thiserror 1.0.69",
  "zeroize",
+ "zerojoin",
 ]
 
 [[package]]
@@ -3080,6 +3081,7 @@ dependencies = [
  "wallet-core",
  "wallet-net",
  "zeroize",
+ "zerojoin",
 ]
 
 [[package]]

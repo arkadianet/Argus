@@ -38,8 +38,9 @@ pub(crate) async fn dexy_client(
 ) -> Result<ergo_node_client::NodeClient, String> {
     let url = resolve_node_url(node_url);
     if url.is_empty() {
-        return Err(ArgusError::NodeUnreachable("no reachable node configured".into())
-            .to_json_string());
+        return Err(
+            ArgusError::NodeUnreachable("no reachable node configured".into()).to_json_string(),
+        );
     }
     ergo_node_client::NodeClient::new(NodeConfig {
         url,
@@ -51,8 +52,10 @@ pub(crate) async fn dexy_client(
 
 fn parse_variant(variant: &str) -> Result<DexyVariant, String> {
     variant.parse::<DexyVariant>().map_err(|_| {
-        ArgusError::Generic(format!("Invalid Dexy variant: {variant}. Use 'gold' or 'usd'"))
-            .to_json_string()
+        ArgusError::Generic(format!(
+            "Invalid Dexy variant: {variant}. Use 'gold' or 'usd'"
+        ))
+        .to_json_string()
     })
 }
 
@@ -92,7 +95,9 @@ pub(crate) async fn state(variant: &str, node_url: Option<String>) -> Result<Str
         .require_capabilities()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-    let state = fetch_dexy_state(&client, &caps, &ids).await.map_err(proto_err)?;
+    let state = fetch_dexy_state(&client, &caps, &ids)
+        .await
+        .map_err(proto_err)?;
     let rates = DexyRates::from_state(&state);
     serde_json::to_string(&serde_json::json!({ "state": state, "rates": rates })).map_err(ser_err)
 }
@@ -110,7 +115,9 @@ pub(crate) async fn preview_mint(
         .require_capabilities()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-    let state = fetch_dexy_state(&client, &caps, &ids).await.map_err(proto_err)?;
+    let state = fetch_dexy_state(&client, &caps, &ids)
+        .await
+        .map_err(proto_err)?;
 
     if amount <= 0 {
         return Ok(preview_mint_json(
@@ -216,9 +223,7 @@ pub(crate) async fn preview_swap(
 ) -> Result<String, String> {
     let dexy_variant = parse_variant(variant)?;
     if amount <= 0 {
-        return Err(
-            ArgusError::Generic("Amount must be positive".to_string()).to_json_string()
-        );
+        return Err(ArgusError::Generic("Amount must be positive".to_string()).to_json_string());
     }
     let ids = ids_for(dexy_variant)?;
     let client = dexy_client(node_url).await?;
@@ -226,7 +231,9 @@ pub(crate) async fn preview_swap(
         .require_capabilities()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-    let state = fetch_dexy_state(&client, &caps, &ids).await.map_err(proto_err)?;
+    let state = fetch_dexy_state(&client, &caps, &ids)
+        .await
+        .map_err(proto_err)?;
 
     let (output_amount, reserves_sold, reserves_bought) = match direction {
         "erg_to_dexy" => (
@@ -321,13 +328,16 @@ pub(crate) async fn preview_lp(
             .to_json_string());
         }
         "redeem" if lp_amount <= 0 => {
-            return Err(ArgusError::Generic("LP token amount must be positive".to_string())
-                .to_json_string());
+            return Err(
+                ArgusError::Generic("LP token amount must be positive".to_string())
+                    .to_json_string(),
+            );
         }
         "deposit" | "redeem" => {}
         _ => {
-            return Err(ArgusError::Generic(format!("Unknown LP action '{action}'"))
-                .to_json_string());
+            return Err(
+                ArgusError::Generic(format!("Unknown LP action '{action}'")).to_json_string()
+            );
         }
     }
 
@@ -361,7 +371,9 @@ pub(crate) async fn preview_lp(
     }
 
     // redeem — needs the pooled/live state for the depeg-protection gate.
-    let state = fetch_dexy_state(&client, &caps, &ids).await.map_err(proto_err)?;
+    let state = fetch_dexy_state(&client, &caps, &ids)
+        .await
+        .map_err(proto_err)?;
     if !state.can_redeem_lp {
         return serde_json::to_string(&serde_json::json!({
             "action": "redeem",
@@ -433,21 +445,33 @@ mod lp_live_tests {
     use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
     use ergo_tx::dev_fee::{with_test_dev_fee, DevFeeConfig};
 
-    async fn run(variant: dexy::constants::DexyVariant, holder_id: &str, deposit_erg: i64, deposit_dexy: i64, fee: bool) {
+    async fn run(
+        variant: dexy::constants::DexyVariant,
+        holder_id: &str,
+        deposit_erg: i64,
+        deposit_dexy: i64,
+        fee: bool,
+    ) {
         let node = "https://ergo-node.eutxo.de".to_string();
-        let client = super::dexy_client(Some(node.clone())).await.expect("client");
+        let client = super::dexy_client(Some(node.clone()))
+            .await
+            .expect("client");
         let caps = client.require_capabilities().await.expect("caps");
         let ids = super::ids_for(variant).expect("ids");
-        let ctx = dexy::fetch::fetch_lp_tx_context(&client, &caps, &ids, dexy::fetch::LpAction::Deposit)
-            .await
-            .expect("lp ctx");
+        let ctx =
+            dexy::fetch::fetch_lp_tx_context(&client, &caps, &ids, dexy::fetch::LpAction::Deposit)
+                .await
+                .expect("lp ctx");
         println!(
             "[{variant:?} fee={fee}] LP reserves erg={} dexy={} lp={}",
             ctx.lp_erg_reserves, ctx.lp_dexy_reserves, ctx.lp_token_reserves
         );
         {
             use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
-            for (label, tree) in [("LP", &ctx.lp_box.ergo_tree), ("MINT", &ctx.action_box.ergo_tree)] {
+            for (label, tree) in [
+                ("LP", &ctx.lp_box.ergo_tree),
+                ("MINT", &ctx.action_box.ergo_tree),
+            ] {
                 let n = tree.constants_len().unwrap_or(0);
                 println!("  {label} tree constants: {n}");
                 for i in 0..n {
@@ -459,10 +483,25 @@ mod lp_live_tests {
                     }
                 }
             }
-            println!("  ids: lp_nft={} mint={} redeem={} swap={} lp_token={} dexy={}", ids.lp_nft, ids.lp_mint_nft, ids.lp_redeem_nft, ids.lp_swap_nft, ids.lp_token_id, ids.dexy_token);
+            println!(
+                "  ids: lp_nft={} mint={} redeem={} swap={} lp_token={} dexy={}",
+                ids.lp_nft,
+                ids.lp_mint_nft,
+                ids.lp_redeem_nft,
+                ids.lp_swap_nft,
+                ids.lp_token_id,
+                ids.dexy_token
+            );
         }
-        let holder: ErgoBox = client.get_box_by_id(&BoxId::new(holder_id)).await.expect("holder box");
-        let eip12 = ergo_tx::Eip12InputBox::from_ergo_box(&holder, holder.transaction_id.to_string(), holder.index);
+        let holder: ErgoBox = client
+            .get_box_by_id(&BoxId::new(holder_id))
+            .await
+            .expect("holder box");
+        let eip12 = ergo_tx::Eip12InputBox::from_ergo_box(
+            &holder,
+            holder.transaction_id.to_string(),
+            holder.index,
+        );
         let user_tree = eip12.ergo_tree.clone();
         let height = client.current_height().await.expect("height") as i32;
         let request = dexy::tx_builder::LpDepositRequest {
@@ -476,21 +515,39 @@ mod lp_live_tests {
             recipient_ergo_tree: Some(user_tree),
         };
         let build = || {
-            dexy::tx_builder::build_lp_deposit_tx(&request, &ctx, &ids.dexy_token, &ids.lp_token_id, variant.initial_lp())
+            dexy::tx_builder::build_lp_deposit_tx(
+                &request,
+                &ctx,
+                &ids.dexy_token,
+                &ids.lp_token_id,
+                variant.initial_lp(),
+            )
         };
         let built = if fee {
-            let tree = wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
-            with_test_dev_fee(DevFeeConfig::custom(tree, crate::api::ARGUS_FEE_NANO), build)
+            let tree =
+                wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
+            with_test_dev_fee(
+                DevFeeConfig::custom(tree, crate::api::ARGUS_FEE_NANO),
+                build,
+            )
         } else {
             build()
         }
         .expect("build");
-        println!("  summary: {:?} outputs={}", built.summary, built.unsigned_tx.outputs.len());
+        println!(
+            "  summary: {:?} outputs={}",
+            built.summary,
+            built.unsigned_tx.outputs.len()
+        );
         let boxes = vec![ctx.lp_box.clone(), ctx.action_box.clone(), holder];
         match ergopay_core::reduce_transaction(&built.unsigned_tx, boxes, vec![], &client).await {
             Ok(bytes) => {
                 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
-                let reduced = ergo_lib::chain::transaction::reduced::ReducedTransaction::sigma_parse_bytes(&bytes).expect("parse");
+                let reduced =
+                    ergo_lib::chain::transaction::reduced::ReducedTransaction::sigma_parse_bytes(
+                        &bytes,
+                    )
+                    .expect("parse");
                 for (i, input) in reduced.reduced_inputs().iter().enumerate() {
                     println!("  input {i}: {:?}", input.sigma_prop);
                 }
@@ -507,16 +564,26 @@ mod lp_live_tests {
     async fn lp_redeem_live_reduces() {
         use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
         let node = "https://ergo-node.eutxo.de".to_string();
-        let client = super::dexy_client(Some(node.clone())).await.expect("client");
+        let client = super::dexy_client(Some(node.clone()))
+            .await
+            .expect("client");
         let caps = client.require_capabilities().await.expect("caps");
         let variant = dexy::constants::DexyVariant::Gold;
         let ids = super::ids_for(variant).expect("ids");
-        let ctx = dexy::fetch::fetch_lp_tx_context(&client, &caps, &ids, dexy::fetch::LpAction::Redeem)
-            .await
-            .expect("lp ctx");
+        let ctx =
+            dexy::fetch::fetch_lp_tx_context(&client, &caps, &ids, dexy::fetch::LpAction::Redeem)
+                .await
+                .expect("lp ctx");
         let holder_id = "dec6bbb7350f47f1058d609aaaee24dbeec1bfb2d4b2fa7c699bcc7d6fc0073c";
-        let holder: ErgoBox = client.get_box_by_id(&BoxId::new(holder_id)).await.expect("holder box");
-        let eip12 = ergo_tx::Eip12InputBox::from_ergo_box(&holder, holder.transaction_id.to_string(), holder.index);
+        let holder: ErgoBox = client
+            .get_box_by_id(&BoxId::new(holder_id))
+            .await
+            .expect("holder box");
+        let eip12 = ergo_tx::Eip12InputBox::from_ergo_box(
+            &holder,
+            holder.transaction_id.to_string(),
+            holder.index,
+        );
         let user_tree = eip12.ergo_tree.clone();
         let height = client.current_height().await.expect("height") as i32;
         let request = dexy::tx_builder::LpRedeemRequest {
@@ -529,21 +596,48 @@ mod lp_live_tests {
             recipient_ergo_tree: Some(user_tree),
         };
         let tree = wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
-        let built = with_test_dev_fee(DevFeeConfig::custom(tree, crate::api::ARGUS_FEE_NANO), || {
-            dexy::tx_builder::build_lp_redeem_tx(&request, &ctx, &ids.dexy_token, &ids.lp_token_id, variant.initial_lp())
-        })
+        let built = with_test_dev_fee(
+            DevFeeConfig::custom(tree, crate::api::ARGUS_FEE_NANO),
+            || {
+                dexy::tx_builder::build_lp_redeem_tx(
+                    &request,
+                    &ctx,
+                    &ids.dexy_token,
+                    &ids.lp_token_id,
+                    variant.initial_lp(),
+                )
+            },
+        )
         .expect("build");
         println!("summary: {:?}", built.summary);
         for (i, o) in built.unsigned_tx.outputs.iter().enumerate() {
-            println!("out {i}: value={} assets={:?}", o.value, o.assets.iter().map(|a| (&a.token_id[..8], &a.amount)).collect::<Vec<_>>());
+            println!(
+                "out {i}: value={} assets={:?}",
+                o.value,
+                o.assets
+                    .iter()
+                    .map(|a| (&a.token_id[..8], &a.amount))
+                    .collect::<Vec<_>>()
+            );
         }
-        let oracle_id = ctx.oracle_data_input.as_ref().expect("oracle").box_id.clone();
-        let oracle_box: ErgoBox = client.get_box_by_id(&BoxId::new(&oracle_id)).await.expect("oracle box");
-        let boxes = vec![ctx.lp_box.clone(), ctx.action_box.clone(), holder];
-        let bytes = ergopay_core::reduce_transaction(&built.unsigned_tx, boxes, vec![oracle_box], &client)
+        let oracle_id = ctx
+            .oracle_data_input
+            .as_ref()
+            .expect("oracle")
+            .box_id
+            .clone();
+        let oracle_box: ErgoBox = client
+            .get_box_by_id(&BoxId::new(&oracle_id))
             .await
-            .expect("reduce");
-        let reduced = ergo_lib::chain::transaction::reduced::ReducedTransaction::sigma_parse_bytes(&bytes).expect("parse");
+            .expect("oracle box");
+        let boxes = vec![ctx.lp_box.clone(), ctx.action_box.clone(), holder];
+        let bytes =
+            ergopay_core::reduce_transaction(&built.unsigned_tx, boxes, vec![oracle_box], &client)
+                .await
+                .expect("reduce");
+        let reduced =
+            ergo_lib::chain::transaction::reduced::ReducedTransaction::sigma_parse_bytes(&bytes)
+                .expect("parse");
         for (i, input) in reduced.reduced_inputs().iter().enumerate() {
             println!("input {i}: {:?}", input.sigma_prop);
         }
@@ -560,12 +654,25 @@ mod lp_live_tests {
                 a.amount = (a.amount.parse::<i64>().unwrap() + 1).to_string();
             }
         }
-        let holder2: ErgoBox = client.get_box_by_id(&BoxId::new(holder_id)).await.expect("holder box");
-        let oracle2: ErgoBox = client.get_box_by_id(&BoxId::new(&oracle_id)).await.expect("oracle box");
-        let bytes = ergopay_core::reduce_transaction(&greedy, vec![ctx.lp_box.clone(), ctx.action_box.clone(), holder2], vec![oracle2], &client)
+        let holder2: ErgoBox = client
+            .get_box_by_id(&BoxId::new(holder_id))
             .await
-            .expect("reduce greedy");
-        let reduced = ergo_lib::chain::transaction::reduced::ReducedTransaction::sigma_parse_bytes(&bytes).expect("parse");
+            .expect("holder box");
+        let oracle2: ErgoBox = client
+            .get_box_by_id(&BoxId::new(&oracle_id))
+            .await
+            .expect("oracle box");
+        let bytes = ergopay_core::reduce_transaction(
+            &greedy,
+            vec![ctx.lp_box.clone(), ctx.action_box.clone(), holder2],
+            vec![oracle2],
+            &client,
+        )
+        .await
+        .expect("reduce greedy");
+        let reduced =
+            ergo_lib::chain::transaction::reduced::ReducedTransaction::sigma_parse_bytes(&bytes)
+                .expect("parse");
         for (i, input) in reduced.reduced_inputs().iter().enumerate() {
             println!("greedy input {i}: {:?}", input.sigma_prop);
         }
@@ -608,14 +715,31 @@ mod dexy_state_live_tests {
     async fn dexy_state_live_dump() {
         let node = Some("https://ergo-node.eutxo.de".to_string());
         for (variant, one_token) in [("gold", 1i64), ("usd", 1000i64)] {
-            let raw = crate::api::dexy_state(variant.to_string(), node.clone()).await.expect("state");
+            let raw = crate::api::dexy_state(variant.to_string(), node.clone())
+                .await
+                .expect("state");
             let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
             println!("[{variant}] oracle_rate_nano={} lp_rate_nano={} free_mint_available={} dexy_in_bank={} lp_erg={} lp_dexy={}",
                 v["state"]["oracle_rate_nano"], v["state"]["lp_rate_nano"], v["state"]["free_mint_available"], v["state"]["dexy_in_bank"], v["state"]["lp_erg_reserves"], v["state"]["lp_dexy_reserves"]);
-            println!("[{variant}] rates erg_per_token={} tokens_per_erg={} decimals={}", v["rates"]["erg_per_token"], v["rates"]["tokens_per_erg"], v["rates"]["token_decimals"]);
-            let p = crate::api::dexy_preview_mint(variant.to_string(), one_token, node.clone()).await.expect("preview");
+            println!(
+                "[{variant}] rates erg_per_token={} tokens_per_erg={} decimals={}",
+                v["rates"]["erg_per_token"],
+                v["rates"]["tokens_per_erg"],
+                v["rates"]["token_decimals"]
+            );
+            let p = crate::api::dexy_preview_mint(variant.to_string(), one_token, node.clone())
+                .await
+                .expect("preview");
             println!("[{variant}] preview mint {one_token} base units: {p}");
-            let r = crate::api::dexy_preview_lp(variant.to_string(), "redeem".to_string(), 0, 0, 470, node.clone()).await;
+            let r = crate::api::dexy_preview_lp(
+                variant.to_string(),
+                "redeem".to_string(),
+                0,
+                0,
+                470,
+                node.clone(),
+            )
+            .await;
             println!("[{variant}] preview lp redeem 470: {r:?}");
         }
     }

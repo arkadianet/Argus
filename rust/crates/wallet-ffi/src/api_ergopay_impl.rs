@@ -50,7 +50,9 @@ pub(crate) fn summarize_reduced(
     is_owned: &dyn Fn(&str) -> bool,
     input_boxes: &[Option<serde_json::Value>],
 ) -> serde_json::Value {
-    let fee_tree = ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS.script().ok();
+    let fee_tree = ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS
+        .script()
+        .ok();
     let tx = &reduced.unsigned_tx;
 
     let mut inputs = Vec::new();
@@ -106,7 +108,10 @@ pub(crate) fn summarize_reduced(
     let mut tokens_back: std::collections::BTreeMap<String, u64> = Default::default();
     for out in tx.output_candidates.iter() {
         let value = *out.value.as_u64();
-        let is_fee = fee_tree.as_ref().map(|f| f == &out.ergo_tree).unwrap_or(false);
+        let is_fee = fee_tree
+            .as_ref()
+            .map(|f| f == &out.ergo_tree)
+            .unwrap_or(false);
         let address = tree_to_address(&out.ergo_tree);
         let kind = if is_fee {
             fee = fee.saturating_add(value);
@@ -210,7 +215,10 @@ mod tests {
     fn sample() -> (WalletHandle, ReducedTransaction, ErgoBox) {
         let handle = WalletHandle::create(MnemonicPhrase::parse(APPKIT).unwrap(), "").unwrap();
         let mine = handle.derive_address(0).unwrap();
-        let tok = Token { token_id: token_id(), amount: TokenAmount::try_from(10u64).unwrap() };
+        let tok = Token {
+            token_id: token_id(),
+            amount: TokenAmount::try_from(10u64).unwrap(),
+        };
         let input = ErgoBox::new(
             BoxValue::try_from(2_000_000_000u64).unwrap(),
             tree(&mine),
@@ -224,19 +232,38 @@ mod tests {
         let fee = 1_100_000u64;
         let send = 1_000_000_000u64;
         let change = 2_000_000_000u64 - send - fee;
-        let mut to = ErgoBoxCandidateBuilder::new(BoxValue::try_from(send).unwrap(), tree(STRANGER), 2000);
-        to.add_token(Token { token_id: token_id(), amount: TokenAmount::try_from(4u64).unwrap() });
-        let mut back = ErgoBoxCandidateBuilder::new(BoxValue::try_from(change).unwrap(), tree(&mine), 2000);
-        back.add_token(Token { token_id: token_id(), amount: TokenAmount::try_from(6u64).unwrap() });
+        let mut to =
+            ErgoBoxCandidateBuilder::new(BoxValue::try_from(send).unwrap(), tree(STRANGER), 2000);
+        to.add_token(Token {
+            token_id: token_id(),
+            amount: TokenAmount::try_from(4u64).unwrap(),
+        });
+        let mut back =
+            ErgoBoxCandidateBuilder::new(BoxValue::try_from(change).unwrap(), tree(&mine), 2000);
+        back.add_token(Token {
+            token_id: token_id(),
+            amount: TokenAmount::try_from(6u64).unwrap(),
+        });
         let fee_out = ErgoBoxCandidateBuilder::new(
             BoxValue::try_from(fee).unwrap(),
-            ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS.script().unwrap(),
+            ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS
+                .script()
+                .unwrap(),
             2000,
         );
         let unsigned = UnsignedTransaction::new(
-            TxIoVec::from_vec(vec![UnsignedInput::new(input.box_id(), ContextExtension::empty())]).unwrap(),
+            TxIoVec::from_vec(vec![UnsignedInput::new(
+                input.box_id(),
+                ContextExtension::empty(),
+            )])
+            .unwrap(),
             None::<TxIoVec<DataInput>>,
-            TxIoVec::from_vec(vec![to.build().unwrap(), back.build().unwrap(), fee_out.build().unwrap()]).unwrap(),
+            TxIoVec::from_vec(vec![
+                to.build().unwrap(),
+                back.build().unwrap(),
+                fee_out.build().unwrap(),
+            ])
+            .unwrap(),
         )
         .unwrap();
         let reduced = wallet_core::transaction::build_reduced_transaction(
@@ -253,14 +280,26 @@ mod tests {
     fn classifies_outputs_and_sums_totals_with_known_inputs() {
         let (handle, reduced, input) = sample();
         let input_json = serde_json::to_value(&input).unwrap();
-        let s = summarize_reduced(&reduced, &|a| handle.owns_address(a).unwrap_or(false), &[Some(input_json)]);
+        let s = summarize_reduced(
+            &reduced,
+            &|a| handle.owns_address(a).unwrap_or(false),
+            &[Some(input_json)],
+        );
 
         assert_eq!(s["fee_nano_erg"], 1_100_000u64);
         assert_eq!(s["sent_nano_erg"], 1_000_000_000u64);
-        assert_eq!(s["change_nano_erg"], 2_000_000_000u64 - 1_000_000_000 - 1_100_000);
+        assert_eq!(
+            s["change_nano_erg"],
+            2_000_000_000u64 - 1_000_000_000 - 1_100_000
+        );
         assert_eq!(s["spend_nano_erg"], 1_001_100_000u64);
         assert_eq!(s["inputs_known"], true);
-        let kinds: Vec<&str> = s["outputs"].as_array().unwrap().iter().map(|o| o["kind"].as_str().unwrap()).collect();
+        let kinds: Vec<&str> = s["outputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["kind"].as_str().unwrap())
+            .collect();
         assert_eq!(kinds, ["recipient", "change", "fee"]);
         assert_eq!(s["outputs"][0]["address"], STRANGER);
         assert_eq!(s["tokens_out"][0]["amount"], 4u64);
@@ -271,7 +310,11 @@ mod tests {
     #[test]
     fn unknown_inputs_leave_spend_absent() {
         let (handle, reduced, _) = sample();
-        let s = summarize_reduced(&reduced, &|a| handle.owns_address(a).unwrap_or(false), &[None]);
+        let s = summarize_reduced(
+            &reduced,
+            &|a| handle.owns_address(a).unwrap_or(false),
+            &[None],
+        );
 
         assert_eq!(s["inputs_known"], false);
         assert!(s["spend_nano_erg"].is_null());

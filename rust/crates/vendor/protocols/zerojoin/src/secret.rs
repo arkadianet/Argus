@@ -48,7 +48,8 @@ pub fn mix_derivation_path(mix_id: u32, round: u32) -> Result<String, ZeroJoinEr
 }
 
 /// Which side of a round a box belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     /// Created the half-mix box; spends a full-mix box with
     /// `proveDHTuple(g, c1, gX, c2)`.

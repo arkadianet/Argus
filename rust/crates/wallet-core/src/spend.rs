@@ -3,10 +3,7 @@ use ergo_tx::{Eip12InputBox, SelectedInputs};
 /// Boxes that are safe to spend for this payment.
 /// ERG-only boxes are always eligible. Boxes that hold tokens are only
 /// eligible if every token is the one being sent (avoids sweeping NFTs).
-pub fn filter_spendable(
-    utxos: &[Eip12InputBox],
-    send_token: Option<&str>,
-) -> Vec<Eip12InputBox> {
+pub fn filter_spendable(utxos: &[Eip12InputBox], send_token: Option<&str>) -> Vec<Eip12InputBox> {
     utxos
         .iter()
         .filter(|b| is_spendable(b, send_token))
@@ -58,12 +55,9 @@ pub fn select_preferring_one_pocket(
     if stealth_box_ids.is_empty() {
         return select_for_send(utxos, required_erg, send_token).map(|s| (s, false));
     }
-    let is_stealth =
-        |b: &Eip12InputBox| stealth_box_ids.iter().any(|id| id == &b.box_id);
-    let ordinary: Vec<Eip12InputBox> =
-        utxos.iter().filter(|b| !is_stealth(b)).cloned().collect();
-    let stealth: Vec<Eip12InputBox> =
-        utxos.iter().filter(|b| is_stealth(b)).cloned().collect();
+    let is_stealth = |b: &Eip12InputBox| stealth_box_ids.iter().any(|id| id == &b.box_id);
+    let ordinary: Vec<Eip12InputBox> = utxos.iter().filter(|b| !is_stealth(b)).cloned().collect();
+    let stealth: Vec<Eip12InputBox> = utxos.iter().filter(|b| is_stealth(b)).cloned().collect();
 
     if !ordinary.is_empty() {
         if let Ok(s) = select_for_send(&ordinary, required_erg, send_token) {
@@ -104,7 +98,13 @@ mod pocket_preference_tests {
         let utxos = vec![boxx("pub", 2_000_000_000), boxx("ste", 9_000_000_000)];
         let (s, mixed) =
             select_preferring_one_pocket(&utxos, &["ste".into()], 1_000_000_000, None).unwrap();
-        assert_eq!(s.boxes.iter().map(|b| b.box_id.as_str()).collect::<Vec<_>>(), vec!["pub"]);
+        assert_eq!(
+            s.boxes
+                .iter()
+                .map(|b| b.box_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["pub"]
+        );
         assert!(!mixed);
     }
 
@@ -113,7 +113,13 @@ mod pocket_preference_tests {
         let utxos = vec![boxx("pub", 100), boxx("ste", 9_000_000_000)];
         let (s, mixed) =
             select_preferring_one_pocket(&utxos, &["ste".into()], 1_000_000_000, None).unwrap();
-        assert_eq!(s.boxes.iter().map(|b| b.box_id.as_str()).collect::<Vec<_>>(), vec!["ste"]);
+        assert_eq!(
+            s.boxes
+                .iter()
+                .map(|b| b.box_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["ste"]
+        );
         assert!(!mixed, "one pocket only, so nothing is linked");
     }
 
@@ -188,8 +194,8 @@ pub fn select_exact(
         for b in &boxes {
             for a in &b.assets {
                 if a.token_id == id {
-                    token_amount = token_amount
-                        .saturating_add(a.amount.parse::<u64>().unwrap_or(0));
+                    token_amount =
+                        token_amount.saturating_add(a.amount.parse::<u64>().unwrap_or(0));
                 }
             }
         }
@@ -266,7 +272,10 @@ mod exact_selection_tests {
     fn uses_every_chosen_box_and_keeps_their_order() {
         let s = select_exact(&wallet(), &["c".into(), "a".into()], 1_000_000_000, None).unwrap();
         assert_eq!(
-            s.boxes.iter().map(|b| b.box_id.as_str()).collect::<Vec<_>>(),
+            s.boxes
+                .iter()
+                .map(|b| b.box_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["c", "a"],
             "a chosen box is never dropped, even when an earlier one already covers the amount"
         );
@@ -322,14 +331,21 @@ mod exact_selection_tests {
 
         let auto = select_for_send(&utxos, 1_200_000_000, None).unwrap();
         assert_eq!(
-            auto.boxes.iter().map(|b| b.box_id.as_str()).collect::<Vec<_>>(),
+            auto.boxes
+                .iter()
+                .map(|b| b.box_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["private"],
             "largest first: the box the user wanted untouched pays the whole amount"
         );
 
         let chosen = select_exact(&utxos, &["a".into(), "c".into()], 1_200_000_000, None).unwrap();
         assert_eq!(
-            chosen.boxes.iter().map(|b| b.box_id.as_str()).collect::<Vec<_>>(),
+            chosen
+                .boxes
+                .iter()
+                .map(|b| b.box_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["a", "c"],
             "coin control keeps the private box out of the transaction"
         );

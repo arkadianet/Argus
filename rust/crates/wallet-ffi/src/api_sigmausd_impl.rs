@@ -11,7 +11,7 @@ use sigmausd::calculator::{
 use sigmausd::constants::NftIds;
 use sigmausd::fetch::fetch_sigmausd_state;
 use sigmausd::tx_builder::{
-    validate_mint_sigusd, validate_mint_sigrsv, validate_redeem_sigusd, validate_redeem_sigrsv,
+    validate_mint_sigrsv, validate_mint_sigusd, validate_redeem_sigrsv, validate_redeem_sigusd,
     SigmaUsdAction,
 };
 

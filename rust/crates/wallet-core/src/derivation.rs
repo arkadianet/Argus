@@ -11,19 +11,19 @@ pub fn ergo_path(index: u32) -> String {
 }
 
 pub fn derive_child(ext_sk: &ExtSecretKey, index: u32) -> Result<ExtSecretKey, CoreError> {
-    let path = ergo_path(index)
-        .parse()
-        .map_err(|e: ergo_lib::wallet::derivation_path::DerivationPathError| {
+    let path = ergo_path(index).parse().map_err(
+        |e: ergo_lib::wallet::derivation_path::DerivationPathError| {
             CoreError::Derivation(e.to_string())
-        })?;
+        },
+    )?;
     ext_sk
         .derive(path)
         .map_err(|e| CoreError::Derivation(e.to_string()))
 }
 
 pub fn derive_address_from_seed(seed: [u8; 64], index: u32) -> Result<String, CoreError> {
-    let root = ExtSecretKey::derive_master(seed)
-        .map_err(|e| CoreError::Derivation(e.to_string()))?;
+    let root =
+        ExtSecretKey::derive_master(seed).map_err(|e| CoreError::Derivation(e.to_string()))?;
     derive_address_from_ext_secret_key(&root, index)
 }
 

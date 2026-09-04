@@ -32,8 +32,8 @@ impl EncryptedSeed {
     pub fn encrypt(seed_bytes: &[u8]) -> Result<Self, CoreError> {
         let mut key = [0u8; KEY_LEN];
         OsRng.fill_bytes(&mut key);
-        let cipher = Aes256Gcm::new_from_slice(&key)
-            .map_err(|e| CoreError::Encryption(e.to_string()))?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&key).map_err(|e| CoreError::Encryption(e.to_string()))?;
         let mut nonce = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce);
         let ciphertext = cipher
@@ -135,9 +135,11 @@ mod tests {
     fn json_roundtrip() {
         let seed = b"test-seed-for-json-roundtrip-000000";
         let encrypted = EncryptedSeed::encrypt(seed).unwrap();
-        let restored =
-            EncryptedSeed::from_json(&encrypted.to_json().unwrap(), Some(&encrypted.wrap_key_hex()))
-                .unwrap();
+        let restored = EncryptedSeed::from_json(
+            &encrypted.to_json().unwrap(),
+            Some(&encrypted.wrap_key_hex()),
+        )
+        .unwrap();
         assert_eq!(restored.decrypt().unwrap().as_slice(), seed);
     }
 

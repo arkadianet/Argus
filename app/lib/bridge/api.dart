@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `broadcast_mix_move`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 
 /// The app fee as the UI should display it.
@@ -675,4 +675,150 @@ Future<String> ammBuildSwap({
   spendAddresses: spendAddresses,
   nodeUrl: nodeUrl,
   heldTokens: heldTokens,
+);
+
+/// Rings, token levels and operator boxes in a snapshot. Pure.
+Future<String> mixRings({required String chainJson}) =>
+    RustLib.instance.api.crateApiMixRings(chainJson: chainJson);
+
+/// What a funding box must hold to enter `denomination` at `level`.
+Future<String> mixFundingRequirement({
+  required String chainJson,
+  required PlatformInt64 denomination,
+  required int level,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiMixFundingRequirement(
+  chainJson: chainJson,
+  denomination: denomination,
+  level: level,
+  feeNano: feeNano,
+);
+
+/// A fresh mix state, not yet in the pool. `destination_address` is where
+/// the money goes when the mix ends: a P2PK address or a stealth payment
+/// address of this wallet's own.
+Future<String> mixNewState({
+  required int mixId,
+  required PlatformInt64 denomination,
+  String? tokenId,
+  PlatformInt64? tokenAmount,
+  required int level,
+  required int rounds,
+  required String destinationAddress,
+  required PlatformInt64 nowUnix,
+}) => RustLib.instance.api.crateApiMixNewState(
+  mixId: mixId,
+  denomination: denomination,
+  tokenId: tokenId,
+  tokenAmount: tokenAmount,
+  level: level,
+  rounds: rounds,
+  destinationAddress: destinationAddress,
+  nowUnix: nowUnix,
+);
+
+/// The next move for a mix, as JSON. Pure: builds nothing.
+Future<String> mixPlan({
+  required String stateJson,
+  required String chainJson,
+  required List<String> ownHalfBoxIds,
+}) => RustLib.instance.api.crateApiMixPlan(
+  stateJson: stateJson,
+  chainJson: chainJson,
+  ownHalfBoxIds: ownHalfBoxIds,
+);
+
+/// Fold the snapshot into the state: a half-mix box of ours that someone
+/// joined becomes our full-mix box. Returns the (possibly unchanged) state.
+Future<String> mixObserve({
+  required BigInt handleId,
+  required String stateJson,
+  required String chainJson,
+  required PlatformInt64 nowUnix,
+}) => RustLib.instance.api.crateApiMixObserve(
+  handleId: handleId,
+  stateJson: stateJson,
+  chainJson: chainJson,
+  nowUnix: nowUnix,
+);
+
+/// Rebuild every live mix of this wallet from the seed and a snapshot that
+/// holds every unspent half- and full-mix box. Returns a JSON array of
+/// states with no destination set.
+Future<String> mixRecover({
+  required BigInt handleId,
+  required String chainJson,
+  required PlatformInt64 nowUnix,
+}) => RustLib.instance.api.crateApiMixRecover(
+  handleId: handleId,
+  chainJson: chainJson,
+  nowUnix: nowUnix,
+);
+
+/// Prepare a mix's entry transaction from one of the wallet's own boxes.
+/// Confirm it with `send_erg`; persist `next_state` only once that
+/// succeeds.
+Future<String> mixPrepareEntry({
+  required BigInt handleId,
+  required String stateJson,
+  required String chainJson,
+  required String fundingAddress,
+  required String fundingBoxId,
+  required List<String> ownHalfBoxIds,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+  required PlatformInt64 nowUnix,
+}) => RustLib.instance.api.crateApiMixPrepareEntry(
+  handleId: handleId,
+  stateJson: stateJson,
+  chainJson: chainJson,
+  fundingAddress: fundingAddress,
+  fundingBoxId: fundingBoxId,
+  ownHalfBoxIds: ownHalfBoxIds,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+  nowUnix: nowUnix,
+);
+
+/// Advance a mix already in the pool by one move: remix as Bob or Alice,
+/// or withdraw once the rounds are done. Broadcasts and returns the new
+/// state, or `{"state": <unchanged>, "action": "wait", "reason": …}` when
+/// there is nothing to do yet.
+Future<String> mixAdvance({
+  required BigInt handleId,
+  required String stateJson,
+  required String chainJson,
+  required List<String> ownHalfBoxIds,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+  required PlatformInt64 nowUnix,
+}) => RustLib.instance.api.crateApiMixAdvance(
+  handleId: handleId,
+  stateJson: stateJson,
+  chainJson: chainJson,
+  ownHalfBoxIds: ownHalfBoxIds,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+  nowUnix: nowUnix,
+);
+
+/// Take a mix's money out now: withdraw a full-mix box or reclaim a
+/// half-mix box nobody joined. `destination_address` overrides the one
+/// chosen at the start (required for a recovered mix, which has none).
+Future<String> mixLeave({
+  required BigInt handleId,
+  required String stateJson,
+  required String chainJson,
+  String? destinationAddress,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+  required PlatformInt64 nowUnix,
+}) => RustLib.instance.api.crateApiMixLeave(
+  handleId: handleId,
+  stateJson: stateJson,
+  chainJson: chainJson,
+  destinationAddress: destinationAddress,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+  nowUnix: nowUnix,
 );

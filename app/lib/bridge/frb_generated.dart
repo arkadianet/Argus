@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -299428303;
+  int get rustContentHash => 1818474497;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -236,6 +236,77 @@ abstract class RustLibApi extends BaseApi {
   });
 
   bool crateApiLooksLikeStealthAddress({required String address});
+
+  Future<String> crateApiMixAdvance({
+    required BigInt handleId,
+    required String stateJson,
+    required String chainJson,
+    required List<String> ownHalfBoxIds,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+    required PlatformInt64 nowUnix,
+  });
+
+  Future<String> crateApiMixFundingRequirement({
+    required String chainJson,
+    required PlatformInt64 denomination,
+    required int level,
+    PlatformInt64? feeNano,
+  });
+
+  Future<String> crateApiMixLeave({
+    required BigInt handleId,
+    required String stateJson,
+    required String chainJson,
+    String? destinationAddress,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+    required PlatformInt64 nowUnix,
+  });
+
+  Future<String> crateApiMixNewState({
+    required int mixId,
+    required PlatformInt64 denomination,
+    String? tokenId,
+    PlatformInt64? tokenAmount,
+    required int level,
+    required int rounds,
+    required String destinationAddress,
+    required PlatformInt64 nowUnix,
+  });
+
+  Future<String> crateApiMixObserve({
+    required BigInt handleId,
+    required String stateJson,
+    required String chainJson,
+    required PlatformInt64 nowUnix,
+  });
+
+  Future<String> crateApiMixPlan({
+    required String stateJson,
+    required String chainJson,
+    required List<String> ownHalfBoxIds,
+  });
+
+  Future<String> crateApiMixPrepareEntry({
+    required BigInt handleId,
+    required String stateJson,
+    required String chainJson,
+    required String fundingAddress,
+    required String fundingBoxId,
+    required List<String> ownHalfBoxIds,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+    required PlatformInt64 nowUnix,
+  });
+
+  Future<String> crateApiMixRecover({
+    required BigInt handleId,
+    required String chainJson,
+    required PlatformInt64 nowUnix,
+  });
+
+  Future<String> crateApiMixRings({required String chainJson});
 
   Future<String> crateApiPrepareConsolidate({
     required BigInt handleId,
@@ -1488,6 +1559,435 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       );
 
   @override
+  Future<String> crateApiMixAdvance({
+    required BigInt handleId,
+    required String stateJson,
+    required String chainJson,
+    required List<String> ownHalfBoxIds,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+    required PlatformInt64 nowUnix,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_String(stateJson, serializer);
+          sse_encode_String(chainJson, serializer);
+          sse_encode_list_String(ownHalfBoxIds, serializer);
+          sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
+          sse_encode_i_64(nowUnix, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 27,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMixAdvanceConstMeta,
+        argValues: [
+          handleId,
+          stateJson,
+          chainJson,
+          ownHalfBoxIds,
+          nodeUrl,
+          feeNano,
+          nowUnix,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMixAdvanceConstMeta => const TaskConstMeta(
+    debugName: "mix_advance",
+    argNames: [
+      "handleId",
+      "stateJson",
+      "chainJson",
+      "ownHalfBoxIds",
+      "nodeUrl",
+      "feeNano",
+      "nowUnix",
+    ],
+  );
+
+  @override
+  Future<String> crateApiMixFundingRequirement({
+    required String chainJson,
+    required PlatformInt64 denomination,
+    required int level,
+    PlatformInt64? feeNano,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(chainJson, serializer);
+          sse_encode_i_64(denomination, serializer);
+          sse_encode_i_32(level, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 28,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMixFundingRequirementConstMeta,
+        argValues: [chainJson, denomination, level, feeNano],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMixFundingRequirementConstMeta =>
+      const TaskConstMeta(
+        debugName: "mix_funding_requirement",
+        argNames: ["chainJson", "denomination", "level", "feeNano"],
+      );
+
+  @override
+  Future<String> crateApiMixLeave({
+    required BigInt handleId,
+    required String stateJson,
+    required String chainJson,
+    String? destinationAddress,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+    required PlatformInt64 nowUnix,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_String(stateJson, serializer);
+          sse_encode_String(chainJson, serializer);
+          sse_encode_opt_String(destinationAddress, serializer);
+          sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
+          sse_encode_i_64(nowUnix, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 29,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMixLeaveConstMeta,
+        argValues: [
+          handleId,
+          stateJson,
+          chainJson,
+          destinationAddress,
+          nodeUrl,
+          feeNano,
+          nowUnix,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMixLeaveConstMeta => const TaskConstMeta(
+    debugName: "mix_leave",
+    argNames: [
+      "handleId",
+      "stateJson",
+      "chainJson",
+      "destinationAddress",
+      "nodeUrl",
+      "feeNano",
+      "nowUnix",
+    ],
+  );
+
+  @override
+  Future<String> crateApiMixNewState({
+    required int mixId,
+    required PlatformInt64 denomination,
+    String? tokenId,
+    PlatformInt64? tokenAmount,
+    required int level,
+    required int rounds,
+    required String destinationAddress,
+    required PlatformInt64 nowUnix,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_32(mixId, serializer);
+          sse_encode_i_64(denomination, serializer);
+          sse_encode_opt_String(tokenId, serializer);
+          sse_encode_opt_box_autoadd_i_64(tokenAmount, serializer);
+          sse_encode_i_32(level, serializer);
+          sse_encode_u_32(rounds, serializer);
+          sse_encode_String(destinationAddress, serializer);
+          sse_encode_i_64(nowUnix, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 30,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMixNewStateConstMeta,
+        argValues: [
+          mixId,
+          denomination,
+          tokenId,
+          tokenAmount,
+          level,
+          rounds,
+          destinationAddress,
+          nowUnix,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMixNewStateConstMeta => const TaskConstMeta(
+    debugName: "mix_new_state",
+    argNames: [
+      "mixId",
+      "denomination",
+      "tokenId",
+      "tokenAmount",
+      "level",
+      "rounds",
+      "destinationAddress",
+      "nowUnix",
+    ],
+  );
+
+  @override
+  Future<String> crateApiMixObserve({
+    required BigInt handleId,
+    required String stateJson,
+    required String chainJson,
+    required PlatformInt64 nowUnix,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_String(stateJson, serializer);
+          sse_encode_String(chainJson, serializer);
+          sse_encode_i_64(nowUnix, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 31,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMixObserveConstMeta,
+        argValues: [handleId, stateJson, chainJson, nowUnix],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMixObserveConstMeta => const TaskConstMeta(
+    debugName: "mix_observe",
+    argNames: ["handleId", "stateJson", "chainJson", "nowUnix"],
+  );
+
+  @override
+  Future<String> crateApiMixPlan({
+    required String stateJson,
+    required String chainJson,
+    required List<String> ownHalfBoxIds,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(stateJson, serializer);
+          sse_encode_String(chainJson, serializer);
+          sse_encode_list_String(ownHalfBoxIds, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 32,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMixPlanConstMeta,
+        argValues: [stateJson, chainJson, ownHalfBoxIds],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMixPlanConstMeta => const TaskConstMeta(
+    debugName: "mix_plan",
+    argNames: ["stateJson", "chainJson", "ownHalfBoxIds"],
+  );
+
+  @override
+  Future<String> crateApiMixPrepareEntry({
+    required BigInt handleId,
+    required String stateJson,
+    required String chainJson,
+    required String fundingAddress,
+    required String fundingBoxId,
+    required List<String> ownHalfBoxIds,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+    required PlatformInt64 nowUnix,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_String(stateJson, serializer);
+          sse_encode_String(chainJson, serializer);
+          sse_encode_String(fundingAddress, serializer);
+          sse_encode_String(fundingBoxId, serializer);
+          sse_encode_list_String(ownHalfBoxIds, serializer);
+          sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
+          sse_encode_i_64(nowUnix, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 33,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMixPrepareEntryConstMeta,
+        argValues: [
+          handleId,
+          stateJson,
+          chainJson,
+          fundingAddress,
+          fundingBoxId,
+          ownHalfBoxIds,
+          nodeUrl,
+          feeNano,
+          nowUnix,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMixPrepareEntryConstMeta => const TaskConstMeta(
+    debugName: "mix_prepare_entry",
+    argNames: [
+      "handleId",
+      "stateJson",
+      "chainJson",
+      "fundingAddress",
+      "fundingBoxId",
+      "ownHalfBoxIds",
+      "nodeUrl",
+      "feeNano",
+      "nowUnix",
+    ],
+  );
+
+  @override
+  Future<String> crateApiMixRecover({
+    required BigInt handleId,
+    required String chainJson,
+    required PlatformInt64 nowUnix,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_String(chainJson, serializer);
+          sse_encode_i_64(nowUnix, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 34,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMixRecoverConstMeta,
+        argValues: [handleId, chainJson, nowUnix],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMixRecoverConstMeta => const TaskConstMeta(
+    debugName: "mix_recover",
+    argNames: ["handleId", "chainJson", "nowUnix"],
+  );
+
+  @override
+  Future<String> crateApiMixRings({required String chainJson}) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(chainJson, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 35,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiMixRingsConstMeta,
+        argValues: [chainJson],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiMixRingsConstMeta =>
+      const TaskConstMeta(debugName: "mix_rings", argNames: ["chainJson"]);
+
+  @override
   Future<String> crateApiPrepareConsolidate({
     required BigInt handleId,
     required List<String> spendAddresses,
@@ -1509,7 +2009,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 27,
+            funcId: 36,
             port: port_,
           );
         },
@@ -1567,7 +2067,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 28,
+            funcId: 37,
             port: port_,
           );
         },
@@ -1637,7 +2137,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 29,
+            funcId: 38,
             port: port_,
           );
         },
@@ -1711,7 +2211,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 30,
+            funcId: 39,
             port: port_,
           );
         },
@@ -1777,7 +2277,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 31,
+            funcId: 40,
             port: port_,
           );
         },
@@ -1845,7 +2345,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 32,
+            funcId: 41,
             port: port_,
           );
         },
@@ -1907,7 +2407,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 33,
+            funcId: 42,
             port: port_,
           );
         },
@@ -1949,7 +2449,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 34,
+            funcId: 43,
             port: port_,
           );
         },
@@ -1981,7 +2481,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 35,
+            funcId: 44,
             port: port_,
           );
         },
@@ -2015,7 +2515,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 36,
+            funcId: 45,
             port: port_,
           );
         },
@@ -2061,7 +2561,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 37,
+            funcId: 46,
             port: port_,
           );
         },
@@ -2115,7 +2615,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 38,
+            funcId: 47,
             port: port_,
           );
         },
@@ -2145,7 +2645,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 39,
+            funcId: 48,
             port: port_,
           );
         },
@@ -2177,7 +2677,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 40,
+            funcId: 49,
             port: port_,
           );
         },
@@ -2211,7 +2711,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 41,
+            funcId: 50,
             port: port_,
           );
         },
@@ -2242,7 +2742,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 42,
+            funcId: 51,
             port: port_,
           );
         },
@@ -2266,7 +2766,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 43)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 52)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -2294,7 +2794,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 44,
+            funcId: 53,
             port: port_,
           );
         },
@@ -2329,7 +2829,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 45,
+            funcId: 54,
             port: port_,
           );
         },
@@ -2361,7 +2861,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 46,
+            funcId: 55,
             port: port_,
           );
         },
@@ -2388,7 +2888,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 47)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 56)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -2418,7 +2918,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 48,
+            funcId: 57,
             port: port_,
           );
         },
@@ -2453,7 +2953,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 49,
+            funcId: 58,
             port: port_,
           );
         },
@@ -2483,7 +2983,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 50,
+            funcId: 59,
             port: port_,
           );
         },
@@ -2511,7 +3011,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(address, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 51)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 60)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -2548,7 +3048,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 52,
+            funcId: 61,
             port: port_,
           );
         },
@@ -2583,7 +3083,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 53,
+            funcId: 62,
             port: port_,
           );
         },
@@ -2613,7 +3113,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 54,
+            funcId: 63,
             port: port_,
           );
         },
@@ -2643,7 +3143,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 55,
+            funcId: 64,
             port: port_,
           );
         },
@@ -2675,7 +3175,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 56,
+            funcId: 65,
             port: port_,
           );
         },
@@ -2709,7 +3209,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 57,
+            funcId: 66,
             port: port_,
           );
         },
@@ -2743,7 +3243,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 58,
+            funcId: 67,
             port: port_,
           );
         },
@@ -2803,6 +3303,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   double dco_decode_f_64(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as double;
+  }
+
+  @protected
+  int dco_decode_i_32(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as int;
   }
 
   @protected
@@ -2933,6 +3439,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  int sse_decode_i_32(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    return deserializer.buffer.getInt32();
+  }
+
+  @protected
   PlatformInt64 sse_decode_i_64(SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return deserializer.buffer.getPlatformInt64();
@@ -3054,12 +3566,6 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  int sse_decode_i_32(SseDeserializer deserializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    return deserializer.buffer.getInt32();
-  }
-
-  @protected
   void sse_encode_String(String self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_list_prim_u_8_strict(utf8.encoder.convert(self), serializer);
@@ -3102,6 +3608,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   void sse_encode_f_64(double self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     serializer.buffer.putFloat64(self);
+  }
+
+  @protected
+  void sse_encode_i_32(int self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    serializer.buffer.putInt32(self);
   }
 
   @protected
@@ -3228,11 +3740,5 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @protected
   void sse_encode_unit(void self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
-  }
-
-  @protected
-  void sse_encode_i_32(int self, SseSerializer serializer) {
-    // Codec=Sse (Serialization based), see doc to use other codecs
-    serializer.buffer.putInt32(self);
   }
 }

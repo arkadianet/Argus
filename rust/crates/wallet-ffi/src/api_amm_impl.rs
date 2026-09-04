@@ -37,10 +37,7 @@ impl TokenMeta {
 static TOKEN_CACHE: Lazy<RwLock<HashMap<String, TokenMeta>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
-pub(crate) async fn token_meta(
-    client: &ergo_node_client::NodeClient,
-    token_id: &str,
-) -> TokenMeta {
+pub(crate) async fn token_meta(client: &ergo_node_client::NodeClient, token_id: &str) -> TokenMeta {
     if let Some(hit) = recover(TOKEN_CACHE.read()).get(token_id) {
         return hit.clone();
     }
@@ -52,7 +49,10 @@ pub(crate) async fn token_meta(
                 .name
                 .filter(|n| !n.is_empty())
                 .unwrap_or_else(|| TokenMeta::fallback(token_id).name),
-            decimals: info.decimals.and_then(|d| u8::try_from(d).ok()).unwrap_or(0),
+            decimals: info
+                .decimals
+                .and_then(|d| u8::try_from(d).ok())
+                .unwrap_or(0),
         },
         Err(_) => TokenMeta::fallback(token_id),
     };
@@ -169,10 +169,14 @@ pub(crate) fn seed_token_cache(known_tokens_json: &str) {
         Ok(v) => v,
         Err(_) => return,
     };
-    let Some(map) = parsed.as_object() else { return };
+    let Some(map) = parsed.as_object() else {
+        return;
+    };
     let mut cache = recover(TOKEN_CACHE.write());
     for (id, v) in map {
-        let Some(name) = v.get("name").and_then(|n| n.as_str()) else { continue };
+        let Some(name) = v.get("name").and_then(|n| n.as_str()) else {
+            continue;
+        };
         if name.is_empty() {
             continue;
         }
@@ -181,9 +185,10 @@ pub(crate) fn seed_token_cache(known_tokens_json: &str) {
             .and_then(|d| d.as_u64())
             .and_then(|d| u8::try_from(d).ok())
             .unwrap_or(0);
-        cache
-            .entry(id.clone())
-            .or_insert(TokenMeta { name: name.to_string(), decimals });
+        cache.entry(id.clone()).or_insert(TokenMeta {
+            name: name.to_string(),
+            decimals,
+        });
     }
 }
 
@@ -219,7 +224,9 @@ pub(crate) fn best_pool_for_output<'a>(
         if pool.pool_type != amm::PoolType::N2T || pool.token_y.token_id != token {
             continue;
         }
-        let Some(erg) = pool.erg_reserves else { continue };
+        let Some(erg) = pool.erg_reserves else {
+            continue;
+        };
         let Some(erg_in) = amm::calculator::calculate_input(
             erg,
             pool.token_y.amount,
@@ -271,7 +278,11 @@ pub(crate) fn best_pool_for<'a>(
         .max_by_key(|(_, q)| q.output.amount)
 }
 
-pub(crate) fn pool_supports(pool: &AmmPool, from_token: Option<&str>, to_token: Option<&str>) -> bool {
+pub(crate) fn pool_supports(
+    pool: &AmmPool,
+    from_token: Option<&str>,
+    to_token: Option<&str>,
+) -> bool {
     let ids: Vec<&str> = match pool.pool_type {
         amm::state::PoolType::N2T => vec![pool.token_y.token_id.as_str()],
         amm::state::PoolType::T2T => pool
@@ -399,7 +410,10 @@ mod tests {
     #[test]
     fn known_tokens_seed_the_cache_without_a_node() {
         seed_token_cache(r#"{"abc":{"name":"ABC","decimals":3},"bad":"x"}"#);
-        let hit = recover(TOKEN_CACHE.read()).get("abc").cloned().expect("seeded");
+        let hit = recover(TOKEN_CACHE.read())
+            .get("abc")
+            .cloned()
+            .expect("seeded");
         assert_eq!(hit.name, "ABC");
         assert_eq!(hit.decimals, 3);
         assert!(recover(TOKEN_CACHE.read()).get("bad").is_none());
@@ -435,7 +449,8 @@ mod tests {
             cfg.recipient_ergo_tree, CITADEL_DEV_FEE_TREE,
             "Argus must never target the Citadel fee address"
         );
-        let expected = wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
+        let expected =
+            wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
         assert_eq!(cfg.recipient_ergo_tree, expected);
     }
 
@@ -460,9 +475,13 @@ mod tests {
 
     #[test]
     fn unknown_tokens_fall_back_to_a_short_id_label() {
-        let meta = TokenMeta::fallback("a55b8735ed1a99e46c2c89f8994aacdf4b1109bdcf682f1e5b34479c6e392669");
+        let meta =
+            TokenMeta::fallback("a55b8735ed1a99e46c2c89f8994aacdf4b1109bdcf682f1e5b34479c6e392669");
         assert_eq!(meta.name, "a55b8735…");
-        assert_eq!(meta.decimals, 0, "unknown decimals must not silently scale amounts");
+        assert_eq!(
+            meta.decimals, 0,
+            "unknown decimals must not silently scale amounts"
+        );
     }
 
     #[test]
@@ -498,7 +517,12 @@ mod tests {
             box_id: format!("box_{pool_id}"),
             erg_reserves: Some(erg),
             token_x: None,
-            token_y: amm::state::TokenAmount { token_id: token.to_string(), amount, decimals: None, name: None },
+            token_y: amm::state::TokenAmount {
+                token_id: token.to_string(),
+                amount,
+                decimals: None,
+                name: None,
+            },
             lp_token_id: format!("lp_{pool_id}"),
             lp_circulating: 1,
             fee_num: 997,
@@ -516,7 +540,10 @@ mod tests {
         let (pool, erg_in) = best_pool_for_output(&pools, "tok", 10).expect("route");
         assert_eq!(pool.pool_id, "deep");
         // ~10 tokens of 100_000 against 100 ERG: about 0.01 ERG plus fee.
-        assert!(erg_in > 10_000_000 && erg_in < 10_100_000, "erg_in {erg_in}");
+        assert!(
+            erg_in > 10_000_000 && erg_in < 10_100_000,
+            "erg_in {erg_in}"
+        );
         // More than the pool holds: no route.
         assert!(best_pool_for_output(&pools, "tok", 100_000).is_none());
         assert!(best_pool_for_output(&pools, "nope", 1).is_none());
@@ -548,8 +575,8 @@ mod tests {
         let better = t2t("better", tok("A", 1_000), tok("B", 500_000));
         let pools = vec![big_y, better];
 
-        let (pool, quote) = best_pool_for(&pools, Some("A"), Some("B"), 1_000)
-            .expect("a T2T pool trades A/B");
+        let (pool, quote) =
+            best_pool_for(&pools, Some("A"), Some("B"), 1_000).expect("a T2T pool trades A/B");
 
         assert_eq!(
             pool.pool_id, "better",
@@ -611,10 +638,7 @@ mod tests {
     /// fee, and this assertion must survive it.
     #[test]
     fn built_swap_outputs_never_pay_citadel() {
-        let trees = vec![
-            "0008cd03aaaaaa".to_string(),
-            "0008cd03bbbbbb".to_string(),
-        ];
+        let trees = vec!["0008cd03aaaaaa".to_string(), "0008cd03bbbbbb".to_string()];
         assert!(!pays_citadel_dev_fee(&trees));
 
         let with_fee = vec![
