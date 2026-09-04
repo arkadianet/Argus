@@ -6,6 +6,7 @@ import '../../services/app_fee.dart';
 
 import '../../format.dart';
 import '../../services/dexy_service.dart';
+import '../../services/swap_rounding.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 import '../dexy_screen.dart';
@@ -448,6 +449,28 @@ class DexySwapSheetState extends State<DexySwapSheet> {
             _sheetRow('Price impact',
                 '${_quote!.priceImpactPct.toStringAsFixed(2)}%'),
             _sheetRow('LP fee', '${_quote!.feePct.toStringAsFixed(2)}%'),
+            if (dexySwapRounding(_quote!, ergInput: _ergInput) case final r?) ...[
+              const SizedBox(height: 6),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${r.output} ${widget.variant.shortName} is the most this buys; '
+                      '${formatErg(r.exactInput)} buys the same and ${formatErg(r.leftover)} would otherwise stay in the pool.',
+                      style: TextStyle(fontSize: 12.5, color: rustFor(context)),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      setState(() => _amountCtrl.text = formatErg(r.exactInput, unit: false));
+                      _onChanged();
+                    },
+                    child: Text('Pay ${formatErg(r.exactInput, unit: false)}'),
+                  ),
+                ],
+              ),
+            ],
           ] else if (_quoteError != null)
             Text(_quoteError!, style: TextStyle(color: rustFor(context), fontSize: 12)),
           const SizedBox(height: 18),
@@ -930,4 +953,17 @@ String? depositPlanNote(LpDepositPlan? plan, DexyState st, DexyVariant variant, 
   final more = plan.ergForOneMore;
   final hint = more == null ? '' : ' ${formatErg(more)} would pair ${formatTokenAmount(plan.dexyUnits + 1, variant.decimals)}.';
   return '$base ${formatErg(leftover)} stays in your wallet.$hint';
+}
+
+/// Rounding hint for an ERG → token Dexy swap (the token side is floored).
+SwapRounding? dexySwapRounding(DexySwapPreview q, {required bool ergInput}) {
+  if (!ergInput || q.lpErgReserves <= 0 || q.lpDexyReserves <= 0) return null;
+  return swapRoundingFor(
+    input: q.inputAmount,
+    output: q.outputAmount,
+    reservesIn: BigInt.from(q.lpErgReserves),
+    reservesOut: BigInt.from(q.lpDexyReserves),
+    feeNum: 997,
+    feeDenom: 1000,
+  );
 }

@@ -55,6 +55,7 @@ DexyState _useState({
 }
 
 void main() {
+  _usePlanTests();
   _planTests();
   _lpRateTests();
   // 1 display USE == 1000 raw units at 3 decimals.
@@ -275,5 +276,29 @@ void _planTests() {
     expect(byY.toInt(), p.lp);
     expect(byX.toInt(), greaterThanOrEqualTo(p.lp));
     expect(byX.toInt(), lessThanOrEqualTo(p.lp + 1));
+  });
+}
+
+// USE through the same planner: rounding is bounded by one base unit
+void _usePlanTests() {
+  DexyState use() => DexyState.fromJson({
+        'state': {'lp_erg_reserves': 282885139149292, 'lp_dexy_reserves': 74997176, 'lp_circulating': 145027982574},
+        'rates': {'variant': 'usd'},
+      });
+
+  test('1 ERG led on USE loses under one base unit of ERG-equivalent', () {
+    final p = planLpDeposit(use(), ergNano: 1000000000, ergLed: true);
+    expect(p.valid, isTrue);
+    expect(p.dexyUnits, 265); // 0.265 USE
+    // Leftover is at most the ERG value of 0.001 USE (~0.0038 ERG).
+    expect(p.ergLeftover, lessThan(3800000));
+    expect(p.ergLeftover, greaterThanOrEqualTo(0));
+  });
+
+  test('0.5 USE led derives ERG with no token rounding', () {
+    final p = planLpDeposit(use(), dexyUnits: 500, ergLed: false);
+    expect(p.dexyUnits, 500);
+    expect(p.ergLeftover, 0);
+    expect(p.ergNano, closeTo(1886000000, 2000000)); // 0.5 × 3.772 ERG
   });
 }

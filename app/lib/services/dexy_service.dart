@@ -381,6 +381,8 @@ class DexySwapPreview {
   final String outputTokenName;
   final bool canExecute;
   final String? error;
+  final int lpErgReserves;
+  final int lpDexyReserves;
 
   DexySwapPreview({
     required this.inputAmount,
@@ -392,6 +394,8 @@ class DexySwapPreview {
     required this.outputTokenName,
     required this.canExecute,
     this.error,
+    this.lpErgReserves = 0,
+    this.lpDexyReserves = 0,
   });
 
   factory DexySwapPreview.fromJson(Map<String, dynamic> json) =>
@@ -403,6 +407,8 @@ class DexySwapPreview {
         feePct: (json['fee_pct'] as num?)?.toDouble() ?? 0,
         minerFeeNano: _i(json, 'miner_fee_nano'),
         outputTokenName: json['output_token_name'] as String? ?? '',
+        lpErgReserves: _i(json, 'lp_erg_reserves'),
+        lpDexyReserves: _i(json, 'lp_dexy_reserves'),
         canExecute: json['can_execute'] as bool? ?? false,
         error: json['error'] as String?,
       );
