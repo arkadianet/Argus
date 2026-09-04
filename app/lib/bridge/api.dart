@@ -264,6 +264,7 @@ Future<String> prepareSend({
   String? nodeUrl,
   PlatformInt64? feeNano,
   List<String>? inputBoxIds,
+  String? stealthBoxesJson,
 }) => RustLib.instance.api.crateApiPrepareSend(
   handleId: handleId,
   senderAddress: senderAddress,
@@ -276,6 +277,7 @@ Future<String> prepareSend({
   nodeUrl: nodeUrl,
   feeNano: feeNano,
   inputBoxIds: inputBoxIds,
+  stealthBoxesJson: stealthBoxesJson,
 );
 
 /// Prepare a UTXO consolidation transaction to merge multiple boxes into one.
@@ -405,6 +407,7 @@ Future<String> prepareSendMulti({
   String? nodeUrl,
   PlatformInt64? feeNano,
   List<String>? inputBoxIds,
+  String? stealthBoxesJson,
 }) => RustLib.instance.api.crateApiPrepareSendMulti(
   handleId: handleId,
   senderAddress: senderAddress,
@@ -414,6 +417,7 @@ Future<String> prepareSendMulti({
   nodeUrl: nodeUrl,
   feeNano: feeNano,
   inputBoxIds: inputBoxIds,
+  stealthBoxesJson: stealthBoxesJson,
 );
 
 /// Live Dexy protocol state + mint-path rates for `gold` or `usd`.

@@ -268,6 +268,7 @@ abstract class RustLibApi extends BaseApi {
     String? nodeUrl,
     PlatformInt64? feeNano,
     List<String>? inputBoxIds,
+    String? stealthBoxesJson,
   });
 
   Future<String> crateApiPrepareSendMulti({
@@ -279,6 +280,7 @@ abstract class RustLibApi extends BaseApi {
     String? nodeUrl,
     PlatformInt64? feeNano,
     List<String>? inputBoxIds,
+    String? stealthBoxesJson,
   });
 
   Future<String> crateApiPrepareSplitErg({
@@ -1610,6 +1612,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     String? nodeUrl,
     PlatformInt64? feeNano,
     List<String>? inputBoxIds,
+    String? stealthBoxesJson,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1626,6 +1629,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_opt_String(nodeUrl, serializer);
           sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
           sse_encode_opt_list_String(inputBoxIds, serializer);
+          sse_encode_opt_String(stealthBoxesJson, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1650,6 +1654,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           nodeUrl,
           feeNano,
           inputBoxIds,
+          stealthBoxesJson,
         ],
         apiImpl: this,
       ),
@@ -1670,6 +1675,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "nodeUrl",
       "feeNano",
       "inputBoxIds",
+      "stealthBoxesJson",
     ],
   );
 
@@ -1683,6 +1689,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     String? nodeUrl,
     PlatformInt64? feeNano,
     List<String>? inputBoxIds,
+    String? stealthBoxesJson,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1696,6 +1703,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_opt_String(nodeUrl, serializer);
           sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
           sse_encode_opt_list_String(inputBoxIds, serializer);
+          sse_encode_opt_String(stealthBoxesJson, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1717,6 +1725,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           nodeUrl,
           feeNano,
           inputBoxIds,
+          stealthBoxesJson,
         ],
         apiImpl: this,
       ),
@@ -1734,6 +1743,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "nodeUrl",
       "feeNano",
       "inputBoxIds",
+      "stealthBoxesJson",
     ],
   );
 

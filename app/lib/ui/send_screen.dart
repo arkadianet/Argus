@@ -18,6 +18,7 @@ import '../services/ergopay_service.dart';
 import '../services/coin_control.dart';
 import '../services/network_controller.dart';
 import '../services/stealth_service.dart';
+import '../services/wallet_sync_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
@@ -112,7 +113,10 @@ class _SendScreenState extends State<SendScreen> {
     }
     setState(() => _loadingBoxes = true);
     try {
-      _boxes = await walletService.listUnspentBoxes(spend, nodeUrl: networkController.activeUrl);
+      final own = await walletService.listUnspentBoxes(spend, nodeUrl: networkController.activeUrl);
+      // Stealth boxes are spendable but sit on no address, so they must be
+      // offered here or their funds have no route out except the sweep.
+      _boxes = [...own, ...stealthInputBoxes(stealthService.lastScan)];
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingBoxes = false);
@@ -426,6 +430,7 @@ class _SendScreenState extends State<SendScreen> {
           nodeUrl: networkController.activeUrl,
           feeNanoErg: parseErgToNano(_feeCtrl.text),
           inputBoxIds: _inputBoxIds,
+          stealthBoxesJson: stealthService.spendableBoxesJson,
         );
       } else {
         final r = recipients.single;
@@ -440,6 +445,7 @@ class _SendScreenState extends State<SendScreen> {
           nodeUrl: networkController.activeUrl,
           feeNanoErg: parseErgToNano(_feeCtrl.text),
           inputBoxIds: _inputBoxIds,
+          stealthBoxesJson: stealthService.spendableBoxesJson,
         );
       }
       await _confirmAndSend(
@@ -735,6 +741,11 @@ class _SendScreenState extends State<SendScreen> {
   String? _availableLine() {
     final spendable = _args.spendableNano;
     if (spendable == null) return null;
+    final stealth = walletSyncController.stealthNano;
+    if (stealth > 0) {
+      return 'Available ${formatErg(spendable, maxFrac: 4)} '
+          '+ ${formatErg(stealth, maxFrac: 4)} stealth (choose it under Advanced → Inputs)';
+    }
     return 'Available ${formatErg(spendable, maxFrac: 4)}';
   }
 
@@ -1486,7 +1497,9 @@ class _InputPickerSheet extends StatelessWidget {
                     subtitle: Text(
                       [
                         if (b.address != null && b.address!.isNotEmpty)
-                          shorten(b.address!, head: 6, tail: 4),
+                          shorten(b.address!, head: 6, tail: 4)
+                        else
+                          'stealth',
                         if (tokens > 0) '$tokens token${tokens == 1 ? '' : 's'}',
                         'block ${b.creationHeight}',
                       ].join(' · '),

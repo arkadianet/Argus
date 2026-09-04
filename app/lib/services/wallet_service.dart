@@ -899,6 +899,7 @@ class WalletService {
     String? nodeUrl,
     int? feeNanoErg,
     List<String>? inputBoxIds,
+    String? stealthBoxesJson,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareSend(
@@ -913,6 +914,7 @@ class WalletService {
       nodeUrl: nodeUrl,
       feeNano: feeNanoErg,
       inputBoxIds: inputBoxIds,
+      stealthBoxesJson: stealthBoxesJson,
     );
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -928,6 +930,7 @@ class WalletService {
     String? nodeUrl,
     int? feeNanoErg,
     List<String>? inputBoxIds,
+    String? stealthBoxesJson,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareSendMulti(
@@ -939,6 +942,7 @@ class WalletService {
       nodeUrl: nodeUrl,
       feeNano: feeNanoErg,
       inputBoxIds: inputBoxIds,
+      stealthBoxesJson: stealthBoxesJson,
     );
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
