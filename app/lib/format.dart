@@ -68,6 +68,20 @@ bool looksLikeErgoAddress(String value) {
   return RegExp(r'^9[1-9A-HJ-NP-Za-km-z]{50,60}$').hasMatch(value.trim());
 }
 
+/// Shape check for a published stealth address: the `stealth` marker plus
+/// Base58 of a 33-byte key and a 4-byte checksum, which lands at 50-51
+/// characters. The blake2b checksum itself is verified in Rust when the
+/// one-time payment address is derived, so a typo is caught either way.
+bool looksLikeStealthAddress(String value) {
+  final v = value.trim();
+  if (!v.startsWith('stealth')) return false;
+  return RegExp(r'^[1-9A-HJ-NP-Za-km-z]{48,53}$').hasMatch(v.substring(7));
+}
+
+/// Anything the Send screen accepts as a recipient.
+bool looksLikeRecipient(String value) =>
+    looksLikeErgoAddress(value) || looksLikeStealthAddress(value);
+
 class PaymentRequest {
   final String address;
   final String? amountErg;

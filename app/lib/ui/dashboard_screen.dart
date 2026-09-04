@@ -17,6 +17,7 @@ import '../services/portfolio.dart';
 import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
+import '../services/stealth_service.dart';
 import '../services/sigmausd_service.dart';
 import '../services/token_pricer.dart';
 import '../services/token_pricing.dart';
@@ -270,6 +271,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       ..clear()
       ..add(0);
     _sync.reset();
+    stealthService.reset();
     _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
   }
 
@@ -412,6 +414,11 @@ class _DashboardScreenState extends State<DashboardScreen>
       _status = 'Unlocked';
     });
     _incoming.reset();
+    // The published stealth string comes straight from the seed, so it can
+    // be shown before any network call. Restoring a wallet lands here too,
+    // and the refresh below runs the first stealth scan.
+    stealthService.reset();
+    unawaited(stealthService.loadAddress());
     notificationService.requestPermission();
     // 2. Full sync (discovery + balances + activity) in the background.
     await _sync.refresh(discover: true);
@@ -1172,8 +1179,11 @@ class _DashboardScreenState extends State<DashboardScreen>
     return ListenableBuilder(
       listenable: Listenable.merge([networkController, tokenPricer]),
       builder: (context, _) {
-        final fungible = _sync.tokens.where((t) => !t.isNft).toList();
-        final nfts = _sync.tokens.where((t) => t.isNft).toList();
+        // Stealth holdings are part of what the wallet owns, so they belong
+        // in the asset list; each tile knows how much of it is stealth.
+        final holdings = _sync.displayTokens;
+        final fungible = holdings.where((t) => !t.isNft).toList();
+        final nfts = holdings.where((t) => t.isNft).toList();
         final fragmented = _sync.utxoCount > utxoFragmentationThreshold;
         Widget tokenTile(TokenBalance t) => AssetTile.token(
               t,

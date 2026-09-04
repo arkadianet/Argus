@@ -5,6 +5,7 @@ import '../../bridge/argus_error.dart';
 import '../../services/privacy_service.dart';
 import '../../services/secure_storage.dart';
 import '../../services/session_lock.dart';
+import '../../services/stealth_service.dart';
 import '../../services/wallet_service.dart';
 import '../pin_fields.dart';
 import 'settings_shared.dart';
@@ -338,6 +339,32 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         ),
         const SettingsNote(
           'Seed phrase screens always block capture, whatever this setting says.',
+        ),
+        ListenableBuilder(
+          listenable: stealthService,
+          builder: (context, _) => SettingsGroup(
+            title: 'Stealth',
+            scope: 'App-wide',
+            children: [
+              SettingsRow(
+                icon: Icons.visibility_off_outlined,
+                title: 'Scan for stealth payments',
+                subtitle: stealthService.scanEnabled
+                    ? 'Each sync asks the explorer for stealth boxes'
+                    : 'Off: payments to your stealth address stay invisible',
+                trailing: Switch(
+                  key: const Key('stealth-scan-switch'),
+                  value: stealthService.scanEnabled,
+                  onChanged: (v) => stealthService.setScanEnabled(v),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SettingsNote(
+          'The scan fetches the public list of stealth boxes from the '
+          'explorer and tests it on your phone. The explorer learns that '
+          'someone asked for the list, never which boxes are yours.',
         ),
       ],
     );

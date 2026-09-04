@@ -90,6 +90,7 @@ impl From<wallet_core::CoreError> for ArgusError {
             wallet_core::CoreError::Signing(msg) => ArgusError::SigningFailed(msg),
             wallet_core::CoreError::WalletLocked => ArgusError::WalletLocked,
             wallet_core::CoreError::Serialization(msg) => ArgusError::SerializationError(msg),
+            wallet_core::CoreError::Stealth(msg) => ArgusError::Generic(msg),
             wallet_core::CoreError::Overflow(msg) => ArgusError::Generic(msg),
         }
     }

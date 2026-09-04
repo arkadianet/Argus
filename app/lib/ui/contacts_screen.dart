@@ -48,9 +48,13 @@ class _ContactsScreenState extends State<ContactsScreen> {
               final name = nameCtrl.text.trim();
               final addr = addrCtrl.text.trim();
               if (name.isEmpty || addr.isEmpty) return;
-              if (!looksLikeErgoAddress(addr)) {
+              // Stealth strings are storable too: paying one derives a
+              // fresh one-time address at send time.
+              if (!looksLikeRecipient(addr)) {
                 ScaffoldMessenger.of(ctx).showSnackBar(
-                  const SnackBar(content: Text('Not a valid Ergo address')),
+                  const SnackBar(
+                    content: Text('Not a valid Ergo or stealth address'),
+                  ),
                 );
                 return;
               }

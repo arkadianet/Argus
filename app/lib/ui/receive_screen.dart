@@ -5,9 +5,13 @@ import 'package:share_plus/share_plus.dart';
 
 import '../format.dart';
 import '../services/address_label_service.dart';
+import '../services/network_controller.dart';
 import '../services/session_lock.dart';
+import '../services/stealth_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
+import 'confirm_transaction_sheet.dart';
+import 'widgets/error_sheet.dart';
 import 'widgets/soft_card.dart';
 
 class ReceiveScreen extends StatefulWidget {
@@ -22,10 +26,17 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   String _qrData = '';
   String? _amountError;
 
+  bool _sweeping = false;
+
   @override
   void initState() {
     super.initState();
     _amountCtrl.addListener(_updateQr);
+    // The published string is derived from the seed, so it is available as
+    // soon as the wallet is unlocked; no network call.
+    if (stealthService.address == null) {
+      stealthService.loadAddress();
+    }
   }
 
   @override
@@ -133,6 +144,141 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
           ],
         ),
       ),
+    );
+  }
+
+  Future<void> _sweepStealth(String destination) async {
+    setState(() => _sweeping = true);
+    try {
+      final preview = await stealthService.prepareSweep(
+        destinationAddress: destination,
+        nodeUrl: networkController.activeUrl,
+      );
+      if (!mounted) return;
+      final ok = await showConfirmTransactionSheet(
+        context,
+        title: 'Sweep stealth funds',
+        rows: [
+          ConfirmTxRow('To', shorten(destination, head: 8, tail: 6)),
+          ConfirmTxRow('Amount', formatErg(preview.amountNanoErg), bold: true),
+          ConfirmTxRow('Stealth boxes', '${preview.inputCount}'),
+          ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
+        ],
+      );
+      if (!mounted) return;
+      if (!ok) {
+        setState(() => _sweeping = false);
+        return;
+      }
+      final txId =
+          await walletService.sendErg(preparationId: preview.preparationId);
+      if (!mounted) return;
+      setState(() => _sweeping = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Sweep sent: ${shorten(txId)}')),
+      );
+      await stealthService.scan();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sweeping = false);
+      showErrorSheet(context, title: 'Could not sweep stealth funds', message: '$e');
+    }
+  }
+
+  Widget _stealthSection(BuildContext context, String sweepTo) {
+    final colors = ArgusColors.of(context);
+    return ListenableBuilder(
+      listenable: stealthService,
+      builder: (context, _) {
+        final stealth = stealthService.address;
+        if (stealth == null) return const SizedBox.shrink();
+        final scan = stealthService.lastScan;
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 32),
+            const SectionLabel('Stealth address'),
+            const SizedBox(height: 8),
+            Text(
+              'One address you can publish anywhere. Each payment to it lands '
+              'on a different one-time script, so nothing on chain links two '
+              'payments to you or to this string. Amounts and timing are '
+              'still public. Finding incoming stealth payments needs the '
+              'explorer, so it works only while you are online.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 20),
+            Center(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: paper,
+                  borderRadius: BorderRadius.circular(cardRadius),
+                  border: Border.all(
+                      color: accentOf(context).withValues(alpha: 0.45)),
+                ),
+                padding: const EdgeInsets.all(18),
+                child: QrImageView(
+                  key: const Key('stealth-qr'),
+                  data: stealth,
+                  version: QrVersions.auto,
+                  size: 200,
+                  backgroundColor: paper,
+                  padding: EdgeInsets.zero,
+                  eyeStyle:
+                      const QrEyeStyle(eyeShape: QrEyeShape.square, color: ink),
+                  dataModuleStyle: const QrDataModuleStyle(
+                    dataModuleShape: QrDataModuleShape.square,
+                    color: ink,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            SelectableText(
+              stealth,
+              key: const Key('stealth-address-text'),
+              style: monoStyle(context, size: 12),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            FilledButton(
+              key: const Key('stealth-copy'),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: stealth));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Stealth address copied')),
+                );
+              },
+              child: const Text('Copy stealth address'),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              !stealthService.scanEnabled
+                  ? 'Stealth scanning is off. Turn it on in Settings → Security '
+                      'to see funds sent here.'
+                  : scan == null
+                      ? 'Stealth balance unknown — the explorer could not be '
+                          'reached yet.'
+                      : scan.isEmpty
+                          ? 'No stealth payments found.'
+                          : '${formatErg(scan.totalNanoErg)} in '
+                              '${scan.ownedCount} stealth '
+                              'box${scan.ownedCount == 1 ? '' : 'es'}.',
+              style: TextStyle(fontSize: 12, color: colors.muted),
+              textAlign: TextAlign.center,
+            ),
+            if (scan != null && !scan.isEmpty && sweepTo.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                key: const Key('stealth-sweep'),
+                onPressed: _sweeping ? null : () => _sweepStealth(sweepTo),
+                icon: const Icon(Icons.move_down, size: 18),
+                label: Text(_sweeping ? 'Sweeping…' : 'Sweep stealth funds'),
+              ),
+            ],
+          ],
+        );
+      },
     );
   }
 
@@ -248,6 +394,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                     ),
             child: const Text('Share'),
           ),
+          _stealthSection(context, address),
           if (args.historyAddresses.where((a) => a != address).isNotEmpty) ...[
             const SizedBox(height: 28),
             const SectionLabel('Used addresses'),

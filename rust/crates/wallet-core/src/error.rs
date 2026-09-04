@@ -29,6 +29,9 @@ pub enum CoreError {
     #[error("Serialization error: {0}")]
     Serialization(String),
 
+    #[error("Stealth error: {0}")]
+    Stealth(String),
+
     #[error("Overflow error: {0}")]
     Overflow(String),
 }

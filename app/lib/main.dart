@@ -8,6 +8,7 @@ import 'services/network_controller.dart';
 import 'services/privacy_service.dart';
 import 'services/token_pricer.dart';
 import 'services/session_lock.dart';
+import 'services/stealth_service.dart';
 import 'services/watch_only_service.dart';
 import 'services/wallet_service.dart';
 import 'services/wallet_sync_controller.dart';
@@ -40,6 +41,7 @@ Future<void> main() async {
     addressLabelService.load().catchError((_) {}),
     watchOnlyService.load().catchError((_) {}),
     privacyService.load().catchError((_) {}),
+    stealthService.load().catchError((_) {}),
     tokenPricer.load().catchError((_) {}),
   ]);
   networkController.priceRefresher = tokenPricer.refresh;

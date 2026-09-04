@@ -16,6 +16,7 @@ import '../services/token_router.dart';
 import '../services/dexy_service.dart';
 import '../services/ergopay_service.dart';
 import '../services/network_controller.dart';
+import '../services/stealth_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
@@ -178,7 +179,12 @@ class _SendScreenState extends State<SendScreen> {
 
   bool get _recipientValid =>
       _recipientCtrl.text.trim().isNotEmpty &&
-      looksLikeErgoAddress(_recipientCtrl.text.trim());
+      looksLikeRecipient(_recipientCtrl.text.trim());
+
+  /// True when the typed recipient is a published stealth address, so the
+  /// form can explain that a one-time address is derived at send time.
+  bool get _recipientIsStealth =>
+      looksLikeStealthAddress(_recipientCtrl.text.trim());
 
   /// True when the recipient came from a trusted source (contact picker or
   /// scanned payment URI) rather than free-typed/pasted text, so the
@@ -247,7 +253,7 @@ class _SendScreenState extends State<SendScreen> {
 
   Future<void> _saveRecipientToContacts() async {
     final addr = _recipientCtrl.text.trim();
-    if (!looksLikeErgoAddress(addr)) return;
+    if (!looksLikeRecipient(addr)) return;
     final nameCtrl = TextEditingController();
     final ok = await showDialog<bool>(
       context: context,
@@ -318,12 +324,25 @@ class _SendScreenState extends State<SendScreen> {
       return;
     }
 
-    final List<Map<String, dynamic>> recipients;
+    List<Map<String, dynamic>> recipients;
     try {
       recipients = buildRecipients(_drafts(), tokens: args.tokens);
     } on SendFormException catch (e) {
       showErrorSheet(context, message: e.message);
       return;
+    }
+    // Stealth recipients become fresh one-time payment addresses here, one
+    // per send, so the published string never reaches the chain.
+    final isStealthPayment = hasStealthRecipient(recipients);
+    if (isStealthPayment) {
+      try {
+        recipients = await resolveStealthRecipients(recipients);
+      } on SendFormException catch (e) {
+        if (!mounted) return;
+        showErrorSheet(context, message: e.message);
+        return;
+      }
+      if (!mounted) return;
     }
     final spendable = args.spendableNano;
     final fee = parseErgToNano(_feeCtrl.text) ?? minerFeeNano;
@@ -361,7 +380,17 @@ class _SendScreenState extends State<SendScreen> {
           feeNanoErg: parseErgToNano(_feeCtrl.text),
         );
       }
-      await _confirmAndSend(preview: preview, isMulti: isMulti);
+      await _confirmAndSend(
+        preview: preview,
+        isMulti: isMulti,
+        stealthRecipients: isStealthPayment
+            ? [
+                for (final r in recipients)
+                  if (r['stealth_address'] != null)
+                    r['stealth_address'] as String,
+              ]
+            : const [],
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _sending = false);
@@ -526,8 +555,12 @@ class _SendScreenState extends State<SendScreen> {
   Future<void> _confirmAndSend({
     required SendPreview preview,
     required bool isMulti,
+    List<String> stealthRecipients = const [],
   }) async {
-    if (!isMulti) {
+    // The clipboard gate compares against what the user typed; for a stealth
+    // payment the prepared recipient is a freshly derived one-time address
+    // that can never match, so the check would always fire.
+    if (!isMulti && stealthRecipients.isEmpty) {
       final clear = await _clipboardMatchesIntent(context, preview.recipient);
       if (!clear) {
         setState(() => _sending = false);
@@ -552,6 +585,14 @@ class _SendScreenState extends State<SendScreen> {
       ),
       if (!isMulti && tokenId != null && tokenId.isNotEmpty)
         ConfirmTxRow('Token', _tokenLabel(preview.tokenAmount ?? 0, tokenId), bold: true),
+      if (stealthRecipients.isNotEmpty)
+        ConfirmTxRow(
+          'Stealth payment',
+          stealthRecipients.length == 1
+              ? shortStealth(stealthRecipients.single)
+              : '${stealthRecipients.length} stealth recipients',
+          bold: true,
+        ),
       ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
       argusFeeRow(),
       ConfirmTxRow('Change to you', formatErg(preview.changeNanoErg)),
@@ -869,10 +910,34 @@ class _SendScreenState extends State<SendScreen> {
                       },
                       validator: (v) {
                         if (v == null || v.trim().isEmpty) return 'Required';
-                        if (!looksLikeErgoAddress(v)) return 'Not an Ergo address';
+                        if (!looksLikeRecipient(v)) {
+                          return looksLikeStealthAddress(v.trim())
+                              ? 'Not a valid stealth address'
+                              : 'Not an Ergo or stealth address';
+                        }
                         return null;
                       },
                     ),
+                    if (_recipientIsStealth)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Icon(Icons.visibility_off_outlined,
+                                size: 16, color: ArgusColors.of(context).muted),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Stealth address. A fresh one-time address is '
+                                'derived when you send, so nothing on chain '
+                                'links this payment to the recipient.',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     if (_recipientValid)
                       Align(
                         alignment: Alignment.centerLeft,
@@ -955,7 +1020,9 @@ class _SendScreenState extends State<SendScreen> {
                                       onChanged: (_) => setState(() {}),
                                       validator: (v) {
                                         if (v == null || v.trim().isEmpty) return 'Required';
-                                        if (!looksLikeErgoAddress(v)) return 'Not an Ergo address';
+                                        if (!looksLikeRecipient(v)) {
+                                          return 'Not an Ergo or stealth address';
+                                        }
                                         return null;
                                       },
                                     ),

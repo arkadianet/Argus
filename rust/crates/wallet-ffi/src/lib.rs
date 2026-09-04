@@ -3,6 +3,7 @@
 mod api_amm_impl;
 mod api_dexy_impl;
 mod api_sigmausd_impl;
+mod api_stealth_impl;
 
 pub mod api;
 mod api_ergopay_impl;

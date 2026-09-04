@@ -62,6 +62,10 @@ static HANDLES: Lazy<Mutex<HashMap<u64, WalletHandle>>> = Lazy::new(|| Mutex::ne
 struct CachedPreparation {
     handle_id: u64,
     ergo_boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+    /// ErgoTree hexes of any stealth inputs in this transaction. Public data;
+    /// the DH-tuple secret they need is re-derived from the unlocked wallet
+    /// at signing time and never stored.
+    stealth_trees: Vec<String>,
     data_input_boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
     unsigned_tx: ergo_tx::Eip12UnsignedTx,
     miner_fee: i64,
@@ -386,6 +390,145 @@ pub fn wallet_owns_address(handle_id: u64, address: String) -> Result<bool, Stri
     with_handle(handle_id, "wallet_owns_address", |handle| {
         handle.owns_address(&address).map_err(err_str)
     })
+}
+
+// ─── Stealth addresses ───────────────────────────────────────────────────
+//
+// A stealth address publishes `u = g^x`; a sender pays a one-time script
+// `proveDHTuple(g^r, g^y, u^r, u^y)`. Wire-compatible with ErgoMixer, so
+// payments work in both directions with its users. See
+// `docs/superpowers/specs/2026-09-04-stealth-addresses-design.md`.
+
+/// This wallet's published `stealth…` string. Requires an unlocked wallet.
+#[flutter_rust_bridge::frb]
+pub fn stealth_address(handle_id: u64) -> Result<String, String> {
+    with_handle(handle_id, "stealth_address", |h| {
+        h.stealth_address().map_err(err_str)
+    })
+}
+
+/// `sha256` of the stealth script template — the path segment for the
+/// explorer's `boxes/unspent/byErgoTreeTemplateHash/{hash}` endpoint.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stealth_template_hash() -> String {
+    stealth::stealth_template_hash_hex()
+}
+
+/// The BIP-32 path the stealth secret is derived on, for display in Settings.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stealth_derivation_path() -> String {
+    stealth::STEALTH_DERIVATION_PATH.to_string()
+}
+
+/// Validate a `stealth…` string: prefix, Base58, length, blake2b checksum
+/// and that the key is a point on the curve.
+#[flutter_rust_bridge::frb(sync)]
+pub fn validate_stealth_address(address: String) -> bool {
+    stealth::is_stealth_address(&address)
+}
+
+/// True when a recipient string was *meant* to be a stealth address, so the
+/// UI can say "bad checksum" rather than "unknown address".
+#[flutter_rust_bridge::frb(sync)]
+pub fn looks_like_stealth_address(address: String) -> bool {
+    stealth::looks_like_stealth_address(&address)
+}
+
+/// Derive a fresh one-time payment address for a `stealth…` recipient.
+///
+/// Call this once per payment: `r` and `y` are drawn here and discarded, so
+/// two calls for the same recipient return unlinkable addresses.
+#[flutter_rust_bridge::frb]
+pub fn stealth_payment_address(stealth_address: String) -> Result<String, String> {
+    stealth::payment_address_for_stealth_address(&stealth_address).map_err(|e| {
+        ArgusError::InvalidAddress(e.to_string()).to_json_string()
+    })
+}
+
+/// Given the explorer's response for the stealth template hash, report which
+/// boxes this wallet can spend, with ERG and token totals.
+///
+/// Dart owns the HTTP call (it already has the configured explorer and can
+/// degrade to "stealth balance unknown" when it fails); this is the local,
+/// private half of detection.
+#[flutter_rust_bridge::frb]
+pub fn stealth_scan(handle_id: u64, explorer_boxes_json: String) -> Result<String, String> {
+    with_handle(handle_id, "stealth_scan", |h| {
+        let secret = h.stealth_secret().map_err(err_str)?;
+        crate::api_stealth_impl::scan(&secret, &explorer_boxes_json)
+    })
+}
+
+/// Prepare a transaction moving every owned stealth box to one of this
+/// wallet's own addresses. Confirm and broadcast it with `send_erg`.
+#[flutter_rust_bridge::frb]
+pub async fn prepare_stealth_sweep(
+    handle_id: u64,
+    explorer_boxes_json: String,
+    destination_address: String,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+) -> Result<String, String> {
+    let owned = with_handle(handle_id, "prepare_stealth_sweep", |h| {
+        if !h.owns_address(&destination_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "stealth sweep destination is not an address of this wallet".into(),
+            )
+            .to_json_string());
+        }
+        let secret = h.stealth_secret().map_err(err_str)?;
+        let all = stealth::parse_explorer_boxes(&explorer_boxes_json)
+            .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+        Ok(stealth::detect_owned(&secret, &all))
+    })?;
+    if owned.is_empty() {
+        return Err(ArgusError::NoUtxos("no stealth boxes to sweep".into()).to_json_string());
+    }
+
+    let inputs = owned
+        .iter()
+        .map(crate::api_stealth_impl::to_input)
+        .collect::<Vec<_>>();
+    let ergo_boxes = owned
+        .iter()
+        .map(crate::api_stealth_impl::to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let stealth_trees = owned.iter().map(|b| b.ergo_tree.clone()).collect::<Vec<_>>();
+
+    let client = node_client(node_url.clone()).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    let destination_tree = address_to_ergo_tree(&destination_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    let built =
+        crate::api_stealth_impl::build_sweep(&inputs, &destination_tree, height, fee_nano)?;
+
+    let input_boxes = input_boxes_json(&inputs);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees,
+        ergo_boxes,
+        data_input_boxes: Vec::new(),
+        unsigned_tx: built.unsigned_tx,
+        miner_fee: built.miner_fee,
+        change_erg: 0,
+        recipient_erg: built.swept_erg,
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "recipient": destination_address,
+        "amount_nano_erg": built.swept_erg,
+        "miner_fee": built.miner_fee,
+        "change_nano_erg": 0,
+        "input_count": built.input_count,
+        "token_count": built.token_count,
+        "citadel_fee_nano": built.app_fee_nano,
+        "input_boxes": input_boxes,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
 #[flutter_rust_bridge::frb]
@@ -988,6 +1131,7 @@ async fn prepare_management<S>(
     let input_boxes = input_boxes_json(&inputs);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
+        stealth_trees: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
@@ -1144,6 +1288,7 @@ pub async fn prepare_send(
     let preview_token_amount = built.summary.token_amount;
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
+        stealth_trees: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
@@ -1408,7 +1553,16 @@ async fn sign_prepared_tx(
     with_handle(handle_id, op, |handle| {
         let reduced = ReducedTransaction::sigma_parse_bytes(&reduced_bytes)
             .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-        let signed_tx = handle.sign_reduced(reduced).map_err(err_str)?;
+        // Stealth inputs need a DH-tuple secret each, derived here and dropped
+        // with the throwaway prover; ordinary sends take the unchanged path.
+        let signed_tx = if prep.stealth_trees.is_empty() {
+            handle.sign_reduced(reduced).map_err(err_str)?
+        } else {
+            let extra = crate::api_stealth_impl::dht_secrets_for(handle, &prep.stealth_trees)?;
+            handle
+                .sign_reduced_with_secrets(reduced, extra)
+                .map_err(err_str)?
+        };
         serde_json::to_value(&signed_tx)
             .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
     })
@@ -1617,6 +1771,7 @@ pub async fn prepare_send_multi(
     let input_boxes = input_boxes_json(&selected);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
+        stealth_trees: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx,
@@ -1907,6 +2062,7 @@ pub async fn dexy_build_mint(
     let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
+        stealth_trees: Vec::new(),
         ergo_boxes,
         data_input_boxes,
         unsigned_tx: built.unsigned_tx,
@@ -2029,6 +2185,7 @@ pub async fn dexy_build_swap(
     let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
+        stealth_trees: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
@@ -2148,6 +2305,7 @@ pub async fn dexy_build_lp_deposit(
     let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
+        stealth_trees: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
@@ -2265,6 +2423,7 @@ pub async fn dexy_build_lp_redeem(
     let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
+        stealth_trees: Vec::new(),
         ergo_boxes,
         data_input_boxes,
         unsigned_tx: built.unsigned_tx,
@@ -2478,6 +2637,7 @@ pub async fn sigmausd_build(
     let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
+        stealth_trees: Vec::new(),
         ergo_boxes,
         data_input_boxes,
         unsigned_tx: built.unsigned_tx,
@@ -2729,6 +2889,7 @@ pub async fn amm_build_swap(
     let change_erg = user_change_erg(&built.unsigned_tx, &change_tree);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
+        stealth_trees: Vec::new(),
         ergo_boxes,
         data_input_boxes: vec![],
         unsigned_tx: built.unsigned_tx,
@@ -2828,6 +2989,7 @@ mod tests {
         assert!(take_preparation(1, 99).is_err());
         let id = store_preparation(CachedPreparation {
             handle_id: 7,
+            stealth_trees: Vec::new(),
             ergo_boxes: Vec::new(),
             data_input_boxes: Vec::new(),
             unsigned_tx: ergo_tx::Eip12UnsignedTx {

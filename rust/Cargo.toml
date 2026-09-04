@@ -11,6 +11,7 @@ members = [
     "crates/vendor/protocols/amm",
     "crates/vendor/protocols/sigmausd",
     "crates/vendor/protocols/dexy",
+    "crates/vendor/protocols/stealth",
 ]
 
 [workspace.package]
@@ -76,6 +77,7 @@ ergopay-core = { path = "crates/vendor/ergopay-core" }
 amm = { path = "crates/vendor/protocols/amm" }
 sigmausd = { path = "crates/vendor/protocols/sigmausd" }
 dexy = { path = "crates/vendor/protocols/dexy" }
+stealth = { path = "crates/vendor/protocols/stealth" }
 
 # ─── Misc ────────────────────────────────────────────────────────────────
 indexmap = "2"

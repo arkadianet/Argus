@@ -148,6 +148,48 @@ impl WalletHandle {
             .sign_reduced_transaction(reduced_tx, None)
             .map_err(|e| CoreError::Signing(e.to_string()))
     }
+
+    /// Sign with the wallet's own keys plus extra one-off secrets.
+    ///
+    /// Used for stealth inputs, whose DH-tuple secret is not a P2PK key and
+    /// must not be added to the long-lived wallet: a throwaway `Wallet` is
+    /// built for this signature and dropped with the extras inside it.
+    pub fn sign_reduced_with_secrets(
+        &self,
+        reduced_tx: ergo_lib::chain::transaction::reduced::ReducedTransaction,
+        extra_secrets: Vec<ergo_lib::wallet::secret_key::SecretKey>,
+    ) -> Result<ergo_lib::chain::transaction::Transaction, CoreError> {
+        if extra_secrets.is_empty() {
+            return self.sign_reduced(reduced_tx);
+        }
+        let guard = recover(self.inner.lock());
+        let unlocked = guard.as_ref().ok_or(CoreError::WalletLocked)?;
+        let mut secrets = Vec::with_capacity(unlocked.max_index as usize + 1);
+        for i in 0..=unlocked.max_index {
+            secrets.push(derivation::derive_child(&unlocked.ext_secret_key, i)?.secret_key());
+        }
+        secrets.extend(extra_secrets);
+        Wallet::from_secrets(secrets)
+            .sign_reduced_transaction(reduced_tx, None)
+            .map_err(|e| CoreError::Signing(e.to_string()))
+    }
+
+    /// This wallet's stealth identity, derived on demand from the seed.
+    ///
+    /// Never cached: the secret lives only as long as the caller's binding.
+    pub fn stealth_secret(&self) -> Result<stealth::StealthSecret, CoreError> {
+        let guard = recover(self.inner.lock());
+        let unlocked = guard.as_ref().ok_or(CoreError::WalletLocked)?;
+        stealth::StealthSecret::derive(&unlocked.ext_secret_key)
+            .map_err(|e| CoreError::Stealth(e.to_string()))
+    }
+
+    /// The published `stealth…` string for this wallet.
+    pub fn stealth_address(&self) -> Result<String, CoreError> {
+        self.stealth_secret()?
+            .stealth_address()
+            .map_err(|e| CoreError::Stealth(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -168,6 +210,40 @@ mod tests {
             .owns_address("9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8")
             .unwrap());
         assert!(!handle.owns_address("not-a-wallet-address").unwrap());
+    }
+
+    #[test]
+    fn stealth_identity_is_stable_and_locked_with_the_wallet() {
+        let phrase = MnemonicPhrase::parse(APPKIT).unwrap();
+        let handle = WalletHandle::create(phrase, "").unwrap();
+        let addr = handle.stealth_address().unwrap();
+        assert!(addr.starts_with("stealth"));
+        assert_eq!(handle.stealth_address().unwrap(), addr);
+
+        // It is a stealth string, not one of the wallet's own P2PK addresses.
+        assert!(!handle.owns_address(&addr).unwrap());
+        let u = stealth::decode_stealth_address(&addr).unwrap();
+        assert_eq!(handle.stealth_secret().unwrap().public_key(), &u);
+
+        handle.lock();
+        assert!(matches!(
+            handle.stealth_address(),
+            Err(CoreError::WalletLocked)
+        ));
+    }
+
+    #[test]
+    fn a_second_wallet_gets_a_different_stealth_address() {
+        let a = WalletHandle::create(MnemonicPhrase::parse(APPKIT).unwrap(), "").unwrap();
+        let b = WalletHandle::create(
+            MnemonicPhrase::parse(
+                "race relax argue hair sorry riot there spirit ready fetch food hedgehog hybrid mobile pretty",
+            )
+            .unwrap(),
+            "",
+        )
+        .unwrap();
+        assert_ne!(a.stealth_address().unwrap(), b.stealth_address().unwrap());
     }
 
     #[test]
