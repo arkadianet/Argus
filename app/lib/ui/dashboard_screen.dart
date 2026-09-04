@@ -757,6 +757,20 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (mounted) setState(() {});
   }
 
+  /// Route args for read-only asset views: totals include stealth holdings.
+  /// Send, Swap and the UTXO tools keep [_args], whose amounts are spendable.
+  WalletRouteArgs _displayArgs() {
+    final a = _args();
+    return WalletRouteArgs(
+      senderAddress: a.senderAddress,
+      receiveAddress: a.receiveAddress,
+      changeAddress: a.changeAddress,
+      historyAddresses: a.historyAddresses,
+      tokens: _sync.displayTokens,
+      spendableNano: _sync.totalNanoWithStealth,
+    );
+  }
+
   WalletRouteArgs _args({Map<String, dynamic>? transaction}) {
     final receive = _sync.receiveAddress ?? '';
     return WalletRouteArgs(
@@ -1197,7 +1211,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             fiatText: networkController.fiatText(_sync.balanceNano),
             hidden: _balanceHidden,
             onTap: () => Navigator.push(
-                context, fadeRoute(AssetsScreen(args: _args()))),
+                context, fadeRoute(AssetsScreen(args: _displayArgs()))),
           ),
           ...fungible.map(tokenTile),
           ...nfts.map(tokenTile),
@@ -1223,7 +1237,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ? 'View all (${assets.length})'
                     : 'View all',
                 onTap: () => Navigator.push(context,
-                    fadeRoute(AssetsScreen(args: _args())))),
+                    fadeRoute(AssetsScreen(args: _displayArgs())))),
             const SizedBox(height: 10),
             SoftCard(
               padding: EdgeInsets.zero,
@@ -1482,7 +1496,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     final colors = ArgusColors.of(context);
     final muted = colors.muted;
     final portfolio = portfolioTotal([
-      _sync.balanceNano,
+      // Stealth ERG is the wallet's money too; only send and coin selection
+      // use the spendable figure.
+      _sync.totalNanoWithStealth,
       for (final w in _wallets)
         if (w.walletId != _walletId) _otherBalances[w.walletId],
       for (final a in watchOnlyService.addresses) _watchBalances[a],
@@ -1495,7 +1511,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     final value = holdingsValue(
       ergNano: portfolio.totalNano,
       tokens: [
-        for (final t in _sync.tokens) (id: t.id, amount: t.amount, decimals: t.decimals),
+        for (final t in _sync.displayTokens) (id: t.id, amount: t.amount, decimals: t.decimals),
         for (final w in _wallets)
           if (w.walletId != _walletId) ...?_lastKnown[w.walletId]?.tokens,
       ],

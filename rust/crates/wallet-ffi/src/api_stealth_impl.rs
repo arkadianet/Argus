@@ -128,10 +128,18 @@ pub fn build_sweep(
         )));
     }
 
-    let total_erg: i64 = inputs
-        .iter()
-        .map(|b| b.value.parse::<i64>().unwrap_or(0))
-        .sum();
+    // Box values are attacker-influenced (anyone can pay a stealth address),
+    // so the sum is checked rather than allowed to wrap.
+    let mut total_erg: i64 = 0;
+    for b in inputs {
+        let v = b
+            .value
+            .parse::<i64>()
+            .map_err(|_| err(format!("box {} has an unparsable value", b.box_id)))?;
+        total_erg = total_erg
+            .checked_add(v)
+            .ok_or_else(|| err("stealth box total is out of range"))?;
+    }
     let fee_cfg = resolved_dev_fee_config();
     let app_fee = fee_cfg.budget();
     let needed = miner_fee

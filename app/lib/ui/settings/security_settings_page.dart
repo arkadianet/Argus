@@ -355,7 +355,13 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                 trailing: Switch(
                   key: const Key('stealth-scan-switch'),
                   value: stealthService.scanEnabled,
-                  onChanged: (v) => stealthService.setScanEnabled(v),
+                  onChanged: (v) async {
+                    try {
+                      await stealthService.setScanEnabled(v);
+                    } catch (_) {
+                      _snack('Could not save the stealth scan setting');
+                    }
+                  },
                 ),
               ),
             ],

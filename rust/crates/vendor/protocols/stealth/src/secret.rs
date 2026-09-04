@@ -1,6 +1,7 @@
 //! The receiver side: the stealth secret `x`, its published key `u = g^x`,
 //! detection of incoming boxes and the DHT prover input used to spend them.
 
+use zeroize::Zeroize;
 use ergo_chain_types::ec_point::{exponentiate, exponentiate_gen};
 use ergo_chain_types::EcPoint;
 use ergo_lib::wallet::ext_secret_key::ExtSecretKey;
@@ -49,8 +50,10 @@ impl StealthSecret {
         let child = root
             .derive(path)
             .map_err(|e| StealthError::Derivation(e.to_string()))?;
-        let bytes = child.secret_key_bytes();
-        let scalar = Wscalar::from_bytes(&bytes).ok_or_else(|| {
+        let mut bytes = child.secret_key_bytes();
+        let scalar = Wscalar::from_bytes(&bytes);
+        bytes.zeroize();
+        let scalar = scalar.ok_or_else(|| {
             StealthError::Derivation("derived stealth key is not a valid scalar".into())
         })?;
         Ok(Self::from_scalar(scalar))

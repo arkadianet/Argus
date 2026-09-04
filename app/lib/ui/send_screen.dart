@@ -432,6 +432,19 @@ class _SendScreenState extends State<SendScreen> {
 
     // The token send carries a user-supplied recipient too — run the same
     // clipboard-hijack gate as the ordinary flow.
+    // A stealth recipient must become a one-time payment address here too:
+    // the router hands the recipient straight to the transaction builders.
+    String routeRecipient = _recipientCtrl.text.trim();
+    if (isStealthAddress(routeRecipient)) {
+      try {
+        routeRecipient = await stealthPaymentAddress(routeRecipient);
+      } on SendFormException catch (e) {
+        if (!mounted) return;
+        showErrorSheet(context, message: e.message);
+        return;
+      }
+      if (!mounted) return;
+    }
     if (!_recipientTrusted) {
       final clear = await _clipboardMatchesIntent(context, _recipientCtrl.text.trim());
       if (!clear) return;
@@ -444,7 +457,7 @@ class _SendScreenState extends State<SendScreen> {
         buy.id,
         wanted: wanted,
         held: held,
-        recipient: _recipientCtrl.text.trim(),
+        recipient: routeRecipient,
         changeAddress: changeAddr,
         spendAddresses: spend,
       );

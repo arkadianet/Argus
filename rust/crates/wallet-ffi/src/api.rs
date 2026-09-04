@@ -453,10 +453,12 @@ pub fn stealth_payment_address(stealth_address: String) -> Result<String, String
 /// private half of detection.
 #[flutter_rust_bridge::frb]
 pub fn stealth_scan(handle_id: u64, explorer_boxes_json: String) -> Result<String, String> {
-    with_handle(handle_id, "stealth_scan", |h| {
-        let secret = h.stealth_secret().map_err(err_str)?;
-        crate::api_stealth_impl::scan(&secret, &explorer_boxes_json)
-    })
+    // Take the secret under the handle lock, then scan outside it: the box
+    // list is sized by the network, and every other FFI call would block.
+    let secret = with_handle(handle_id, "stealth_scan", |h| {
+        h.stealth_secret().map_err(err_str)
+    })?;
+    crate::api_stealth_impl::scan(&secret, &explorer_boxes_json)
 }
 
 /// Prepare a transaction moving every owned stealth box to one of this
@@ -469,18 +471,20 @@ pub async fn prepare_stealth_sweep(
     node_url: Option<String>,
     fee_nano: Option<i64>,
 ) -> Result<String, String> {
-    let owned = with_handle(handle_id, "prepare_stealth_sweep", |h| {
+    // Only the ownership check and the secret need the handle lock; parsing
+    // and per-box scalar work happen after it is released.
+    let secret = with_handle(handle_id, "prepare_stealth_sweep", |h| {
         if !h.owns_address(&destination_address).map_err(err_str)? {
             return Err(ArgusError::InvalidAddress(
                 "stealth sweep destination is not an address of this wallet".into(),
             )
             .to_json_string());
         }
-        let secret = h.stealth_secret().map_err(err_str)?;
-        let all = stealth::parse_explorer_boxes(&explorer_boxes_json)
-            .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-        Ok(stealth::detect_owned(&secret, &all))
+        h.stealth_secret().map_err(err_str)
     })?;
+    let all = stealth::parse_explorer_boxes(&explorer_boxes_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let owned = stealth::detect_owned(&secret, &all);
     if owned.is_empty() {
         return Err(ArgusError::NoUtxos("no stealth boxes to sweep".into()).to_json_string());
     }

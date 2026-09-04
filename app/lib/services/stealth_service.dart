@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -69,11 +71,15 @@ class StealthScanResult {
 /// the network.
 typedef StealthBoxFetcher = Future<String> Function(String explorerBase);
 
-Future<String> _httpFetchStealthBoxes(String explorerBase) async {
+/// One explorer page, so pagination can be tested without the network.
+typedef StealthPageFetcher = Future<String> Function(String explorerBase, int offset);
+
+Future<String> _httpFetchStealthPage(String explorerBase, int offset) async {
   final base = explorerBase.replaceAll(RegExp(r'/+$'), '');
   final hash = RustLib.instance.api.crateApiStealthTemplateHash();
   final uri = Uri.parse(
-    '$base/api/v1/boxes/unspent/byErgoTreeTemplateHash/$hash?limit=$boxPageLimit',
+    '$base/api/v1/boxes/unspent/byErgoTreeTemplateHash/$hash'
+    '?offset=$offset&limit=$boxPageLimit',
   );
   final res = await http.get(uri).timeout(const Duration(seconds: 20));
   if (res.statusCode != 200) {
@@ -82,9 +88,46 @@ Future<String> _httpFetchStealthBoxes(String explorerBase) async {
   return res.body;
 }
 
-/// The explorer caps a page; the live set is small (tens of boxes) but the
-/// limit keeps a future growth spurt from pulling megabytes onto a phone.
+/// Boxes per request. The live set is tens of boxes; paging keeps a future
+/// growth spurt from arriving as one huge response.
 const boxPageLimit = 500;
+
+/// Hard cap on a whole scan, so a pathological template set cannot pull
+/// unbounded data onto a phone.
+const boxScanCap = 5000;
+
+/// Walks every page and returns one explorer-shaped body, de-duplicated by
+/// box id. Stops at the last partial page, at [boxScanCap], or when the
+/// explorer reports a total it has already delivered.
+Future<String> fetchAllStealthBoxes(
+  String explorerBase, {
+  required StealthPageFetcher page,
+}) async {
+  final items = <String, Map<String, dynamic>>{};
+  var offset = 0;
+  // Bounded by pages, not by unique ids: an explorer that keeps returning
+  // the same boxes must not spin this loop forever.
+  final maxPages = (boxScanCap / boxPageLimit).ceil();
+  for (var pageNo = 0; pageNo < maxPages && items.length < boxScanCap; pageNo++) {
+    final body = jsonDecode(await page(explorerBase, offset));
+    final list = body is Map
+        ? (body['items'] as List? ?? const [])
+        : (body is List ? body : const []);
+    for (final e in list) {
+      if (e is Map && e['boxId'] != null) {
+        items[e['boxId'].toString()] = e.cast<String, dynamic>();
+      }
+    }
+    final total = body is Map ? (body['total'] as num?)?.toInt() : null;
+    if (list.length < boxPageLimit) break;
+    offset += list.length;
+    if (total != null && offset >= total) break;
+  }
+  return jsonEncode({'items': items.values.toList(), 'total': items.length});
+}
+
+Future<String> _httpFetchStealthBoxes(String explorerBase) =>
+    fetchAllStealthBoxes(explorerBase, page: _httpFetchStealthPage);
 
 /// Owns the stealth-address feature: the published string, the opt-in scan
 /// switch, and the last scan result.
@@ -147,8 +190,13 @@ class StealthService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Bumped by [reset] so a request started for the previous wallet can
+  /// never publish its address or scan into the new session.
+  int _generation = 0;
+
   /// Clears everything derived from the unlocked wallet.
   void reset() {
+    _generation++;
     address = null;
     lastScan = null;
     lastScanFailed = false;
@@ -159,11 +207,15 @@ class StealthService extends ChangeNotifier {
   /// Loads (and caches) this wallet's published stealth string.
   Future<String?> loadAddress() async {
     if (!walletService.isUnlocked) return null;
+    final gen = _generation;
+    String? found;
     try {
-      address = await walletService.stealthAddress();
+      found = await walletService.stealthAddress();
     } catch (_) {
-      address = null;
+      found = null;
     }
+    if (gen != _generation) return null;
+    address = found;
     notifyListeners();
     return address;
   }
@@ -174,16 +226,19 @@ class StealthService extends ChangeNotifier {
   /// the previous result in place.
   Future<StealthScanResult?> scan({String? explorerBase}) async {
     if (!scanEnabled || !walletService.isUnlocked) return null;
+    final gen = _generation;
     try {
       final body = await _fetch(explorerBase ?? networkController.explorer);
       final result =
           StealthScanResult.fromJson(await walletService.stealthScan(body));
+      if (gen != _generation) return null;
       _lastBoxesJson = body;
       lastScan = result;
       lastScanFailed = false;
       notifyListeners();
       return result;
     } catch (_) {
+      if (gen != _generation) return null;
       lastScanFailed = true;
       notifyListeners();
       return null;
