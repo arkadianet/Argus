@@ -11,7 +11,7 @@ use ergopay_core::reduce_transaction_with_context;
 use once_cell::sync::Lazy;
 use rand::RngCore;
 use wallet_core::seed::MnemonicPhrase;
-use wallet_core::spend::{select_exact, select_for_send};
+use wallet_core::spend::{select_exact, select_for_send, select_preferring_one_pocket};
 use wallet_core::wallet::WalletHandle;
 use wallet_core::PinWrappedKey;
 use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
@@ -1233,10 +1233,17 @@ async fn prepare(
     // Coin control: when the user chose boxes, spend exactly those. Falling
     // back to automatic selection here would silently pull in a box they
     // deliberately left out, which is the linking they were avoiding.
+    let stealth_ids = stealth_owned
+        .iter()
+        .map(|b| b.box_id.clone())
+        .collect::<Vec<_>>();
     let selected = match input_box_ids.as_deref() {
         Some(ids) => select_exact(&eip12, ids, required, token_ref)
             .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
-        None => select_for_send(&eip12, required, token_ref)
+        // Automatic selection still avoids putting stealth and ordinary
+        // boxes in one input list unless neither pocket can pay alone.
+        None => select_preferring_one_pocket(&eip12, &stealth_ids, required, token_ref)
+            .map(|(s, _mixed)| s)
             .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
     };
 
@@ -1825,8 +1832,28 @@ pub async fn prepare_send_multi(
             }
             exact.boxes
         }
-        None => select_for_multi_send(&eip12, required, &needed_tokens)
-            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
+        None => {
+            // Same rule as the single send: try ordinary boxes alone, then
+            // stealth alone, and only combine when neither can pay.
+            let is_stealth = |b: &ergo_tx::Eip12InputBox| {
+                stealth_owned.iter().any(|s| s.box_id == b.box_id)
+            };
+            let ordinary = eip12.iter().filter(|b| !is_stealth(b)).cloned().collect::<Vec<_>>();
+            let only_stealth = eip12.iter().filter(|b| is_stealth(b)).cloned().collect::<Vec<_>>();
+            let attempt = |set: &[ergo_tx::Eip12InputBox]| {
+                if set.is_empty() {
+                    return None;
+                }
+                select_for_multi_send(set, required, &needed_tokens)
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            };
+            match attempt(&ordinary).or_else(|| attempt(&only_stealth)) {
+                Some(s) => s,
+                None => select_for_multi_send(&eip12, required, &needed_tokens)
+                    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
+            }
+        }
     };
 
     if selected.is_empty() {
