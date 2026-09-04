@@ -337,6 +337,19 @@ class StealthService extends ChangeNotifier {
     );
   }
 
+  /// The explorer body a send can offer as extra spendable inputs, or null
+  /// when the scan is off, has not run, or was truncated.
+  String? get spendableBoxesJson {
+    final body = _lastBoxesJson;
+    // A failed scan leaves the previous body in place so the balance can
+    // still be reported as "unknown"; it must not be spent from, because a
+    // box in it may already have been spent elsewhere.
+    if (!scanEnabled || lastScanFailed || body == null || isTruncatedScan(body)) {
+      return null;
+    }
+    return body;
+  }
+
   /// Used by tests to prime the box list without a fetch.
   @visibleForTesting
   set cachedBoxesJson(String? value) => _lastBoxesJson = value;
@@ -480,3 +493,27 @@ List<Map<String, dynamic>> mergeStealthActivity(
       : null;
   return (balanceNano: total, note: note);
 }
+
+/// Detected stealth boxes as send inputs. Their `address` is null, which is
+/// how the picker and the privacy warning tell them apart from boxes that
+/// sit on an address of this wallet.
+List<InputBoxInput> stealthInputBoxes(StealthScanResult? scan) {
+  if (scan == null) return const [];
+  return [
+    for (final b in scan.boxes)
+      InputBoxInput(
+        boxId: b.boxId,
+        valueNanoErg: BigInt.from(b.valueNanoErg),
+        creationHeight: b.creationHeight,
+        address: null,
+        assets: [
+          for (final t in b.tokens)
+            InputAsset(tokenId: t.id, amount: t.amount),
+        ],
+      ),
+  ];
+}
+
+/// True for a box the picker should mark as stealth.
+bool isStealthInputBox(InputBoxInput box, StealthScanResult? scan) =>
+    scan != null && scan.boxIds.contains(box.boxId);

@@ -2,6 +2,7 @@ import 'package:argus_wallet/services/network_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  _nodeSearchSummaryTests();
   _nodeChoiceTests();
   group('chainHeightFromInfo', () {
     test('prefers fullHeight', () {
@@ -153,5 +154,43 @@ void _nodeChoiceTests() {
       expect(describeNode(n, p('https://a', extra: true, height: 100, indexed: 40), active: false, preferred: true),
           'Standby  ·  chosen  ·  extraIndex, lag 60  ·  #100');
     });
+  });
+}
+
+// A finished search must say what it found, including nothing
+void _nodeSearchSummaryTests() {
+  NodeSearchResult r(int asked, int answered, int cand, int ok, {int? checked}) =>
+      NodeSearchResult(
+        nodesAsked: asked,
+        nodesAnswered: answered,
+        candidates: cand,
+        checked: checked ?? cand,
+        reachable: ok,
+      );
+
+  test('no node answered', () {
+    expect(nodeSearchSummary(r(4, 0, 0, 0)), contains('No node answered'));
+  });
+
+  test('answered but nothing new to add', () {
+    // This is the case that looked like a dead button: the connected node's
+    // peers all publish URLs already in the list.
+    expect(nodeSearchSummary(r(4, 4, 0, 0)), contains('no HTTPS API you do not already have'));
+  });
+
+  test('candidates found but none reachable', () {
+    expect(nodeSearchSummary(r(4, 4, 3, 0)), contains('none reachable'));
+  });
+
+  test('results found', () {
+    expect(nodeSearchSummary(r(4, 4, 3, 2)), '2 reachable of 3 found, best first.');
+  });
+
+  test('a search that stopped at the probe cap says how many it checked', () {
+    // 50 candidates, only 40 probed: reporting "of 50" would overstate it.
+    expect(nodeSearchSummary(r(4, 4, 50, 2, checked: 40)),
+        '2 reachable of 40 of 50 found, best first.');
+    expect(nodeSearchSummary(r(4, 4, 50, 0, checked: 40)),
+        'Checked 40 of 50 found, none reachable right now.');
   });
 }

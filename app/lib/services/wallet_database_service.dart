@@ -17,9 +17,19 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// the screen, not storage, and is irrelevant here.
 /// A wallet's last synced total, for rows the app cannot sync right now.
 class LastKnownBalance {
-  const LastKnownBalance({required this.balanceNano, required this.age, this.tokens = const []});
+  const LastKnownBalance({
+    required this.balanceNano,
+    required this.age,
+    this.tokens = const [],
+    this.addresses = const [],
+  });
   final int balanceNano;
   final Duration age;
+
+  /// Addresses this wallet was known to use when it was last unlocked.
+  /// A locked wallet cannot derive new ones (that needs the seed), but its
+  /// known addresses can still be queried live.
+  final List<String> addresses;
 
   /// Token holdings from the same snapshot, for portfolio valuation.
   final List<({String id, int amount, int decimals})> tokens;
@@ -122,6 +132,11 @@ class WalletDatabaseService {
     return LastKnownBalance(
       balanceNano: (map['balance_nano_erg'] as num?)?.toInt() ?? 0,
       age: at == null ? Duration.zero : DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(at)),
+      addresses: [
+        for (final a in (map['used_addresses'] as List? ?? const []))
+          if (a is Map && a['address'] != null) a['address'].toString()
+          else if (a is String && a.isNotEmpty) a,
+      ],
       tokens: [
         for (final t in (map['tokens'] as List? ?? const []))
           if (t is Map && t['id'] is String)

@@ -132,9 +132,13 @@ class NetworkController extends ChangeNotifier {
   /// Node the user chose in Settings; null means automatic selection.
   String? preferredUrl;
 
-  /// Nodes found via the active node's peer list, not yet in [nodes].
+  /// Nodes found via peer lists, not yet in [nodes].
   List<NodeProbe> discovered = const [];
   bool discovering = false;
+
+  /// Outcome of the last search, so "found nothing" is distinguishable
+  /// from "never ran".
+  NodeSearchResult? lastSearch;
 
   List<NodeEntry> nodes = [
     for (final url in defaultNodes) NodeEntry(url: url),
@@ -255,17 +259,42 @@ class NetworkController extends ChangeNotifier {
 
   /// Asks the active node for peers that advertise a REST URL and probes
   /// them. Results land in [discovered] for the user to add.
+  /// Asks every node we know for its peers, not only the connected one.
+  ///
+  /// A single node's peer list is a narrow view: most of its peers publish
+  /// that same node's URL, so asking one node can turn up nothing at all
+  /// while another knows two.
   Future<void> discoverNodes() async {
-    final base = activeUrl;
-    if (base == null || discovering) return;
+    if (discovering) return;
     discovering = true;
+    lastSearch = null;
     notifyListeners();
+    var asked = 0;
+    var answered = 0;
+    final candidates = <String>{};
     try {
-      final res = await http.get(Uri.parse('$base/peers/all')).timeout(const Duration(seconds: 10));
-      if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
-      final peers = jsonDecode(res.body);
-      final urls = restApiUrlsFromPeers(peers is List ? peers : const [], known: nodes.map((n) => n.url));
-      final results = await Future.wait(urls.take(40).map(probeNodeDetails));
+      final sources = orderedUrls;
+      final peerLists = await Future.wait(sources.map((url) async {
+        try {
+          final res = await http
+              .get(Uri.parse('$url/peers/all'))
+              .timeout(const Duration(seconds: 10));
+          if (res.statusCode != 200) return null;
+          final body = jsonDecode(res.body);
+          return body is List ? body : null;
+        } catch (_) {
+          return null;
+        }
+      }));
+      final known = nodes.map((n) => n.url).toList();
+      for (final peers in peerLists) {
+        asked++;
+        if (peers == null) continue;
+        answered++;
+        candidates.addAll(restApiUrlsFromPeers(peers, known: [...known, ...candidates]));
+      }
+      final probed = candidates.take(40).toList();
+      final results = await Future.wait(probed.map(probeNodeDetails));
       final good = results.where((p) => p.ok).toList();
       good.sort((a, b) {
         final ai = a.extraIndex == true ? 0 : 1;
@@ -274,8 +303,22 @@ class NetworkController extends ChangeNotifier {
         return (a.indexLag ?? 1 << 20).compareTo(b.indexLag ?? 1 << 20);
       });
       discovered = good;
+      lastSearch = NodeSearchResult(
+        nodesAsked: asked,
+        nodesAnswered: answered,
+        candidates: candidates.length,
+        checked: probed.length,
+        reachable: good.length,
+      );
     } catch (_) {
       discovered = const [];
+      lastSearch = NodeSearchResult(
+        nodesAsked: asked,
+        nodesAnswered: answered,
+        candidates: candidates.length,
+        checked: 0,
+        reachable: 0,
+      );
     } finally {
       discovering = false;
       notifyListeners();
@@ -514,3 +557,45 @@ bool isLocalNetworkHost(String host) {
 }
 
 final networkController = NetworkController();
+
+/// What a node search actually did, so the screen can say so.
+class NodeSearchResult {
+  const NodeSearchResult({
+    required this.nodesAsked,
+    required this.nodesAnswered,
+    required this.candidates,
+    required this.checked,
+    required this.reachable,
+  });
+
+  final int nodesAsked;
+  final int nodesAnswered;
+
+  /// Peer URLs worth probing: HTTPS, and not already in the node list.
+  final int candidates;
+
+  /// How many of them were actually probed; a search stops at a cap, and
+  /// reporting the full count would overstate what was tested.
+  final int checked;
+  final int reachable;
+}
+
+/// One line reporting a finished search, including the cases where it found
+/// nothing — silence there reads as a button that did not work.
+String nodeSearchSummary(NodeSearchResult r) {
+  if (r.nodesAnswered == 0) {
+    return 'No node answered the peer request. Check your connection, or try '
+        'another node.';
+  }
+  if (r.candidates == 0) {
+    return 'Asked ${r.nodesAnswered} node${r.nodesAnswered == 1 ? '' : 's'}: '
+        'their peers publish no HTTPS API you do not already have.';
+  }
+  final scope = r.checked < r.candidates
+      ? '${r.checked} of ${r.candidates} found'
+      : '${r.candidates} found';
+  if (r.reachable == 0) {
+    return 'Checked $scope, none reachable right now.';
+  }
+  return '${r.reachable} reachable of $scope, best first.';
+}

@@ -11,7 +11,7 @@ use ergopay_core::reduce_transaction_with_context;
 use once_cell::sync::Lazy;
 use rand::RngCore;
 use wallet_core::seed::MnemonicPhrase;
-use wallet_core::spend::{select_exact, select_for_send};
+use wallet_core::spend::{select_exact, select_for_send, select_preferring_one_pocket};
 use wallet_core::wallet::WalletHandle;
 use wallet_core::PinWrappedKey;
 use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
@@ -1163,7 +1163,16 @@ async fn prepare(
     node_url: Option<String>,
     fee_nano: Option<i64>,
     input_box_ids: Option<Vec<String>>,
-) -> Result<(Vec<serde_json::Value>, Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>, ergo_tx::SendBuildResult), String> {
+    stealth_boxes_json: Option<String>,
+) -> Result<
+    (
+        Vec<serde_json::Value>,
+        Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+        ergo_tx::SendBuildResult,
+        Vec<String>,
+    ),
+    String,
+> {
     if amount_nano_erg < MIN_BOX_VALUE_NANO {
         return Err(ArgusError::TxBuildFailed(format!(
             "amount must be at least {MIN_BOX_VALUE_NANO} nanoERG"
@@ -1192,7 +1201,23 @@ async fn prepare(
 
     let send_token = resolve_send_token(token_id, token_amount)?;
     let client = node_client(node_url).await?;
-    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend).await?;
+    let (mut boxes, mut eip12) = gather_unspent(handle_id, &client, &spend).await?;
+    // Stealth boxes sit on one-time scripts, so address discovery cannot
+    // find them. Dart passes the explorer's list; only boxes this wallet's
+    // stealth key owns are added, and only chosen ones are ever spent.
+    let stealth_owned = match stealth_boxes_json.as_deref() {
+        Some(json) if !json.trim().is_empty() => {
+            let secret = with_handle(handle_id, "send", |h| h.stealth_secret().map_err(err_str))?;
+            let all = stealth::parse_explorer_boxes(json)
+                .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+            stealth::detect_owned(&secret, &all)
+        }
+        _ => Vec::new(),
+    };
+    for b in &stealth_owned {
+        eip12.push(crate::api_stealth_impl::to_input(b));
+        boxes.push(crate::api_stealth_impl::to_ergo_box(b)?);
+    }
     if eip12.is_empty() {
         return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());
     }
@@ -1208,10 +1233,17 @@ async fn prepare(
     // Coin control: when the user chose boxes, spend exactly those. Falling
     // back to automatic selection here would silently pull in a box they
     // deliberately left out, which is the linking they were avoiding.
+    let stealth_ids = stealth_owned
+        .iter()
+        .map(|b| b.box_id.clone())
+        .collect::<Vec<_>>();
     let selected = match input_box_ids.as_deref() {
         Some(ids) => select_exact(&eip12, ids, required, token_ref)
             .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
-        None => select_for_send(&eip12, required, token_ref)
+        // Automatic selection still avoids putting stealth and ordinary
+        // boxes in one input list unless neither pocket can pay alone.
+        None => select_preferring_one_pocket(&eip12, &stealth_ids, required, token_ref)
+            .map(|(s, _mixed)| s)
             .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
     };
 
@@ -1259,9 +1291,17 @@ async fn prepare(
         return Err(ArgusError::TxBuildFailed("UTXO set mismatch".into()).to_json_string());
     }
 
+    // Which of the chosen inputs need a DH-tuple secret at signing time.
+    let stealth_trees = selected
+        .boxes
+        .iter()
+        .filter(|b| stealth_owned.iter().any(|s| s.box_id == b.box_id))
+        .map(|b| b.ergo_tree.clone())
+        .collect::<Vec<_>>();
+
     let input_boxes = input_boxes_json(&selected.boxes);
 
-    Ok((input_boxes, ergo_boxes, built))
+    Ok((input_boxes, ergo_boxes, built, stealth_trees))
 }
 
 #[flutter_rust_bridge::frb]
@@ -1277,8 +1317,9 @@ pub async fn prepare_send(
     node_url: Option<String>,
     fee_nano: Option<i64>,
     input_box_ids: Option<Vec<String>>,
+    stealth_boxes_json: Option<String>,
 ) -> Result<String, String> {
-    let (input_boxes, ergo_boxes, built) = prepare(
+    let (input_boxes, ergo_boxes, built, stealth_trees) = prepare(
         handle_id,
         &sender_address,
         &spend_addresses,
@@ -1290,6 +1331,7 @@ pub async fn prepare_send(
         node_url.clone(),
         fee_nano,
         input_box_ids,
+        stealth_boxes_json,
     )
     .await?;
     let recipient_erg = built.summary.recipient_erg;
@@ -1301,7 +1343,7 @@ pub async fn prepare_send(
     let preview_token_amount = built.summary.token_amount;
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
-        stealth_trees: Vec::new(),
+        stealth_trees,
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
@@ -1635,6 +1677,7 @@ pub async fn prepare_send_multi(
     node_url: Option<String>,
     fee_nano: Option<i64>,
     input_box_ids: Option<Vec<String>>,
+    stealth_boxes_json: Option<String>,
 ) -> Result<String, String> {
     let change_tree = address_to_ergo_tree(&change_address)
         .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
@@ -1722,7 +1765,20 @@ pub async fn prepare_send_multi(
 
     let spend = resolve_spend_addresses(&sender_address, &spend_addresses);
     let client = node_client(node_url.clone()).await?;
-    let (boxes, eip12) = gather_unspent(handle_id, &client, &spend).await?;
+    let (mut boxes, mut eip12) = gather_unspent(handle_id, &client, &spend).await?;
+    let stealth_owned = match stealth_boxes_json.as_deref() {
+        Some(json) if !json.trim().is_empty() => {
+            let secret = with_handle(handle_id, "send_multi", |h| h.stealth_secret().map_err(err_str))?;
+            let all = stealth::parse_explorer_boxes(json)
+                .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+            stealth::detect_owned(&secret, &all)
+        }
+        _ => Vec::new(),
+    };
+    for b in &stealth_owned {
+        eip12.push(crate::api_stealth_impl::to_input(b));
+        boxes.push(crate::api_stealth_impl::to_ergo_box(b)?);
+    }
     if eip12.is_empty() {
         return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());
     }
@@ -1776,8 +1832,28 @@ pub async fn prepare_send_multi(
             }
             exact.boxes
         }
-        None => select_for_multi_send(&eip12, required, &needed_tokens)
-            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
+        None => {
+            // Same rule as the single send: try ordinary boxes alone, then
+            // stealth alone, and only combine when neither can pay.
+            let is_stealth = |b: &ergo_tx::Eip12InputBox| {
+                stealth_owned.iter().any(|s| s.box_id == b.box_id)
+            };
+            let ordinary = eip12.iter().filter(|b| !is_stealth(b)).cloned().collect::<Vec<_>>();
+            let only_stealth = eip12.iter().filter(|b| is_stealth(b)).cloned().collect::<Vec<_>>();
+            let attempt = |set: &[ergo_tx::Eip12InputBox]| {
+                if set.is_empty() {
+                    return None;
+                }
+                select_for_multi_send(set, required, &needed_tokens)
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            };
+            match attempt(&ordinary).or_else(|| attempt(&only_stealth)) {
+                Some(s) => s,
+                None => select_for_multi_send(&eip12, required, &needed_tokens)
+                    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
+            }
+        }
     };
 
     if selected.is_empty() {
@@ -1809,9 +1885,14 @@ pub async fn prepare_send_multi(
     }
 
     let input_boxes = input_boxes_json(&selected);
+    let stealth_trees = selected
+        .iter()
+        .filter(|b| stealth_owned.iter().any(|s| s.box_id == b.box_id))
+        .map(|b| b.ergo_tree.clone())
+        .collect::<Vec<_>>();
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
-        stealth_trees: Vec::new(),
+        stealth_trees,
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx,

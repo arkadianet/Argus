@@ -112,15 +112,15 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
                         Expanded(
                           child: Text(
                             networkController.discovering
-                                ? 'Asking the connected node for peers and checking each…'
-                                : networkController.discovered.isEmpty
-                                    ? 'Peers of the connected node that publish a REST API.'
-                                    : '${networkController.discovered.length} reachable, best first.',
+                                ? 'Asking every node for its peers and checking each…'
+                                : networkController.lastSearch != null
+                                    ? nodeSearchSummary(networkController.lastSearch!)
+                                    : 'Peers of your nodes that publish an HTTPS API.',
                             style: TextStyle(fontSize: 12.5, color: colors.muted),
                           ),
                         ),
                         TextButton(
-                          onPressed: networkController.discovering || networkController.activeUrl == null
+                          onPressed: networkController.discovering
                               ? null
                               : networkController.discoverNodes,
                           child: Text(networkController.discovering ? 'Searching…' : 'Search'),

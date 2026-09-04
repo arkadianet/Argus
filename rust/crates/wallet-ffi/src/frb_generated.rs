@@ -1272,6 +1272,7 @@ fn wire__crate__api__prepare_send_impl(
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
             let api_input_box_ids = <Option<Vec<String>>>::sse_decode(&mut deserializer);
+            let api_stealth_boxes_json = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -1288,6 +1289,7 @@ fn wire__crate__api__prepare_send_impl(
                             api_node_url,
                             api_fee_nano,
                             api_input_box_ids,
+                            api_stealth_boxes_json,
                         )
                         .await?;
                         Ok(output_ok)
@@ -1328,6 +1330,7 @@ fn wire__crate__api__prepare_send_multi_impl(
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
             let api_input_box_ids = <Option<Vec<String>>>::sse_decode(&mut deserializer);
+            let api_stealth_boxes_json = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -1341,6 +1344,7 @@ fn wire__crate__api__prepare_send_multi_impl(
                             api_node_url,
                             api_fee_nano,
                             api_input_box_ids,
+                            api_stealth_boxes_json,
                         )
                         .await?;
                         Ok(output_ok)

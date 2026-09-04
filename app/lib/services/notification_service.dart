@@ -45,12 +45,17 @@ class NotificationService {
     } catch (_) {}
   }
 
-  Future<void> incomingPayment({required int nanoErg, required String walletName, required bool pending}) async {
+  Future<void> incomingPayment({
+    required int nanoErg,
+    required String walletName,
+    required bool pending,
+    bool stealth = false,
+  }) async {
     if (!_ready) return;
     try {
       await _plugin.show(
         id: nanoErg.hashCode & 0x7fffffff,
-        title: pending ? 'Payment on the way' : 'Payment received',
+        title: incomingTitle(pending: pending, stealth: stealth),
         body: '${formatErg(nanoErg, maxFrac: 4)} to $walletName',
         notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
@@ -69,3 +74,10 @@ class NotificationService {
 }
 
 final notificationService = NotificationService();
+
+/// A stealth receipt is always confirmed by the time it is detected: it is
+/// found in the unspent set, not the mempool, so it is never "on the way".
+String incomingTitle({required bool pending, required bool stealth}) {
+  if (stealth) return 'Stealth payment received';
+  return pending ? 'Payment on the way' : 'Payment received';
+}
