@@ -267,6 +267,7 @@ abstract class RustLibApi extends BaseApi {
     BigInt? tokenAmount,
     String? nodeUrl,
     PlatformInt64? feeNano,
+    List<String>? inputBoxIds,
   });
 
   Future<String> crateApiPrepareSendMulti({
@@ -277,6 +278,7 @@ abstract class RustLibApi extends BaseApi {
     required String recipientsJson,
     String? nodeUrl,
     PlatformInt64? feeNano,
+    List<String>? inputBoxIds,
   });
 
   Future<String> crateApiPrepareSplitErg({
@@ -1607,6 +1609,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     BigInt? tokenAmount,
     String? nodeUrl,
     PlatformInt64? feeNano,
+    List<String>? inputBoxIds,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1622,6 +1625,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_opt_box_autoadd_u_64(tokenAmount, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
           sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
+          sse_encode_opt_list_String(inputBoxIds, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1645,6 +1649,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           tokenAmount,
           nodeUrl,
           feeNano,
+          inputBoxIds,
         ],
         apiImpl: this,
       ),
@@ -1664,6 +1669,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "tokenAmount",
       "nodeUrl",
       "feeNano",
+      "inputBoxIds",
     ],
   );
 
@@ -1676,6 +1682,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String recipientsJson,
     String? nodeUrl,
     PlatformInt64? feeNano,
+    List<String>? inputBoxIds,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -1688,6 +1695,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(recipientsJson, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
           sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
+          sse_encode_opt_list_String(inputBoxIds, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -1708,6 +1716,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           recipientsJson,
           nodeUrl,
           feeNano,
+          inputBoxIds,
         ],
         apiImpl: this,
       ),
@@ -1724,6 +1733,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "recipientsJson",
       "nodeUrl",
       "feeNano",
+      "inputBoxIds",
     ],
   );
 
@@ -2803,6 +2813,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
+  List<String>? dco_decode_opt_list_String(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw == null ? null : dco_decode_list_String(raw);
+  }
+
+  @protected
   int dco_decode_u_32(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return raw as int;
@@ -2951,6 +2967,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
     if (sse_decode_bool(deserializer)) {
       return (sse_decode_box_autoadd_u_64(deserializer));
+    } else {
+      return null;
+    }
+  }
+
+  @protected
+  List<String>? sse_decode_opt_list_String(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    if (sse_decode_bool(deserializer)) {
+      return (sse_decode_list_String(deserializer));
     } else {
       return null;
     }
@@ -3117,6 +3144,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_bool(self != null, serializer);
     if (self != null) {
       sse_encode_box_autoadd_u_64(self, serializer);
+    }
+  }
+
+  @protected
+  void sse_encode_opt_list_String(
+    List<String>? self,
+    SseSerializer serializer,
+  ) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+
+    sse_encode_bool(self != null, serializer);
+    if (self != null) {
+      sse_encode_list_String(self, serializer);
     }
   }
 
