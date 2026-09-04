@@ -12,6 +12,7 @@ members = [
     "crates/vendor/protocols/sigmausd",
     "crates/vendor/protocols/dexy",
     "crates/vendor/protocols/stealth",
+    "crates/vendor/protocols/zerojoin",
 ]
 
 [workspace.package]
@@ -78,6 +79,7 @@ amm = { path = "crates/vendor/protocols/amm" }
 sigmausd = { path = "crates/vendor/protocols/sigmausd" }
 dexy = { path = "crates/vendor/protocols/dexy" }
 stealth = { path = "crates/vendor/protocols/stealth" }
+zerojoin = { path = "crates/vendor/protocols/zerojoin" }
 
 # ─── Misc ────────────────────────────────────────────────────────────────
 indexmap = "2"

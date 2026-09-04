@@ -3398,6 +3398,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "zerojoin"
+version = "0.1.0"
+dependencies = [
+ "citadel-core",
+ "ergo-chain-types",
+ "ergo-lib",
+ "ergo-node-client",
+ "ergo-tx",
+ "ergopay-core",
+ "ergotree-interpreter",
+ "ergotree-ir",
+ "hex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sigma-ser",
+ "thiserror 1.0.69",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "zerotrie"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
