@@ -84,22 +84,21 @@ enum SpendFrom {
 
 /// The warning a send must show for [from], or null when there is none.
 ///
-/// Two separate costs. Spending across pockets puts both sets of coins in
-/// one input list, which tells any observer they share an owner. And any
-/// send that spends stealth coins returns its change to an address of this
-/// wallet, which ties that stealth box to that address — so a stealth send
-/// is private in who paid you, not in where the remainder went.
+/// Spending across pockets puts both sets of coins in one input list, which
+/// tells any observer they share an owner. A stealth-only send carries no
+/// such cost: its change goes to a fresh stealth address of the sender's
+/// own, so nothing points back at an address of this wallet.
 String? spendFromWarning(SpendFrom from) {
   switch (from) {
     case SpendFrom.public:
       return null;
     case SpendFrom.stealth:
-      return 'Change returns to one of your addresses, which links this '
-          'stealth box to it. Send the whole amount to avoid change.';
+      // Change goes to a fresh stealth address of your own, so nothing is
+      // tied back to an address of this wallet.
+      return null;
     case SpendFrom.both:
       return 'Spending public and stealth coins together links them: the '
-          'chain will show one transaction owning both, and change returns '
-          'to one of your addresses.';
+          'chain will show one transaction owning both.';
   }
 }
 

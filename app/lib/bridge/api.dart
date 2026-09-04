@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `with_handle`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 
 /// The app fee as the UI should display it.
@@ -147,6 +147,15 @@ bool looksLikeStealthAddress({required String address}) =>
 /// two calls for the same recipient return unlinkable addresses.
 Future<String> stealthPaymentAddress({required String stealthAddress}) =>
     RustLib.instance.api.crateApiStealthPaymentAddress(
+      stealthAddress: stealthAddress,
+    );
+
+/// A fresh one-time address to send our own change to, with its script.
+///
+/// The script is returned so the wallet can record what it created: money
+/// it sent itself must be findable without waiting for a template scan.
+Future<String> stealthSelfChangeTarget({required String stealthAddress}) =>
+    RustLib.instance.api.crateApiStealthSelfChangeTarget(
       stealthAddress: stealthAddress,
     );
 

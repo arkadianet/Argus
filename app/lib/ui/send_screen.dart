@@ -453,8 +453,24 @@ class _SendScreenState extends State<SendScreen> {
       return;
     }
 
-    final changeAddress =
+    // A send that spends stealth coins returns its change to a fresh
+    // stealth address of our own, so the remainder is not tied to any
+    // address of this wallet. Falls back to the ordinary change address
+    // when that cannot be built, and says so rather than doing it quietly.
+    var changeAddress =
         args.changeAddress.isEmpty ? args.senderAddress : args.changeAddress;
+    var stealthChange = false;
+    if (_spendFrom.usesStealth) {
+      final fresh = await stealthService.newSelfChangeAddress();
+      if (!mounted) return;
+      if (fresh != null) {
+        changeAddress = fresh;
+        stealthChange = true;
+      } else {
+        _snack('Could not build a stealth change address; change will go to '
+            'your wallet address');
+      }
+    }
     final isMulti = recipients.length > 1;
     setState(() => _sending = true);
     try {
@@ -489,6 +505,7 @@ class _SendScreenState extends State<SendScreen> {
       await _confirmAndSend(
         preview: preview,
         isMulti: isMulti,
+        stealthChange: stealthChange,
         stealthRecipients: isStealthPayment
             ? [
                 for (final r in recipients)
@@ -687,6 +704,7 @@ class _SendScreenState extends State<SendScreen> {
     required SendPreview preview,
     required bool isMulti,
     List<String> stealthRecipients = const [],
+    bool stealthChange = false,
   }) async {
     // The clipboard gate compares against what the user typed; for a stealth
     // payment the prepared recipient is a freshly derived one-time address
@@ -726,7 +744,10 @@ class _SendScreenState extends State<SendScreen> {
         ),
       ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
       argusFeeRow(),
-      ConfirmTxRow('Change to you', formatErg(preview.changeNanoErg)),
+      ConfirmTxRow(
+        stealthChange ? 'Change to a new stealth address' : 'Change to you',
+        formatErg(preview.changeNanoErg),
+      ),
     ];
     final fiat = networkController.fiatText(preview.amountNanoErg);
     final choice = await showConfirmTransactionChoice(
