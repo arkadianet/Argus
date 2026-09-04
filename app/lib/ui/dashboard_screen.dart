@@ -216,7 +216,8 @@ class _DashboardScreenState extends State<DashboardScreen>
         return;
       }
     }
-    _sync.refresh(discover: false);
+    // Routine poll: refresh without flipping the strip to "Syncing…".
+    _sync.refresh(discover: false, quiet: true);
   }
 
   void _probeTick() {
@@ -405,6 +406,10 @@ class _DashboardScreenState extends State<DashboardScreen>
       setState(_resetLocked);
       return;
     }
+    // Record the pinned address if only its index was ever stored, so the
+    // wallet list shows the pinned address rather than index 0 once this
+    // wallet is locked again.
+    await walletService.backfillPinnedAddress().catchError((_) {});
     // 1. Derive the main address locally and paint from the cache (instant).
     final ok = await _sync.hydrateAfterUnlock();
     if (!mounted) return;
@@ -412,6 +417,8 @@ class _DashboardScreenState extends State<DashboardScreen>
       setState(_resetLocked);
       return;
     }
+    await _loadWallets();
+    if (!mounted) return;
     if (!ok) {
       debugPrint('argus: address derivation failed after unlock');
       setState(() {
@@ -1650,13 +1657,24 @@ class _DashboardScreenState extends State<DashboardScreen>
     // The active row must agree with the portfolio card above it: both are
     // display surfaces, so both include stealth funds.
     final live = _otherBalances[w.walletId];
+    // A locked wallet's live figure covers its known addresses; its
+    // stealth funds can only come from the last sync, since rescanning
+    // needs its seed.
+    final cachedStealth = known?.stealthNano ?? 0;
     final display = walletRowDisplay(
       isActive: isActive,
       spendableNano: _sync.balanceNano,
       stealthNano: _sync.stealthNano,
-      cachedNano: live ?? known?.balanceNano,
+      cachedNano: live == null
+          ? known?.balanceNano
+          : live + cachedStealth,
       hidden: _balanceHidden,
     );
+    final stealthSeen = known?.stealthScannedAt;
+    final lockedStealthNote = !isActive && cachedStealth > 0 && !_balanceHidden
+        ? 'includes ${formatErg(cachedStealth, maxFrac: 4)} stealth'
+            '${stealthSeen == null ? '' : ', as of ${formatSyncAge(stealthSeen)}'}'
+        : null;
     final balance = display.balanceNano;
     final stealthNote = display.note;
     final addr = isActive ? (_sync.receiveAddress ?? w.displayAddress) : w.displayAddress;
@@ -1743,7 +1761,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 balance,
                 isActive ? _sync.isSyncing : false,
                 asOf: asOf,
-                note: stealthNote,
+                note: stealthNote ?? lockedStealthNote,
                 tokens: isActive
                     ? [
                         for (final t in _sync.displayTokens)

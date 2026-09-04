@@ -132,6 +132,11 @@ class LiveWalletSyncGateway implements WalletSyncGateway {
         primaryAddress: snapshot['primary_address'] as String?,
         usedAddresses:
             (snapshot['used_addresses'] as List).cast<Map<String, dynamic>>(),
+        stealthNano: (snapshot['stealth_nano_erg'] as num?)?.toInt() ?? 0,
+        stealthScannedAt: (snapshot['stealth_scanned_at'] as num?) == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(
+                (snapshot['stealth_scanned_at'] as num).toInt()),
         balanceNano: snapshot['balance_nano_erg'] as int,
         tokens: (snapshot['tokens'] as List).cast<Map<String, dynamic>>(),
         transactions:
@@ -200,6 +205,9 @@ class WalletSyncController extends ChangeNotifier {
   /// balance shown is unknown rather than zero. Also true right after a
   /// failed explorer call.
   bool stealthBalanceUnknown = true;
+
+  /// When [stealthNano] was last confirmed. Untouched by a failed scan.
+  DateTime? stealthScannedAt;
 
   /// True when the user has the scan on, so an unknown stealth balance is
   /// worth reporting rather than simply "not in use".
@@ -289,6 +297,7 @@ class WalletSyncController extends ChangeNotifier {
     stealthTokens = const [];
     stealthRows = const [];
     stealthBalanceUnknown = true;
+    stealthScannedAt = null;
     notifyListeners();
   }
 
@@ -341,17 +350,24 @@ class WalletSyncController extends ChangeNotifier {
   /// Refreshes balances, activity and UTXO count. With [discover] the
   /// address set is rescanned first and the node list re-probed.
   /// Concurrent callers share the in-flight operation.
-  Future<void> refresh({required bool discover}) {
+  /// [quiet] is for the background poll: it refreshes without announcing
+  /// itself, so the status strip does not flip to "Syncing…" and back every
+  /// 20 seconds. The result still updates the phase, so a failure or stale
+  /// balance is reported as soon as it happens.
+  Future<void> refresh({required bool discover, bool quiet = false}) {
     final running = _inFlight;
     if (running != null) return running;
-    final op = _refresh(discover).whenComplete(() => _inFlight = null);
+    final op = _refresh(discover, quiet: quiet).whenComplete(() => _inFlight = null);
     _inFlight = op;
     return op;
   }
 
-  Future<void> _refresh(bool discover) async {
-    phase = SyncPhase.syncing;
-    notifyListeners();
+  Future<void> _refresh(bool discover, {bool quiet = false}) async {
+    // A first load has nothing to show yet, so it always announces itself.
+    if (!quiet || phase == SyncPhase.idle) {
+      phase = SyncPhase.syncing;
+      notifyListeners();
+    }
 
     if (discover) {
       _gw.probeNetwork();
@@ -426,6 +442,13 @@ class WalletSyncController extends ChangeNotifier {
         'wallet_id': _cacheKey(receive),
         'primary_address': receive,
         'used_addresses': usedAddresses,
+        // A locked wallet cannot derive its stealth key, so it can never
+        // rescan; the last known figure is the only thing it can honestly
+        // show, and it is labelled as of a time.
+        'stealth_nano_erg': stealthNano,
+        // Only a successful scan moves this on, so a failed one preserves
+        // both the figure and how old it is.
+        'stealth_scanned_at': stealthScannedAt?.millisecondsSinceEpoch,
         'balance_nano_erg': balanceNano ?? 0,
         'tokens': [
           for (final t in tokens)
@@ -546,6 +569,7 @@ class WalletSyncController extends ChangeNotifier {
       stealthTokens = const [];
       stealthRows = const [];
       stealthBalanceUnknown = false;
+      stealthScannedAt = null;
       return;
     }
     StealthScanResult? result;
@@ -586,6 +610,7 @@ class WalletSyncController extends ChangeNotifier {
     ];
     stealthRows = stealthActivityRows(result.boxes);
     stealthBalanceUnknown = false;
+    stealthScannedAt = DateTime.now();
   }
 
   /// Null when the history call itself failed.
