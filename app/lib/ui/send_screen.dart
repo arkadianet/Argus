@@ -17,6 +17,7 @@ import '../services/dexy_service.dart';
 import '../services/ergopay_service.dart';
 import '../services/coin_control.dart';
 import '../services/network_controller.dart';
+import '../services/pockets.dart';
 import '../services/stealth_service.dart';
 import '../services/wallet_sync_controller.dart';
 import '../services/wallet_service.dart';
@@ -93,6 +94,11 @@ class _SendScreenState extends State<SendScreen> {
   List<BuyableToken> _buyable = const [];
   Set<String> _selectedSpendAddresses = {};
 
+  /// Which pockets this send draws on. Public by default: stealth coins
+  /// are only spent when the user says so, so they are never linked to
+  /// ordinary ones by an automatic choice.
+  SpendFrom _spendFrom = SpendFrom.public;
+
   /// Boxes the user chose to spend. Empty means automatic selection.
   final Set<String> _chosenBoxIds = {};
   List<InputBoxInput> _boxes = const [];
@@ -100,8 +106,24 @@ class _SendScreenState extends State<SendScreen> {
 
   CoinSelection get _selection => summariseSelection(_boxes, _chosenBoxIds);
 
-  List<String>? get _inputBoxIds =>
-      _chosenBoxIds.isEmpty ? null : _selection.boxes.map((b) => b.boxId).toList();
+  /// Ids to spend. A per-box choice wins; otherwise a stealth-only send
+  /// names its boxes explicitly, so ordinary coins cannot be pulled in to
+  /// cover a shortfall and quietly link the two pockets.
+  List<String>? get _inputBoxIds {
+    if (_chosenBoxIds.isNotEmpty) {
+      return _selection.boxes.map((b) => b.boxId).toList();
+    }
+    if (_spendFrom == SpendFrom.stealth) {
+      final ids = walletSyncController.stealthRowBoxIds;
+      return ids.isEmpty ? null : ids;
+    }
+    return null;
+  }
+
+  /// The explorer body a send may draw stealth inputs from, or null when
+  /// this send is public-only.
+  String? get _stealthBoxesJson =>
+      _spendFrom.usesStealth ? stealthService.spendableBoxesJson : null;
 
   Future<void> _openInputPicker() async {
     final spend = _selectedSpendAddresses.isNotEmpty
@@ -114,9 +136,13 @@ class _SendScreenState extends State<SendScreen> {
     setState(() => _loadingBoxes = true);
     try {
       final own = await walletService.listUnspentBoxes(spend, nodeUrl: networkController.activeUrl);
-      // Stealth boxes are spendable but sit on no address, so they must be
-      // offered here or their funds have no route out except the sweep.
-      _boxes = [...own, ...stealthInputBoxes(stealthService.lastScan)];
+      // Only the chosen pockets' boxes are offered, so the picker cannot
+      // undo the decision made above it.
+      _boxes = eligibleBoxes(
+        from: _spendFrom,
+        publicBoxes: own,
+        stealthBoxes: stealthInputBoxes(stealthService.lastScan),
+      );
     } catch (e) {
       if (!mounted) return;
       setState(() => _loadingBoxes = false);
@@ -430,7 +456,7 @@ class _SendScreenState extends State<SendScreen> {
           nodeUrl: networkController.activeUrl,
           feeNanoErg: parseErgToNano(_feeCtrl.text),
           inputBoxIds: _inputBoxIds,
-          stealthBoxesJson: stealthService.spendableBoxesJson,
+          stealthBoxesJson: _stealthBoxesJson,
         );
       } else {
         final r = recipients.single;
@@ -445,7 +471,7 @@ class _SendScreenState extends State<SendScreen> {
           nodeUrl: networkController.activeUrl,
           feeNanoErg: parseErgToNano(_feeCtrl.text),
           inputBoxIds: _inputBoxIds,
-          stealthBoxesJson: stealthService.spendableBoxesJson,
+          stealthBoxesJson: _stealthBoxesJson,
         );
       }
       await _confirmAndSend(
@@ -737,16 +763,59 @@ class _SendScreenState extends State<SendScreen> {
     return '$tokenId: $amount';
   }
 
-  /// "Available 12.3456 ERG" under the amount field.
+  /// "Available 12.3456 ERG" under the amount field, for the chosen pocket.
   String? _availableLine() {
-    final spendable = _args.spendableNano;
-    if (spendable == null) return null;
+    final available = availableNano(
+      from: _spendFrom,
+      publicNano: _args.spendableNano,
+      stealthNano: walletSyncController.stealthNano,
+    );
+    if (available == null) return null;
+    final suffix = _spendFrom == SpendFrom.public ? '' : ' from ${_spendFrom.label.toLowerCase()}';
+    return 'Available ${formatErg(available, maxFrac: 4)}$suffix';
+  }
+
+  /// The pocket chooser, shown only when there is a second pocket to pick.
+  Widget? _pocketSelector(BuildContext context) {
     final stealth = walletSyncController.stealthNano;
-    if (stealth > 0) {
-      return 'Available ${formatErg(spendable, maxFrac: 4)} '
-          '+ ${formatErg(stealth, maxFrac: 4)} stealth (choose it under Advanced → Inputs)';
-    }
-    return 'Available ${formatErg(spendable, maxFrac: 4)}';
+    if (stealth <= 0) return null;
+    final warning = spendFromWarning(_spendFrom);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('SPEND FROM',
+              style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: ArgusColors.of(context).muted,
+                    letterSpacing: 1,
+                    fontSize: 11.5,
+                  )),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final f in SpendFrom.values)
+                ChoiceChip(
+                  key: Key('spend-from-${f.name}'),
+                  label: Text(f.label),
+                  selected: _spendFrom == f,
+                  onSelected: (_) => setState(() {
+                    _spendFrom = f;
+                    // A pocket change invalidates a per-box choice made
+                    // against the previous set.
+                    _chosenBoxIds.clear();
+                  }),
+                ),
+            ],
+          ),
+          if (warning != null) ...[
+            const SizedBox(height: 6),
+            Text(warning, style: TextStyle(fontSize: 12.5, color: rustFor(context))),
+          ],
+        ],
+      ),
+    );
   }
 
   String _advancedSummary() {
@@ -1042,6 +1111,7 @@ class _SendScreenState extends State<SendScreen> {
                       _buildSwapSection(swapVariant)
                     else ...[
                       const SizedBox(height: 12),
+                      if (_pocketSelector(context) case final sel?) sel,
                       if (token == null)
                         AmountEntry(
                           controller: _amountCtrl,

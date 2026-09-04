@@ -13,6 +13,7 @@ import '../services/ergopay_service.dart';
 import '../services/incoming_payment_watcher.dart';
 import '../services/notification_service.dart';
 import '../services/network_controller.dart';
+import '../services/pockets.dart';
 import '../services/portfolio.dart';
 import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
@@ -1531,13 +1532,20 @@ class _DashboardScreenState extends State<DashboardScreen>
       result: tokenPricer.result,
     );
     final fiatValue = tokenPricer.fiatTextForUsd(tokenPricer.result.ergUsd == null ? null : value.usd);
+    // Where the money sits, so the headline total is never a number the
+    // rest of the screen appears to contradict.
+    final pockets = walletPockets(
+      publicNano: _sync.balanceNano,
+      stealthNano: _sync.stealthNano,
+      stealthUnknown: _sync.stealthScanning && _sync.stealthBalanceUnknown,
+    );
+    final breakdown = pocketBreakdown(pockets, hidden: _balanceHidden);
     // Status parts stand on their own: an unpriced wallet must still be
     // told that the total omits stealth funds nobody could look up.
     final statusParts = <String>[
       if (fiatValue != null) '$fiatValue ${networkController.fiatCode.toUpperCase()}',
       if (fiatValue != null && value.unpriced + value.excluded > 0)
         '${value.unpriced + value.excluded} unpriced',
-      if (_sync.stealthScanning && _sync.stealthBalanceUnknown) 'stealth unknown',
       if (fiatValue != null && tokenPricer.stale) 'prices stale',
     ];
     final fiat = _balanceHidden
@@ -1602,6 +1610,10 @@ class _DashboardScreenState extends State<DashboardScreen>
                       [if (fiat != null) fiat, subtitle].join('  ·  '),
                       style: TextStyle(fontSize: 14, color: muted),
                     ),
+                    if (breakdown != null) ...[
+                      const SizedBox(height: 2),
+                      Text(breakdown, style: TextStyle(fontSize: 13, color: muted)),
+                    ],
                   ],
                 ),
               ),
