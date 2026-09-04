@@ -55,6 +55,7 @@ DexyState _useState({
 }
 
 void main() {
+  _planTests();
   _lpRateTests();
   // 1 display USE == 1000 raw units at 3 decimals.
   const oneUse = 1000;
@@ -141,11 +142,13 @@ void main() {
       expect(dexyForErgDeposit(pool(), 962000000), 260);
     });
 
-    // Round up, so the entered side is fully consumed rather than partly
-    // refunded by calculate_lp_deposit's min-of-shares rule.
-    test('rounds the pair up so the entered side is not left over', () {
+    // ERG rounds up (a nanoERG is nothing); the token side rounds down so
+    // a whole unit is never handed to the pool for a fraction of its share.
+    test('rounds ERG up and tokens down', () {
       expect(ergForDexyDeposit(pool(), 1), 3700000);
-      expect(dexyForErgDeposit(pool(), 3700001), 2);
+      expect(dexyForErgDeposit(pool(), 3700001), 1);
+      expect(dexyForErgDeposit(pool(), 7399999), 1);
+      expect(dexyForErgDeposit(pool(), 7400000), 2);
     });
 
     test('an empty pool cannot be paired', () {
@@ -229,5 +232,48 @@ void _lpRateTests() {
         });
     expect(lpErgPerToken(make(DexyVariant.usd)), closeTo(3.7719, 0.001));
     expect(lpErgPerToken(make(DexyVariant.gold)), closeTo(0.0037719, 0.000001));
+  });
+}
+
+// Deposit planner against the live DexyGold pool of 2026-09-04
+void _planTests() {
+  DexyState gold() => DexyState.fromJson({
+        'state': {'lp_erg_reserves': 3229996138623, 'lp_dexy_reserves': 6002, 'lp_circulating': 1520186},
+        'rates': {'variant': 'gold'},
+      });
+
+  test('1 ERG led: pairs one DexyGold, consumes only its share, reports the rest', () {
+    final p = planLpDeposit(gold(), ergNano: 1000000000, ergLed: true);
+    expect(p.valid, isTrue);
+    expect(p.dexyUnits, 1);
+    expect(p.lp, 253);
+    expect(p.ergNano, closeTo(538000000, 1500000)); // 0.538 ERG for 253 LP
+    expect(p.ergLeftover, 1000000000 - p.ergNano);
+    expect(p.ergForOneMore, closeTo(1076000000, 3000000));
+  });
+
+  test('2 DexyGold led: derives the ERG that mints exactly the Y-side share', () {
+    final p = planLpDeposit(gold(), dexyUnits: 2, ergLed: false);
+    expect(p.lp, 506);
+    expect(p.dexyUnits, 2);
+    expect(p.ergNano, closeTo(1075000000, 2000000));
+    expect(p.ergLeftover, 0);
+  });
+
+  test('too little ERG for one unit is not a deposit but says what would be', () {
+    final p = planLpDeposit(gold(), ergNano: 100000000, ergLed: true);
+    expect(p.valid, isFalse);
+    expect(p.ergForOneMore, greaterThan(500000000));
+  });
+
+  test('planned amounts reproduce the on-chain min-of-shares rule with no overpay', () {
+    final st = gold();
+    final p = planLpDeposit(st, ergNano: 1000000000, ergLed: true);
+    // calculate_lp_deposit: shares_by_x = floor(erg*S/RX), shares_by_y = floor(dexy*S/RY)
+    final byX = BigInt.from(p.ergNano) * BigInt.from(st.lpCirculating) ~/ BigInt.from(st.lpErgReserves);
+    final byY = BigInt.from(p.dexyUnits) * BigInt.from(st.lpCirculating) ~/ BigInt.from(st.lpDexyReserves);
+    expect(byY.toInt(), p.lp);
+    expect(byX.toInt(), greaterThanOrEqualTo(p.lp));
+    expect(byX.toInt(), lessThanOrEqualTo(p.lp + 1));
   });
 }
