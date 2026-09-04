@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/amm_service.dart';
+import '../services/swap_rounding.dart';
 import '../services/route_display.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -282,6 +283,7 @@ class _SwapScreenState extends State<SwapScreen> {
       setState(() {
         _quote = q;
         _quoteError = null;
+        _rounding = _lastEdited == 'from' ? _roundingFor(q, amount) : null;
         // Mirror the quoted output into the want field so both sides always
         // show a consistent pair — but only when the user's last edit was on
         // the pay side; otherwise it would fight their typing.
@@ -301,6 +303,41 @@ class _SwapScreenState extends State<SwapScreen> {
 
   /// Why the last quote attempt produced nothing, shown under the fields.
   String? _quoteError;
+
+  /// Set when the typed input over-pays for a floored output.
+  SwapRounding? _rounding;
+
+  SwapRounding? _roundingFor(AmmQuote q, int amount) {
+    final pool = (_set?.pools ?? const []).cast<Map<String, dynamic>?>().firstWhere(
+          (p) => p?['pool_id'] == q.poolId,
+          orElse: () => null,
+        );
+    if (pool == null) return null;
+    final sides = poolSides(pool);
+    BigInt? rIn;
+    BigInt? rOut;
+    for (final s in sides) {
+      if (s.$1 == _fromToken) rIn = s.$2;
+      if (s.$1 == _toToken) rOut = s.$2;
+    }
+    if (rIn == null || rOut == null) return null;
+    return swapRoundingFor(
+      input: amount,
+      output: q.outputAmount,
+      reservesIn: rIn,
+      reservesOut: rOut,
+      feeNum: (pool['fee_num'] as num?)?.toInt() ?? 997,
+      feeDenom: (pool['fee_denom'] as num?)?.toInt() ?? 1000,
+    );
+  }
+
+  void _useExactInput() {
+    final r = _rounding;
+    if (r == null) return;
+    _lastEdited = 'from';
+    _amountCtrl.text = _fmtAmount(BigInt.from(r.exactInput), _decimals(_fromToken));
+    _scheduleQuote();
+  }
 
   Future<void> _swap() async {
     final quote = _quote;
@@ -530,6 +567,10 @@ class _SwapScreenState extends State<SwapScreen> {
             _onToAmountChanged(text);
           },
         ),
+        if (_quote != null && _rounding != null) ...[
+          const SizedBox(height: 8),
+          _roundingNote(context, _rounding!),
+        ],
         if (pool != null) ...[
           const SizedBox(height: 16),
           _depthCard(pool, poolCount),
@@ -591,6 +632,27 @@ class _SwapScreenState extends State<SwapScreen> {
       _toAmountCtrl.clear();
     });
     _scheduleQuote();
+  }
+
+  /// "1 ERG buys 1 DexyGold; 0.5397 ERG buys the same. Pay that instead"
+  Widget _roundingNote(BuildContext context, SwapRounding r) {
+    final from = _symbol(_fromToken);
+    final to = _symbol(_toToken);
+    final exact = _fmtAmount(BigInt.from(r.exactInput), _decimals(_fromToken));
+    final left = _fmtAmount(BigInt.from(r.leftover), _decimals(_fromToken));
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Text(
+            '${_fmtAmount(BigInt.from(r.output), _decimals(_toToken))} $to is the most this buys; '
+            '$exact $from buys the same and $left $from would otherwise stay in the pool.',
+            style: TextStyle(fontSize: 12.5, color: rustFor(context)),
+          ),
+        ),
+        TextButton(onPressed: _useExactInput, child: Text('Pay $exact')),
+      ],
+    );
   }
 
   Widget _depthCard(Map<String, dynamic> pool, int poolCount) {

@@ -285,7 +285,13 @@ pub(crate) async fn preview_swap(
         "lp_erg_reserves": state.lp_erg_reserves,
         "lp_dexy_reserves": state.lp_dexy_reserves,
         "can_execute": output_amount > 0,
-        "error": if output_amount <= 0 { Some("No liquidity in the LP pool".to_string()) } else { None },
+        "error": if output_amount <= 0 {
+            Some(if reserves_bought <= 0 {
+                "No liquidity in the LP pool".to_string()
+            } else {
+                format!("Too small: this amount would receive 0 {output_token_name}")
+            })
+        } else { None },
     }))
     .map_err(ser_err)
 }
