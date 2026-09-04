@@ -160,10 +160,28 @@ pub fn calculate_lp_redeem(
 ) -> LpRedeemResult {
     let supply = initial_lp - lp_reserves;
 
-    let erg_out = (lp_to_burn as i128 * reserves_x as i128 / supply as i128 * 98 / 100) as i64;
-    let dexy_out = (lp_to_burn as i128 * reserves_y as i128 / supply as i128 * 98 / 100) as i64;
+    // The contract's bound is deltaY * supply * 100 / 98 >= lp * reservesY,
+    // i.e. at most lp * reservesY * 98 / (100 * supply). One floor at the
+    // end; flooring the share first and then the fee lost a whole unit for
+    // low-decimal tokens (DexyGold: 470 LP gave 0 instead of 1).
+    let s = supply as i128;
+    let erg_out = (lp_to_burn as i128 * reserves_x as i128 * 98 / (100 * s)) as i64;
+    let dexy_out = (lp_to_burn as i128 * reserves_y as i128 * 98 / (100 * s)) as i64;
 
     LpRedeemResult { erg_out, dexy_out }
+}
+
+/// Smallest LP amount whose redemption yields at least one base unit of the
+/// Dexy token (the pool contract requires both reserves to shrink).
+pub fn min_lp_for_one_dexy(reserves_y: i64, lp_reserves: i64, initial_lp: i64) -> i64 {
+    let supply = (initial_lp - lp_reserves) as i128;
+    if reserves_y <= 0 || supply <= 0 {
+        return 0;
+    }
+    // lp * reserves_y * 98 >= 100 * supply  →  lp >= ceil(100 * supply / (98 * reserves_y))
+    let num = 100 * supply;
+    let den = 98 * reserves_y as i128;
+    ((num + den - 1) / den) as i64
 }
 
 /// Blocked when LP rate < 98% of oracle rate (depeg protection).
@@ -196,6 +214,43 @@ pub fn calculate_lp_swap_price_impact(
     let input_f = input_amount as f64 * (fee_denom - fee_num) as f64 / fee_denom as f64;
     let _ = reserves_bought;
     input_f / (reserves_sold as f64 + input_f) * 100.0
+}
+
+#[cfg(test)]
+mod redeem_rounding_tests {
+    use super::*;
+
+    // Live DexyGold pool on 2026-09-04: 6000 DexyGold pooled, 99_998_480_284
+    // LP in reserve of 100_000_000_000 → supply 1_519_716.
+    const RES_X: i64 = 3_228_996_138_623;
+    const RES_Y: i64 = 6000;
+    const LP_RES: i64 = 99_998_480_284;
+    const INITIAL: i64 = 100_000_000_000;
+
+    #[test]
+    fn redeem_floors_once_after_the_fee() {
+        let r = calculate_lp_redeem(470, RES_X, RES_Y, LP_RES, INITIAL);
+        assert_eq!(r.dexy_out, 1, "470 LP is 1.818 DexyGold after fee, not 0");
+        assert_eq!(r.erg_out, ((470i128 * RES_X as i128 * 98) / (100 * 1_519_716)) as i64);
+    }
+
+    #[test]
+    fn redeem_output_never_exceeds_the_contract_bound() {
+        for lp in [1, 259, 470, 1000, 150_000] {
+            let r = calculate_lp_redeem(lp, RES_X, RES_Y, LP_RES, INITIAL);
+            let supply = 1_519_716i128;
+            assert!(r.dexy_out as i128 * supply * 100 / 98 <= lp as i128 * RES_Y as i128);
+            assert!(r.erg_out as i128 * supply * 100 / 98 <= lp as i128 * RES_X as i128);
+        }
+    }
+
+    #[test]
+    fn min_lp_for_one_dexy_matches_the_bound() {
+        let min = min_lp_for_one_dexy(RES_Y, LP_RES, INITIAL);
+        assert_eq!(min, 259);
+        assert_eq!(calculate_lp_redeem(min, RES_X, RES_Y, LP_RES, INITIAL).dexy_out, 1);
+        assert_eq!(calculate_lp_redeem(min - 1, RES_X, RES_Y, LP_RES, INITIAL).dexy_out, 0);
+    }
 }
 
 #[cfg(test)]

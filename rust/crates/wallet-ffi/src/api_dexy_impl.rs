@@ -326,7 +326,7 @@ pub(crate) async fn preview_lp(
     }
 
     let lp_box = client
-        .get_box_by_token_id(&caps, &TokenId::new(&ids.lp_token_id))
+        .get_box_by_token_id(&caps, &TokenId::new(&ids.lp_nft))
         .await
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
     let lp_data = parse_lp_box(&lp_box, &ids).map_err(proto_err)?;
@@ -384,7 +384,19 @@ pub(crate) async fn preview_lp(
         "dexy_out": calc.dexy_out,
         "redemption_fee_pct": LP_REDEEM_FEE_PCT,
         "can_execute": calc.erg_out > 0 && calc.dexy_out > 0,
-        "error": if calc.erg_out <= 0 || calc.dexy_out <= 0 { Some("Redeem too small: would receive 0 ERG or Dexy".to_string()) } else { None },
+        "error": if calc.erg_out <= 0 || calc.dexy_out <= 0 {
+            let min_lp = dexy::calculator::min_lp_for_one_dexy(
+                lp_data.dexy_reserves,
+                lp_data.lp_token_reserves,
+                dexy_variant.initial_lp(),
+            );
+            Some(format!(
+                "Too few LP tokens: the pool must release at least {} {}, which takes {} LP tokens",
+                fmt_units(1, dexy_variant.decimals()),
+                dexy_variant.token_name(),
+                min_lp
+            ))
+        } else { None },
         "miner_fee_nano": TX_FEE_NANO,
     }))
     .map_err(ser_err)
@@ -509,6 +521,8 @@ mod dexy_state_live_tests {
             println!("[{variant}] rates erg_per_token={} tokens_per_erg={} decimals={}", v["rates"]["erg_per_token"], v["rates"]["tokens_per_erg"], v["rates"]["token_decimals"]);
             let p = crate::api::dexy_preview_mint(variant.to_string(), one_token, node.clone()).await.expect("preview");
             println!("[{variant}] preview mint {one_token} base units: {p}");
+            let r = crate::api::dexy_preview_lp(variant.to_string(), "redeem".to_string(), 0, 0, 470, node.clone()).await;
+            println!("[{variant}] preview lp redeem 470: {r:?}");
         }
     }
 }
