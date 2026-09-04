@@ -174,14 +174,29 @@ pub fn calculate_lp_redeem(
 /// Smallest LP amount whose redemption yields at least one base unit of the
 /// Dexy token (the pool contract requires both reserves to shrink).
 pub fn min_lp_for_one_dexy(reserves_y: i64, lp_reserves: i64, initial_lp: i64) -> i64 {
+    min_lp_for_dexy_units(1, reserves_y, lp_reserves, initial_lp)
+}
+
+/// Smallest LP amount whose redemption yields at least [`units`] base units
+/// of the Dexy token after the 2% fee.
+pub fn min_lp_for_dexy_units(units: i64, reserves_y: i64, lp_reserves: i64, initial_lp: i64) -> i64 {
     let supply = (initial_lp - lp_reserves) as i128;
-    if reserves_y <= 0 || supply <= 0 {
+    if reserves_y <= 0 || supply <= 0 || units <= 0 {
         return 0;
     }
-    // lp * reserves_y * 98 >= 100 * supply  →  lp >= ceil(100 * supply / (98 * reserves_y))
-    let num = 100 * supply;
+    // lp * reserves_y * 98 >= units * 100 * supply
+    let num = units as i128 * 100 * supply;
     let den = 98 * reserves_y as i128;
     ((num + den - 1) / den) as i64
+}
+
+/// Exact (unfloored) Dexy base units a redemption is entitled to after the fee.
+pub fn exact_dexy_share(lp_to_burn: i64, reserves_y: i64, lp_reserves: i64, initial_lp: i64) -> f64 {
+    let supply = (initial_lp - lp_reserves) as f64;
+    if supply <= 0.0 {
+        return 0.0;
+    }
+    lp_to_burn as f64 * reserves_y as f64 * 0.98 / supply
 }
 
 /// Blocked when LP rate < 98% of oracle rate (depeg protection).
@@ -242,6 +257,14 @@ mod redeem_rounding_tests {
             assert!(r.dexy_out as i128 * supply * 100 / 98 <= lp as i128 * RES_Y as i128);
             assert!(r.erg_out as i128 * supply * 100 / 98 <= lp as i128 * RES_X as i128);
         }
+    }
+
+    #[test]
+    fn min_lp_for_two_units_matches_the_bound() {
+        let min = min_lp_for_dexy_units(2, RES_Y, LP_RES, INITIAL);
+        assert_eq!(calculate_lp_redeem(min, RES_X, RES_Y, LP_RES, INITIAL).dexy_out, 2);
+        assert_eq!(calculate_lp_redeem(min - 1, RES_X, RES_Y, LP_RES, INITIAL).dexy_out, 1);
+        assert!((exact_dexy_share(470, RES_Y, LP_RES, INITIAL) - 1.818).abs() < 0.01);
     }
 
     #[test]

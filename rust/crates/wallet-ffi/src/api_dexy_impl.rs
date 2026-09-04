@@ -377,11 +377,27 @@ pub(crate) async fn preview_lp(
         lp_data.lp_token_reserves,
         dexy_variant.initial_lp(),
     );
+    let exact_units = dexy::calculator::exact_dexy_share(
+        lp_amount,
+        lp_data.dexy_reserves,
+        lp_data.lp_token_reserves,
+        dexy_variant.initial_lp(),
+    );
+    let lp_for_next_unit = dexy::calculator::min_lp_for_dexy_units(
+        calc.dexy_out + 1,
+        lp_data.dexy_reserves,
+        lp_data.lp_token_reserves,
+        dexy_variant.initial_lp(),
+    );
     serde_json::to_string(&serde_json::json!({
         "action": "redeem",
         "lp_amount": lp_amount,
         "erg_out": calc.erg_out,
         "dexy_out": calc.dexy_out,
+        // Unfloored entitlement in whole tokens, and the LP that would
+        // release one more base unit, so the sheet can explain rounding.
+        "dexy_share_exact": exact_units / 10_f64.powi(dexy_variant.decimals() as i32),
+        "lp_for_next_unit": lp_for_next_unit,
         "redemption_fee_pct": LP_REDEEM_FEE_PCT,
         "can_execute": calc.erg_out > 0 && calc.dexy_out > 0,
         "error": if calc.erg_out <= 0 || calc.dexy_out <= 0 {

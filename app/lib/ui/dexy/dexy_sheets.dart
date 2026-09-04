@@ -803,6 +803,10 @@ class DexyLiquiditySheetState extends State<DexyLiquiditySheet> {
                   '${formatTokenAmount(_preview!.dexyOut, variant.decimals)}'),
               _sheetRow(
                   'Redemption fee', '${_preview!.redemptionFeePct}%'),
+              if (redeemRoundingNote(_preview!, variant) case final note?) ...[
+                const SizedBox(height: 6),
+                Text(note, style: Theme.of(context).textTheme.bodySmall),
+              ],
             ],
           ] else if (_previewError != null)
             Text(_previewError!,
@@ -883,3 +887,24 @@ List<(String, String)> mintCostRows(DexyMintPreview p, {required String shortNam
 /// ERG per whole token from [state], or 0 when [state] is not for [variant].
 double mintRateFor(DexyState state, DexyVariant variant) =>
     state.variant == variant ? state.rates.ergPerToken : 0;
+
+/// Explains a redemption that returns fewer whole tokens than the share
+/// after the fee, which happens for DexyGold (no decimals). Null when the
+/// rounding loses less than a twentieth of a unit.
+String? redeemRoundingNote(DexyLpPreview p, DexyVariant variant) {
+  final exact = p.dexyShareExact;
+  final next = p.lpForNextUnit;
+  if (exact == null) return null;
+  var scale = 1.0;
+  for (var i = 0; i < variant.decimals; i++) {
+    scale *= 10;
+  }
+  final got = p.dexyOut / scale;
+  if (exact - got < 0.05 / scale) return null;
+  final unit = variant.decimals == 0 ? '1 ${variant.shortName}' : '${formatTokenAmount(1, variant.decimals)} ${variant.shortName}';
+  final base = 'Your share after the ${p.redemptionFeePct}% fee is '
+      '${exact.toStringAsFixed(variant.decimals + 2)} ${variant.shortName}; '
+      '${variant.shortName} is paid in steps of $unit, so ${formatTokenAmount(p.dexyOut, variant.decimals)} is returned and the rest stays in the pool.';
+  if (next == null || next <= p.lpAmount) return base;
+  return '$base Redeeming $next LP tokens would return ${formatTokenAmount(p.dexyOut + 1, variant.decimals)}.';
+}
