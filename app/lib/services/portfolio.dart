@@ -27,3 +27,23 @@ String portfolioSubtitle({required int wallets, required int watched, required i
   if (unknown > 0) parts.add('$unknown not loaded');
   return parts.join(' · ');
 }
+
+/// Addresses to query for a wallet that is not the active one.
+///
+/// Viewing a balance needs no authorisation: the addresses are public and
+/// were already recorded when this wallet was last unlocked. What a locked
+/// wallet cannot do is derive *new* addresses, so a payment to an address
+/// discovered after its last unlock is not counted until it is unlocked
+/// again. Everything already known refreshes live.
+List<String> lockedWalletAddresses({
+  required List<String> knownAddresses,
+  required String? displayAddress,
+}) {
+  final out = <String>[];
+  for (final a in knownAddresses) {
+    if (a.isNotEmpty && !out.contains(a)) out.add(a);
+  }
+  final d = displayAddress;
+  if (d != null && d.isNotEmpty && !out.contains(d)) out.add(d);
+  return out;
+}

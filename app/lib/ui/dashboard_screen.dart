@@ -310,20 +310,27 @@ class _DashboardScreenState extends State<DashboardScreen>
   Future<void> _refreshOtherBalances() async {
     final gen = ++_otherGeneration;
     final others = _wallets.where((w) => w.walletId != _walletId).toList();
-    // Last synced totals first: they cover every address of that wallet,
-    // where a live query of one address would not.
+    // Paint the last snapshot first so the list is never blank, then
+    // refresh it live. A locked wallet's addresses are public and already
+    // recorded, so seeing its balance needs no unlock; only deriving new
+    // addresses does.
     for (final w in others) {
       final known = await WalletDatabaseService.lastKnownBalance(w.walletId);
       if (known != null) _lastKnown[w.walletId] = known;
     }
     if (mounted) setState(() {});
     final results = await Future.wait(others.map((w) async {
-      if (_lastKnown.containsKey(w.walletId)) return null;
-      final addr = w.displayAddress;
-      if (addr == null || addr.isEmpty) return null;
+      final addresses = lockedWalletAddresses(
+        knownAddresses: _lastKnown[w.walletId]?.addresses ?? const [],
+        displayAddress: w.displayAddress,
+      );
+      if (addresses.isEmpty) return null;
       try {
-        return await walletService.getBalanceNano(addr, nodeUrl: networkController.activeUrl);
+        final each = await Future.wait(addresses.map((a) =>
+            walletService.getBalanceNano(a, nodeUrl: networkController.activeUrl)));
+        return each.fold<int>(0, (sum, v) => sum + v);
       } catch (_) {
+        // Keep the snapshot rather than showing a wrong zero.
         return null;
       }
     }));
@@ -1627,17 +1634,21 @@ class _DashboardScreenState extends State<DashboardScreen>
     final known = _lastKnown[w.walletId];
     // The active row must agree with the portfolio card above it: both are
     // display surfaces, so both include stealth funds.
+    final live = _otherBalances[w.walletId];
     final display = walletRowDisplay(
       isActive: isActive,
       spendableNano: _sync.balanceNano,
       stealthNano: _sync.stealthNano,
-      cachedNano: known?.balanceNano ?? _otherBalances[w.walletId],
+      cachedNano: live ?? known?.balanceNano,
       hidden: _balanceHidden,
     );
     final balance = display.balanceNano;
     final stealthNote = display.note;
     final addr = isActive ? (_sync.receiveAddress ?? w.displayAddress) : w.displayAddress;
-    final asOf = !isActive && known != null ? formatSyncAge(DateTime.now().subtract(known.age)) : null;
+    // Only a figure that could not be refreshed is dated.
+    final asOf = !isActive && live == null && known != null
+        ? formatSyncAge(DateTime.now().subtract(known.age))
+        : null;
     return InkWell(
       onTap: isActive ? null : () => _switchWallet(w.walletId),
       onLongPress: () async {
