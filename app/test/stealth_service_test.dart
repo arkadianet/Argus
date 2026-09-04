@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   _paginationTests();
   _displayConsistencyTests();
+  _stealthMetadataTests();
 }
 
 // Pagination and wallet-switch guards (CodeRabbit review on PR #58)
@@ -91,4 +92,27 @@ class _DisplayGateway implements WalletSyncGateway {
   bool get stealthScanEnabled => scanOn;
   @override
   dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
+}
+
+// Metadata for tokens seen only in stealth boxes (CodeRabbit, PR #58)
+void _stealthMetadataTests() {
+  test('a stealth-only token keeps its name and decimals', () {
+    final merged = mergeStealthTokens(
+      const [],
+      [TokenBalance(id: 'sig', amount: 1234, name: 'SigUSD', decimals: 2, stealthAmount: 1234)],
+    );
+    expect(merged.single.decimals, 2, reason: 'otherwise 12.34 renders as 1234');
+    expect(merged.single.name, 'SigUSD');
+    expect(merged.single.stealthAmount, 1234);
+  });
+
+  test('metadata from the spendable side is preserved when both sides hold it', () {
+    final merged = mergeStealthTokens(
+      [TokenBalance(id: 'sig', amount: 100, name: 'SigUSD', decimals: 2)],
+      [TokenBalance(id: 'sig', amount: 50, decimals: 2, stealthAmount: 50)],
+    );
+    expect(merged.single.amount, 150);
+    expect(merged.single.decimals, 2);
+    expect(merged.single.stealthAmount, 50);
+  });
 }

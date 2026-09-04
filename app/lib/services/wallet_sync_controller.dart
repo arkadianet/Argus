@@ -542,11 +542,28 @@ class WalletSyncController extends ChangeNotifier {
       return;
     }
     stealthNano = result.totalNanoErg;
+    // Names and decimals, so a token held only in stealth boxes is not
+    // rendered in base units and priced as if it had none. Hydration is
+    // best effort: on failure the raw amounts still show.
+    final raw = [
+      for (final t in result.tokens) {'id': t.id, 'amount': t.amount.toInt()},
+    ];
+    List<TokenBalance> hydrated;
+    try {
+      hydrated = await _gw.hydrateTokens(raw);
+    } catch (_) {
+      hydrated = const [];
+    }
+    final meta = {for (final t in hydrated) t.id: t};
     stealthTokens = [
       for (final t in result.tokens)
         TokenBalance(
           id: t.id,
           amount: t.amount.toInt(),
+          name: meta[t.id]?.name,
+          decimals: meta[t.id]?.decimals ?? 0,
+          emissionAmount: meta[t.id]?.emissionAmount,
+          iconUrl: meta[t.id]?.iconUrl,
           stealthAmount: t.amount.toInt(),
         ),
     ];
