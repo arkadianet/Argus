@@ -1,10 +1,13 @@
 import 'dart:convert';
 
 import 'package:argus_wallet/services/stealth_service.dart';
+import 'package:argus_wallet/services/wallet_service.dart';
+import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   _paginationTests();
+  _displayConsistencyTests();
 }
 
 // Pagination and wallet-switch guards (CodeRabbit review on PR #58)
@@ -55,4 +58,37 @@ void _paginationTests() {
     final body = jsonDecode(await fetchAllStealthBoxes('https://x', page: page));
     expect((body['items'] as List).length, boxPageLimit);
   });
+}
+
+// The dashboard's display model must include stealth everywhere at once
+void _displayConsistencyTests() {
+  test('display totals include stealth ERG and tokens', () {
+    final c = WalletSyncController(_DisplayGateway());
+    c.balanceNano = 4000000000;
+    c.stealthNano = 1000000000;
+    c.tokens = [TokenBalance(id: 'a', amount: 5, decimals: 0)];
+    c.stealthTokens = [TokenBalance(id: 'a', amount: 3, decimals: 0, stealthAmount: 3)];
+
+    expect(c.totalNanoWithStealth, 5000000000);
+    expect(c.balanceNano, 4000000000, reason: 'spendable is untouched');
+    final merged = c.displayTokens.firstWhere((t) => t.id == 'a');
+    expect(merged.amount, 8);
+    expect(merged.stealthAmount, 3);
+  });
+
+  test('an unknown stealth balance is reportable only while scanning is on', () {
+    final on = WalletSyncController(_DisplayGateway(scanOn: true));
+    expect(on.stealthScanning && on.stealthBalanceUnknown, isTrue);
+    final off = WalletSyncController(_DisplayGateway(scanOn: false));
+    expect(off.stealthScanning, isFalse);
+  });
+}
+
+class _DisplayGateway implements WalletSyncGateway {
+  _DisplayGateway({this.scanOn = true});
+  final bool scanOn;
+  @override
+  bool get stealthScanEnabled => scanOn;
+  @override
+  dynamic noSuchMethod(Invocation i) => super.noSuchMethod(i);
 }

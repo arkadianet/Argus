@@ -1207,8 +1207,11 @@ class _DashboardScreenState extends State<DashboardScreen>
             );
         final assets = <Widget>[
           AssetTile.erg(
-            balanceNano: _sync.balanceNano,
-            fiatText: networkController.fiatText(_sync.balanceNano),
+            // Display surface: stealth ERG is included, as it is in the
+            // portfolio card above and in the token tiles below. Send and
+            // coin selection still use _sync.balanceNano.
+            balanceNano: _sync.totalNanoWithStealth,
+            fiatText: networkController.fiatText(_sync.totalNanoWithStealth),
             hidden: _balanceHidden,
             onTap: () => Navigator.push(
                 context, fadeRoute(AssetsScreen(args: _displayArgs()))),
@@ -1525,6 +1528,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             : [
                 '$fiatValue ${networkController.fiatCode.toUpperCase()}',
                 if (value.unpriced + value.excluded > 0) '${value.unpriced + value.excluded} unpriced',
+                if (_sync.stealthScanning && _sync.stealthBalanceUnknown) 'stealth unknown',
                 if (tokenPricer.stale) 'prices stale',
               ].join(' · ');
     return SoftCard(

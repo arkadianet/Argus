@@ -196,6 +196,10 @@ class WalletSyncController extends ChangeNotifier {
   /// failed explorer call.
   bool stealthBalanceUnknown = true;
 
+  /// True when the user has the scan on, so an unknown stealth balance is
+  /// worth reporting rather than simply "not in use".
+  bool get stealthScanning => _gw.stealthScanEnabled;
+
   /// True when the stealth scan is switched off in Settings.
   bool get stealthScanEnabled => _gw.stealthScanEnabled;
 
