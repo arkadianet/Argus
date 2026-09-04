@@ -45,7 +45,13 @@ fn validate_pin(pin: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
-fn derive_kek(pin: &str, salt: &[u8], m_cost: u32, t_cost: u32, p_cost: u32) -> Result<[u8; KEY_LEN], CoreError> {
+fn derive_kek(
+    pin: &str,
+    salt: &[u8],
+    m_cost: u32,
+    t_cost: u32,
+    p_cost: u32,
+) -> Result<[u8; KEY_LEN], CoreError> {
     let params = Params::new(m_cost, t_cost, p_cost, Some(KEY_LEN))
         .map_err(|e| CoreError::Encryption(e.to_string()))?;
     let mut kek = [0u8; KEY_LEN];
@@ -64,8 +70,8 @@ impl PinWrappedKey {
         let mut salt = [0u8; SALT_LEN];
         OsRng.fill_bytes(&mut salt);
         let mut kek = derive_kek(pin, &salt, M_COST, T_COST, P_COST)?;
-        let cipher = Aes256Gcm::new_from_slice(&kek)
-            .map_err(|e| CoreError::Encryption(e.to_string()))?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&kek).map_err(|e| CoreError::Encryption(e.to_string()))?;
         kek.zeroize();
         let mut nonce = [0u8; NONCE_LEN];
         OsRng.fill_bytes(&mut nonce);
@@ -85,15 +91,16 @@ impl PinWrappedKey {
     pub fn unwrap(&self, pin: &str) -> Result<[u8; KEY_LEN], CoreError> {
         validate_pin(pin)?;
         let mut kek = derive_kek(pin, &self.salt, self.m_cost, self.t_cost, self.p_cost)?;
-        let cipher = Aes256Gcm::new_from_slice(&kek)
-            .map_err(|e| CoreError::Encryption(e.to_string()))?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&kek).map_err(|e| CoreError::Encryption(e.to_string()))?;
         kek.zeroize();
         let mut plain = cipher
             .decrypt(Nonce::from_slice(&self.nonce), self.ciphertext.as_ref())
             .map_err(|_| CoreError::Encryption("incorrect PIN".into()))?;
-        let key = plain.as_slice().try_into().map_err(|_| {
-            CoreError::Encryption("unwrap produced invalid key".into())
-        });
+        let key = plain
+            .as_slice()
+            .try_into()
+            .map_err(|_| CoreError::Encryption("unwrap produced invalid key".into()));
         plain.zeroize();
         key
     }

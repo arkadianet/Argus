@@ -169,7 +169,10 @@ pub fn build_sweep(
     for input in inputs {
         for asset in &input.assets {
             let amount = asset.amount.parse::<u128>().unwrap_or(0);
-            match token_totals.iter_mut().find(|(id, _)| *id == asset.token_id) {
+            match token_totals
+                .iter_mut()
+                .find(|(id, _)| *id == asset.token_id)
+            {
                 Some((_, total)) => *total += amount,
                 None => token_totals.push((asset.token_id.clone(), amount)),
             }
@@ -281,13 +284,15 @@ mod tests {
 
     #[test]
     fn scan_reports_our_own_boxes_with_totals() {
-        let mut items: Vec<serde_json::Value> =
-            serde_json::from_str::<serde_json::Value>(FIXTURE).unwrap()["items"]
-                .as_array()
-                .unwrap()
-                .clone();
+        let mut items: Vec<serde_json::Value> = serde_json::from_str::<serde_json::Value>(FIXTURE)
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .clone();
         let mine = my_box(1_500_000, &[("aa", "7")]);
-        items.push(serde_json::from_str(&serde_json::to_string(&mine.to_node_json()).unwrap()).unwrap());
+        items.push(
+            serde_json::from_str(&serde_json::to_string(&mine.to_node_json()).unwrap()).unwrap(),
+        );
         let json = serde_json::json!({ "items": items }).to_string();
 
         let v: serde_json::Value = serde_json::from_str(&scan(&secret(), &json).unwrap()).unwrap();
@@ -403,7 +408,10 @@ mod sweep_input_tests {
     #[test]
     fn an_overflowing_total_is_refused() {
         let err = super::build_sweep(
-            &[boxx("aa", &i64::MAX.to_string()), boxx("bb", &i64::MAX.to_string())],
+            &[
+                boxx("aa", &i64::MAX.to_string()),
+                boxx("bb", &i64::MAX.to_string()),
+            ],
             "0008cd0281a2e429779249d99048aa63152838b735174a4302d0f38dfbacbcb78524beb3",
             1,
             None,

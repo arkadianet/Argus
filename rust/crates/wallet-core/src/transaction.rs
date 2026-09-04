@@ -130,14 +130,23 @@ mod tests {
         let send = 1_000_000u64;
         let change = *value.as_u64() - send - fee;
 
-        let send_out = ErgoBoxCandidateBuilder::new(BoxValue::try_from(send).unwrap(), p2pk_tree(&recipient), 2000);
+        let send_out = ErgoBoxCandidateBuilder::new(
+            BoxValue::try_from(send).unwrap(),
+            p2pk_tree(&recipient),
+            2000,
+        );
         let send_out = send_out.build().unwrap();
-        let change_out =
-            ErgoBoxCandidateBuilder::new(BoxValue::try_from(change).unwrap(), p2pk_tree(&sender), 2000);
+        let change_out = ErgoBoxCandidateBuilder::new(
+            BoxValue::try_from(change).unwrap(),
+            p2pk_tree(&sender),
+            2000,
+        );
         let change_out = change_out.build().unwrap();
         let fee_out = ErgoBoxCandidateBuilder::new(
             BoxValue::try_from(fee).unwrap(),
-            ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS.script().unwrap(),
+            ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS
+                .script()
+                .unwrap(),
             2000,
         );
         let fee_out = fee_out.build().unwrap();
@@ -148,7 +157,8 @@ mod tests {
         )])
         .unwrap();
         let outputs = TxIoVec::from_vec(vec![send_out, change_out, fee_out]).unwrap();
-        let unsigned = UnsignedTransaction::new(inputs, None::<TxIoVec<DataInput>>, outputs).unwrap();
+        let unsigned =
+            UnsignedTransaction::new(inputs, None::<TxIoVec<DataInput>>, outputs).unwrap();
 
         let reduced = build_reduced_transaction(
             unsigned,
@@ -177,8 +187,7 @@ mod tests {
 
         // Someone pays our published stealth address.
         let tree_hex = stealth::build_payment_tree_hex(me.public_key()).unwrap();
-        let stealth_tree =
-            ErgoTree::sigma_parse_bytes(&hex::decode(&tree_hex).unwrap()).unwrap();
+        let stealth_tree = ErgoTree::sigma_parse_bytes(&hex::decode(&tree_hex).unwrap()).unwrap();
 
         let value = BoxValue::try_from(2_000_000_000u64).unwrap();
         let input_box = ErgoBox::new(
@@ -203,7 +212,9 @@ mod tests {
         .unwrap();
         let fee_out = ErgoBoxCandidateBuilder::new(
             BoxValue::try_from(fee).unwrap(),
-            ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS.script().unwrap(),
+            ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS
+                .script()
+                .unwrap(),
             2000,
         )
         .build()

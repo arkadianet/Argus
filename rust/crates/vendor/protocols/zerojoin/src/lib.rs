@@ -30,9 +30,11 @@
 //!   accounting the contracts enforce.
 //! - [`tx_builder`]: the five moves, as `Eip12UnsignedTx` plus prover inputs.
 //!
-//! There is no state machine, no persistence, no scanning and no UI yet: a
-//! later change adds the per-mix state machine, background advancement and
-//! the Mix screen. Nothing in Argus calls this crate yet.
+//! - [`mix`]: the per-mix state machine, pure and persisted without
+//!   secrets, plus recovery of live mixes from the seed.
+//!
+//! There is no persistence, scanning or UI here: the wallet layer feeds
+//! [`mix`] chain snapshots and applies what it decides.
 //!
 //! ## The operator dependency
 //!
@@ -45,6 +47,7 @@
 pub mod boxes;
 pub mod contracts;
 pub mod error;
+pub mod mix;
 pub mod round;
 pub mod secret;
 pub mod tx_builder;
@@ -61,6 +64,10 @@ pub use contracts::{
     HALF_MIX_ERGO_TREE_HEX, MIXING_TOKEN_ID, TOKEN_EMISSION_ERGO_TREE_HEX,
 };
 pub use error::ZeroJoinError;
+pub use mix::{
+    next_mix_id, observe, plan, recover, Applied, ChainView, MixEvent, MixPhase, MixState, Plan,
+    RingSpec, WaitReason, WithdrawReason,
+};
 pub use round::{MixTokenSplit, PairOrder};
 pub use secret::{MixSecret, Role, MIX_DERIVATION_BRANCH};
 pub use tx_builder::{

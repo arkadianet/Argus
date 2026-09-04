@@ -66,6 +66,10 @@ struct CachedPreparation {
     /// the DH-tuple secret they need is re-derived from the unlocked wallet
     /// at signing time and never stored.
     stealth_trees: Vec<String>,
+    /// Mixing inputs whose proof needs a mix secret. Like stealth, only a
+    /// recipe is kept: the secret is re-derived from the unlocked wallet at
+    /// signing time.
+    mix_proofs: Vec<crate::api_mix_impl::MixProofRecipe>,
     data_input_boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
     unsigned_tx: ergo_tx::Eip12UnsignedTx,
     miner_fee: i64,
@@ -92,8 +96,9 @@ fn store_preparation(prep: CachedPreparation) -> u64 {
 fn take_preparation(handle_id: u64, preparation_id: u64) -> Result<CachedPreparation, String> {
     let mut cache = recover(PREPARATIONS.lock());
     match cache.get(&preparation_id).map(|p| p.handle_id) {
-        None => Err(ArgusError::TxBuildFailed("unknown or stale send preparation".into())
-            .to_json_string()),
+        None => Err(
+            ArgusError::TxBuildFailed("unknown or stale send preparation".into()).to_json_string(),
+        ),
         Some(owner) if owner != handle_id => Err(ArgusError::TxBuildFailed(
             "send preparation does not match wallet".into(),
         )
@@ -119,20 +124,32 @@ fn apply_custom_fee(
         return Ok(current_fee);
     }
     let delta = custom_fee - current_fee;
-    let fee_idx = tx.outputs.iter().position(|o| {
-        o.ergo_tree == citadel_core::constants::MINER_FEE_ERGO_TREE
-    }).ok_or_else(|| ArgusError::TxBuildFailed("fee output not found in unsigned tx".into()).to_json_string())?;
+    let fee_idx = tx
+        .outputs
+        .iter()
+        .position(|o| o.ergo_tree == citadel_core::constants::MINER_FEE_ERGO_TREE)
+        .ok_or_else(|| {
+            ArgusError::TxBuildFailed("fee output not found in unsigned tx".into()).to_json_string()
+        })?;
 
-    let change_idx = tx.outputs.iter().rposition(|o| o.ergo_tree == change_ergo_tree)
-        .ok_or_else(|| ArgusError::TxBuildFailed("change output not found in unsigned tx".into()).to_json_string())?;
+    let change_idx = tx
+        .outputs
+        .iter()
+        .rposition(|o| o.ergo_tree == change_ergo_tree)
+        .ok_or_else(|| {
+            ArgusError::TxBuildFailed("change output not found in unsigned tx".into())
+                .to_json_string()
+        })?;
 
-    let change_val: i64 = tx.outputs[change_idx].value.parse::<i64>()
-        .map_err(|e| ArgusError::TxBuildFailed(format!("invalid change value: {e}")).to_json_string())?;
+    let change_val: i64 = tx.outputs[change_idx].value.parse::<i64>().map_err(|e| {
+        ArgusError::TxBuildFailed(format!("invalid change value: {e}")).to_json_string()
+    })?;
     let new_change = change_val - delta;
     if new_change < 0 {
         return Err(ArgusError::TxBuildFailed(format!(
             "custom fee {custom_fee} nanoERG exceeds available change {change_val} nanoERG"
-        )).to_json_string());
+        ))
+        .to_json_string());
     }
     tx.outputs[fee_idx].value = custom_fee.to_string();
     // The change box is the sole carrier of leftover tokens — never erase it.
@@ -140,7 +157,8 @@ fn apply_custom_fee(
     if new_change == 0 && carries_tokens {
         return Err(ArgusError::TxBuildFailed(
             "custom fee would remove the change box holding tokens; lower the fee".into(),
-        ).to_json_string());
+        )
+        .to_json_string());
     }
     let mut final_fee = custom_fee;
     if new_change == 0 || (!carries_tokens && new_change < MIN_BOX_VALUE_NANO) {
@@ -167,7 +185,11 @@ fn register_handle(handle: WalletHandle) -> u64 {
     }
 }
 
-fn with_handle<T>(handle_id: u64, op: &'static str, f: impl FnOnce(&WalletHandle) -> Result<T, String>) -> Result<T, String> {
+fn with_handle<T>(
+    handle_id: u64,
+    op: &'static str,
+    f: impl FnOnce(&WalletHandle) -> Result<T, String>,
+) -> Result<T, String> {
     let handles = recover(HANDLES.lock());
     let handle = handles
         .get(&handle_id)
@@ -232,12 +254,9 @@ fn session_json(
 
 fn open_wallet(mnemonic_phrase: String, passphrase: &str) -> Result<(u64, String, String), String> {
     let phrase = MnemonicPhrase::parse(mnemonic_phrase).map_err(err_str)?;
-    let encrypted = wallet_core::EncryptedSeed::encrypt(
-        &phrase
-            .to_seed(passphrase)
-            .map_err(err_str)?,
-    )
-    .map_err(err_str)?;
+    let encrypted =
+        wallet_core::EncryptedSeed::encrypt(&phrase.to_seed(passphrase).map_err(err_str)?)
+            .map_err(err_str)?;
     let json = serde_json::to_string(&encrypted.to_json().map_err(err_str)?)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
     let wrap_key = encrypted.wrap_key_hex();
@@ -255,10 +274,14 @@ pub fn wallet_create(mnemonic_phrase: String, passphrase: String) -> Result<Stri
 /// Restore from a Keystore blob plus the separately stored wrap key.
 /// v1 blobs that still embed `k` accept a null wrap key.
 #[flutter_rust_bridge::frb]
-pub fn wallet_restore(encrypted_seed_json: String, wrap_key: Option<String>) -> Result<u64, String> {
+pub fn wallet_restore(
+    encrypted_seed_json: String,
+    wrap_key: Option<String>,
+) -> Result<u64, String> {
     let json: serde_json::Value = serde_json::from_str(&encrypted_seed_json)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-    let encrypted = wallet_core::EncryptedSeed::from_json(&json, wrap_key.as_deref()).map_err(err_str)?;
+    let encrypted =
+        wallet_core::EncryptedSeed::from_json(&json, wrap_key.as_deref()).map_err(err_str)?;
     let mut seed_bytes = encrypted.decrypt().map_err(err_str)?;
     let handle = WalletHandle::restore_from_seed(&seed_bytes).map_err(err_str)?;
     use zeroize::Zeroize;
@@ -284,11 +307,16 @@ pub fn wallet_is_unlocked(handle_id: u64) -> Result<bool, String> {
 
 #[flutter_rust_bridge::frb]
 pub fn derive_address(handle_id: u64, index: u32) -> Result<String, String> {
-    with_handle(handle_id, "derive_address", |h| h.derive_address(index).map_err(err_str))
+    with_handle(handle_id, "derive_address", |h| {
+        h.derive_address(index).map_err(err_str)
+    })
 }
 
 #[flutter_rust_bridge::frb]
-pub fn create_encrypted_seed(mnemonic_phrase: String, passphrase: String) -> Result<String, String> {
+pub fn create_encrypted_seed(
+    mnemonic_phrase: String,
+    passphrase: String,
+) -> Result<String, String> {
     let phrase = MnemonicPhrase::parse(mnemonic_phrase).map_err(err_str)?;
     let mut seed = phrase.to_seed(&passphrase).map_err(err_str)?;
     let encrypted = wallet_core::EncryptedSeed::encrypt(&seed).map_err(err_str)?;
@@ -327,8 +355,8 @@ pub fn sign_reduced_transaction(
     reduced_tx_bytes: Vec<u8>,
 ) -> Result<String, String> {
     with_handle(handle_id, "sign_reduced_transaction", |handle| {
-        let reduced = wallet_core::transaction::deserialize_reduced(&reduced_tx_bytes)
-            .map_err(err_str)?;
+        let reduced =
+            wallet_core::transaction::deserialize_reduced(&reduced_tx_bytes).map_err(err_str)?;
         let signed_tx = handle.sign_reduced(reduced).map_err(err_str)?;
         serde_json::to_value(&signed_tx)
             .map(|v| v.to_string())
@@ -345,8 +373,8 @@ pub async fn describe_reduced_transaction(
     reduced_tx_bytes: Vec<u8>,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    let reduced = wallet_core::transaction::deserialize_reduced(&reduced_tx_bytes)
-        .map_err(err_str)?;
+    let reduced =
+        wallet_core::transaction::deserialize_reduced(&reduced_tx_bytes).map_err(err_str)?;
     // Input boxes are best effort: a node without the box (spent, pruned,
     // unreachable) still leaves the outputs and fee readable.
     let mut input_boxes = Vec::new();
@@ -440,9 +468,8 @@ pub fn looks_like_stealth_address(address: String) -> bool {
 /// two calls for the same recipient return unlinkable addresses.
 #[flutter_rust_bridge::frb]
 pub fn stealth_payment_address(stealth_address: String) -> Result<String, String> {
-    stealth::payment_address_for_stealth_address(&stealth_address).map_err(|e| {
-        ArgusError::InvalidAddress(e.to_string()).to_json_string()
-    })
+    stealth::payment_address_for_stealth_address(&stealth_address)
+        .map_err(|e| ArgusError::InvalidAddress(e.to_string()).to_json_string())
 }
 
 /// A fresh one-time address to send our own change to, with its script.
@@ -511,7 +538,10 @@ pub async fn prepare_stealth_sweep(
         .iter()
         .map(crate::api_stealth_impl::to_ergo_box)
         .collect::<Result<Vec<_>, _>>()?;
-    let stealth_trees = owned.iter().map(|b| b.ergo_tree.clone()).collect::<Vec<_>>();
+    let stealth_trees = owned
+        .iter()
+        .map(|b| b.ergo_tree.clone())
+        .collect::<Vec<_>>();
 
     let client = node_client(node_url.clone()).await?;
     let height = client
@@ -520,13 +550,13 @@ pub async fn prepare_stealth_sweep(
         .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
     let destination_tree = address_to_ergo_tree(&destination_address)
         .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-    let built =
-        crate::api_stealth_impl::build_sweep(&inputs, &destination_tree, height, fee_nano)?;
+    let built = crate::api_stealth_impl::build_sweep(&inputs, &destination_tree, height, fee_nano)?;
 
     let input_boxes = input_boxes_json(&inputs);
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         stealth_trees,
+        mix_proofs: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
@@ -615,11 +645,7 @@ pub async fn get_balance(address: String, node_url: Option<String>) -> Result<St
                             }
                         }
                     }
-                    delta = wallet_net::mempool::balance_delta(
-                        &txs,
-                        &tree,
-                        &confirmed_values,
-                    );
+                    delta = wallet_net::mempool::balance_delta(&txs, &tree, &confirmed_values);
                     // Pending token spends reduce the reported amounts under
                     // the same ownership and spent-set rules as the ERG delta.
                     let token_delta =
@@ -651,13 +677,20 @@ pub async fn get_balance(address: String, node_url: Option<String>) -> Result<St
 }
 
 #[flutter_rust_bridge::frb]
-pub async fn get_token_info(token_id: String, explorer_url: Option<String>) -> Result<String, String> {
+pub async fn get_token_info(
+    token_id: String,
+    explorer_url: Option<String>,
+) -> Result<String, String> {
     let mut info = wallet_net::client::get_token_info(&token_id, explorer_url.as_deref())
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
     // EIP-4 media: the issuance box (IndexedToken.boxId) carries the asset
     // type in R7 and a link in R9. Best effort — a plain token has neither.
-    if let Some(box_id) = info.get("boxId").and_then(|b| b.as_str()).map(str::to_string) {
+    if let Some(box_id) = info
+        .get("boxId")
+        .and_then(|b| b.as_str())
+        .map(str::to_string)
+    {
         if let Ok(client) = node_client(None).await {
             if let Ok(bx) = client.get_blockchain_box_by_id(&box_id).await {
                 let regs = bx.get("additionalRegisters");
@@ -787,12 +820,13 @@ pub async fn get_pending_transactions(
             .unwrap_or_default();
         // Tokens arriving at any wallet address (mempool outputs paying an
         // owned tree), so the activity list can render incoming amounts.
-        let mut received: std::collections::HashMap<String, u64> =
-            std::collections::HashMap::new();
+        let mut received: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
         if let Some(outs) = tx["outputs"].as_array() {
             for o in outs {
-                let tree_owned =
-                    o["ergoTree"].as_str().map(|t| trees.contains(t)).unwrap_or(false);
+                let tree_owned = o["ergoTree"]
+                    .as_str()
+                    .map(|t| trees.contains(t))
+                    .unwrap_or(false);
                 if !tree_owned {
                     continue;
                 }
@@ -932,7 +966,11 @@ pub async fn walk_singleton_lineage(
 ) -> Result<String, String> {
     let client = node_client(node_url).await?;
     let res = client
-        .track_singleton_lineage(&singleton_token_id, &starting_box_id, max_hops.unwrap_or(50))
+        .track_singleton_lineage(
+            &singleton_token_id,
+            &starting_box_id,
+            max_hops.unwrap_or(50),
+        )
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
     serde_json::to_string(&res)
@@ -991,7 +1029,13 @@ async fn gather_unspent(
     handle_id: u64,
     client: &ErgoNodeClient,
     addresses: &[String],
-) -> Result<(Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>, Vec<ergo_tx::Eip12InputBox>), String> {
+) -> Result<
+    (
+        Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+        Vec<ergo_tx::Eip12InputBox>,
+    ),
+    String,
+> {
     let mut boxes = Vec::new();
     let mut eip12 = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -1025,15 +1069,17 @@ async fn gather_unspent(
 fn input_boxes_json(boxes: &[ergo_tx::Eip12InputBox]) -> Vec<serde_json::Value> {
     boxes
         .iter()
-        .map(|b| serde_json::json!({
-            "box_id": b.box_id,
-            "value_nano_erg": b.value,
-            "creation_height": b.creation_height,
-            "assets": b.assets.iter().map(|a| serde_json::json!({
-                "token_id": a.token_id,
-                "amount": a.amount,
-            })).collect::<Vec<_>>(),
-        }))
+        .map(|b| {
+            serde_json::json!({
+                "box_id": b.box_id,
+                "value_nano_erg": b.value,
+                "creation_height": b.creation_height,
+                "assets": b.assets.iter().map(|a| serde_json::json!({
+                    "token_id": a.token_id,
+                    "amount": a.amount,
+                })).collect::<Vec<_>>(),
+            })
+        })
         .collect()
 }
 
@@ -1055,12 +1101,21 @@ fn filter_selected_inputs(
     inputs: Vec<ergo_tx::Eip12InputBox>,
     selected_box_ids: &[String],
 ) -> Result<Vec<ergo_tx::Eip12InputBox>, String> {
-    let selected_ids = selected_box_ids.iter().map(String::as_str).collect::<HashSet<_>>();
+    let selected_ids = selected_box_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
     if selected_ids.is_empty() {
         return Ok(inputs);
     }
-    let available_ids = inputs.iter().map(|input| input.box_id.as_str()).collect::<HashSet<_>>();
-    let mut missing = selected_ids.difference(&available_ids).copied().collect::<Vec<_>>();
+    let available_ids = inputs
+        .iter()
+        .map(|input| input.box_id.as_str())
+        .collect::<HashSet<_>>();
+    let mut missing = selected_ids
+        .difference(&available_ids)
+        .copied()
+        .collect::<Vec<_>>();
     missing.sort_unstable();
     if !missing.is_empty() {
         return Err(ArgusError::TxBuildFailed(format!(
@@ -1124,7 +1179,10 @@ async fn prepare_management<S>(
             custom_fee,
         )?;
         built.miner_fee = applied_fee;
-        built.change_erg = built.unsigned_tx.outputs.iter()
+        built.change_erg = built
+            .unsigned_tx
+            .outputs
+            .iter()
             .find(|o| o.ergo_tree == change_tree)
             .map(|o| o.value.parse::<i64>().unwrap_or(0))
             .unwrap_or(0);
@@ -1150,6 +1208,7 @@ async fn prepare_management<S>(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
@@ -1165,16 +1224,12 @@ async fn prepare_management<S>(
     })
 }
 
-
 /// True when `address` is one this wallet can spend from: a derived
 /// address, or a stealth script its stealth key owns.
 ///
 /// Stealth change is a payment to ourselves on a fresh one-time script, so
 /// it is not among the derived addresses and must be recognised this way.
-fn wallet_can_spend_change(
-    h: &wallet_core::WalletHandle,
-    address: &str,
-) -> Result<bool, String> {
+fn wallet_can_spend_change(h: &wallet_core::WalletHandle, address: &str) -> Result<bool, String> {
     if h.owns_address(address).map_err(err_str)? {
         return Ok(true);
     }
@@ -1307,9 +1362,17 @@ async fn prepare(
 
     let mut built = built;
     if let Some(custom_fee) = fee_nano {
-        let applied_fee = apply_custom_fee(&mut built.unsigned_tx, &change_tree, built.summary.miner_fee, custom_fee)?;
+        let applied_fee = apply_custom_fee(
+            &mut built.unsigned_tx,
+            &change_tree,
+            built.summary.miner_fee,
+            custom_fee,
+        )?;
         built.summary.miner_fee = applied_fee;
-        built.summary.change_erg = built.unsigned_tx.outputs.iter()
+        built.summary.change_erg = built
+            .unsigned_tx
+            .outputs
+            .iter()
             .find(|o| o.ergo_tree == change_tree)
             .map(|o| o.value.parse::<i64>().unwrap_or(0))
             .unwrap_or(0);
@@ -1382,6 +1445,7 @@ pub async fn prepare_send(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         stealth_trees,
+        mix_proofs: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
@@ -1417,13 +1481,20 @@ pub async fn prepare_consolidate(
     fee_nano: Option<i64>,
 ) -> Result<String, String> {
     let prepared = prepare_management(
-        handle_id, "consolidate", &spend_addresses, &selected_box_ids, &change_address,
-        spend_addresses.join(","), node_url, fee_nano,
+        handle_id,
+        "consolidate",
+        &spend_addresses,
+        &selected_box_ids,
+        &change_address,
+        spend_addresses.join(","),
+        node_url,
+        fee_nano,
         |inputs, change_tree, height| {
             if inputs.len() < 2 {
                 return Err(ArgusError::TxBuildFailed(
                     "Consolidation requires at least 2 input boxes".into(),
-                ).to_json_string());
+                )
+                .to_json_string());
             }
             let built = ergo_tx::build_consolidate_tx(inputs, change_tree, height)
                 .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
@@ -1435,7 +1506,8 @@ pub async fn prepare_consolidate(
                 summary: built.summary,
             })
         },
-    ).await?;
+    )
+    .await?;
     let summary = prepared.summary;
 
     serde_json::to_string(&serde_json::json!({
@@ -1466,8 +1538,14 @@ pub async fn prepare_split_erg(
         amount_per_box: amount_per_box_nano,
     };
     let prepared = prepare_management(
-        handle_id, "split_erg", &spend_addresses, &selected_box_ids, &change_address,
-        "no inputs available for split".into(), node_url, fee_nano,
+        handle_id,
+        "split_erg",
+        &spend_addresses,
+        &selected_box_ids,
+        &change_address,
+        "no inputs available for split".into(),
+        node_url,
+        fee_nano,
         move |inputs, change_tree, height| {
             let built = ergo_tx::build_split_tx(inputs, &mode, count as usize, change_tree, height)
                 .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
@@ -1479,7 +1557,8 @@ pub async fn prepare_split_erg(
                 summary: built.summary,
             })
         },
-    ).await?;
+    )
+    .await?;
     let summary = prepared.summary;
 
     serde_json::to_string(&serde_json::json!({
@@ -1514,8 +1593,14 @@ pub async fn prepare_split_token(
         erg_per_box: erg_per_box_nano,
     };
     let prepared = prepare_management(
-        handle_id, "split_token", &spend_addresses, &selected_box_ids, &change_address,
-        "no inputs available for split".into(), node_url, fee_nano,
+        handle_id,
+        "split_token",
+        &spend_addresses,
+        &selected_box_ids,
+        &change_address,
+        "no inputs available for split".into(),
+        node_url,
+        fee_nano,
         move |inputs, change_tree, height| {
             let built = ergo_tx::build_split_tx(inputs, &mode, count as usize, change_tree, height)
                 .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
@@ -1527,7 +1612,8 @@ pub async fn prepare_split_token(
                 summary: built.summary,
             })
         },
-    ).await?;
+    )
+    .await?;
     let summary = prepared.summary;
 
     serde_json::to_string(&serde_json::json!({
@@ -1554,14 +1640,16 @@ pub async fn prepare_restructure(
     node_url: Option<String>,
     fee_nano: Option<i64>,
 ) -> Result<String, String> {
-    let parsed_specs: Vec<serde_json::Value> = serde_json::from_str(&outputs_json)
-        .map_err(|e| ArgusError::SerializationError(format!("Invalid outputs JSON: {e}")).to_json_string())?;
+    let parsed_specs: Vec<serde_json::Value> =
+        serde_json::from_str(&outputs_json).map_err(|e| {
+            ArgusError::SerializationError(format!("Invalid outputs JSON: {e}")).to_json_string()
+        })?;
 
     let mut specs = Vec::with_capacity(parsed_specs.len());
     for s in parsed_specs {
-        let value = s["value_nano_erg"]
-            .as_i64()
-            .ok_or_else(|| ArgusError::TxBuildFailed("output missing value_nano_erg".into()).to_json_string())?;
+        let value = s["value_nano_erg"].as_i64().ok_or_else(|| {
+            ArgusError::TxBuildFailed("output missing value_nano_erg".into()).to_json_string()
+        })?;
         let tokens = s["tokens"]
             .as_array()
             .map(|arr| {
@@ -1577,8 +1665,14 @@ pub async fn prepare_restructure(
         specs.push(ergo_tx::RestructureOutputSpec { value, tokens });
     }
     let prepared = prepare_management(
-        handle_id, "restructure", &spend_addresses, &selected_box_ids, &change_address,
-        "no inputs available for restructure".into(), node_url, fee_nano,
+        handle_id,
+        "restructure",
+        &spend_addresses,
+        &selected_box_ids,
+        &change_address,
+        "no inputs available for restructure".into(),
+        node_url,
+        fee_nano,
         move |inputs, change_tree, height| {
             let built = ergo_tx::build_restructure_tx(inputs, &specs, change_tree, height)
                 .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
@@ -1590,7 +1684,8 @@ pub async fn prepare_restructure(
                 summary: built.summary,
             })
         },
-    ).await?;
+    )
+    .await?;
     let summary = prepared.summary;
 
     serde_json::to_string(&serde_json::json!({
@@ -1648,10 +1743,15 @@ async fn sign_prepared_tx(
             .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
         // Stealth inputs need a DH-tuple secret each, derived here and dropped
         // with the throwaway prover; ordinary sends take the unchanged path.
-        let signed_tx = if prep.stealth_trees.is_empty() {
+        let signed_tx = if prep.stealth_trees.is_empty() && prep.mix_proofs.is_empty() {
             handle.sign_reduced(reduced).map_err(err_str)?
         } else {
-            let extra = crate::api_stealth_impl::dht_secrets_for(handle, &prep.stealth_trees)?;
+            let mut extra = crate::api_stealth_impl::dht_secrets_for(handle, &prep.stealth_trees)?;
+            extra.extend(crate::api_mix_impl::secrets_for(
+                handle,
+                &prep.mix_proofs,
+                &prep.ergo_boxes,
+            )?);
             handle
                 .sign_reduced_with_secrets(reduced, extra)
                 .map_err(err_str)?
@@ -1727,19 +1827,23 @@ pub async fn prepare_send_multi(
         .to_json_string());
     }
 
-    let recipients: Vec<serde_json::Value> = serde_json::from_str(&recipients_json)
-        .map_err(|e| ArgusError::SerializationError(format!("Invalid recipients JSON: {e}")).to_json_string())?;
+    let recipients: Vec<serde_json::Value> =
+        serde_json::from_str(&recipients_json).map_err(|e| {
+            ArgusError::SerializationError(format!("Invalid recipients JSON: {e}")).to_json_string()
+        })?;
 
     if recipients.is_empty() {
-        return Err(ArgusError::TxBuildFailed("at least one recipient is required".into())
-            .to_json_string());
+        return Err(
+            ArgusError::TxBuildFailed("at least one recipient is required".into()).to_json_string(),
+        );
     }
 
     let mut parsed: Vec<ParsedRecipient> = Vec::new();
     let mut total_send_erg: i64 = 0;
     for rcpt in recipients {
-        let addr = rcpt["address"].as_str()
-            .ok_or_else(|| ArgusError::TxBuildFailed("recipient missing address".into()).to_json_string())?;
+        let addr = rcpt["address"].as_str().ok_or_else(|| {
+            ArgusError::TxBuildFailed("recipient missing address".into()).to_json_string()
+        })?;
         let token = resolve_send_token(
             rcpt["token_id"].as_str().map(|id| id.to_string()),
             rcpt["token_amount"].as_u64(),
@@ -1763,8 +1867,7 @@ pub async fn prepare_send_multi(
             .to_json_string());
         }
         total_send_erg = total_send_erg.checked_add(amount).ok_or_else(|| {
-            ArgusError::TxBuildFailed("recipient total amount out of range".into())
-                .to_json_string()
+            ArgusError::TxBuildFailed("recipient total amount out of range".into()).to_json_string()
         })?;
         parsed.push(ParsedRecipient {
             address: addr.to_string(),
@@ -1775,8 +1878,10 @@ pub async fn prepare_send_multi(
 
     let has_sent_tokens = parsed.iter().any(|rcpt| rcpt.token.is_some());
     if total_send_erg <= 0 && !has_sent_tokens {
-        return Err(ArgusError::TxBuildFailed("at least one recipient must receive ERG or tokens".into())
-            .to_json_string());
+        return Err(ArgusError::TxBuildFailed(
+            "at least one recipient must receive ERG or tokens".into(),
+        )
+        .to_json_string());
     }
 
     // Collect all recipient trees
@@ -1806,7 +1911,9 @@ pub async fn prepare_send_multi(
     let (mut boxes, mut eip12) = gather_unspent(handle_id, &client, &spend).await?;
     let stealth_owned = match stealth_boxes_json.as_deref() {
         Some(json) if !json.trim().is_empty() => {
-            let secret = with_handle(handle_id, "send_multi", |h| h.stealth_secret().map_err(err_str))?;
+            let secret = with_handle(handle_id, "send_multi", |h| {
+                h.stealth_secret().map_err(err_str)
+            })?;
             let all = stealth::parse_explorer_boxes(json)
                 .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
             stealth::detect_owned(&secret, &all)
@@ -1827,8 +1934,7 @@ pub async fn prepare_send_multi(
         if let Some((id, amt)) = &rcpt.token {
             let entry = needed_tokens.entry(id.clone()).or_insert(0);
             *entry = entry.checked_add(*amt).ok_or_else(|| {
-                ArgusError::TxBuildFailed("token requirement out of range".into())
-                    .to_json_string()
+                ArgusError::TxBuildFailed("token requirement out of range".into()).to_json_string()
             })?;
         }
     }
@@ -1842,14 +1948,16 @@ pub async fn prepare_send_multi(
         .and_then(|v| i64::checked_add(v, MIN_BOX_VALUE_NANO))
         .filter(|v| *v > 0)
         .ok_or_else(|| {
-            ArgusError::TxBuildFailed("recipient total amount out of range".into())
-                .to_json_string()
+            ArgusError::TxBuildFailed("recipient total amount out of range".into()).to_json_string()
         })? as u64;
     // Coin control, as in prepare_send: the chosen boxes are the whole
     // input set, never a starting point the selector may extend.
     let selected = match input_box_ids.as_deref() {
         Some(ids) => {
-            let token_ref = needed_tokens.iter().next().map(|(id, amt)| (id.as_str(), *amt));
+            let token_ref = needed_tokens
+                .iter()
+                .next()
+                .map(|(id, amt)| (id.as_str(), *amt));
             let exact = select_exact(&eip12, ids, required, token_ref)
                 .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
             // Every token this send delivers must be covered by the choice.
@@ -1873,11 +1981,18 @@ pub async fn prepare_send_multi(
         None => {
             // Same rule as the single send: try ordinary boxes alone, then
             // stealth alone, and only combine when neither can pay.
-            let is_stealth = |b: &ergo_tx::Eip12InputBox| {
-                stealth_owned.iter().any(|s| s.box_id == b.box_id)
-            };
-            let ordinary = eip12.iter().filter(|b| !is_stealth(b)).cloned().collect::<Vec<_>>();
-            let only_stealth = eip12.iter().filter(|b| is_stealth(b)).cloned().collect::<Vec<_>>();
+            let is_stealth =
+                |b: &ergo_tx::Eip12InputBox| stealth_owned.iter().any(|s| s.box_id == b.box_id);
+            let ordinary = eip12
+                .iter()
+                .filter(|b| !is_stealth(b))
+                .cloned()
+                .collect::<Vec<_>>();
+            let only_stealth = eip12
+                .iter()
+                .filter(|b| is_stealth(b))
+                .cloned()
+                .collect::<Vec<_>>();
             let attempt = |set: &[ergo_tx::Eip12InputBox]| {
                 if set.is_empty() {
                     return None;
@@ -1915,9 +2030,15 @@ pub async fn prepare_send_multi(
     let change_erg = built.summary.change_erg;
 
     // Get the ErgoBox representations for signing
-    let ergo_boxes = selected.iter().filter_map(|eip| {
-        boxes.iter().find(|b| b.box_id().to_string() == eip.box_id).cloned()
-    }).collect::<Vec<_>>();
+    let ergo_boxes = selected
+        .iter()
+        .filter_map(|eip| {
+            boxes
+                .iter()
+                .find(|b| b.box_id().to_string() == eip.box_id)
+                .cloned()
+        })
+        .collect::<Vec<_>>();
     if ergo_boxes.len() != selected.len() {
         return Err(ArgusError::TxBuildFailed("UTXO set mismatch".into()).to_json_string());
     }
@@ -1931,6 +2052,7 @@ pub async fn prepare_send_multi(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         stealth_trees,
+        mix_proofs: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx,
@@ -1940,14 +2062,17 @@ pub async fn prepare_send_multi(
         node_url,
     });
 
-    let recipient_summary: Vec<serde_json::Value> = parsed.iter().map(|rcpt| {
-        serde_json::json!({
-            "address": rcpt.address,
-            "amount_nano_erg": rcpt.amount_nano_erg,
-            "token_id": rcpt.token.as_ref().map(|(id, _)| id),
-            "token_amount": rcpt.token.as_ref().map(|(_, amt)| amt),
+    let recipient_summary: Vec<serde_json::Value> = parsed
+        .iter()
+        .map(|rcpt| {
+            serde_json::json!({
+                "address": rcpt.address,
+                "amount_nano_erg": rcpt.amount_nano_erg,
+                "token_id": rcpt.token.as_ref().map(|(id, _)| id),
+                "token_amount": rcpt.token.as_ref().map(|(_, amt)| amt),
+            })
         })
-    }).collect();
+        .collect();
 
     serde_json::to_string(&serde_json::json!({
         "preparation_id": preparation_id,
@@ -1984,9 +2109,9 @@ fn select_for_multi_send(
         }
 
         if total_erg >= required_erg {
-            let all_ok = needed_tokens.iter().all(|(id, need)| {
-                total_tokens.get(id).copied().unwrap_or(0) >= *need
-            });
+            let all_ok = needed_tokens
+                .iter()
+                .all(|(id, need)| total_tokens.get(id).copied().unwrap_or(0) >= *need);
             if all_ok {
                 break;
             }
@@ -2001,7 +2126,9 @@ fn select_for_multi_send(
     for (id, need) in needed_tokens {
         let have = total_tokens.get(id).copied().unwrap_or(0);
         if have < *need {
-            return Err(format!("insufficient tokens {id}: have {have}, need {need}"));
+            return Err(format!(
+                "insufficient tokens {id}: have {have}, need {need}"
+            ));
         }
     }
 
@@ -2051,8 +2178,15 @@ pub async fn dexy_preview_lp(
     lp_amount: i64,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    crate::api_dexy_impl::preview_lp(&variant, &action, erg_amount, dexy_amount, lp_amount, node_url)
-        .await
+    crate::api_dexy_impl::preview_lp(
+        &variant,
+        &action,
+        erg_amount,
+        dexy_amount,
+        lp_amount,
+        node_url,
+    )
+    .await
 }
 
 /// Fetch the selected user input boxes from the wallet, keyed by box id,
@@ -2085,12 +2219,9 @@ fn ordered_user_boxes(
         .collect::<HashMap<_, _>>();
     let mut out = Vec::with_capacity(selected_ids.len());
     for id in selected_ids {
-        out.push(
-            by_id
-                .get(id)
-                .cloned()
-                .ok_or_else(|| ArgusError::TxBuildFailed(format!("missing user UTXO {id}")).to_json_string())?,
-        );
+        out.push(by_id.get(id).cloned().ok_or_else(|| {
+            ArgusError::TxBuildFailed(format!("missing user UTXO {id}")).to_json_string()
+        })?);
     }
     Ok(out)
 }
@@ -2148,19 +2279,25 @@ pub async fn dexy_build_mint(
     spend_addresses: Vec<String>,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    let dexy_variant = variant.parse::<dexy::constants::DexyVariant>().map_err(|_| {
-        ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
-    })?;
+    let dexy_variant = variant
+        .parse::<dexy::constants::DexyVariant>()
+        .map_err(|_| {
+            ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
+        })?;
     let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
 
     if held_tokens < 0 {
         return Err(
-            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string()
+            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string(),
         );
     }
 
-    let (recipient_tree, change_tree) =
-        resolve_dexy_destinations(handle_id, "dexy_build_mint", &recipient_address, &change_address)?;
+    let (recipient_tree, change_tree) = resolve_dexy_destinations(
+        handle_id,
+        "dexy_build_mint",
+        &recipient_address,
+        &change_address,
+    )?;
 
     let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
     let caps = client
@@ -2182,7 +2319,8 @@ pub async fn dexy_build_mint(
     let height = client
         .current_height()
         .await
-        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?
+        as i32;
 
     let user_tree = change_tree.clone();
     let request = dexy::tx_builder::MintDexyRequest {
@@ -2222,6 +2360,7 @@ pub async fn dexy_build_mint(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
         ergo_boxes,
         data_input_boxes,
         unsigned_tx: built.unsigned_tx,
@@ -2266,9 +2405,11 @@ pub async fn dexy_build_swap(
     spend_addresses: Vec<String>,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    let dexy_variant = variant.parse::<dexy::constants::DexyVariant>().map_err(|_| {
-        ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
-    })?;
+    let dexy_variant = variant
+        .parse::<dexy::constants::DexyVariant>()
+        .map_err(|_| {
+            ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
+        })?;
     let swap_direction = match direction.as_str() {
         "erg_to_dexy" => dexy::tx_builder::SwapDirection::ErgToDexy,
         "dexy_to_erg" => dexy::tx_builder::SwapDirection::DexyToErg,
@@ -2283,12 +2424,16 @@ pub async fn dexy_build_swap(
 
     if held_tokens < 0 {
         return Err(
-            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string()
+            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string(),
         );
     }
 
-    let (recipient_tree, change_tree) =
-        resolve_dexy_destinations(handle_id, "dexy_build_swap", &recipient_address, &change_address)?;
+    let (recipient_tree, change_tree) = resolve_dexy_destinations(
+        handle_id,
+        "dexy_build_swap",
+        &recipient_address,
+        &change_address,
+    )?;
 
     let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
     let caps = client
@@ -2310,7 +2455,8 @@ pub async fn dexy_build_swap(
     let height = client
         .current_height()
         .await
-        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?
+        as i32;
     let user_tree = change_tree.clone();
     let request = dexy::tx_builder::SwapDexyRequest {
         variant: dexy_variant,
@@ -2345,6 +2491,7 @@ pub async fn dexy_build_swap(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
@@ -2392,9 +2539,11 @@ pub async fn dexy_build_lp_deposit(
     spend_addresses: Vec<String>,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    let dexy_variant = variant.parse::<dexy::constants::DexyVariant>().map_err(|_| {
-        ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
-    })?;
+    let dexy_variant = variant
+        .parse::<dexy::constants::DexyVariant>()
+        .map_err(|_| {
+            ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
+        })?;
     let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
 
     let (recipient_tree, change_tree) = resolve_dexy_destinations(
@@ -2409,14 +2558,10 @@ pub async fn dexy_build_lp_deposit(
         .require_capabilities()
         .await
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
-    let ctx = dexy::fetch::fetch_lp_tx_context(
-        &client,
-        &caps,
-        &ids,
-        dexy::fetch::LpAction::Deposit,
-    )
-    .await
-    .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    let ctx =
+        dexy::fetch::fetch_lp_tx_context(&client, &caps, &ids, dexy::fetch::LpAction::Deposit)
+            .await
+            .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
 
     let (all_boxes, eip12) =
         gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
@@ -2426,7 +2571,8 @@ pub async fn dexy_build_lp_deposit(
     let height = client
         .current_height()
         .await
-        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?
+        as i32;
     let user_tree = change_tree.clone();
     let request = dexy::tx_builder::LpDepositRequest {
         variant: dexy_variant,
@@ -2465,6 +2611,7 @@ pub async fn dexy_build_lp_deposit(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx: built.unsigned_tx,
@@ -2500,9 +2647,11 @@ pub async fn dexy_build_lp_redeem(
     spend_addresses: Vec<String>,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    let dexy_variant = variant.parse::<dexy::constants::DexyVariant>().map_err(|_| {
-        ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
-    })?;
+    let dexy_variant = variant
+        .parse::<dexy::constants::DexyVariant>()
+        .map_err(|_| {
+            ArgusError::Generic(format!("Invalid Dexy variant: {variant}")).to_json_string()
+        })?;
     let ids = crate::api_dexy_impl::ids_for(dexy_variant)?;
 
     let (recipient_tree, change_tree) = resolve_dexy_destinations(
@@ -2517,14 +2666,9 @@ pub async fn dexy_build_lp_redeem(
         .require_capabilities()
         .await
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
-    let ctx = dexy::fetch::fetch_lp_tx_context(
-        &client,
-        &caps,
-        &ids,
-        dexy::fetch::LpAction::Redeem,
-    )
-    .await
-    .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    let ctx = dexy::fetch::fetch_lp_tx_context(&client, &caps, &ids, dexy::fetch::LpAction::Redeem)
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
 
     let (all_boxes, eip) =
         gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
@@ -2534,7 +2678,8 @@ pub async fn dexy_build_lp_redeem(
     let height = client
         .current_height()
         .await
-        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?
+        as i32;
     let user_tree = change_tree.clone();
     let request = dexy::tx_builder::LpRedeemRequest {
         variant: dexy_variant,
@@ -2583,6 +2728,7 @@ pub async fn dexy_build_lp_redeem(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
         ergo_boxes,
         data_input_boxes,
         unsigned_tx: built.unsigned_tx,
@@ -2643,17 +2789,17 @@ pub async fn sigmausd_build(
 ) -> Result<String, String> {
     if held_tokens < 0 {
         return Err(
-            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string()
+            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string(),
         );
     }
     use citadel_core::BoxId;
     use sigmausd::fetch::fetch_tx_context;
     use sigmausd::state::{BankBoxData, OracleBoxData, SigmaUsdState};
     use sigmausd::tx_builder::{
-        build_mint_sigusd_tx, build_mint_sigrsv_tx, build_redeem_sigusd_tx,
-        build_redeem_sigrsv_tx, validate_mint_sigusd, validate_mint_sigrsv,
-        validate_redeem_sigusd, validate_redeem_sigrsv, MintSigRsvRequest, MintSigUsdRequest,
-        RedeemSigRsvRequest, RedeemSigUsdRequest, SigmaUsdAction,
+        build_mint_sigrsv_tx, build_mint_sigusd_tx, build_redeem_sigrsv_tx, build_redeem_sigusd_tx,
+        validate_mint_sigrsv, validate_mint_sigusd, validate_redeem_sigrsv, validate_redeem_sigusd,
+        MintSigRsvRequest, MintSigUsdRequest, RedeemSigRsvRequest, RedeemSigUsdRequest,
+        SigmaUsdAction,
     };
 
     let parsed_action = action.parse::<SigmaUsdAction>().map_err(|_| {
@@ -2682,7 +2828,8 @@ pub async fn sigmausd_build(
     let height = client
         .current_height()
         .await
-        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?
+        as i32;
 
     let fetched = fetch_tx_context(&client, &caps, &ids)
         .await
@@ -2797,6 +2944,7 @@ pub async fn sigmausd_build(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
         ergo_boxes,
         data_input_boxes,
         unsigned_tx: built.unsigned_tx,
@@ -2921,10 +3069,8 @@ pub async fn amm_quote_exact_output(
     let (pool, erg_in) =
         crate::api_amm_impl::best_pool_for_output(&set.pools, &to_token, output_amount as u64)
             .ok_or_else(|| {
-                ArgusError::Generic(
-                    "NO_POOL: no Spectrum pool can deliver this amount".into(),
-                )
-                .to_json_string()
+                ArgusError::Generic("NO_POOL: no Spectrum pool can deliver this amount".into())
+                    .to_json_string()
             })?;
     serde_json::to_string(&serde_json::json!({
         "pool_id": pool.pool_id,
@@ -2962,17 +3108,20 @@ pub async fn amm_build_swap(
     }
     if held_tokens < 0 {
         return Err(
-            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string()
+            ArgusError::Generic("held_tokens must not be negative".into()).to_json_string(),
         );
     }
-    let (recipient_tree, change_tree) =
-        resolve_dexy_destinations(handle_id, "amm_build_swap", &recipient_address, &change_address)?;
+    let (recipient_tree, change_tree) = resolve_dexy_destinations(
+        handle_id,
+        "amm_build_swap",
+        &recipient_address,
+        &change_address,
+    )?;
 
     let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
     // The pool's current box by its NFT: one indexed request, always fresh,
     // instead of re-downloading every Spectrum pool to locate it.
-    let (pool_owned, pool_ergo_box) =
-        crate::api_amm_impl::fetch_pool(&client, &pool_id).await?;
+    let (pool_owned, pool_ergo_box) = crate::api_amm_impl::fetch_pool(&client, &pool_id).await?;
     let pool = &pool_owned;
 
     // The builders derive the output from the pool box alone — the N2T path
@@ -2989,8 +3138,7 @@ pub async fn amm_build_swap(
         .get_box_creation_info(&pool_ergo_box.box_id().to_string())
         .await
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
-    let pool_box =
-        ergo_tx::Eip12InputBox::from_ergo_box(&pool_ergo_box, creation.0, creation.1);
+    let pool_box = ergo_tx::Eip12InputBox::from_ergo_box(&pool_ergo_box, creation.0, creation.1);
 
     let (all_boxes, eip12) =
         gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
@@ -3000,7 +3148,8 @@ pub async fn amm_build_swap(
     let height = client
         .current_height()
         .await
-        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?
+        as i32;
 
     let input = crate::api_amm_impl::swap_input(from_token.as_deref(), amount as u64);
     let built = amm::direct_swap::build_direct_swap_eip12_with_held(
@@ -3049,6 +3198,7 @@ pub async fn amm_build_swap(
     let preparation_id = store_preparation(CachedPreparation {
         handle_id,
         stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
         ergo_boxes,
         data_input_boxes: vec![],
         unsigned_tx: built.unsigned_tx,
@@ -3078,6 +3228,17 @@ pub async fn amm_build_swap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mix_miner_fee_defaults_and_refuses_below_the_minimum() {
+        assert_eq!(mix_miner_fee(None).unwrap(), TX_FEE_NANO);
+        assert_eq!(
+            mix_miner_fee(Some(TX_FEE_NANO + 1)).unwrap(),
+            TX_FEE_NANO + 1
+        );
+        assert!(mix_miner_fee(Some(TX_FEE_NANO - 1)).is_err());
+        assert!(mix_miner_fee(Some(-1)).is_err());
+    }
 
     const APPKIT: &str = "slow silly start wash bundle suffer bulb ancient height spin express remind today effort helmet";
 
@@ -3118,7 +3279,10 @@ mod tests {
 
         let blob = session["encrypted_seed_json"].as_str().unwrap().to_string();
         let wrap_key = session["wrap_key"].as_str().unwrap().to_string();
-        assert!(serde_json::from_str::<serde_json::Value>(&blob).unwrap().get("k").is_none());
+        assert!(serde_json::from_str::<serde_json::Value>(&blob)
+            .unwrap()
+            .get("k")
+            .is_none());
         wallet_lock(handle_id).unwrap();
         assert!(wallet_is_unlocked(handle_id).is_err());
 
@@ -3149,6 +3313,7 @@ mod tests {
         let id = store_preparation(CachedPreparation {
             handle_id: 7,
             stealth_trees: Vec::new(),
+            mix_proofs: Vec::new(),
             ergo_boxes: Vec::new(),
             data_input_boxes: Vec::new(),
             unsigned_tx: ergo_tx::Eip12UnsignedTx {
@@ -3173,10 +3338,7 @@ mod tests {
             &["9ccc".into(), " 9bbb ".into(), "9ccc".into(), "".into()],
         );
         assert_eq!(many, vec!["9bbb", "9ccc"]);
-        assert_eq!(
-            resolve_spend_addresses("9aaa", &[]),
-            vec!["9aaa"]
-        );
+        assert_eq!(resolve_spend_addresses("9aaa", &[]), vec!["9aaa"]);
     }
 
     #[test]
@@ -3196,11 +3358,18 @@ mod tests {
     fn pin_wrap_roundtrip() {
         let key = hex::encode([3u8; 32]);
         let json = wrap_key_with_pin(key.clone(), "123456".into()).unwrap();
-        assert_eq!(unwrap_key_with_pin(json.clone(), "123456".into()).unwrap(), key);
+        assert_eq!(
+            unwrap_key_with_pin(json.clone(), "123456".into()).unwrap(),
+            key
+        );
         assert!(unwrap_key_with_pin(json, "654321".into()).is_err());
     }
 
-    fn test_input_box(box_id: &str, value: &str, assets: Vec<(&str, &str)>) -> ergo_tx::Eip12InputBox {
+    fn test_input_box(
+        box_id: &str,
+        value: &str,
+        assets: Vec<(&str, &str)>,
+    ) -> ergo_tx::Eip12InputBox {
         serde_json::from_str(
             &serde_json::json!({
                 "boxId": box_id,
@@ -3242,10 +3411,356 @@ mod tests {
         ];
         let filtered = filter_selected_inputs(inputs.clone(), &["b3".into(), "b1".into()]).unwrap();
         assert_eq!(
-            filtered.iter().map(|input| input.box_id.as_str()).collect::<Vec<_>>(),
+            filtered
+                .iter()
+                .map(|input| input.box_id.as_str())
+                .collect::<Vec<_>>(),
             vec!["b1", "b3"]
         );
         let error = filter_selected_inputs(inputs, &["b1".into(), "missing".into()]).unwrap_err();
         assert!(error.contains("selected UTXO(s) not found: missing"));
     }
+}
+
+// ---------------------------------------------------------------------------
+// ZeroJoin mixing
+// ---------------------------------------------------------------------------
+//
+// The Dart side persists each mix's state JSON and fetches chain snapshots
+// (`{"half_boxes","full_boxes","fee_boxes","token_boxes","height"}`); these
+// calls decide, build, sign and broadcast. See `api_mix_impl`.
+
+fn mix_now(now_unix: i64) -> i64 {
+    if now_unix > 0 {
+        now_unix
+    } else {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0)
+    }
+}
+
+/// The miner fee for a mixing move: the caller's, or the default, refused
+/// below the network minimum here rather than by the node after signing.
+fn mix_miner_fee(fee_nano: Option<i64>) -> Result<i64, String> {
+    let fee = fee_nano.unwrap_or(TX_FEE_NANO);
+    if fee < TX_FEE_NANO {
+        return Err(ArgusError::TxBuildFailed(format!(
+            "custom fee {fee} nanoERG is below minimum {TX_FEE_NANO}"
+        ))
+        .to_json_string());
+    }
+    Ok(fee)
+}
+
+/// Rings, token levels and operator boxes in a snapshot. Pure.
+#[flutter_rust_bridge::frb]
+pub fn mix_rings(chain_json: String) -> Result<String, String> {
+    let view = crate::api_mix_impl::parse_view(&chain_json)?;
+    Ok(crate::api_mix_impl::rings_json(&view).to_string())
+}
+
+/// What a funding box must hold to enter `denomination` at `level`.
+#[flutter_rust_bridge::frb]
+pub fn mix_funding_requirement(
+    chain_json: String,
+    denomination: i64,
+    level: i32,
+    fee_nano: Option<i64>,
+) -> Result<String, String> {
+    let view = crate::api_mix_impl::parse_view(&chain_json)?;
+    let fee = mix_miner_fee(fee_nano)?;
+    Ok(crate::api_mix_impl::funding_requirement(&view, denomination, level, fee)?.to_string())
+}
+
+/// A fresh mix state, not yet in the pool. `destination_address` is where
+/// the money goes when the mix ends: a P2PK address or a stealth payment
+/// address of this wallet's own.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub fn mix_new_state(
+    mix_id: u32,
+    denomination: i64,
+    token_id: Option<String>,
+    token_amount: Option<i64>,
+    level: i32,
+    rounds: u32,
+    destination_address: String,
+    now_unix: i64,
+) -> Result<String, String> {
+    let tree = address_to_ergo_tree(&destination_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    let ring = zerojoin::RingSpec {
+        value: denomination,
+        token_id,
+        token_amount,
+    };
+    let state = zerojoin::MixState::new(mix_id, ring, level, rounds, tree, mix_now(now_unix));
+    crate::api_mix_impl::state_json(&state)
+}
+
+/// The next move for a mix, as JSON. Pure: builds nothing.
+#[flutter_rust_bridge::frb]
+pub fn mix_plan(
+    state_json: String,
+    chain_json: String,
+    own_half_box_ids: Vec<String>,
+) -> Result<String, String> {
+    let state = crate::api_mix_impl::parse_state(&state_json)?;
+    let view = crate::api_mix_impl::parse_view(&chain_json)?;
+    serde_json::to_string(&zerojoin::plan(&state, &view, &own_half_box_ids))
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Fold the snapshot into the state: a half-mix box of ours that someone
+/// joined becomes our full-mix box. Returns the (possibly unchanged) state.
+#[flutter_rust_bridge::frb]
+pub fn mix_observe(
+    handle_id: u64,
+    state_json: String,
+    chain_json: String,
+    now_unix: i64,
+) -> Result<String, String> {
+    let state = crate::api_mix_impl::parse_state(&state_json)?;
+    let view = crate::api_mix_impl::parse_view(&chain_json)?;
+    let g = with_handle(handle_id, "mix_observe", |h| {
+        h.mix_secret(state.mix_id, state.round)
+            .map(|s| *s.public_key())
+            .map_err(err_str)
+    })?;
+    let next = zerojoin::observe(state, &view, &g, mix_now(now_unix));
+    crate::api_mix_impl::state_json(&next)
+}
+
+/// Rebuild every live mix of this wallet from the seed and a snapshot that
+/// holds every unspent half- and full-mix box. Returns a JSON array of
+/// states with no destination set.
+#[flutter_rust_bridge::frb]
+pub fn mix_recover(handle_id: u64, chain_json: String, now_unix: i64) -> Result<String, String> {
+    let view = crate::api_mix_impl::parse_view(&chain_json)?;
+    let states = with_handle(handle_id, "mix_recover", |h| {
+        Ok(zerojoin::recover(
+            &view,
+            |m, r| h.mix_secret(m, r).ok(),
+            mix_now(now_unix),
+        ))
+    })?;
+    serde_json::to_string(&states)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Prepare a mix's entry transaction from one of the wallet's own boxes.
+/// Confirm it with `send_erg`; persist `next_state` only once that
+/// succeeds.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn mix_prepare_entry(
+    handle_id: u64,
+    state_json: String,
+    chain_json: String,
+    funding_address: String,
+    funding_box_id: String,
+    own_half_box_ids: Vec<String>,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+    now_unix: i64,
+) -> Result<String, String> {
+    let state = crate::api_mix_impl::parse_state(&state_json)?;
+    let view = crate::api_mix_impl::parse_view(&chain_json)?;
+    let miner_fee = mix_miner_fee(fee_nano)?;
+    let client = node_client(node_url.clone()).await?;
+    let (_, unspent) = gather_unspent(handle_id, &client, &[funding_address]).await?;
+    let funding = unspent
+        .iter()
+        .find(|b| b.box_id == funding_box_id)
+        .ok_or_else(|| {
+            ArgusError::NoUtxos("the funding box is not unspent at that address".into())
+                .to_json_string()
+        })?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+
+    let built = with_handle(handle_id, "mix_prepare_entry", |h| {
+        crate::api_mix_impl::build_entry(
+            h,
+            &state,
+            &view,
+            funding,
+            &own_half_box_ids,
+            miner_fee,
+            height,
+        )
+    })?;
+    let ergo_boxes = built
+        .inputs
+        .iter()
+        .map(crate::api_mix_impl::to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let input_boxes = input_boxes_json(&built.inputs);
+    let summary = built.tx.summary.clone();
+    let next_state = state.after(built.applied, "", mix_now(now_unix));
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: built.recipes,
+        ergo_boxes,
+        data_input_boxes: Vec::new(),
+        unsigned_tx: built.tx.unsigned_tx,
+        miner_fee,
+        change_erg: 0,
+        recipient_erg: summary.denomination,
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "action": summary.action,
+        "summary": summary,
+        "next_state": next_state,
+        "input_boxes": input_boxes,
+        "miner_fee": miner_fee,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Reduce, sign and broadcast one built move. Returns the transaction id.
+async fn broadcast_mix_move(
+    handle_id: u64,
+    built: crate::api_mix_impl::BuiltMove,
+    client: &ErgoNodeClient,
+    op: &'static str,
+) -> Result<String, String> {
+    let ergo_boxes = built
+        .inputs
+        .iter()
+        .map(crate::api_mix_impl::to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let state_context = client
+        .get_state_context()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    let reduced_bytes = reduce_transaction_with_context(
+        &built.tx.unsigned_tx,
+        ergo_boxes,
+        Vec::new(),
+        &state_context,
+    )
+    .map_err(|e| ArgusError::TxReductionFailed(e.to_string()).to_json_string())?;
+    let extra: Vec<_> = built
+        .tx
+        .prover_inputs
+        .into_iter()
+        .map(|p| p.into_secret_key())
+        .collect();
+    let tx_json = with_handle(handle_id, op, |handle| {
+        let reduced = ReducedTransaction::sigma_parse_bytes(&reduced_bytes)
+            .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+        let signed = handle
+            .sign_reduced_with_secrets(reduced, extra)
+            .map_err(err_str)?;
+        serde_json::to_value(&signed)
+            .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+    })?;
+    client
+        .submit_transaction(&tx_json)
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())
+}
+
+fn mix_move_result(
+    state: zerojoin::MixState,
+    applied: zerojoin::Applied,
+    summary: zerojoin::MixTxSummary,
+    tx_id: &str,
+    now: i64,
+) -> Result<String, String> {
+    let next = state.after(applied, tx_id, now);
+    serde_json::to_string(&serde_json::json!({
+        "state": next,
+        "action": summary.action,
+        "summary": summary,
+        "tx_id": tx_id,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Advance a mix already in the pool by one move: remix as Bob or Alice,
+/// or withdraw once the rounds are done. Broadcasts and returns the new
+/// state, or `{"state": <unchanged>, "action": "wait", "reason": …}` when
+/// there is nothing to do yet.
+#[flutter_rust_bridge::frb]
+pub async fn mix_advance(
+    handle_id: u64,
+    state_json: String,
+    chain_json: String,
+    own_half_box_ids: Vec<String>,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+    now_unix: i64,
+) -> Result<String, String> {
+    let now = mix_now(now_unix);
+    let state = crate::api_mix_impl::parse_state(&state_json)?;
+    let view = crate::api_mix_impl::parse_view(&chain_json)?;
+    let miner_fee = mix_miner_fee(fee_nano)?;
+    let client = node_client(node_url).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+
+    let built = with_handle(handle_id, "mix_advance", |h| {
+        crate::api_mix_impl::build_move(h, &state, &view, &own_half_box_ids, miner_fee, height)
+    })?;
+    let Some(built) = built else {
+        let plan = zerojoin::plan(&state, &view, &own_half_box_ids);
+        return serde_json::to_string(&serde_json::json!({
+            "state": state,
+            "action": "wait",
+            "plan": plan,
+        }))
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string());
+    };
+    let applied = built.applied.clone();
+    let summary = built.tx.summary.clone();
+    let tx_id = broadcast_mix_move(handle_id, built, &client, "mix_advance").await?;
+    mix_move_result(state, applied, summary, &tx_id, now)
+}
+
+/// Take a mix's money out now: withdraw a full-mix box or reclaim a
+/// half-mix box nobody joined. `destination_address` overrides the one
+/// chosen at the start (required for a recovered mix, which has none).
+#[flutter_rust_bridge::frb]
+pub async fn mix_leave(
+    handle_id: u64,
+    state_json: String,
+    chain_json: String,
+    destination_address: Option<String>,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+    now_unix: i64,
+) -> Result<String, String> {
+    let now = mix_now(now_unix);
+    let state = crate::api_mix_impl::parse_state(&state_json)?;
+    let view = crate::api_mix_impl::parse_view(&chain_json)?;
+    let miner_fee = mix_miner_fee(fee_nano)?;
+    let destination = match destination_address {
+        Some(a) => {
+            address_to_ergo_tree(&a).map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?
+        }
+        None => state.destination_ergo_tree.clone(),
+    };
+    let client = node_client(node_url).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    let built = with_handle(handle_id, "mix_leave", |h| {
+        crate::api_mix_impl::build_leave(h, &state, &view, &destination, miner_fee, height)
+    })?;
+    let applied = built.applied.clone();
+    let summary = built.tx.summary.clone();
+    let tx_id = broadcast_mix_move(handle_id, built, &client, "mix_leave").await?;
+    mix_move_result(state, applied, summary, &tx_id, now)
 }

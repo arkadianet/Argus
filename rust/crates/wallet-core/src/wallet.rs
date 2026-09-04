@@ -57,8 +57,8 @@ impl WalletHandle {
     }
 
     fn from_seed(seed: &[u8; 64]) -> Result<Self, CoreError> {
-        let ext_secret_key = ExtSecretKey::derive_master(*seed)
-            .map_err(|e| CoreError::Derivation(e.to_string()))?;
+        let ext_secret_key =
+            ExtSecretKey::derive_master(*seed).map_err(|e| CoreError::Derivation(e.to_string()))?;
         let mut unlocked = UnlockedWallet {
             wallet: Wallet::from_secrets(Vec::new()),
             ext_secret_key,
@@ -181,6 +181,17 @@ impl WalletHandle {
         let guard = recover(self.inner.lock());
         let unlocked = guard.as_ref().ok_or(CoreError::WalletLocked)?;
         stealth::StealthSecret::derive(&unlocked.ext_secret_key)
+            .map_err(|e| CoreError::Stealth(e.to_string()))
+    }
+
+    /// The secret for one mix round, derived on demand from the seed.
+    ///
+    /// Never cached: a mix secret that reached a log line or a database
+    /// row would let its holder spend the box it guards.
+    pub fn mix_secret(&self, mix_id: u32, round: u32) -> Result<zerojoin::MixSecret, CoreError> {
+        let guard = recover(self.inner.lock());
+        let unlocked = guard.as_ref().ok_or(CoreError::WalletLocked)?;
+        zerojoin::MixSecret::derive(&unlocked.ext_secret_key, mix_id, round)
             .map_err(|e| CoreError::Stealth(e.to_string()))
     }
 

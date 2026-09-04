@@ -41,8 +41,11 @@ const MNEMONIC: &str = "slow silly start wash bundle suffer bulb ancient height 
 
 /// A deterministic secret for `(mix_id, round)` from a fixed test mnemonic.
 pub fn test_secret(mix_id: u32, round: u32) -> MixSecret {
-    let root = ExtSecretKey::derive_master(Mnemonic::to_seed(MNEMONIC, "")).unwrap();
-    MixSecret::derive(&root, mix_id, round).unwrap()
+    // The seed stretch is slow by design; recovery tests derive hundreds.
+    static ROOT: std::sync::OnceLock<ExtSecretKey> = std::sync::OnceLock::new();
+    let root =
+        ROOT.get_or_init(|| ExtSecretKey::derive_master(Mnemonic::to_seed(MNEMONIC, "")).unwrap());
+    MixSecret::derive(root, mix_id, round).unwrap()
 }
 
 fn fake_input(

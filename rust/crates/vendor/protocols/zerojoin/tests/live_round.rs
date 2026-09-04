@@ -435,3 +435,52 @@ async fn zerojoin_live_rings() {
     }
     let _ = Eip12Asset::new("x", 1);
 }
+
+// ---------------------------------------------------------------------------
+// The engine's snapshot, from live boxes
+// ---------------------------------------------------------------------------
+
+/// The Dart side will build exactly this JSON from explorer pages; the
+/// engine must read the live pool through it and decide something sane.
+#[tokio::test]
+#[ignore = "needs the network"]
+async fn zerojoin_live_chain_view() {
+    let half = unspent_by_tree(zerojoin::HALF_MIX_ERGO_TREE_HEX, 500).await;
+    let fee = unspent_by_tree(zerojoin::FEE_EMISSION_ERGO_TREE_HEX, 50).await;
+    let token = unspent_by_tree(zerojoin::TOKEN_EMISSION_ERGO_TREE_HEX, 50).await;
+    let height = node_client().await.current_height().await.expect("height");
+    let json = serde_json::json!({
+        "half_boxes": half,
+        "full_boxes": [],
+        "fee_boxes": fee,
+        "token_boxes": token,
+        "height": height,
+    })
+    .to_string();
+    let view = zerojoin::ChainView::parse(&json).expect("live view parses");
+    assert_eq!(view.unreadable, 0, "every live pool box parses");
+    assert!(view.fee_box().is_some(), "operator fee box is live");
+    let token_box = view.token_box().expect("operator token box is live");
+    let level = token_box.levels()[0];
+
+    // A fresh 1 ERG mix: joins a waiting stranger if there is one, else
+    // posts a half box. Either way it does not wait.
+    let state = zerojoin::MixState::new(
+        0,
+        zerojoin::RingSpec::erg(1_000_000_000),
+        level,
+        3,
+        "0008cd0247997e4390471ab3fe271ad4ad1ad485570c50326ff671a57722ee88e1fa4582".into(),
+        1,
+    );
+    let plan = zerojoin::plan(&state, &view, &[]);
+    eprintln!("live plan for a 1 ERG entry at level {level}: {plan:?}");
+    assert!(matches!(
+        plan,
+        zerojoin::Plan::EnterAsAlice | zerojoin::Plan::EnterAsBob { .. }
+    ));
+
+    // Nothing of ours is on chain under the test seed.
+    let recovered = zerojoin::recover(&view, |m, r| Some(secret(m, r)), 1);
+    assert!(recovered.is_empty());
+}
