@@ -172,3 +172,34 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod decompile_check {
+    use ergo_lib::ergotree_ir::ergo_tree::ErgoTree;
+    use ergo_lib::ergotree_ir::mir::expr::Expr;
+    use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
+
+    /// The stealth script is a bare `proveDHTuple` over four group
+    /// elements: no operator address, no fee output, no token requirement.
+    /// Every fee ErgoMixer charges on a stealth withdrawal is applied by its
+    /// backend when it builds the transaction, not demanded by the box, so a
+    /// wallet spending these boxes owes nothing to anyone.
+    #[test]
+    fn stealth_script_requires_only_a_dh_proof() {
+        let body = include_str!("../test/fixtures/live_ergomixer_stealth_boxes.json");
+        let v: serde_json::Value = serde_json::from_str(body).unwrap();
+        for item in v["items"].as_array().unwrap() {
+            let hex = item["ergoTree"].as_str().unwrap();
+            let tree = ErgoTree::sigma_parse_bytes(&hex::decode(hex).unwrap()).unwrap();
+            // Four group elements and nothing else to parameterise.
+            assert_eq!(tree.constants_len().unwrap(), 4);
+            // The whole proposition is the DH tuple; anything else in the
+            // root would be a spending condition we do not control.
+            assert!(
+                matches!(tree.proposition().unwrap(), Expr::CreateProveDhTuple(_)),
+                "stealth box {} carries more than a DH proof",
+                item["boxId"]
+            );
+        }
+    }
+}
