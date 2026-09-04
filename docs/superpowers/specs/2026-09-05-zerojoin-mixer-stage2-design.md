@@ -12,7 +12,7 @@ token) moving through `rounds_target` rounds and landing at a destination
 the user chose when they started it. The wallet drives it; nothing else
 does. Its life:
 
-```
+```text
 Pending ──entry tx──► HalfPosted ──someone Bobs it──► FullOwned(Alice)
                   └──► FullOwned(Bob)                       │
                                                             ▼

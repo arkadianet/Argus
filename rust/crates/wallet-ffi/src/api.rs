@@ -3229,6 +3229,17 @@ pub async fn amm_build_swap(
 mod tests {
     use super::*;
 
+    #[test]
+    fn mix_miner_fee_defaults_and_refuses_below_the_minimum() {
+        assert_eq!(mix_miner_fee(None).unwrap(), TX_FEE_NANO);
+        assert_eq!(
+            mix_miner_fee(Some(TX_FEE_NANO + 1)).unwrap(),
+            TX_FEE_NANO + 1
+        );
+        assert!(mix_miner_fee(Some(TX_FEE_NANO - 1)).is_err());
+        assert!(mix_miner_fee(Some(-1)).is_err());
+    }
+
     const APPKIT: &str = "slow silly start wash bundle suffer bulb ancient height spin express remind today effort helmet";
 
     #[test]
@@ -3430,6 +3441,19 @@ fn mix_now(now_unix: i64) -> i64 {
     }
 }
 
+/// The miner fee for a mixing move: the caller's, or the default, refused
+/// below the network minimum here rather than by the node after signing.
+fn mix_miner_fee(fee_nano: Option<i64>) -> Result<i64, String> {
+    let fee = fee_nano.unwrap_or(TX_FEE_NANO);
+    if fee < TX_FEE_NANO {
+        return Err(ArgusError::TxBuildFailed(format!(
+            "custom fee {fee} nanoERG is below minimum {TX_FEE_NANO}"
+        ))
+        .to_json_string());
+    }
+    Ok(fee)
+}
+
 /// Rings, token levels and operator boxes in a snapshot. Pure.
 #[flutter_rust_bridge::frb]
 pub fn mix_rings(chain_json: String) -> Result<String, String> {
@@ -3446,7 +3470,7 @@ pub fn mix_funding_requirement(
     fee_nano: Option<i64>,
 ) -> Result<String, String> {
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
-    let fee = fee_nano.unwrap_or(TX_FEE_NANO);
+    let fee = mix_miner_fee(fee_nano)?;
     Ok(crate::api_mix_impl::funding_requirement(&view, denomination, level, fee)?.to_string())
 }
 
@@ -3544,7 +3568,7 @@ pub async fn mix_prepare_entry(
 ) -> Result<String, String> {
     let state = crate::api_mix_impl::parse_state(&state_json)?;
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
-    let miner_fee = fee_nano.unwrap_or(TX_FEE_NANO);
+    let miner_fee = mix_miner_fee(fee_nano)?;
     let client = node_client(node_url.clone()).await?;
     let (_, unspent) = gather_unspent(handle_id, &client, &[funding_address]).await?;
     let funding = unspent
@@ -3679,7 +3703,7 @@ pub async fn mix_advance(
     let now = mix_now(now_unix);
     let state = crate::api_mix_impl::parse_state(&state_json)?;
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
-    let miner_fee = fee_nano.unwrap_or(TX_FEE_NANO);
+    let miner_fee = mix_miner_fee(fee_nano)?;
     let client = node_client(node_url).await?;
     let height = client
         .current_height()
@@ -3720,7 +3744,7 @@ pub async fn mix_leave(
     let now = mix_now(now_unix);
     let state = crate::api_mix_impl::parse_state(&state_json)?;
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
-    let miner_fee = fee_nano.unwrap_or(TX_FEE_NANO);
+    let miner_fee = mix_miner_fee(fee_nano)?;
     let destination = match destination_address {
         Some(a) => {
             address_to_ergo_tree(&a).map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?
