@@ -293,9 +293,16 @@ class _SendScreenState extends State<SendScreen> {
   }
 
   void _applyMaxErg() {
-    final spendable = _args.spendableNano;
+    final spendable = availableNano(
+      from: _spendFrom,
+      publicNano: _args.spendableNano,
+      stealthNano: walletSyncController.stealthNano,
+      stealthUnknown: walletSyncController.stealthBalanceUnknown,
+    );
     if (spendable == null) {
-      _snack('Spendable balance is unknown');
+      _snack(_spendFrom.usesStealth && walletSyncController.stealthBalanceUnknown
+          ? 'Stealth balance is unknown until the scan succeeds'
+          : 'Spendable balance is unknown');
       return;
     }
     final max = spendable - minerFeeNano - argusFeeNano - minBoxNano;
@@ -434,7 +441,12 @@ class _SendScreenState extends State<SendScreen> {
       }
       if (!mounted) return;
     }
-    final spendable = args.spendableNano;
+    final spendable = availableNano(
+      from: _spendFrom,
+      publicNano: args.spendableNano,
+      stealthNano: walletSyncController.stealthNano,
+      stealthUnknown: walletSyncController.stealthBalanceUnknown,
+    );
     final fee = parseErgToNano(_feeCtrl.text) ?? minerFeeNano;
     if (spendable != null && totalNanoErg(recipients) + fee + argusFeeNano > spendable) {
       _snack('Amount plus fee exceeds your ${formatErg(spendable, maxFrac: 4)}');
@@ -496,6 +508,18 @@ class _SendScreenState extends State<SendScreen> {
   /// the recipient; ERG change returns to the wallet's change address.
   Future<void> _sendViaRoute() async {
     final buy = _selectedBuy!;
+    // The router builds its own transactions from address-derived inputs
+    // and has no way to carry a stealth secret, so it must never be
+    // reached while a stealth pocket is selected.
+    if (_spendFrom.usesStealth) {
+      showErrorSheet(
+        context,
+        title: 'Buying a token needs the public pocket',
+        message: 'Routes are built from your ordinary boxes. Switch Spend '
+            'from to Public, or sweep your stealth funds first.',
+      );
+      return;
+    }
     final args = _args;
     final spend = _selectedSpendAddresses.isNotEmpty
         ? _selectedSpendAddresses.toList()
@@ -769,8 +793,13 @@ class _SendScreenState extends State<SendScreen> {
       from: _spendFrom,
       publicNano: _args.spendableNano,
       stealthNano: walletSyncController.stealthNano,
+      stealthUnknown: walletSyncController.stealthBalanceUnknown,
     );
-    if (available == null) return null;
+    if (available == null) {
+      return _spendFrom.usesStealth && walletSyncController.stealthBalanceUnknown
+          ? 'Stealth balance unknown until the scan succeeds'
+          : null;
+    }
     final suffix = _spendFrom == SpendFrom.public ? '' : ' from ${_spendFrom.label.toLowerCase()}';
     return 'Available ${formatErg(available, maxFrac: 4)}$suffix';
   }
@@ -779,6 +808,7 @@ class _SendScreenState extends State<SendScreen> {
   Widget? _pocketSelector(BuildContext context) {
     final stealth = walletSyncController.stealthNano;
     if (stealth <= 0) return null;
+    final buyingToken = _selectedBuy != null;
     final warning = spendFromWarning(_spendFrom);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -800,16 +830,24 @@ class _SendScreenState extends State<SendScreen> {
                   key: Key('spend-from-${f.name}'),
                   label: Text(f.label),
                   selected: _spendFrom == f,
-                  onSelected: (_) => setState(() {
-                    _spendFrom = f;
-                    // A pocket change invalidates a per-box choice made
-                    // against the previous set.
-                    _chosenBoxIds.clear();
-                  }),
+                  // Buying a token to send runs through the route builders,
+                  // which cannot spend a stealth box.
+                  onSelected: buyingToken && f.usesStealth
+                      ? null
+                      : (_) => setState(() {
+                            _spendFrom = f;
+                            // A pocket change invalidates a per-box choice
+                            // made against the previous set.
+                            _chosenBoxIds.clear();
+                          }),
                 ),
             ],
           ),
-          if (warning != null) ...[
+          if (buyingToken) ...[
+            const SizedBox(height: 6),
+            Text('Buying a token to send uses your public boxes.',
+                style: TextStyle(fontSize: 12.5, color: ArgusColors.of(context).muted)),
+          ] else if (warning != null) ...[
             const SizedBox(height: 6),
             Text(warning, style: TextStyle(fontSize: 12.5, color: rustFor(context))),
           ],

@@ -84,13 +84,23 @@ enum SpendFrom {
 
 /// The warning a send must show for [from], or null when there is none.
 ///
-/// Spending across pockets in one transaction puts both sets of coins in
-/// the same input list, which tells any observer they share an owner. That
-/// is the whole cost of the choice, so it is stated where it is made.
+/// Two separate costs. Spending across pockets puts both sets of coins in
+/// one input list, which tells any observer they share an owner. And any
+/// send that spends stealth coins returns its change to an address of this
+/// wallet, which ties that stealth box to that address — so a stealth send
+/// is private in who paid you, not in where the remainder went.
 String? spendFromWarning(SpendFrom from) {
-  if (from != SpendFrom.both) return null;
-  return 'Spending public and stealth coins together links them: the chain '
-      'will show one transaction owning both.';
+  switch (from) {
+    case SpendFrom.public:
+      return null;
+    case SpendFrom.stealth:
+      return 'Change returns to one of your addresses, which links this '
+          'stealth box to it. Send the whole amount to avoid change.';
+    case SpendFrom.both:
+      return 'Spending public and stealth coins together links them: the '
+          'chain will show one transaction owning both, and change returns '
+          'to one of your addresses.';
+  }
 }
 
 /// Boxes eligible for a send from [from].
@@ -109,7 +119,11 @@ int? availableNano({
   required SpendFrom from,
   required int? publicNano,
   required int stealthNano,
+  bool stealthUnknown = false,
 }) {
+  // An unknown stealth balance must not be added as a number: the last
+  // figure may predate a spend, so any total including it would be a guess.
+  if (from.usesStealth && stealthUnknown) return null;
   if (from == SpendFrom.stealth) return stealthNano;
   if (publicNano == null) return null;
   return from == SpendFrom.both ? publicNano + stealthNano : publicNano;

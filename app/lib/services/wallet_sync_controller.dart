@@ -218,8 +218,10 @@ class WalletSyncController extends ChangeNotifier {
   List<TokenBalance> get displayTokens =>
       mergeStealthTokens(tokens, stealthTokens);
 
-  /// Box ids of the stealth funds this wallet can spend.
-  List<String> get stealthRowBoxIds => stealthService.lastScan?.boxIds ?? const [];
+  /// Box ids of the stealth funds this wallet can spend. Empty while the
+  /// balance is unknown: the last scan's boxes may be stale.
+  List<String> get stealthRowBoxIds =>
+      stealthBalanceUnknown ? const [] : (stealthService.lastScan?.boxIds ?? const []);
 
   /// Activity as the user should see it: address history plus stealth
   /// receipts, newest first.

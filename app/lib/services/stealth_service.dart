@@ -341,7 +341,12 @@ class StealthService extends ChangeNotifier {
   /// when the scan is off, has not run, or was truncated.
   String? get spendableBoxesJson {
     final body = _lastBoxesJson;
-    if (!scanEnabled || body == null || isTruncatedScan(body)) return null;
+    // A failed scan leaves the previous body in place so the balance can
+    // still be reported as "unknown"; it must not be spent from, because a
+    // box in it may already have been spent elsewhere.
+    if (!scanEnabled || lastScanFailed || body == null || isTruncatedScan(body)) {
+      return null;
+    }
     return body;
   }
 

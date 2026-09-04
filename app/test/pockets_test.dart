@@ -53,10 +53,13 @@ void main() {
       expect(eligibleBoxes(from: SpendFrom.both, publicBoxes: pub, stealthBoxes: ste), hasLength(2));
     });
 
-    test('only mixing pockets warns, because only that links them', () {
+    test('every send that touches stealth coins is warned about', () {
       expect(spendFromWarning(SpendFrom.public), isNull);
-      expect(spendFromWarning(SpendFrom.stealth), isNull);
+      // Change from a stealth send lands on a wallet address, which ties
+      // that stealth box to it — private in who paid, not in the remainder.
+      expect(spendFromWarning(SpendFrom.stealth), contains('Change returns'));
       expect(spendFromWarning(SpendFrom.both), contains('links them'));
+      expect(spendFromWarning(SpendFrom.both), contains('change returns'));
     });
 
     test('available reflects the chosen pocket', () {
@@ -68,6 +71,24 @@ void main() {
     test('an unknown public balance stays unknown unless spending stealth alone', () {
       expect(availableNano(from: SpendFrom.public, publicNano: null, stealthNano: 5), isNull);
       expect(availableNano(from: SpendFrom.stealth, publicNano: null, stealthNano: 5), 5);
+    });
+
+    test('an unknown stealth balance is never added as a number', () {
+      // The last figure may predate a spend, so any total including it
+      // would be a guess presented as a fact.
+      expect(
+        availableNano(from: SpendFrom.stealth, publicNano: 10, stealthNano: 7, stealthUnknown: true),
+        isNull,
+      );
+      expect(
+        availableNano(from: SpendFrom.both, publicNano: 10, stealthNano: 7, stealthUnknown: true),
+        isNull,
+      );
+      // A public send is unaffected: it never touches those coins.
+      expect(
+        availableNano(from: SpendFrom.public, publicNano: 10, stealthNano: 7, stealthUnknown: true),
+        10,
+      );
     });
   });
 }

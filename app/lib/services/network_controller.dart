@@ -293,8 +293,8 @@ class NetworkController extends ChangeNotifier {
         answered++;
         candidates.addAll(restApiUrlsFromPeers(peers, known: [...known, ...candidates]));
       }
-      final results =
-          await Future.wait(candidates.take(40).map(probeNodeDetails));
+      final probed = candidates.take(40).toList();
+      final results = await Future.wait(probed.map(probeNodeDetails));
       final good = results.where((p) => p.ok).toList();
       good.sort((a, b) {
         final ai = a.extraIndex == true ? 0 : 1;
@@ -307,6 +307,7 @@ class NetworkController extends ChangeNotifier {
         nodesAsked: asked,
         nodesAnswered: answered,
         candidates: candidates.length,
+        checked: probed.length,
         reachable: good.length,
       );
     } catch (_) {
@@ -315,6 +316,7 @@ class NetworkController extends ChangeNotifier {
         nodesAsked: asked,
         nodesAnswered: answered,
         candidates: candidates.length,
+        checked: 0,
         reachable: 0,
       );
     } finally {
@@ -562,6 +564,7 @@ class NodeSearchResult {
     required this.nodesAsked,
     required this.nodesAnswered,
     required this.candidates,
+    required this.checked,
     required this.reachable,
   });
 
@@ -570,6 +573,10 @@ class NodeSearchResult {
 
   /// Peer URLs worth probing: HTTPS, and not already in the node list.
   final int candidates;
+
+  /// How many of them were actually probed; a search stops at a cap, and
+  /// reporting the full count would overstate what was tested.
+  final int checked;
   final int reachable;
 }
 
@@ -584,9 +591,11 @@ String nodeSearchSummary(NodeSearchResult r) {
     return 'Asked ${r.nodesAnswered} node${r.nodesAnswered == 1 ? '' : 's'}: '
         'their peers publish no HTTPS API you do not already have.';
   }
+  final scope = r.checked < r.candidates
+      ? '${r.checked} of ${r.candidates} found'
+      : '${r.candidates} found';
   if (r.reachable == 0) {
-    return 'Found ${r.candidates} candidate${r.candidates == 1 ? '' : 's'}, '
-        'none reachable right now.';
+    return 'Checked $scope, none reachable right now.';
   }
-  return '${r.reachable} reachable of ${r.candidates} found, best first.';
+  return '${r.reachable} reachable of $scope, best first.';
 }
