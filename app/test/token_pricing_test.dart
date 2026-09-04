@@ -27,6 +27,7 @@ int decimals(String id) => switch (id) {
     };
 
 void main() {
+  _rowValueTests();
   test('oracle source: ERG from the ERG_USD feed, rsBTC from BTC_USD', () {
     final r = priceTokens(PricingInputs(source: PriceSource.oracle, oracle: oracle, decimalsOf: decimals));
     expect(r.ergUsd, 0.25);
@@ -133,5 +134,38 @@ void main() {
   test('coingeckoIdsFor requests majors only for the CoinGecko source', () {
     expect(coingeckoIdsFor(PriceSource.oracle), ['ergo']);
     expect(coingeckoIdsFor(PriceSource.coingecko), contains('bitcoin'));
+  });
+}
+
+// A wallet row's worth is ERG plus its tokens
+void _rowValueTests() {
+  test('token value is counted, not just the ERG', () {
+    final r = priceTokens(PricingInputs(
+      source: PriceSource.oracle,
+      oracle: OracleSnapshot(epoch: 1, poolHeight: 1, operators: 3, usd: {'ERG_USD': 0.25}),
+      decimalsOf: (_) => 2,
+    ));
+    // 100 ERG at $0.25 is $25; 10 SigUSD is $10 on top.
+    final v = holdingsValue(
+      ergNano: 100 * 1000000000,
+      tokens: [(id: SigmaUsdTokens.sigUsd, amount: 1000, decimals: 2)],
+      result: r,
+    );
+    expect(v.usd, closeTo(35, 1e-9));
+  });
+
+  test('a wallet holding only unpriced tokens still reports its ERG', () {
+    final r = priceTokens(PricingInputs(
+      source: PriceSource.oracle,
+      oracle: OracleSnapshot(epoch: 1, poolHeight: 1, operators: 3, usd: {'ERG_USD': 0.25}),
+      decimalsOf: (_) => 0,
+    ));
+    final v = holdingsValue(
+      ergNano: 4 * 1000000000,
+      tokens: [(id: 'unknown-token', amount: 70000, decimals: 0)],
+      result: r,
+    );
+    expect(v.usd, closeTo(1, 1e-9));
+    expect(v.unpriced, 1);
   });
 }

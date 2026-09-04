@@ -57,6 +57,10 @@ class TokenPricer extends ChangeNotifier {
   double fiatPerUsd = 1;
   DateTime? asOf;
   bool stale = false;
+
+  /// True when the last refresh produced no rate and the previous prices
+  /// are still being shown.
+  bool pricesAreOld = false;
   String? lastError;
   bool refreshing = false;
 
@@ -152,7 +156,7 @@ class TokenPricer extends ChangeNotifier {
       for (final e in gecko.entries)
         if (e.value['usd'] != null) e.key: e.value['usd']!,
     };
-    result = priceTokens(PricingInputs(
+    final fresh = priceTokens(PricingInputs(
       source: src,
       oracle: oracle,
       coingeckoUsd: geckoUsd,
@@ -161,6 +165,14 @@ class TokenPricer extends ChangeNotifier {
       dexyGoldRateNano: gold,
       decimalsOf: (id) => pools?.tokens[id]?.decimals ?? knownToken(id)?.decimals ?? 0,
     ));
+    // A source that momentarily answers with nothing must not blank every
+    // price in the wallet. Keep the last good result and say it is old.
+    if (fresh.ergUsd != null || result.ergUsd == null) {
+      result = fresh;
+      pricesAreOld = false;
+    } else {
+      pricesAreOld = true;
+    }
 
     final ergo = gecko['ergo'];
     if (fiat == 'usd') {
@@ -168,7 +180,8 @@ class TokenPricer extends ChangeNotifier {
     } else if (ergo != null && ergo['usd'] != null && ergo[fiat] != null && ergo['usd']! > 0) {
       fiatPerUsd = ergo[fiat]! / ergo['usd']!;
     }
-    stale = src == PriceSource.oracle && (oracle?.isStale(_deps.tipHeight()) ?? false);
+    stale = pricesAreOld ||
+        (src == PriceSource.oracle && (oracle?.isStale(_deps.tipHeight()) ?? false));
     lastError = errors.isEmpty ? null : errors.join('; ');
     if (result.ergUsd != null) {
       asOf = now;
