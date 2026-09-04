@@ -351,7 +351,7 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                 title: 'Scan for stealth payments',
                 subtitle: stealthService.scanEnabled
                     ? 'Each sync asks the explorer for stealth boxes'
-                    : 'Off: payments to your stealth address stay invisible',
+                    : 'Off: stealth payments stay invisible, with no balance and no notification',
                 trailing: Switch(
                   key: const Key('stealth-scan-switch'),
                   value: stealthService.scanEnabled,

@@ -130,13 +130,16 @@ class _DashboardScreenState extends State<DashboardScreen>
   /// while the app is not in front, so the home screen itself stays quiet.
   void _announceIncoming() {
     if (!_walletUnlocked) return;
-    final fresh = _incoming.observe(_sync.recentTxs);
+    // The merged list, so a stealth receipt is announced too: it never
+    // appears in the address history the node returns.
+    final fresh = _incoming.observe(_sync.displayActivity);
     if (fresh.isEmpty || !_pollBackgrounded) return;
     for (final tx in fresh) {
       notificationService.incomingPayment(
         nanoErg: (tx['value_nano_erg'] as num?)?.toInt() ?? 0,
         walletName: _activeWalletName,
         pending: ((tx['height'] as num?)?.toInt() ?? 0) == 0,
+        stealth: tx['stealth'] == true,
       );
     }
   }
