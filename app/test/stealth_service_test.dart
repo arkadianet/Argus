@@ -10,6 +10,7 @@ void main() {
   _displayConsistencyTests();
   _stealthMetadataTests();
   _truncationTests();
+  _stealthActivityTests();
 }
 
 // Pagination and wallet-switch guards (CodeRabbit review on PR #58)
@@ -153,5 +154,57 @@ void _truncationTests() {
     expect(isTruncatedScan(jsonEncode({'items': const [], 'argus_truncated': true})), isTrue);
     expect(isTruncatedScan(jsonEncode({'items': [box(1)]})), isFalse);
     expect(isTruncatedScan('not json'), isFalse);
+  });
+}
+
+// Stealth receipts in the activity list
+void _stealthActivityTests() {
+  StealthOwnedBox b(String tx, int nano, int height, {List<StealthToken> tokens = const []}) =>
+      StealthOwnedBox(
+        boxId: '$tx-$nano',
+        transactionId: tx,
+        valueNanoErg: nano,
+        creationHeight: height,
+        tokens: tokens,
+      );
+
+  test('boxes from one transaction become one receipt', () {
+    final rows = stealthActivityRows([
+      b('tx1', 1000000000, 100),
+      b('tx1', 500000000, 100, tokens: [StealthToken(id: 'sig', amount: BigInt.from(250))]),
+    ]);
+    expect(rows.length, 1, reason: 'the user saw one payment');
+    expect(rows.single['value_nano_erg'], 1500000000);
+    expect(rows.single['stealth'], isTrue);
+    expect((rows.single['tokens_received'] as List).single['amount'], '250');
+  });
+
+  test('receipts are newest first', () {
+    final rows = stealthActivityRows([b('old', 1, 10), b('new', 1, 900)]);
+    expect(rows.map((r) => r['tx_id']), ['new', 'old']);
+  });
+
+  test('a box with no creating transaction is skipped rather than shown blank', () {
+    expect(stealthActivityRows([b('', 1, 10)]), isEmpty);
+  });
+
+  test('merging keeps address history and adds only unseen stealth receipts', () {
+    final history = [
+      {'tx_id': 'shared', 'height': 500, 'value_nano_erg': 1},
+      {'tx_id': 'plain', 'height': 300, 'value_nano_erg': 1},
+    ];
+    final merged = mergeStealthActivity(history, [
+      {'tx_id': 'shared', 'height': 500, 'value_nano_erg': 9, 'stealth': true},
+      {'tx_id': 'stealthy', 'height': 400, 'value_nano_erg': 1, 'stealth': true},
+    ]);
+    expect(merged.map((t) => t['tx_id']), ['shared', 'stealthy', 'plain']);
+    expect(merged.first['value_nano_erg'], 1, reason: 'the sweep tx keeps its real history row');
+  });
+
+  test('no stealth rows leaves history untouched', () {
+    final history = [
+      {'tx_id': 'a', 'height': 1},
+    ];
+    expect(identical(mergeStealthActivity(history, const []), history), isTrue);
   });
 }

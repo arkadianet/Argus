@@ -187,6 +187,11 @@ class WalletSyncController extends ChangeNotifier {
   /// found none; see [stealthBalanceUnknown] for "we could not look".
   int stealthNano = 0;
 
+  /// Activity rows for stealth receipts, which the address-derived history
+  /// cannot see: a stealth box sits on a one-time script, not on any
+  /// address this wallet queries.
+  List<Map<String, dynamic>> stealthRows = const [];
+
   /// Tokens held in stealth boxes, with [TokenBalance.stealthAmount] equal
   /// to the whole amount.
   List<TokenBalance> stealthTokens = const [];
@@ -212,6 +217,11 @@ class WalletSyncController extends ChangeNotifier {
   /// with stealth ones, each carrying how much of it is in stealth boxes.
   List<TokenBalance> get displayTokens =>
       mergeStealthTokens(tokens, stealthTokens);
+
+  /// Activity as the user should see it: address history plus stealth
+  /// receipts, newest first.
+  List<Map<String, dynamic>> get displayActivity =>
+      mergeStealthActivity(recentTxs, stealthRows);
 
   /// Non-null when the stored pinned address index can't be derived.
   String? pinIssue;
@@ -272,6 +282,7 @@ class WalletSyncController extends ChangeNotifier {
     lastSyncedAt = null;
     stealthNano = 0;
     stealthTokens = const [];
+    stealthRows = const [];
     stealthBalanceUnknown = true;
     notifyListeners();
   }
@@ -528,6 +539,7 @@ class WalletSyncController extends ChangeNotifier {
     if (!_gw.stealthScanEnabled) {
       stealthNano = 0;
       stealthTokens = const [];
+      stealthRows = const [];
       stealthBalanceUnknown = false;
       return;
     }
@@ -567,6 +579,7 @@ class WalletSyncController extends ChangeNotifier {
           stealthAmount: t.amount.toInt(),
         ),
     ];
+    stealthRows = stealthActivityRows(result.boxes);
     stealthBalanceUnknown = false;
   }
 

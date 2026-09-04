@@ -1248,10 +1248,10 @@ class _DashboardScreenState extends State<DashboardScreen>
             ),
             const SizedBox(height: 28),
             _sectionHeader('Recent activity',
-                action: _sync.recentTxs.isNotEmpty ? 'View all' : null,
+                action: _sync.displayActivity.isNotEmpty ? 'View all' : null,
                 onTap: () => _selectTab(1)),
             const SizedBox(height: 10),
-            _sync.recentTxs.isEmpty
+            _sync.displayActivity.isEmpty
                 ? SoftCard(
                     child: EmptyState(
                       compact: true,
@@ -1266,7 +1266,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     padding: EdgeInsets.zero,
                     child: DividedColumn(
                       children: [
-                        for (final tx in _sync.recentTxs)
+                        for (final tx in _sync.displayActivity.take(5))
                           ActivityTile(
                             tx: tx,
                             hidden: _balanceHidden,

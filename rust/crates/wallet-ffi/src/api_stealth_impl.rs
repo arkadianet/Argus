@@ -48,6 +48,10 @@ pub fn dht_secrets_for(
 pub fn owned_box_json(b: &stealth::StealthBox) -> serde_json::Value {
     serde_json::json!({
         "box_id": b.box_id,
+        // The creating transaction: enough for the activity list to show a
+        // stealth receipt without any further lookup.
+        "transaction_id": b.transaction_id,
+        "index": b.index,
         "value_nano_erg": b.value,
         "creation_height": b.creation_height,
         "ergo_tree": b.ergo_tree,
@@ -293,6 +297,7 @@ mod tests {
         assert_eq!(v["tokens"][0]["token_id"], "aa");
         assert_eq!(v["tokens"][0]["amount"], "7");
         assert_eq!(v["boxes"][0]["box_id"], mine.box_id);
+        assert_eq!(v["boxes"][0]["transaction_id"], mine.transaction_id);
     }
 
     #[test]
