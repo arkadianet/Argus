@@ -210,16 +210,47 @@ void _stealthActivityTests() {
   });
 }
 
-// The wallet row must not contradict the portfolio card above it
+// The wallet row must not contradict the portfolio card above it.
+// walletRowDisplay is the decision the row makes, so testing it covers the
+// row rather than only the controller behind it.
 void _walletRowTests() {
-  test('the active row total equals the portfolio total', () {
-    final c = WalletSyncController(_DisplayGateway());
-    c.balanceNano = 1012000000;
-    c.stealthNano = 1000000000;
-    // What the portfolio card sums and what the active row shows are the
-    // same number; the screenshot that prompted this showed 2.012 above
-    // 1.01 for one wallet.
-    expect(c.totalNanoWithStealth, 2012000000);
-    expect(c.stealthNano, greaterThan(0), reason: 'the row should say so');
+  test('the active row shows the same total as the portfolio and names the stealth part', () {
+    // The screenshot that prompted this showed 2.012 in the portfolio and
+    // 1.01 on the same wallet's row.
+    final d = walletRowDisplay(
+      isActive: true,
+      spendableNano: 1012000000,
+      stealthNano: 1000000000,
+      cachedNano: 999,
+      hidden: false,
+    );
+    expect(d.balanceNano, 2012000000);
+    expect(d.note, 'includes 1 ERG stealth');
+  });
+
+  test('no stealth funds means no note', () {
+    final d = walletRowDisplay(
+      isActive: true, spendableNano: 1012000000, stealthNano: 0, cachedNano: null, hidden: false);
+    expect(d.balanceNano, 1012000000);
+    expect(d.note, isNull);
+  });
+
+  test('hidden balances do not leak the stealth amount in the note', () {
+    final d = walletRowDisplay(
+      isActive: true, spendableNano: 1, stealthNano: 1000000000, cachedNano: null, hidden: true);
+    expect(d.note, isNull);
+  });
+
+  test('an inactive row keeps its cached snapshot and gains nothing', () {
+    final d = walletRowDisplay(
+      isActive: false, spendableNano: 5, stealthNano: 1000000000, cachedNano: 26390000000, hidden: false);
+    expect(d.balanceNano, 26390000000);
+    expect(d.note, isNull);
+  });
+
+  test('an unknown spendable balance stays unknown rather than becoming the stealth total', () {
+    final d = walletRowDisplay(
+      isActive: true, spendableNano: null, stealthNano: 1000000000, cachedNano: null, hidden: false);
+    expect(d.balanceNano, isNull);
   });
 }

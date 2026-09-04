@@ -1627,12 +1627,15 @@ class _DashboardScreenState extends State<DashboardScreen>
     final known = _lastKnown[w.walletId];
     // The active row must agree with the portfolio card above it: both are
     // display surfaces, so both include stealth funds.
-    final balance = isActive
-        ? _sync.totalNanoWithStealth
-        : (known?.balanceNano ?? _otherBalances[w.walletId]);
-    final stealthNote = isActive && _sync.stealthNano > 0
-        ? 'includes ${formatErg(_sync.stealthNano, maxFrac: 4)} stealth'
-        : null;
+    final display = walletRowDisplay(
+      isActive: isActive,
+      spendableNano: _sync.balanceNano,
+      stealthNano: _sync.stealthNano,
+      cachedNano: known?.balanceNano ?? _otherBalances[w.walletId],
+      hidden: _balanceHidden,
+    );
+    final balance = display.balanceNano;
+    final stealthNote = display.note;
     final addr = isActive ? (_sync.receiveAddress ?? w.displayAddress) : w.displayAddress;
     final asOf = !isActive && known != null ? formatSyncAge(DateTime.now().subtract(known.age)) : null;
     return InkWell(
@@ -1708,7 +1711,11 @@ class _DashboardScreenState extends State<DashboardScreen>
               ),
             ),
             const SizedBox(width: 8),
-            _rowBalance(balance, isActive ? _sync.isSyncing : false, asOf: asOf, note: stealthNote),
+            // Bounded so a long note wraps instead of overflowing the row.
+            Flexible(
+              child: _rowBalance(balance, isActive ? _sync.isSyncing : false,
+                  asOf: asOf, note: stealthNote),
+            ),
             const SizedBox(width: 4),
             Icon(Icons.chevron_right, size: 18, color: colors.muted),
           ],
@@ -1774,7 +1781,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     final fiat = [
       if (fiatText != null) fiatText,
       if (asOf != null && asOf.isNotEmpty) 'as of $asOf',
-      if (note != null && !_balanceHidden) note,
+      if (note != null) note,
     ].join(' · ');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
@@ -1792,7 +1799,14 @@ class _DashboardScreenState extends State<DashboardScreen>
             Text('ERG', style: TextStyle(fontSize: 12, color: colors.muted)),
           ],
         ),
-        if (fiat.isNotEmpty) Text(fiat, style: TextStyle(fontSize: 12, color: colors.muted)),
+        if (fiat.isNotEmpty)
+          Text(
+            fiat,
+            textAlign: TextAlign.end,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontSize: 12, color: colors.muted),
+          ),
       ],
     );
   }

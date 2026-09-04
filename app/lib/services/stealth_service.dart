@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'dart:convert';
 
+import '../format.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -460,4 +461,22 @@ List<Map<String, dynamic>> mergeStealthActivity(
     return hb.compareTo(ha);
   });
   return out;
+}
+
+/// What one wallet row should show. The active row must agree with the
+/// portfolio card, which counts stealth funds, while a locked row can only
+/// report its cached spendable snapshot.
+({int? balanceNano, String? note}) walletRowDisplay({
+  required bool isActive,
+  required int? spendableNano,
+  required int stealthNano,
+  required int? cachedNano,
+  required bool hidden,
+}) {
+  if (!isActive) return (balanceNano: cachedNano, note: null);
+  final total = spendableNano == null ? null : spendableNano + stealthNano;
+  final note = stealthNano > 0 && !hidden
+      ? 'includes ${formatErg(stealthNano, maxFrac: 4)} stealth'
+      : null;
+  return (balanceNano: total, note: note);
 }
