@@ -259,3 +259,64 @@ mod tests {
         assert!(!printed.contains(&hex::encode(me.scalar.to_bytes())));
     }
 }
+
+#[cfg(test)]
+mod ergomixer_compat {
+    use super::*;
+    use ergo_lib::wallet::ext_secret_key::ExtSecretKey;
+    use ergo_lib::wallet::mnemonic::Mnemonic;
+
+    /// BIP-39 test vector. Its stealth address is pinned here so a change to
+    /// the derivation path, the key encoding or the checksum fails the build
+    /// rather than silently stranding funds paid to the old address.
+    const VECTOR_MNEMONIC: &str =
+        "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    const VECTOR_ADDRESS: &str = "stealth7pKv2xPsEjeNd2v68sbKxjxP2p63A8MwcrXhh6LAq945wfPo5Z";
+
+    fn vector_secret() -> StealthSecret {
+        let seed = Mnemonic::to_seed(VECTOR_MNEMONIC, "");
+        let root = ExtSecretKey::derive_master(seed).unwrap();
+        StealthSecret::derive(&root).unwrap()
+    }
+
+    /// Cross-checked against an independent implementation of ErgoMixer's
+    /// `createStealthAddress`: "stealth" + Base58(pk ‖ blake2b256(pk)[..4]).
+    #[test]
+    fn address_matches_the_pinned_ergomixer_vector() {
+        assert_eq!(vector_secret().stealth_address().unwrap(), VECTOR_ADDRESS);
+    }
+
+    /// Every unspent stealth box on mainnet at the time of capture, all
+    /// created by ErgoMixer, must parse. Detection must not claim any of
+    /// them, since they belong to other people.
+    #[test]
+    fn parses_live_ergomixer_boxes_without_claiming_them() {
+        let body = include_str!("../test/fixtures/live_ergomixer_stealth_boxes.json");
+        let boxes = crate::detect::parse_explorer_boxes(body).unwrap();
+        assert_eq!(boxes.len(), 20, "every captured box must parse");
+        assert!(boxes.iter().all(|b| crate::tree::is_stealth_tree(&b.ergo_tree)));
+        assert!(crate::detect::detect_owned(&vector_secret(), &boxes).is_empty());
+    }
+
+    /// A payment built for our own published address is detected as ours and
+    /// yields a usable prover input, which is the receive half of the loop.
+    #[test]
+    fn a_payment_to_our_address_round_trips() {
+        let me = vector_secret();
+        let tree = build_payment_tree_hex(
+            &crate::address::decode_stealth_address(&me.stealth_address().unwrap()).unwrap(),
+        )
+        .unwrap();
+        let body = format!(
+            r#"{{"items":[{{"boxId":"{}","transactionId":"{}","index":0,"value":1000000,"creationHeight":1000000,"ergoTree":"{}","assets":[]}}]}}"#,
+            "0".repeat(64),
+            "1".repeat(64),
+            tree
+        );
+        let boxes = crate::detect::parse_explorer_boxes(&body).unwrap();
+        let owned = crate::detect::detect_owned(&me, &boxes);
+        assert_eq!(owned.len(), 1);
+        let tuple = crate::tree::parse_stealth_tree(&owned[0].ergo_tree).unwrap();
+        assert!(me.dht_prover_input(&tuple).is_ok());
+    }
+}
