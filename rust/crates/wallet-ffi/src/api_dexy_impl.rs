@@ -493,6 +493,78 @@ mod lp_live_tests {
         }
     }
 
+    /// Builds a 470 LP redeem against the live gold pool with a real LP
+    /// holder's box and reduces every script (nothing is signed or sent).
+    /// `cargo test -p wallet-ffi lp_redeem_live -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn lp_redeem_live_reduces() {
+        use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
+        let node = "https://ergo-node.eutxo.de".to_string();
+        let client = super::dexy_client(Some(node.clone())).await.expect("client");
+        let caps = client.require_capabilities().await.expect("caps");
+        let variant = dexy::constants::DexyVariant::Gold;
+        let ids = super::ids_for(variant).expect("ids");
+        let ctx = dexy::fetch::fetch_lp_tx_context(&client, &caps, &ids, dexy::fetch::LpAction::Redeem)
+            .await
+            .expect("lp ctx");
+        let holder_id = "dec6bbb7350f47f1058d609aaaee24dbeec1bfb2d4b2fa7c699bcc7d6fc0073c";
+        let holder: ErgoBox = client.get_box_by_id(&BoxId::new(holder_id)).await.expect("holder box");
+        let eip12 = ergo_tx::Eip12InputBox::from_ergo_box(&holder, holder.transaction_id.to_string(), holder.index);
+        let user_tree = eip12.ergo_tree.clone();
+        let height = client.current_height().await.expect("height") as i32;
+        let request = dexy::tx_builder::LpRedeemRequest {
+            variant,
+            lp_to_burn: 470,
+            user_address: String::new(),
+            user_ergo_tree: user_tree.clone(),
+            user_inputs: vec![eip12],
+            current_height: height,
+            recipient_ergo_tree: Some(user_tree),
+        };
+        let tree = wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
+        let built = with_test_dev_fee(DevFeeConfig::custom(tree, crate::api::ARGUS_FEE_NANO), || {
+            dexy::tx_builder::build_lp_redeem_tx(&request, &ctx, &ids.dexy_token, &ids.lp_token_id, variant.initial_lp())
+        })
+        .expect("build");
+        println!("summary: {:?}", built.summary);
+        for (i, o) in built.unsigned_tx.outputs.iter().enumerate() {
+            println!("out {i}: value={} assets={:?}", o.value, o.assets.iter().map(|a| (&a.token_id[..8], &a.amount)).collect::<Vec<_>>());
+        }
+        let oracle_id = ctx.oracle_data_input.as_ref().expect("oracle").box_id.clone();
+        let oracle_box: ErgoBox = client.get_box_by_id(&BoxId::new(&oracle_id)).await.expect("oracle box");
+        let boxes = vec![ctx.lp_box.clone(), ctx.action_box.clone(), holder];
+        let bytes = ergopay_core::reduce_transaction(&built.unsigned_tx, boxes, vec![oracle_box], &client)
+            .await
+            .expect("reduce");
+        let reduced = ergo_lib::chain::transaction::reduced::ReducedTransaction::sigma_parse_bytes(&bytes).expect("parse");
+        for (i, input) in reduced.reduced_inputs().iter().enumerate() {
+            println!("input {i}: {:?}", input.sigma_prop);
+        }
+
+        // Greedy variant: same 470 LP but take 2 DexyGold instead of 1.
+        let mut greedy = built.unsigned_tx.clone();
+        for a in greedy.outputs[0].assets.iter_mut() {
+            if a.token_id == ids.dexy_token {
+                a.amount = (a.amount.parse::<i64>().unwrap() - 1).to_string();
+            }
+        }
+        for a in greedy.outputs[2].assets.iter_mut() {
+            if a.token_id == ids.dexy_token {
+                a.amount = (a.amount.parse::<i64>().unwrap() + 1).to_string();
+            }
+        }
+        let holder2: ErgoBox = client.get_box_by_id(&BoxId::new(holder_id)).await.expect("holder box");
+        let oracle2: ErgoBox = client.get_box_by_id(&BoxId::new(&oracle_id)).await.expect("oracle box");
+        let bytes = ergopay_core::reduce_transaction(&greedy, vec![ctx.lp_box.clone(), ctx.action_box.clone(), holder2], vec![oracle2], &client)
+            .await
+            .expect("reduce greedy");
+        let reduced = ergo_lib::chain::transaction::reduced::ReducedTransaction::sigma_parse_bytes(&bytes).expect("parse");
+        for (i, input) in reduced.reduced_inputs().iter().enumerate() {
+            println!("greedy input {i}: {:?}", input.sigma_prop);
+        }
+    }
+
     /// Live reproduction of the LP deposit "reduced to false" report against
     /// the mainnet pools. Network access; run with
     /// `cargo test -p wallet-ffi lp_deposit_live -- --ignored --nocapture`.
