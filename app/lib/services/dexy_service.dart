@@ -347,6 +347,11 @@ class DexyLpPreview {
   final bool canExecute;
   final String? error;
 
+  /// Redeem only: unfloored entitlement in whole tokens after the fee, and
+  /// the LP amount that would release one more base unit.
+  final double? dexyShareExact;
+  final int? lpForNextUnit;
+
   DexyLpPreview({
     required this.action,
     this.requestedErg = 0,
@@ -361,6 +366,8 @@ class DexyLpPreview {
     required this.minerFeeNano,
     required this.canExecute,
     this.error,
+    this.dexyShareExact,
+    this.lpForNextUnit,
   });
 
   factory DexyLpPreview.fromJson(Map<String, dynamic> json) => DexyLpPreview(
@@ -373,6 +380,8 @@ class DexyLpPreview {
         lpAmount: _i(json, 'lp_amount'),
         ergOut: _i(json, 'erg_out'),
         dexyOut: _i(json, 'dexy_out'),
+        dexyShareExact: (json['dexy_share_exact'] as num?)?.toDouble(),
+        lpForNextUnit: json['lp_for_next_unit'] == null ? null : _i(json, 'lp_for_next_unit'),
         redemptionFeePct: (json['redemption_fee_pct'] as num?)?.toDouble() ?? 0,
         minerFeeNano: _i(json, 'miner_fee_nano'),
         canExecute: json['can_execute'] as bool? ?? false,

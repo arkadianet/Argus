@@ -3,6 +3,7 @@ import 'package:argus_wallet/ui/dexy/dexy_sheets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  _redeemNoteTests();
   _rateGuardTests();
   test('whole-unit token: 1 ERG buys 1 DexyGold and says what stays', () {
     final note = mintRoundingNote(ergTyped: 1, baseUnits: 1, decimals: 0, ergPerToken: 0.542, shortName: 'DexyGold');
@@ -47,5 +48,30 @@ void _rateGuardTests() {
     final gold = DexyState.fromJson({'state': {}, 'rates': {'variant': 'gold', 'erg_per_token': 0.5454}});
     expect(mintRateFor(gold, DexyVariant.gold), 0.5454);
     expect(mintRateFor(gold, DexyVariant.usd), 0);
+  });
+}
+
+// Redeem rounding note
+void _redeemNoteTests() {
+  DexyLpPreview mk({required int dexyOut, required double exact, required int next, required int lp}) => DexyLpPreview.fromJson({
+        'action': 'redeem', 'lp_amount': lp, 'erg_out': 978654073, 'dexy_out': dexyOut,
+        'dexy_share_exact': exact, 'lp_for_next_unit': next, 'redemption_fee_pct': 2.0,
+        'miner_fee_nano': 1100000, 'can_execute': true,
+      });
+
+  test('DexyGold: explains the floored unit and the LP for one more', () {
+    final note = redeemRoundingNote(mk(dexyOut: 1, exact: 1.818, next: 517, lp: 470), DexyVariant.gold)!;
+    expect(note, contains('1.82 DexyGold'));
+    expect(note, contains('1 is returned'));
+    expect(note, contains('517 LP tokens would return 2'));
+  });
+
+  test('no note when the rounding is negligible', () {
+    expect(redeemRoundingNote(mk(dexyOut: 2, exact: 2.004, next: 776, lp: 518), DexyVariant.gold), isNull);
+  });
+
+  test('no next-unit hint when the user cannot reach it with their LP', () {
+    final note = redeemRoundingNote(mk(dexyOut: 1, exact: 1.818, next: 517, lp: 600), DexyVariant.gold)!;
+    expect(note, isNot(contains('would return')));
   });
 }
