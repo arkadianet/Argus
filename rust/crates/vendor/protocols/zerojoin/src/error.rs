@@ -32,11 +32,10 @@ pub enum ZeroJoinError {
     #[error("insufficient funds: need {needed} nanoERG, have {available}")]
     InsufficientFunds { needed: i64, available: i64 },
     /// The token emission box has no batch for the requested mix level.
-    #[error("token emission box offers no batch for {requested} mixing tokens (has {available:?})")]
-    NoSuchBatch {
-        requested: i32,
-        available: Vec<i32>,
-    },
+    #[error(
+        "token emission box offers no batch for {requested} mixing tokens (has {available:?})"
+    )]
+    NoSuchBatch { requested: i32, available: Vec<i32> },
     /// The requested miner fee exceeds what the fee emission box allows.
     #[error("miner fee {requested} exceeds the fee box maximum {max_fee}")]
     FeeTooLarge { requested: i64, max_fee: i64 },
@@ -49,4 +48,9 @@ pub enum ZeroJoinError {
     /// A caller-supplied value the builders cannot work with.
     #[error("invalid argument: {0}")]
     Invalid(String),
+    /// The funding box carries assets the transaction shape has no output
+    /// for. Ergo lets a transaction drop tokens by omission, so building it
+    /// would burn them, or hand the surplus to the operator.
+    #[error("funding box {box_id} carries assets this mix would lose: {tokens:?}")]
+    UnaccountedAssets { box_id: String, tokens: Vec<String> },
 }

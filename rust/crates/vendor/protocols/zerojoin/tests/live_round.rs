@@ -123,12 +123,7 @@ fn to_ergo_box(b: &Eip12InputBox, tag: u8, index: u16) -> ErgoBox {
         });
     }
     let candidate = builder.build().unwrap();
-    ErgoBox::from_box_candidate(
-        &candidate,
-        TxId::from(Digest32::from([tag; 32])),
-        index,
-    )
-    .unwrap()
+    ErgoBox::from_box_candidate(&candidate, TxId::from(Digest32::from([tag; 32])), index).unwrap()
 }
 
 /// Every input of `tx`, as `ErgoBox`, taking the live ones from `live` (keyed
@@ -237,7 +232,12 @@ async fn zerojoin_live_round_reduces() {
     println!(
         "\nchosen ring: {} nanoERG, half-mix level {}; fee box {} nanoERG (max fee {}); \
          token box offers {:?} at rate {}",
-        half.value, half.mix_level, fee_box.value, fee_box.max_fee, token_box.levels(), token_box.rate
+        half.value,
+        half.mix_level,
+        fee_box.value,
+        fee_box.max_fee,
+        token_box.levels(),
+        token_box.rate
     );
 
     // Live boxes must reduce against their real ids.
@@ -395,7 +395,10 @@ async fn zerojoin_live_round_reduces() {
     .expect("reclaim builds");
     all_ok &= reduce_and_report("reclaim half-mix", &tx, &live, &client).await;
 
-    assert!(all_ok, "at least one input reduced to an unsatisfiable proposition");
+    assert!(
+        all_ok,
+        "at least one input reduced to an unsatisfiable proposition"
+    );
 }
 
 /// Sanity: the trees pinned in the crate are the trees the pool is using today.
@@ -406,10 +409,7 @@ async fn zerojoin_live_contracts_match_mainnet() {
         ("half mix", HALF_MIX_ERGO_TREE_HEX),
         ("fee emission", FEE_EMISSION_ERGO_TREE_HEX),
         ("token emission", TOKEN_EMISSION_ERGO_TREE_HEX),
-        (
-            "full mix",
-            zerojoin::contracts::FULL_MIX_ERGO_TREE_HEX,
-        ),
+        ("full mix", zerojoin::contracts::FULL_MIX_ERGO_TREE_HEX),
     ] {
         let boxes = unspent_by_tree(tree, 3).await;
         println!("{label}: {} unspent boxes on mainnet", boxes.len());

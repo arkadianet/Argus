@@ -32,8 +32,7 @@ use crate::boxes::{FeeEmissionBox, FullMixBox, HalfMixBox, TokenEmissionBox};
 use crate::contracts::{MIXER_INCOME_ERGO_TREE_HEX, MIXING_TOKEN_ID};
 use crate::error::ZeroJoinError;
 use crate::round::{
-    enter_as_bob_tokens, full_mix_outputs, half_mix_output, next_full_mix, next_half_mix,
-    PairOrder,
+    enter_as_bob_tokens, full_mix_outputs, half_mix_output, next_full_mix, next_half_mix, PairOrder,
 };
 use crate::secret::MixSecret;
 
@@ -101,6 +100,90 @@ fn miner_fee_output(fee: i64, height: i32) -> Eip12Output {
     Eip12Output::fee(fee, height)
 }
 
+/// The network's minimum miner fee; below it a transaction is not relayed,
+/// and a negative value would turn the fee output into a withdrawal.
+pub const MIN_MINER_FEE_NANO: i64 = citadel_core::constants::TX_FEE_NANO;
+
+fn validate_miner_fee(fee: i64) -> Result<(), ZeroJoinError> {
+    if fee < MIN_MINER_FEE_NANO {
+        return Err(ZeroJoinError::Invalid(format!(
+            "miner fee {fee} nanoERG is below the network minimum {MIN_MINER_FEE_NANO}"
+        )));
+    }
+    Ok(())
+}
+
+/// ERG the funding box leaves for the income output after the mix box and
+/// the miner fee, or an error when it cannot cover them.
+fn income_after(
+    funding_value: i64,
+    miner_fee: i64,
+    mix_value: i64,
+    operator_total: i64,
+) -> Result<i64, ZeroJoinError> {
+    let needed = mix_value
+        .checked_add(miner_fee)
+        .and_then(|v| v.checked_add(operator_total))
+        .ok_or_else(|| ZeroJoinError::Invalid("mix amounts overflow".into()))?;
+    if funding_value < needed {
+        return Err(ZeroJoinError::InsufficientFunds {
+            needed,
+            available: funding_value,
+        });
+    }
+    Ok(funding_value - miner_fee - mix_value)
+}
+
+/// The funding box must carry exactly what this transaction has an output
+/// for. Ergo lets a transaction drop tokens by omission, so an ERG mix funded
+/// from a box holding tokens would burn them, and a token mix funded with
+/// too much of the ring token would hand the surplus to the operator: there
+/// is no change output in these shapes.
+fn check_funding_assets(
+    funding: &Eip12InputBox,
+    ring: Option<(&str, i64)>,
+    rate: i32,
+) -> Result<Option<(String, i64)>, ZeroJoinError> {
+    let mut stray: Vec<String> = funding
+        .assets
+        .iter()
+        .filter(|a| {
+            ring.map(|(id, _)| !a.token_id.eq_ignore_ascii_case(id))
+                .unwrap_or(true)
+        })
+        .map(|a| a.token_id.clone())
+        .collect();
+    stray.sort();
+    stray.dedup();
+    if !stray.is_empty() {
+        return Err(ZeroJoinError::UnaccountedAssets {
+            box_id: funding.box_id.clone(),
+            tokens: stray,
+        });
+    }
+    match ring {
+        None => Ok(None),
+        Some((id, per_box)) => {
+            if rate <= 0 {
+                return Err(ZeroJoinError::Invalid(
+                    "token emission box has a non-positive rate".into(),
+                ));
+            }
+            let commission = per_box / rate as i64;
+            let needed = per_box
+                .checked_add(commission)
+                .ok_or_else(|| ZeroJoinError::Invalid("ring token amount overflows".into()))?;
+            let held = token_amount(funding, id);
+            if held != needed {
+                return Err(ZeroJoinError::TokenAccounting(format!(
+                    "fund a token mix with exactly {needed} of {id} ({per_box} to mix plus {commission} commission); the box holds {held}"
+                )));
+            }
+            Ok(Some((id.to_string(), commission)))
+        }
+    }
+}
+
 fn value_of(b: &Eip12InputBox) -> Result<i64, ZeroJoinError> {
     b.value
         .parse::<i64>()
@@ -119,7 +202,11 @@ fn token_amount(b: &Eip12InputBox, token_id: &str) -> i64 {
 ///
 /// `isCopy` in the fee contract requires the same script, the same R4 and a
 /// value no lower than `SELF.value - maxFee`.
-fn fee_emission_copy(fee_box: &FeeEmissionBox, fee: i64, height: i32) -> Result<Eip12Output, ZeroJoinError> {
+fn fee_emission_copy(
+    fee_box: &FeeEmissionBox,
+    fee: i64,
+    height: i32,
+) -> Result<Eip12Output, ZeroJoinError> {
     if fee > fee_box.max_fee {
         return Err(ZeroJoinError::FeeTooLarge {
             requested: fee,
@@ -242,33 +329,18 @@ pub struct AliceEntry<'a> {
 }
 
 pub fn build_alice_entry(req: &AliceEntry<'_>) -> Result<MixTx, ZeroJoinError> {
+    validate_miner_fee(req.miner_fee)?;
     let fee = operator_fee(req.token_box, req.denomination, req.level)?;
     let funding_value = value_of(req.funding)?;
 
     // The income box takes everything the mix box and the emission copy do
     // not: there is no change output in this shape.
-    let income_value = funding_value - req.miner_fee - req.denomination;
-    if income_value < fee.total() {
-        return Err(ZeroJoinError::InsufficientFunds {
-            needed: req.denomination + req.miner_fee + fee.total(),
-            available: funding_value,
-        });
-    }
-
-    let ring_commission = match &req.ring_token {
-        Some((id, per_box)) => {
-            let held = token_amount(req.funding, id);
-            let commission = held - per_box;
-            if commission < per_box / req.token_box.rate as i64 {
-                return Err(ZeroJoinError::TokenAccounting(format!(
-                    "ring token commission {commission} is below the required {}",
-                    per_box / req.token_box.rate as i64
-                )));
-            }
-            Some((id.clone(), commission))
-        }
-        None => None,
-    };
+    let income_value = income_after(funding_value, req.miner_fee, req.denomination, fee.total())?;
+    let ring_commission = check_funding_assets(
+        req.funding,
+        req.ring_token.as_ref().map(|(id, n)| (id.as_str(), *n)),
+        req.token_box.rate,
+    )?;
 
     let half = half_mix_output(
         req.denomination,
@@ -319,34 +391,22 @@ pub struct BobEntry<'a> {
 }
 
 pub fn build_bob_entry(req: &BobEntry<'_>) -> Result<MixTx, ZeroJoinError> {
+    validate_miner_fee(req.miner_fee)?;
     let split = enter_as_bob_tokens(req.half.mix_level, req.level as i64)?;
     let fee = operator_fee(req.token_box, req.half.value, req.level)?;
     let funding_value = value_of(req.funding)?;
 
     // Bob's own money funds the second full-mix box; the half-mix box funds
     // the first, so the transaction moves `denomination` of new ERG in.
-    let income_value = funding_value - req.miner_fee - req.half.value;
-    if income_value < fee.total() {
-        return Err(ZeroJoinError::InsufficientFunds {
-            needed: req.half.value + req.miner_fee + fee.total(),
-            available: funding_value,
-        });
-    }
-
-    let ring_commission = match &req.half.mixing_token {
-        Some((id, per_box)) => {
-            let held = token_amount(req.funding, id);
-            let commission = held - per_box;
-            if commission < per_box / req.token_box.rate as i64 {
-                return Err(ZeroJoinError::TokenAccounting(format!(
-                    "ring token commission {commission} is below the required {}",
-                    per_box / req.token_box.rate as i64
-                )));
-            }
-            Some((id.clone(), commission))
-        }
-        None => None,
-    };
+    let income_value = income_after(funding_value, req.miner_fee, req.half.value, fee.total())?;
+    let ring_commission = check_funding_assets(
+        req.funding,
+        req.half
+            .mixing_token
+            .as_ref()
+            .map(|(id, n)| (id.as_str(), *n)),
+        req.token_box.rate,
+    )?;
 
     let outputs = full_mix_outputs(
         req.half.value,
@@ -377,7 +437,9 @@ pub fn build_bob_entry(req: &BobEntry<'_>) -> Result<MixTx, ZeroJoinError> {
     Ok(MixTx {
         unsigned_tx,
         // INPUTS(0), the half-mix box, needs `proveDHTuple(g, gX, gY, gXY)`.
-        prover_inputs: vec![MixProverInput::DhTuple(req.y.spend_half_mix_as_bob(req.half))],
+        prover_inputs: vec![MixProverInput::DhTuple(
+            req.y.spend_half_mix_as_bob(req.half),
+        )],
         summary: MixTxSummary {
             action: "bob_entry".into(),
             denomination: req.half.value,
@@ -394,10 +456,7 @@ pub fn build_bob_entry(req: &BobEntry<'_>) -> Result<MixTx, ZeroJoinError> {
 // ---------------------------------------------------------------------------
 
 /// Which proof our own full-mix box needs, given who we were last round.
-fn full_mix_proof(
-    full: &FullMixBox,
-    secret: &MixSecret,
-) -> Result<MixProverInput, ZeroJoinError> {
+fn full_mix_proof(full: &FullMixBox, secret: &MixSecret) -> Result<MixProverInput, ZeroJoinError> {
     match secret.role_for(full) {
         Some(crate::secret::Role::Bob) => {
             Ok(MixProverInput::Dlog(secret.spend_full_mix_as_bob(full)?))
@@ -426,6 +485,7 @@ pub struct RemixAsAlice<'a> {
 }
 
 pub fn build_remix_as_alice(req: &RemixAsAlice<'_>) -> Result<MixTx, ZeroJoinError> {
+    validate_miner_fee(req.miner_fee)?;
     let round = next_half_mix(req.full, req.next_x, req.height)?;
     let proof = full_mix_proof(req.full, req.current)?;
 
@@ -469,6 +529,7 @@ pub struct RemixAsBob<'a> {
 }
 
 pub fn build_remix_as_bob(req: &RemixAsBob<'_>) -> Result<MixTx, ZeroJoinError> {
+    validate_miner_fee(req.miner_fee)?;
     let round = next_full_mix(req.full, req.half, req.next_y, req.order, req.height)?;
     let own_proof = full_mix_proof(req.full, req.current)?;
 
@@ -527,6 +588,7 @@ pub struct Withdraw<'a> {
 }
 
 pub fn build_withdraw(req: &Withdraw<'_>) -> Result<MixTx, ZeroJoinError> {
+    validate_miner_fee(req.miner_fee)?;
     let proof = full_mix_proof(req.full, req.current)?;
 
     // The mixing token is destroyed; a ring token, if any, travels with the
@@ -585,6 +647,7 @@ pub struct ReclaimHalfMix<'a> {
 }
 
 pub fn build_reclaim_half_mix(req: &ReclaimHalfMix<'_>) -> Result<MixTx, ZeroJoinError> {
+    validate_miner_fee(req.miner_fee)?;
     if req.half.g_x != *req.x.public_key() {
         return Err(ZeroJoinError::Invalid(format!(
             "half-mix box {} was not created by this secret",

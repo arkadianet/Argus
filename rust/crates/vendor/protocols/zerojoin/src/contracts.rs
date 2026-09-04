@@ -108,10 +108,10 @@ pub fn address_for_tree(ergo_tree_hex: &str) -> Result<String, ZeroJoinError> {
         .map_err(|_| ZeroJoinError::Serialization("ErgoTree is not hex".into()))?;
     let tree = ErgoTree::sigma_parse_bytes(&bytes)
         .map_err(|e| ZeroJoinError::Serialization(e.to_string()))?;
-    Ok(AddressEncoder::new(NetworkPrefix::Mainnet)
-        .address_to_str(&Address::recreate_from_ergo_tree(&tree).map_err(
-            |e| ZeroJoinError::Serialization(e.to_string()),
-        )?))
+    Ok(AddressEncoder::new(NetworkPrefix::Mainnet).address_to_str(
+        &Address::recreate_from_ergo_tree(&tree)
+            .map_err(|e| ZeroJoinError::Serialization(e.to_string()))?,
+    ))
 }
 
 /// True when `hex` is exactly the deployed half-mix script.
@@ -189,7 +189,11 @@ pub fn verify_contract_wiring() -> Result<(), ZeroJoinError> {
             FEE_EMISSION_SCRIPT_HASH_HEX,
         ),
         ("fee emission", FEE_EMISSION_ERGO_TREE_HEX, MIXING_TOKEN_ID),
-        ("fee emission", FEE_EMISSION_ERGO_TREE_HEX, MIXER_OWNER_PK_HEX),
+        (
+            "fee emission",
+            FEE_EMISSION_ERGO_TREE_HEX,
+            MIXER_OWNER_PK_HEX,
+        ),
         (
             "token emission",
             TOKEN_EMISSION_ERGO_TREE_HEX,

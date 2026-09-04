@@ -20,7 +20,8 @@ const RING: i64 = 1_000_000_000;
 const FEE: i64 = 1_500_000;
 const HEIGHT: i32 = 1_500_000;
 
-const DESTINATION: &str = "0008cd0385d10043e1ff4a3bef3f99961d5f16e1f2978f900e16421d3998f8d09fd6412c";
+const DESTINATION: &str =
+    "0008cd0385d10043e1ff4a3bef3f99961d5f16e1f2978f900e16421d3998f8d09fd6412c";
 
 fn trees(boxes: &[Eip12InputBox]) -> Vec<&str> {
     boxes.iter().map(|b| b.ergo_tree.as_str()).collect()
@@ -308,7 +309,10 @@ fn alice_entry_matches_the_token_emission_contracts_alice_branch() {
     // aliceBuying: INPUTS.size == 2, OUTPUTS.size == 4, isHalf(OUTPUTS(0)),
     // isCopy((OUTPUTS(2), OUTPUTS(1))).
     assert_eq!(tx.unsigned_tx.inputs.len(), 2);
-    assert_eq!(tx.unsigned_tx.inputs[1].ergo_tree, TOKEN_EMISSION_ERGO_TREE_HEX);
+    assert_eq!(
+        tx.unsigned_tx.inputs[1].ergo_tree,
+        TOKEN_EMISSION_ERGO_TREE_HEX
+    );
     assert_eq!(tx.unsigned_tx.outputs.len(), 4);
     assert_eq!(
         out_trees(&tx.unsigned_tx.outputs)[..3],
@@ -419,11 +423,7 @@ fn bob_entry_matches_the_token_emission_contracts_bob_branch() {
 fn bob_entry_refuses_funding_that_cannot_cover_the_operator_fee() {
     let token_box = fixture_token_box();
     let level = token_box.levels()[0];
-    let half = synthetic_half_mix(
-        *test_secret(60, 0).public_key(),
-        RING,
-        level as i64,
-    );
+    let half = synthetic_half_mix(*test_secret(60, 0).public_key(), RING, level as i64);
     let err = build_bob_entry(&BobEntry {
         half: &half,
         // Enough for the second mix box and the miner, nothing for the operator.
@@ -516,4 +516,239 @@ fn a_three_round_mix_conserves_erg_and_walks_the_level_down() {
     .unwrap();
     assert_eq!(erg_imbalance(&tx.unsigned_tx), 0);
     assert_eq!(tx.unsigned_tx.outputs[0].value, RING.to_string());
+}
+
+// ---------------------------------------------------------------------------
+// Review findings: the builder must refuse what the contracts would lose
+// ---------------------------------------------------------------------------
+
+const STRAY_TOKEN: &str = "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04";
+
+fn alice_request<'a>(
+    funding: &'a Eip12InputBox,
+    token_box: &'a TokenEmissionBox,
+    x: &'a MixSecret,
+    level: i32,
+    ring_token: Option<(String, i64)>,
+    miner_fee: i64,
+) -> AliceEntry<'a> {
+    AliceEntry {
+        funding,
+        token_box,
+        x,
+        denomination: RING,
+        level,
+        ring_token,
+        miner_fee,
+        height: HEIGHT,
+    }
+}
+
+#[test]
+fn entries_refuse_a_miner_fee_below_the_network_minimum() {
+    let token_box = fixture_token_box();
+    let level = token_box.levels()[0];
+    let x = test_secret(5, 0);
+    let fee = operator_fee(&token_box, RING, level).unwrap();
+    let funding = funding_box(RING + FEE + fee.total(), vec![]);
+
+    for bad in [0, -1, MIN_MINER_FEE_NANO - 1, i64::MIN] {
+        let err = build_alice_entry(&alice_request(&funding, &token_box, &x, level, None, bad))
+            .expect_err("a fee below the floor never builds");
+        assert!(matches!(err, ZeroJoinError::Invalid(_)), "{err}");
+    }
+    assert!(
+        build_alice_entry(&alice_request(
+            &funding,
+            &token_box,
+            &x,
+            level,
+            None,
+            MIN_MINER_FEE_NANO
+        ))
+        .is_ok(),
+        "the floor itself is fine"
+    );
+
+    let stranger = test_secret(60, 0);
+    let bob_level = *token_box.levels().iter().max().unwrap();
+    let half = synthetic_half_mix(*stranger.public_key(), RING, bob_level as i64);
+    let err = build_bob_entry(&BobEntry {
+        half: &half,
+        funding: &funding,
+        token_box: &token_box,
+        y: &test_secret(6, 0),
+        level: bob_level,
+        order: PairOrder::BobFirst,
+        miner_fee: -FEE,
+        height: HEIGHT,
+    })
+    .expect_err("a negative fee would turn the fee output into a withdrawal");
+    assert!(matches!(err, ZeroJoinError::Invalid(_)), "{err}");
+}
+
+#[test]
+fn remix_and_withdraw_refuse_a_miner_fee_below_the_network_minimum() {
+    let x = test_secret(1, 0);
+    let y = test_secret(2, 0);
+    let [_, alices] = synthetic_round(x.public_key(), &y, PairOrder::BobFirst, RING, 20);
+    let fee_box = fixture_fee_box();
+    let err = build_remix_as_alice(&RemixAsAlice {
+        full: &alices,
+        current: &x,
+        next_x: &test_secret(1, 1),
+        fee_box: &fee_box,
+        miner_fee: 0,
+        height: HEIGHT,
+    })
+    .expect_err("zero fee");
+    assert!(matches!(err, ZeroJoinError::Invalid(_)), "{err}");
+    let err = build_withdraw(&Withdraw {
+        full: &alices,
+        current: &x,
+        fee_box: &fee_box,
+        destination_ergo_tree: DESTINATION,
+        miner_fee: -1,
+        height: HEIGHT,
+    })
+    .expect_err("negative fee");
+    assert!(matches!(err, ZeroJoinError::Invalid(_)), "{err}");
+}
+
+#[test]
+fn an_erg_mix_refuses_funding_that_carries_tokens_it_would_burn() {
+    let token_box = fixture_token_box();
+    let level = token_box.levels()[0];
+    let fee = operator_fee(&token_box, RING, level).unwrap();
+    let stray = Eip12Asset {
+        token_id: STRAY_TOKEN.into(),
+        amount: "7".into(),
+    };
+    let funding = funding_box(RING + FEE + fee.total(), vec![stray.clone()]);
+
+    let err = build_alice_entry(&alice_request(
+        &funding,
+        &token_box,
+        &test_secret(5, 0),
+        level,
+        None,
+        FEE,
+    ))
+    .expect_err("no output would carry the token");
+    match err {
+        ZeroJoinError::UnaccountedAssets { box_id, tokens } => {
+            assert_eq!(box_id, funding.box_id);
+            assert_eq!(tokens, vec![STRAY_TOKEN.to_string()]);
+        }
+        other => panic!("wrong error: {other}"),
+    }
+
+    let bob_level = *token_box.levels().iter().max().unwrap();
+    let bob_fee = operator_fee(&token_box, RING, bob_level).unwrap();
+    let bob_funding = funding_box(RING + FEE + bob_fee.total(), vec![stray]);
+    let half = synthetic_half_mix(*test_secret(60, 0).public_key(), RING, bob_level as i64);
+    let err = build_bob_entry(&BobEntry {
+        half: &half,
+        funding: &bob_funding,
+        token_box: &token_box,
+        y: &test_secret(6, 0),
+        level: bob_level,
+        order: PairOrder::BobFirst,
+        miner_fee: FEE,
+        height: HEIGHT,
+    })
+    .expect_err("same rule as Bob");
+    assert!(
+        matches!(err, ZeroJoinError::UnaccountedAssets { .. }),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_token_mix_needs_exactly_the_ring_amount_plus_commission() {
+    let token_box = fixture_token_box();
+    let level = token_box.levels()[0];
+    let fee = operator_fee(&token_box, RING, level).unwrap();
+    let x = test_secret(5, 0);
+    let per_box: i64 = 200_000;
+    let commission = per_box / token_box.rate as i64;
+    let ring = Some((STRAY_TOKEN.to_string(), per_box));
+    let fund = |amount: i64, extra: Vec<Eip12Asset>| {
+        let mut assets = vec![Eip12Asset {
+            token_id: STRAY_TOKEN.into(),
+            amount: amount.to_string(),
+        }];
+        assets.extend(extra);
+        funding_box(RING + FEE + fee.total(), assets)
+    };
+
+    let exact = fund(per_box + commission, vec![]);
+    let tx = build_alice_entry(&alice_request(
+        &exact,
+        &token_box,
+        &x,
+        level,
+        ring.clone(),
+        FEE,
+    ))
+    .expect("exact funding builds");
+    let out_tokens: i64 = tx
+        .unsigned_tx
+        .outputs
+        .iter()
+        .flat_map(|o| o.assets.iter())
+        .filter(|a| a.token_id == STRAY_TOKEN)
+        .map(|a| a.amount.parse::<i64>().unwrap())
+        .sum();
+    assert_eq!(out_tokens, per_box + commission, "every unit has an output");
+
+    // Too much: the surplus would go to the operator, not back to the user.
+    let too_much = fund(per_box + commission + 1, vec![]);
+    let err = build_alice_entry(&alice_request(
+        &too_much,
+        &token_box,
+        &x,
+        level,
+        ring.clone(),
+        FEE,
+    ))
+    .expect_err("surplus refused");
+    assert!(matches!(err, ZeroJoinError::TokenAccounting(_)), "{err}");
+
+    // Too little fails on chain; catch it here.
+    let too_little = fund(per_box + commission - 1, vec![]);
+    assert!(matches!(
+        build_alice_entry(&alice_request(
+            &too_little,
+            &token_box,
+            &x,
+            level,
+            ring.clone(),
+            FEE
+        )),
+        Err(ZeroJoinError::TokenAccounting(_))
+    ));
+
+    // A second token alongside the ring token is unaccounted.
+    let other = "1a6a8c16e4b1cc9d73d03183565cfb8e79dd84198cb66beeed7d3463e0da2b98";
+    let with_other = fund(
+        per_box + commission,
+        vec![Eip12Asset {
+            token_id: other.into(),
+            amount: "1".into(),
+        }],
+    );
+    match build_alice_entry(&alice_request(
+        &with_other,
+        &token_box,
+        &x,
+        level,
+        ring,
+        FEE,
+    )) {
+        Err(ZeroJoinError::UnaccountedAssets { tokens, .. }) => {
+            assert_eq!(tokens, vec![other.to_string()])
+        }
+        other => panic!("wrong result: {other:?}"),
+    }
 }

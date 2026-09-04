@@ -80,7 +80,10 @@ pub fn remix_as_bob_tokens(
             "both boxes need at least one mixing token (full={full_level}, half={half_level})"
         )));
     }
-    let total = full_level + half_level;
+    // Levels come from chain boxes anyone can create; the sum must not wrap.
+    let total = full_level
+        .checked_add(half_level)
+        .ok_or_else(|| ZeroJoinError::TokenAccounting("mixing token total overflows".into()))?;
     let per_output = (total - 1) / 2;
     let burned = total - per_output * 2;
     if !(1..=2).contains(&burned) {
@@ -88,10 +91,7 @@ pub fn remix_as_bob_tokens(
             "burn of {burned} is outside the 1..=2 the fee contract allows"
         )));
     }
-    Ok(MixTokenSplit {
-        per_output,
-        burned,
-    })
+    Ok(MixTokenSplit { per_output, burned })
 }
 
 /// Tokens for entering as Bob against a half-mix box, buying `bought` units.
@@ -99,16 +99,20 @@ pub fn remix_as_bob_tokens(
 /// The half-mix contract's `bobEntranceLogic` requires
 /// `OUTPUTS(0).tokens(0)._2 * 2 > SELF.tokens(0)._2`, so a purchase too small
 /// for the waiting box is rejected here rather than on chain.
-pub fn enter_as_bob_tokens(
-    half_level: i64,
-    bought: i64,
-) -> Result<MixTokenSplit, ZeroJoinError> {
+pub fn enter_as_bob_tokens(half_level: i64, bought: i64) -> Result<MixTokenSplit, ZeroJoinError> {
     if bought < 1 {
         return Err(ZeroJoinError::TokenAccounting(
             "entering as Bob requires buying at least one mixing token".into(),
         ));
     }
-    let total = half_level + bought;
+    if half_level < 0 {
+        return Err(ZeroJoinError::TokenAccounting(format!(
+            "half-mix box reports a negative mix level {half_level}"
+        )));
+    }
+    let total = half_level
+        .checked_add(bought)
+        .ok_or_else(|| ZeroJoinError::TokenAccounting("mixing token total overflows".into()))?;
     let per_output = total / 2;
     let burned = total - per_output * 2;
     if per_output * 2 <= half_level {
@@ -116,10 +120,7 @@ pub fn enter_as_bob_tokens(
             "buying {bought} tokens is too few for a half-mix box at level {half_level}"
         )));
     }
-    Ok(MixTokenSplit {
-        per_output,
-        burned,
-    })
+    Ok(MixTokenSplit { per_output, burned })
 }
 
 /// Tokens for a remix as Alice: exactly one unit burned.
@@ -293,6 +294,17 @@ pub fn next_full_mix(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn token_totals_do_not_wrap_on_hostile_levels() {
+        assert!(remix_as_bob_tokens(i64::MAX, 1).is_err());
+        assert!(remix_as_bob_tokens(1, i64::MAX).is_err());
+        assert!(enter_as_bob_tokens(i64::MAX, 1).is_err());
+        assert!(
+            enter_as_bob_tokens(-1, 5).is_err(),
+            "a negative level is not a level"
+        );
+    }
     use crate::testing::{synthetic_full_mix, synthetic_half_mix, test_secret};
 
     #[test]
@@ -330,7 +342,13 @@ mod tests {
     #[test]
     fn remix_as_alice_burns_exactly_one() {
         let s = remix_as_alice_tokens(30).unwrap();
-        assert_eq!(s, MixTokenSplit { per_output: 29, burned: 1 });
+        assert_eq!(
+            s,
+            MixTokenSplit {
+                per_output: 29,
+                burned: 1
+            }
+        );
         // A box down to its last token has paid for its last round.
         assert!(remix_as_alice_tokens(1).is_err());
         assert!(remix_as_alice_tokens(0).is_err());
@@ -358,7 +376,10 @@ mod tests {
     fn the_two_full_mix_outputs_are_mirror_images() {
         let x = test_secret(1, 0);
         let y = test_secret(2, 0);
-        let split = MixTokenSplit { per_output: 10, burned: 1 };
+        let split = MixTokenSplit {
+            per_output: 10,
+            burned: 1,
+        };
         let outs = full_mix_outputs(
             1_000_000_000,
             x.public_key(),
@@ -371,24 +392,63 @@ mod tests {
         .unwrap();
         assert_eq!(outs[0].value, outs[1].value);
         assert_eq!(
-            outs[0].assets.iter().map(|a| (&a.token_id, &a.amount)).collect::<Vec<_>>(),
-            outs[1].assets.iter().map(|a| (&a.token_id, &a.amount)).collect::<Vec<_>>()
+            outs[0]
+                .assets
+                .iter()
+                .map(|a| (&a.token_id, &a.amount))
+                .collect::<Vec<_>>(),
+            outs[1]
+                .assets
+                .iter()
+                .map(|a| (&a.token_id, &a.amount))
+                .collect::<Vec<_>>()
         );
-        assert_eq!(outs[0].additional_registers["R4"], outs[1].additional_registers["R5"]);
-        assert_eq!(outs[0].additional_registers["R5"], outs[1].additional_registers["R4"]);
-        assert_eq!(outs[0].additional_registers["R6"], outs[1].additional_registers["R6"]);
-        assert_eq!(outs[0].additional_registers["R7"], outs[1].additional_registers["R7"]);
+        assert_eq!(
+            outs[0].additional_registers["R4"],
+            outs[1].additional_registers["R5"]
+        );
+        assert_eq!(
+            outs[0].additional_registers["R5"],
+            outs[1].additional_registers["R4"]
+        );
+        assert_eq!(
+            outs[0].additional_registers["R6"],
+            outs[1].additional_registers["R6"]
+        );
+        assert_eq!(
+            outs[0].additional_registers["R7"],
+            outs[1].additional_registers["R7"]
+        );
     }
 
     #[test]
     fn the_order_swaps_which_box_belongs_to_whom() {
         let x = test_secret(1, 0);
         let y = test_secret(2, 0);
-        let split = MixTokenSplit { per_output: 10, burned: 1 };
-        let bob_first = full_mix_outputs(1, x.public_key(), &y, PairOrder::BobFirst, split, &None, 1).unwrap();
-        let alice_first = full_mix_outputs(1, x.public_key(), &y, PairOrder::AliceFirst, split, &None, 1).unwrap();
-        assert_eq!(bob_first[0].additional_registers, alice_first[1].additional_registers);
-        assert_eq!(bob_first[1].additional_registers, alice_first[0].additional_registers);
+        let split = MixTokenSplit {
+            per_output: 10,
+            burned: 1,
+        };
+        let bob_first =
+            full_mix_outputs(1, x.public_key(), &y, PairOrder::BobFirst, split, &None, 1).unwrap();
+        let alice_first = full_mix_outputs(
+            1,
+            x.public_key(),
+            &y,
+            PairOrder::AliceFirst,
+            split,
+            &None,
+            1,
+        )
+        .unwrap();
+        assert_eq!(
+            bob_first[0].additional_registers,
+            alice_first[1].additional_registers
+        );
+        assert_eq!(
+            bob_first[1].additional_registers,
+            alice_first[0].additional_registers
+        );
         assert_ne!(PairOrder::from_bit(true), PairOrder::from_bit(false));
     }
 
@@ -402,7 +462,10 @@ mod tests {
                 x.public_key(),
                 &y,
                 order,
-                MixTokenSplit { per_output: 10, burned: 1 },
+                MixTokenSplit {
+                    per_output: 10,
+                    burned: 1,
+                },
                 &None,
                 1,
             )

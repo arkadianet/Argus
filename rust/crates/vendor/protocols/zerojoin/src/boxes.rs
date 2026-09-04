@@ -309,10 +309,13 @@ impl TokenEmissionBox {
     }
 
     /// The mix levels on sale, cheapest first.
+    ///
+    /// Sorted by price, then level: the operator's list is not promised to
+    /// be monotonic, and a caller taking the first entry means the cheapest.
     pub fn levels(&self) -> Vec<i32> {
-        let mut l: Vec<i32> = self.batches.iter().map(|(l, _)| *l).collect();
-        l.sort_unstable();
-        l
+        let mut b = self.batches.clone();
+        b.sort_unstable_by_key(|(l, p)| (*p, *l));
+        b.into_iter().map(|(l, _)| l).collect()
     }
 }
 
@@ -348,7 +351,11 @@ fn explorer_box(v: &serde_json::Value) -> Result<Eip12InputBox, ZeroJoinError> {
     };
     let value = v
         .get("value")
-        .and_then(|x| x.as_i64().map(|n| n.to_string()).or_else(|| x.as_str().map(str::to_string)))
+        .and_then(|x| {
+            x.as_i64()
+                .map(|n| n.to_string())
+                .or_else(|| x.as_str().map(str::to_string))
+        })
         .ok_or_else(|| ZeroJoinError::Serialization("box is missing value".into()))?;
     let assets = v
         .get("assets")
@@ -394,17 +401,41 @@ fn explorer_box(v: &serde_json::Value) -> Result<Eip12InputBox, ZeroJoinError> {
             registers.insert(name.clone(), hex);
         }
     }
+    // These identify the box on chain and go into the transaction as-is;
+    // a default or a silently truncated value would build a transaction the
+    // node rejects, or worse, one that spends the wrong box.
+    let transaction_id = s("transactionId")?;
+    if transaction_id.len() != 64 || !transaction_id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ZeroJoinError::Serialization(format!(
+            "box transactionId {transaction_id:?} is not a 32-byte hex id"
+        )));
+    }
+    let index = v
+        .get("index")
+        .and_then(|x| x.as_u64())
+        .ok_or_else(|| ZeroJoinError::Serialization("box is missing index".into()))?;
+    let index = u16::try_from(index)
+        .map_err(|_| ZeroJoinError::Serialization(format!("box index {index} exceeds u16")))?;
+    let creation_height = v
+        .get("creationHeight")
+        .and_then(|x| x.as_i64())
+        .ok_or_else(|| ZeroJoinError::Serialization("box is missing creationHeight".into()))?;
+    let creation_height = i32::try_from(creation_height)
+        .ok()
+        .filter(|h| *h >= 0)
+        .ok_or_else(|| {
+            ZeroJoinError::Serialization(format!(
+                "box creationHeight {creation_height} is out of range"
+            ))
+        })?;
     Ok(Eip12InputBox {
         box_id: s("boxId")?,
-        transaction_id: s("transactionId").unwrap_or_default(),
-        index: v.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as u16,
+        transaction_id,
+        index,
         value,
         ergo_tree: s("ergoTree")?,
         assets,
-        creation_height: v
-            .get("creationHeight")
-            .and_then(|x| x.as_i64())
-            .unwrap_or(0) as i32,
+        creation_height,
         additional_registers: registers,
         extension: std::collections::HashMap::new(),
     })
@@ -466,7 +497,49 @@ pub struct Ring {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::{fixture_boxes, HALF_MIX_FIXTURE, FULL_MIX_FIXTURE};
+    use crate::testing::{fixture_boxes, FULL_MIX_FIXTURE, HALF_MIX_FIXTURE};
+
+    #[test]
+    fn levels_are_cheapest_first_even_when_the_operator_lists_them_oddly() {
+        let b = TokenEmissionBox {
+            batches: vec![(30, 3_000_000), (10, 5_000_000), (20, 1_000_000)],
+            ..crate::testing::fixture_token_box()
+        };
+        assert_eq!(b.levels(), vec![20, 30, 10], "price order, not level order");
+    }
+
+    #[test]
+    fn explorer_boxes_with_missing_or_absurd_identity_are_rejected() {
+        let good = serde_json::json!({
+            "boxId": "ab", "value": 1, "ergoTree": "00", "assets": [],
+            "transactionId": "0".repeat(64), "index": 0, "creationHeight": 1000000,
+        });
+        assert!(explorer_box(&good).is_ok());
+        let mut m = good.clone();
+        m.as_object_mut().unwrap().remove("transactionId");
+        assert!(explorer_box(&m).is_err(), "no transaction id");
+        let mut m = good.clone();
+        m["transactionId"] = serde_json::json!("abc");
+        assert!(explorer_box(&m).is_err(), "short transaction id");
+        let mut m = good.clone();
+        m["index"] = serde_json::json!(70000);
+        assert!(
+            explorer_box(&m).is_err(),
+            "index past u16 must not be truncated"
+        );
+        let mut m = good.clone();
+        m["creationHeight"] = serde_json::json!(-5);
+        assert!(explorer_box(&m).is_err(), "negative height");
+        let mut m = good.clone();
+        m["creationHeight"] = serde_json::json!(5_000_000_000i64);
+        assert!(
+            explorer_box(&m).is_err(),
+            "height past i32 must not be truncated"
+        );
+        let mut m = good.clone();
+        m.as_object_mut().unwrap().remove("index");
+        assert!(explorer_box(&m).is_err(), "no index");
+    }
 
     #[test]
     fn half_mix_fixtures_parse() {

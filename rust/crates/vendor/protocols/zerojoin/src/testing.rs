@@ -10,7 +10,9 @@ use ergo_lib::wallet::ext_secret_key::ExtSecretKey;
 use ergo_lib::wallet::mnemonic::Mnemonic;
 use ergo_tx::{Eip12Asset, Eip12InputBox, Eip12Output};
 
-use crate::boxes::{parse_explorer_boxes, FeeEmissionBox, FullMixBox, HalfMixBox, TokenEmissionBox};
+use crate::boxes::{
+    parse_explorer_boxes, FeeEmissionBox, FullMixBox, HalfMixBox, TokenEmissionBox,
+};
 use crate::contracts::{FULL_MIX_ERGO_TREE_HEX, HALF_MIX_ERGO_TREE_HEX, MIXING_TOKEN_ID};
 use crate::round::{full_mix_outputs, half_mix_output, MixTokenSplit, PairOrder};
 use crate::secret::MixSecret;

@@ -11,9 +11,7 @@ use ergo_chain_types::ec_point::{exponentiate, exponentiate_gen};
 use ergo_chain_types::EcPoint;
 use ergo_lib::wallet::derivation_path::DerivationPath;
 use ergo_lib::wallet::ext_secret_key::ExtSecretKey;
-use ergotree_interpreter::sigma_protocol::private_input::{
-    DhTupleProverInput, DlogProverInput,
-};
+use ergotree_interpreter::sigma_protocol::private_input::{DhTupleProverInput, DlogProverInput};
 use ergotree_interpreter::sigma_protocol::wscalar::Wscalar;
 use ergotree_ir::sigma_protocol::sigma_boolean::ProveDhTuple;
 use zeroize::Zeroize;
@@ -146,7 +144,13 @@ impl MixSecret {
     /// Callers should prefer [`Self::spend_half_mix_as_bob`] and
     /// [`Self::spend_full_mix_as_alice`], which build the tuple from a box so
     /// the argument order cannot be got wrong.
-    pub fn dht_prover_input(&self, g: EcPoint, h: EcPoint, u: EcPoint, v: EcPoint) -> DhTupleProverInput {
+    pub fn dht_prover_input(
+        &self,
+        g: EcPoint,
+        h: EcPoint,
+        u: EcPoint,
+        v: EcPoint,
+    ) -> DhTupleProverInput {
         DhTupleProverInput {
             w: self.scalar.clone(),
             common_input: ProveDhTuple::new(g, h, u, v),
@@ -264,7 +268,9 @@ mod tests {
             "race relax argue hair sorry riot there spirit ready fetch food hedgehog hybrid mobile pretty",
         );
         assert_ne!(
-            MixSecret::derive(&root(MNEMONIC), 1, 1).unwrap().public_key(),
+            MixSecret::derive(&root(MNEMONIC), 1, 1)
+                .unwrap()
+                .public_key(),
             MixSecret::derive(&other, 1, 1).unwrap().public_key()
         );
     }
@@ -277,10 +283,7 @@ mod tests {
             .unwrap()
             .secret_key_bytes();
         for other in ["m/44'/429'/0'/0/0", "m/44'/429'/0'/3'/0"] {
-            let bytes = r
-                .derive(other.parse().unwrap())
-                .unwrap()
-                .secret_key_bytes();
+            let bytes = r.derive(other.parse().unwrap()).unwrap().secret_key_bytes();
             assert_ne!(mix, bytes, "mix key collides with {other}");
         }
     }
