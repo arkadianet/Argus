@@ -9,6 +9,7 @@ void main() {
   _paginationTests();
   _displayConsistencyTests();
   _stealthMetadataTests();
+  _truncationTests();
 }
 
 // Pagination and wallet-switch guards (CodeRabbit review on PR #58)
@@ -114,5 +115,43 @@ void _stealthMetadataTests() {
     expect(merged.single.amount, 150);
     expect(merged.single.decimals, 2);
     expect(merged.single.stealthAmount, 50);
+  });
+}
+
+// A capped scan must not read as a complete, smaller balance
+void _truncationTests() {
+  Map<String, dynamic> box(int i) => {
+        'boxId': 'box$i',
+        'transactionId': '0',
+        'index': 0,
+        'value': 1000000,
+        'creationHeight': 1,
+        'ergoTree': 'tree$i',
+        'assets': const [],
+      };
+
+  test('hitting the cap marks the body truncated', () async {
+    Future<String> page(String base, int offset) async => jsonEncode({
+          'items': [for (var i = offset; i < offset + boxPageLimit; i++) box(i)],
+        });
+    final body = await fetchAllStealthBoxes('https://x', page: page);
+    expect(isTruncatedScan(body), isTrue);
+    expect((jsonDecode(body)['items'] as List).length, boxScanCap);
+  });
+
+  test('a complete scan is not marked truncated', () async {
+    Future<String> page(String base, int offset) async =>
+        jsonEncode({'items': [box(1), box(2)], 'total': 2});
+    final body = await fetchAllStealthBoxes('https://x', page: page);
+    expect(isTruncatedScan(body), isFalse);
+  });
+
+  // scan() and prepareSweep() both consult this before using a body; the
+  // wallet-state half of those paths needs an unlocked wallet, so the guard
+  // itself is what is pinned here.
+  test('the truncation guard reads the marker, not the box count', () {
+    expect(isTruncatedScan(jsonEncode({'items': const [], 'argus_truncated': true})), isTrue);
+    expect(isTruncatedScan(jsonEncode({'items': [box(1)]})), isFalse);
+    expect(isTruncatedScan('not json'), isFalse);
   });
 }

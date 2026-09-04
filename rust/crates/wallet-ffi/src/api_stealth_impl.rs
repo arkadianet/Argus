@@ -121,6 +121,15 @@ pub fn build_sweep(
     if inputs.is_empty() {
         return Err(ArgusError::NoUtxos("no stealth boxes to sweep".into()).to_json_string());
     }
+    // The Dart fetch de-duplicates, but this is a public FFI taking raw
+    // JSON: a repeated box would be counted twice here and then rejected by
+    // the node as a duplicate input, after the user had signed.
+    let mut seen = std::collections::BTreeSet::new();
+    for b in inputs {
+        if !seen.insert(b.box_id.as_str()) {
+            return Err(err(format!("box {} appears more than once", b.box_id)));
+        }
+    }
     let miner_fee = fee_nano.unwrap_or(TX_FEE_NANO);
     if miner_fee < TX_FEE_NANO {
         return Err(err(format!(
@@ -349,5 +358,53 @@ mod tests {
             let ergo_box = to_ergo_box(b).unwrap();
             assert_eq!(ergo_box.box_id().to_string(), b.box_id);
         }
+    }
+}
+
+#[cfg(test)]
+mod sweep_input_tests {
+    use ergo_tx::Eip12InputBox;
+
+    fn boxx(id: &str, value: &str) -> Eip12InputBox {
+        Eip12InputBox {
+            box_id: id.to_string(),
+            transaction_id: "0".repeat(64),
+            index: 0,
+            ergo_tree: "10040e21".to_string(),
+            creation_height: 1,
+            value: value.to_string(),
+            assets: vec![],
+            additional_registers: Default::default(),
+            extension: Default::default(),
+        }
+    }
+
+    /// A repeated box would be counted twice and then rejected by the node
+    /// as a duplicate input, after the user had already signed.
+    #[test]
+    fn a_repeated_box_is_refused_before_signing() {
+        let err = super::build_sweep(
+            &[boxx("aa", "1000000000"), boxx("aa", "1000000000")],
+            "0008cd0281a2e429779249d99048aa63152838b735174a4302d0f38dfbacbcb78524beb3",
+            1,
+            None,
+        )
+        .err()
+        .expect("duplicate box must be refused");
+        assert!(err.contains("more than once"), "{err}");
+    }
+
+    /// Attacker-supplied values must not wrap the total.
+    #[test]
+    fn an_overflowing_total_is_refused() {
+        let err = super::build_sweep(
+            &[boxx("aa", &i64::MAX.to_string()), boxx("bb", &i64::MAX.to_string())],
+            "0008cd0281a2e429779249d99048aa63152838b735174a4302d0f38dfbacbcb78524beb3",
+            1,
+            None,
+        )
+        .err()
+        .expect("overflowing total must be refused");
+        assert!(err.contains("out of range"), "{err}");
     }
 }

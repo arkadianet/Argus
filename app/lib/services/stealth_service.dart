@@ -108,6 +108,7 @@ Future<String> fetchAllStealthBoxes(
   // Bounded by pages, not by unique ids: an explorer that keeps returning
   // the same boxes must not spin this loop forever.
   final maxPages = (boxScanCap / boxPageLimit).ceil();
+  var truncated = false;
   for (var pageNo = 0; pageNo < maxPages && items.length < boxScanCap; pageNo++) {
     final body = jsonDecode(await page(explorerBase, offset));
     final list = body is Map
@@ -122,8 +123,16 @@ Future<String> fetchAllStealthBoxes(
     if (list.length < boxPageLimit) break;
     offset += list.length;
     if (total != null && offset >= total) break;
+    if (pageNo == maxPages - 1 || items.length >= boxScanCap) truncated = true;
   }
-  return jsonEncode({'items': items.values.toList(), 'total': items.length});
+  // A scan that stopped at the cap is not a complete view of the set. Say
+  // so, so the balance stays "unknown" and a sweep is blocked rather than
+  // quietly leaving owned boxes behind.
+  return jsonEncode({
+    'items': items.values.toList(),
+    'total': items.length,
+    if (truncated) 'argus_truncated': true,
+  });
 }
 
 Future<String> _httpFetchStealthBoxes(String explorerBase) =>
@@ -229,6 +238,10 @@ class StealthService extends ChangeNotifier {
     final gen = _generation;
     try {
       final body = await _fetch(explorerBase ?? networkController.explorer);
+      if (isTruncatedScan(body)) {
+        // Partial data would read as a smaller balance than the truth.
+        throw StateError('stealth box list exceeded the scan cap');
+      }
       final result =
           StealthScanResult.fromJson(await walletService.stealthScan(body));
       if (gen != _generation) return null;
@@ -264,6 +277,14 @@ class StealthService extends ChangeNotifier {
     }
     if (body == null) {
       throw StateError('Could not reach the explorer to list stealth boxes');
+    }
+    if (isTruncatedScan(body)) {
+      // Sweeping a partial list would leave owned boxes behind and, worse,
+      // report a smaller total than the user actually holds.
+      throw StateError(
+        'The stealth box list is larger than one scan can cover; '
+        'sweeping is blocked until it can be read in full',
+      );
     }
     return walletService.prepareStealthSweep(
       explorerBoxesJson: body,
@@ -327,3 +348,14 @@ String shortStealth(String value, {int head = 10, int tail = 4}) {
 /// Explorer JSON body → owned-box scan is done in Rust; this is only the
 /// bookkeeping singleton the UI listens to.
 final stealthService = StealthService();
+
+/// True when [body] came from a scan that stopped at [boxScanCap] and so
+/// does not describe the whole template set.
+bool isTruncatedScan(String body) {
+  try {
+    final v = jsonDecode(body);
+    return v is Map && v['argus_truncated'] == true;
+  } catch (_) {
+    return false;
+  }
+}

@@ -1521,16 +1521,20 @@ class _DashboardScreenState extends State<DashboardScreen>
       result: tokenPricer.result,
     );
     final fiatValue = tokenPricer.fiatTextForUsd(tokenPricer.result.ergUsd == null ? null : value.usd);
+    // Status parts stand on their own: an unpriced wallet must still be
+    // told that the total omits stealth funds nobody could look up.
+    final statusParts = <String>[
+      if (fiatValue != null) '$fiatValue ${networkController.fiatCode.toUpperCase()}',
+      if (fiatValue != null && value.unpriced + value.excluded > 0)
+        '${value.unpriced + value.excluded} unpriced',
+      if (_sync.stealthScanning && _sync.stealthBalanceUnknown) 'stealth unknown',
+      if (fiatValue != null && tokenPricer.stale) 'prices stale',
+    ];
     final fiat = _balanceHidden
         ? '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}'
-        : fiatValue == null
+        : statusParts.isEmpty
             ? null
-            : [
-                '$fiatValue ${networkController.fiatCode.toUpperCase()}',
-                if (value.unpriced + value.excluded > 0) '${value.unpriced + value.excluded} unpriced',
-                if (_sync.stealthScanning && _sync.stealthBalanceUnknown) 'stealth unknown',
-                if (tokenPricer.stale) 'prices stale',
-              ].join(' · ');
+            : statusParts.join(' · ');
     return SoftCard(
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
       child: Column(
