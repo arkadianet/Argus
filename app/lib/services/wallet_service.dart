@@ -947,6 +947,13 @@ class WalletService {
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
 
+  /// A fresh one-time address for our own stealth change, with its script.
+  Future<Map<String, dynamic>> stealthSelfChangeTarget(String stealthAddress) async {
+    final raw = await RustLib.instance.api
+        .crateApiStealthSelfChangeTarget(stealthAddress: stealthAddress);
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
   /// Prepare a UTXO consolidation transaction.
   Future<ConsolidatePreview> prepareConsolidate({
     required List<String> spendAddresses,

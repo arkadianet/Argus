@@ -27,6 +27,10 @@ class OraclePool {
 
   /// A pool refresh older than this many blocks is reported as stale.
   static const staleAfterBlocks = 60;
+
+  /// Prices more than this many epochs behind the pool are reported as
+  /// stale, but still used: an old price beats no price at all.
+  static const staleAfterEpochs = 4;
 }
 
 /// One decoded snapshot: feed symbol → USD.
@@ -36,9 +40,18 @@ class OracleSnapshot {
     required this.poolHeight,
     required this.operators,
     required this.usd,
-  });
+    int? poolEpoch,
+  }) : poolEpoch = poolEpoch ?? epoch;
 
+  /// The epoch the prices were actually published for.
   final int epoch;
+
+  /// The epoch the pool box is on, which operators may not have reached.
+  final int poolEpoch;
+
+  /// How many epochs behind the pool these prices are.
+  int get epochsBehind => poolEpoch - epoch;
+
   final int poolHeight;
 
   /// How many operator data points the medians were taken over.
@@ -47,8 +60,12 @@ class OracleSnapshot {
 
   double? operator [](String feed) => usd[feed];
 
-  bool isStale(int? tipHeight) =>
-      tipHeight != null && tipHeight - poolHeight > OraclePool.staleAfterBlocks;
+  /// Stale when the pool itself has not refreshed recently, or when the
+  /// operators' newest vector is well behind the pool's epoch.
+  bool isStale(int? tipHeight) {
+    if (epochsBehind > OraclePool.staleAfterEpochs) return true;
+    return tipHeight != null && tipHeight - poolHeight > OraclePool.staleAfterBlocks;
+  }
 }
 
 /// Pure aggregation over node box JSON. Returns null when the pool box is
@@ -76,7 +93,12 @@ OracleSnapshot? aggregateOracle({
     final e = decodeSigmaInt(r['R5'] as String? ?? '');
     final v = decodeSigmaLongColl(r['R6'] as String? ?? '');
     if (e == null || v == null || v.length < feedCount) continue;
-    if (e != epoch && e != epoch - 1) continue;
+    // Operators post when they post. Requiring the pool's exact epoch, or
+    // the one before it, threw away a perfectly good vector whenever they
+    // were a few epochs behind — and with no ERG price the whole wallet
+    // shows nothing priced. Take the newest epoch they have actually
+    // published, up to the pool's, and report how far back it is.
+    if (e > epoch) continue;
     byEpoch.putIfAbsent(e, () => []).add(v);
   }
   if (byEpoch.isEmpty) return null;
@@ -93,7 +115,13 @@ OracleSnapshot? aggregateOracle({
         : (values[mid - 1] + values[mid]) / 2;
     usd[OraclePool.feeds[i]] = median / OraclePool.priceScale;
   }
-  return OracleSnapshot(epoch: useEpoch, poolHeight: poolHeight, operators: vectors.length, usd: usd);
+  return OracleSnapshot(
+    epoch: useEpoch,
+    poolEpoch: epoch,
+    poolHeight: poolHeight,
+    operators: vectors.length,
+    usd: usd,
+  );
 }
 
 /// Fetches the pool and operator boxes from a node's blockchain API.

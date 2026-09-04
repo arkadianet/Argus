@@ -445,6 +445,20 @@ pub fn stealth_payment_address(stealth_address: String) -> Result<String, String
     })
 }
 
+/// A fresh one-time address to send our own change to, with its script.
+///
+/// The script is returned so the wallet can record what it created: money
+/// it sent itself must be findable without waiting for a template scan.
+#[flutter_rust_bridge::frb]
+pub fn stealth_self_change_target(stealth_address: String) -> Result<String, String> {
+    let address = stealth::payment_address_for_stealth_address(&stealth_address)
+        .map_err(|e| ArgusError::InvalidAddress(e.to_string()).to_json_string())?;
+    let tree = address_to_ergo_tree(&address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    serde_json::to_string(&serde_json::json!({ "address": address, "ergo_tree": tree }))
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 /// Given the explorer's response for the stealth template hash, report which
 /// boxes this wallet can spend, with ERG and token totals.
 ///
@@ -1151,6 +1165,30 @@ async fn prepare_management<S>(
     })
 }
 
+
+/// True when `address` is one this wallet can spend from: a derived
+/// address, or a stealth script its stealth key owns.
+///
+/// Stealth change is a payment to ourselves on a fresh one-time script, so
+/// it is not among the derived addresses and must be recognised this way.
+fn wallet_can_spend_change(
+    h: &wallet_core::WalletHandle,
+    address: &str,
+) -> Result<bool, String> {
+    if h.owns_address(address).map_err(err_str)? {
+        return Ok(true);
+    }
+    let tree = match address_to_ergo_tree(address) {
+        Ok(t) => t,
+        Err(_) => return Ok(false),
+    };
+    if !stealth::is_stealth_tree(&tree) {
+        return Ok(false);
+    }
+    let secret = h.stealth_secret().map_err(err_str)?;
+    Ok(secret.owns_tree(&tree))
+}
+
 async fn prepare(
     handle_id: u64,
     sender_address: &str,
@@ -1188,7 +1226,7 @@ async fn prepare(
         }
     }
     with_handle(handle_id, "send", |h| {
-        if !h.owns_address(change_address).map_err(err_str)? {
+        if !wallet_can_spend_change(h, change_address)? {
             return Err(ArgusError::InvalidAddress(
                 "change is not an address of this wallet".into(),
             )
@@ -1754,7 +1792,7 @@ pub async fn prepare_send_multi(
     }
 
     with_handle(handle_id, "prepare_send_multi", |h| {
-        if !h.owns_address(&change_address).map_err(err_str)? {
+        if !wallet_can_spend_change(h, &change_address)? {
             return Err(ArgusError::InvalidAddress(
                 "change is not an address of this wallet".into(),
             )

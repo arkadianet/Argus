@@ -1739,8 +1739,18 @@ class _DashboardScreenState extends State<DashboardScreen>
             const SizedBox(width: 8),
             // Bounded so a long note wraps instead of overflowing the row.
             Flexible(
-              child: _rowBalance(balance, isActive ? _sync.isSyncing : false,
-                  asOf: asOf, note: stealthNote),
+              child: _rowBalance(
+                balance,
+                isActive ? _sync.isSyncing : false,
+                asOf: asOf,
+                note: stealthNote,
+                tokens: isActive
+                    ? [
+                        for (final t in _sync.displayTokens)
+                          (id: t.id, amount: t.amount, decimals: t.decimals),
+                      ]
+                    : (known?.tokens ?? const []),
+              ),
             ),
             const SizedBox(width: 4),
             Icon(Icons.chevron_right, size: 18, color: colors.muted),
@@ -1798,12 +1808,25 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _rowBalance(int? nano, bool loading, {String? asOf, String? note}) {
+  Widget _rowBalance(
+    int? nano,
+    bool loading, {
+    String? asOf,
+    String? note,
+    Iterable<({String id, int amount, int decimals})> tokens = const [],
+  }) {
     final colors = ArgusColors.of(context);
     final text = nano == null
         ? (loading ? '…' : '—')
         : (_balanceHidden ? '••••' : formatErg(nano, unit: false, maxFrac: 2));
-    final fiatText = nano == null || _balanceHidden ? null : networkController.fiatText(nano);
+    // ERG plus whatever tokens this wallet holds: a row showing only its
+    // ERG value understates a wallet whose worth is mostly tokens.
+    final usd = nano == null || _balanceHidden
+        ? null
+        : holdingsValue(ergNano: nano, tokens: tokens, result: tokenPricer.result).usd;
+    final fiatText = usd == null || tokenPricer.result.ergUsd == null
+        ? (nano == null || _balanceHidden ? null : networkController.fiatText(nano))
+        : tokenPricer.fiatTextForUsd(usd);
     final fiat = [
       if (fiatText != null) fiatText,
       if (asOf != null && asOf.isNotEmpty) 'as of $asOf',

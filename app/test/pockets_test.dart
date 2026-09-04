@@ -53,13 +53,12 @@ void main() {
       expect(eligibleBoxes(from: SpendFrom.both, publicBoxes: pub, stealthBoxes: ste), hasLength(2));
     });
 
-    test('every send that touches stealth coins is warned about', () {
+    test('only mixing pockets warns, because only that links them', () {
       expect(spendFromWarning(SpendFrom.public), isNull);
-      // Change from a stealth send lands on a wallet address, which ties
-      // that stealth box to it — private in who paid, not in the remainder.
-      expect(spendFromWarning(SpendFrom.stealth), contains('Change returns'));
+      // A stealth-only send returns its change to a fresh stealth address
+      // of the sender's own, so nothing points back at this wallet.
+      expect(spendFromWarning(SpendFrom.stealth), isNull);
       expect(spendFromWarning(SpendFrom.both), contains('links them'));
-      expect(spendFromWarning(SpendFrom.both), contains('change returns'));
     });
 
     test('available reflects the chosen pocket', () {
