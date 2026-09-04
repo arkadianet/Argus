@@ -15,6 +15,7 @@ import '../services/route_quote_controller.dart';
 import '../services/token_router.dart';
 import '../services/dexy_service.dart';
 import '../services/ergopay_service.dart';
+import '../services/coin_control.dart';
 import '../services/network_controller.dart';
 import '../services/stealth_service.dart';
 import '../services/wallet_service.dart';
@@ -90,6 +91,65 @@ class _SendScreenState extends State<SendScreen> {
   final _quotes = RouteQuoteController();
   List<BuyableToken> _buyable = const [];
   Set<String> _selectedSpendAddresses = {};
+
+  /// Boxes the user chose to spend. Empty means automatic selection.
+  final Set<String> _chosenBoxIds = {};
+  List<InputBoxInput> _boxes = const [];
+  bool _loadingBoxes = false;
+
+  CoinSelection get _selection => summariseSelection(_boxes, _chosenBoxIds);
+
+  List<String>? get _inputBoxIds =>
+      _chosenBoxIds.isEmpty ? null : _selection.boxes.map((b) => b.boxId).toList();
+
+  Future<void> _openInputPicker() async {
+    final spend = _selectedSpendAddresses.isNotEmpty
+        ? _selectedSpendAddresses.toList()
+        : _allSpendAddresses;
+    if (spend.isEmpty) {
+      _snack('No spendable addresses');
+      return;
+    }
+    setState(() => _loadingBoxes = true);
+    try {
+      _boxes = await walletService.listUnspentBoxes(spend, nodeUrl: networkController.activeUrl);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _loadingBoxes = false);
+      showErrorSheet(context, title: 'Could not list your boxes', message: '$e');
+      return;
+    }
+    if (!mounted) return;
+    setState(() {
+      _loadingBoxes = false;
+      // Drop anything that has since been spent.
+      _chosenBoxIds.retainAll(_boxes.map((b) => b.boxId));
+    });
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => _InputPickerSheet(
+          boxes: _boxes,
+          chosen: _chosenBoxIds,
+          amountNanoErg: parseErgToNano(_amountCtrl.text) ?? 0,
+          feeNanoErg: parseErgToNano(_feeCtrl.text) ?? minerFeeNano,
+          onToggle: (id) {
+            setSheet(() {
+              if (!_chosenBoxIds.remove(id)) _chosenBoxIds.add(id);
+            });
+            setState(() {});
+          },
+          onClear: () {
+            setSheet(_chosenBoxIds.clear);
+            setState(() {});
+          },
+        ),
+      ),
+    );
+    if (mounted) setState(() {});
+  }
   final _feeCtrl = TextEditingController();
   final List<_RecipientEntry> _extraRecipients = [];
   bool get _multiRecipient => _extraRecipients.isNotEmpty;
@@ -365,6 +425,7 @@ class _SendScreenState extends State<SendScreen> {
           recipients: recipients,
           nodeUrl: networkController.activeUrl,
           feeNanoErg: parseErgToNano(_feeCtrl.text),
+          inputBoxIds: _inputBoxIds,
         );
       } else {
         final r = recipients.single;
@@ -378,6 +439,7 @@ class _SendScreenState extends State<SendScreen> {
           tokenAmount: r['token_amount'] as int?,
           nodeUrl: networkController.activeUrl,
           feeNanoErg: parseErgToNano(_feeCtrl.text),
+          inputBoxIds: _inputBoxIds,
         );
       }
       await _confirmAndSend(
@@ -682,6 +744,7 @@ class _SendScreenState extends State<SendScreen> {
     final fee = parseErgToNano(_feeCtrl.text) ?? minerFeeNano;
     return [
       picked == 0 ? 'All $all addresses' : '$picked of $all addresses',
+      if (_chosenBoxIds.isNotEmpty) '${_chosenBoxIds.length} boxes chosen',
       'Fee ${formatErg(fee, unit: false)} ERG',
     ].join('  ·  ');
   }
@@ -1165,6 +1228,36 @@ class _SendScreenState extends State<SendScreen> {
                         Align(
                           alignment: Alignment.centerLeft,
                           child: Text(
+                            'Inputs',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                selectionSummary(_selection),
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ),
+                            TextButton(
+                              key: const Key('choose-inputs'),
+                              onPressed: _loadingBoxes ? null : _openInputPicker,
+                              child: Text(_loadingBoxes ? 'Loading…' : 'Choose'),
+                            ),
+                          ],
+                        ),
+                        if (selectionPrivacyNote(_selection) case final note?)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Text(note,
+                                style: TextStyle(fontSize: 12.5, color: rustFor(context))),
+                          ),
+                        const SizedBox(height: 12),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
                             'Spend from',
                             style: Theme.of(context).textTheme.titleSmall,
                           ),
@@ -1304,6 +1397,116 @@ class _InputBoxList extends StatelessWidget {
           );
         }),
       ],
+    );
+  }
+}
+
+/// Per-box input chooser. Shows what each box holds and where it sits, so
+/// the user can decide what their transaction will link together.
+class _InputPickerSheet extends StatelessWidget {
+  const _InputPickerSheet({
+    required this.boxes,
+    required this.chosen,
+    required this.amountNanoErg,
+    required this.feeNanoErg,
+    required this.onToggle,
+    required this.onClear,
+  });
+
+  final List<InputBoxInput> boxes;
+  final Set<String> chosen;
+  final int amountNanoErg;
+  final int feeNanoErg;
+  final ValueChanged<String> onToggle;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = ArgusColors.of(context);
+    final selection = summariseSelection(boxes, chosen);
+    final check = checkSelection(
+      selection: selection,
+      amountNanoErg: amountNanoErg,
+      feeNanoErg: feeNanoErg,
+      appFeeNanoErg: argusFeeNano,
+    );
+    final note = selectionPrivacyNote(selection);
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Choose inputs',
+                      style: Theme.of(context).textTheme.titleLarge),
+                ),
+                if (chosen.isNotEmpty)
+                  TextButton(onPressed: onClear, child: const Text('Automatic')),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              chosen.isEmpty
+                  ? 'Argus will pick boxes for you. Choose some to control exactly what this transaction spends.'
+                  : selectionSummary(selection),
+              style: TextStyle(fontSize: 12.5, color: colors.muted),
+            ),
+            if (chosen.isNotEmpty && !check.covers) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Short by ${formatErg(check.shortfallNano, maxFrac: 4)} for this amount plus fees.',
+                style: TextStyle(fontSize: 12.5, color: rustFor(context)),
+              ),
+            ],
+            if (note != null) ...[
+              const SizedBox(height: 6),
+              Text(note, style: TextStyle(fontSize: 12.5, color: rustFor(context))),
+            ],
+            const SizedBox(height: 12),
+            Flexible(
+              child: ListView.separated(
+                shrinkWrap: true,
+                itemCount: boxes.length,
+                separatorBuilder: (_, _) => Divider(height: 1, color: colors.cardBorder),
+                itemBuilder: (context, i) {
+                  final b = boxes[i];
+                  final on = chosen.contains(b.boxId);
+                  final tokens = b.assets.length;
+                  return CheckboxListTile(
+                    key: Key('box-${b.boxId}'),
+                    value: on,
+                    onChanged: (_) => onToggle(b.boxId),
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(formatErg(b.valueNanoErg.toInt(), maxFrac: 4)),
+                    subtitle: Text(
+                      [
+                        if (b.address != null && b.address!.isNotEmpty)
+                          shorten(b.address!, head: 6, tail: 4),
+                        if (tokens > 0) '$tokens token${tokens == 1 ? '' : 's'}',
+                        'block ${b.creationHeight}',
+                      ].join(' · '),
+                      style: TextStyle(fontSize: 11.5, color: colors.muted),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Done'),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

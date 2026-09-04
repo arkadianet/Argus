@@ -11,7 +11,7 @@ use ergopay_core::reduce_transaction_with_context;
 use once_cell::sync::Lazy;
 use rand::RngCore;
 use wallet_core::seed::MnemonicPhrase;
-use wallet_core::spend::select_for_send;
+use wallet_core::spend::{select_exact, select_for_send};
 use wallet_core::wallet::WalletHandle;
 use wallet_core::PinWrappedKey;
 use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
@@ -1162,6 +1162,7 @@ async fn prepare(
     token_amount: Option<u64>,
     node_url: Option<String>,
     fee_nano: Option<i64>,
+    input_box_ids: Option<Vec<String>>,
 ) -> Result<(Vec<serde_json::Value>, Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>, ergo_tx::SendBuildResult), String> {
     if amount_nano_erg < MIN_BOX_VALUE_NANO {
         return Err(ArgusError::TxBuildFailed(format!(
@@ -1204,9 +1205,15 @@ async fn prepare(
             ArgusError::TxBuildFailed("send amount out of range".into()).to_json_string()
         })? as u64;
     let token_ref = send_token.as_ref().map(|(id, amt)| (id.as_str(), *amt));
-    let selected = select_for_send(&eip12, required, token_ref).map_err(|e| {
-        ArgusError::TxBuildFailed(e.to_string()).to_json_string()
-    })?;
+    // Coin control: when the user chose boxes, spend exactly those. Falling
+    // back to automatic selection here would silently pull in a box they
+    // deliberately left out, which is the linking they were avoiding.
+    let selected = match input_box_ids.as_deref() {
+        Some(ids) => select_exact(&eip12, ids, required, token_ref)
+            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
+        None => select_for_send(&eip12, required, token_ref)
+            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
+    };
 
     let height = client
         .current_height()
@@ -1269,6 +1276,7 @@ pub async fn prepare_send(
     token_amount: Option<u64>,
     node_url: Option<String>,
     fee_nano: Option<i64>,
+    input_box_ids: Option<Vec<String>>,
 ) -> Result<String, String> {
     let (input_boxes, ergo_boxes, built) = prepare(
         handle_id,
@@ -1281,6 +1289,7 @@ pub async fn prepare_send(
         token_amount,
         node_url.clone(),
         fee_nano,
+        input_box_ids,
     )
     .await?;
     let recipient_erg = built.summary.recipient_erg;
@@ -1625,6 +1634,7 @@ pub async fn prepare_send_multi(
     recipients_json: String,
     node_url: Option<String>,
     fee_nano: Option<i64>,
+    input_box_ids: Option<Vec<String>>,
 ) -> Result<String, String> {
     let change_tree = address_to_ergo_tree(&change_address)
         .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
@@ -1741,8 +1751,34 @@ pub async fn prepare_send_multi(
             ArgusError::TxBuildFailed("recipient total amount out of range".into())
                 .to_json_string()
         })? as u64;
-    let selected = select_for_multi_send(&eip12, required, &needed_tokens)
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    // Coin control, as in prepare_send: the chosen boxes are the whole
+    // input set, never a starting point the selector may extend.
+    let selected = match input_box_ids.as_deref() {
+        Some(ids) => {
+            let token_ref = needed_tokens.iter().next().map(|(id, amt)| (id.as_str(), *amt));
+            let exact = select_exact(&eip12, ids, required, token_ref)
+                .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+            // Every token this send delivers must be covered by the choice.
+            for (id, amount) in &needed_tokens {
+                let have: u64 = exact
+                    .boxes
+                    .iter()
+                    .flat_map(|b| b.assets.iter())
+                    .filter(|a| &a.token_id == id)
+                    .map(|a| a.amount.parse::<u64>().unwrap_or(0))
+                    .sum();
+                if have < *amount {
+                    return Err(ArgusError::TxBuildFailed(format!(
+                        "the chosen boxes hold {have} of token {id}, this send needs {amount}"
+                    ))
+                    .to_json_string());
+                }
+            }
+            exact.boxes
+        }
+        None => select_for_multi_send(&eip12, required, &needed_tokens)
+            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
+    };
 
     if selected.is_empty() {
         return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());

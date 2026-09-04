@@ -52,7 +52,12 @@ class ActivityTile extends StatelessWidget {
       name: (id) => walletService.cachedTokenMeta(id)?.name,
       decimals: (id) => walletService.cachedTokenMeta(id)?.decimals ?? 0,
     );
-    final who = counterparty == null || counterparty.isEmpty
+    // A stealth receipt has no counterparty to name: the payer built a
+    // one-time script, and nothing on chain says who they were.
+    final isStealth = tx['stealth'] == true;
+    final who = isStealth
+        ? 'stealth payment'
+        : counterparty == null || counterparty.isEmpty
         ? null
         : (isContractAddress(counterparty)
             ? (kind == ActivityKind.swap ? null : 'contract ${shorten(counterparty, head: 6, tail: 4)}')

@@ -1271,6 +1271,7 @@ fn wire__crate__api__prepare_send_impl(
             let api_token_amount = <Option<u64>>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
+            let api_input_box_ids = <Option<Vec<String>>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -1286,6 +1287,7 @@ fn wire__crate__api__prepare_send_impl(
                             api_token_amount,
                             api_node_url,
                             api_fee_nano,
+                            api_input_box_ids,
                         )
                         .await?;
                         Ok(output_ok)
@@ -1325,6 +1327,7 @@ fn wire__crate__api__prepare_send_multi_impl(
             let api_recipients_json = <String>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
+            let api_input_box_ids = <Option<Vec<String>>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -1337,6 +1340,7 @@ fn wire__crate__api__prepare_send_multi_impl(
                             api_recipients_json,
                             api_node_url,
                             api_fee_nano,
+                            api_input_box_ids,
                         )
                         .await?;
                         Ok(output_ok)
@@ -2471,6 +2475,17 @@ impl SseDecode for Option<u64> {
     }
 }
 
+impl SseDecode for Option<Vec<String>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<Vec<String>>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
 impl SseDecode for u32 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2682,6 +2697,16 @@ impl SseEncode for Option<u64> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <u64>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<Vec<String>> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <Vec<String>>::sse_encode(value, serializer);
         }
     }
 }

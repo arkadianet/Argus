@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'dart:convert';
 
+import '../format.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -18,6 +19,39 @@ class StealthToken {
 }
 
 /// Outcome of one stealth scan.
+/// One detected stealth box: enough to render a receipt without any
+/// further lookup, since detection already read the creating transaction.
+class StealthOwnedBox {
+  const StealthOwnedBox({
+    required this.boxId,
+    required this.transactionId,
+    required this.valueNanoErg,
+    required this.creationHeight,
+    required this.tokens,
+  });
+
+  final String boxId;
+  final String transactionId;
+  final int valueNanoErg;
+  final int creationHeight;
+  final List<StealthToken> tokens;
+
+  factory StealthOwnedBox.fromJson(Map<String, dynamic> json) => StealthOwnedBox(
+        boxId: json['box_id']?.toString() ?? '',
+        transactionId: json['transaction_id']?.toString() ?? '',
+        valueNanoErg: (json['value_nano_erg'] as num?)?.toInt() ?? 0,
+        creationHeight: (json['creation_height'] as num?)?.toInt() ?? 0,
+        tokens: [
+          for (final a in (json['assets'] as List? ?? const []))
+            if (a is Map)
+              StealthToken(
+                id: a['token_id']?.toString() ?? '',
+                amount: BigInt.tryParse(a['amount']?.toString() ?? '') ?? BigInt.zero,
+              ),
+        ],
+      );
+}
+
 class StealthScanResult {
   const StealthScanResult({
     required this.scanned,
@@ -25,6 +59,7 @@ class StealthScanResult {
     required this.totalNanoErg,
     required this.tokens,
     required this.boxIds,
+    this.boxes = const [],
   });
 
   /// How many stealth boxes the explorer returned in total.
@@ -35,6 +70,9 @@ class StealthScanResult {
   final int totalNanoErg;
   final List<StealthToken> tokens;
   final List<String> boxIds;
+
+  /// Every owned box as detection saw it, for the activity list.
+  final List<StealthOwnedBox> boxes;
 
   bool get isEmpty => ownedCount == 0;
 
@@ -63,6 +101,11 @@ class StealthScanResult {
         boxIds: [
           for (final b in (json['boxes'] as List? ?? const []))
             if (b is Map && b['box_id'] != null) b['box_id'].toString(),
+        ],
+        boxes: [
+          for (final b in (json['boxes'] as List? ?? const []))
+            if (b is Map && b['box_id'] != null)
+              StealthOwnedBox.fromJson(b.cast<String, dynamic>()),
         ],
       );
 }
@@ -358,4 +401,82 @@ bool isTruncatedScan(String body) {
   } catch (_) {
     return false;
   }
+}
+
+/// Activity rows for stealth receipts, in the same shape the transaction
+/// list already renders. One row per creating transaction: several boxes
+/// can arrive together, and the user saw one payment.
+///
+/// Marked `stealth: true` so a row can say where the funds sit, and so the
+/// sweep that later moves them is not mistaken for a second receipt.
+List<Map<String, dynamic>> stealthActivityRows(List<StealthOwnedBox> boxes) {
+  final byTx = <String, List<StealthOwnedBox>>{};
+  for (final b in boxes) {
+    if (b.transactionId.isEmpty) continue;
+    byTx.putIfAbsent(b.transactionId, () => []).add(b);
+  }
+  final rows = <Map<String, dynamic>>[];
+  byTx.forEach((txId, group) {
+    var nano = 0;
+    final tokens = <String, BigInt>{};
+    var height = 0;
+    for (final b in group) {
+      nano += b.valueNanoErg;
+      if (b.creationHeight > height) height = b.creationHeight;
+      for (final t in b.tokens) {
+        tokens[t.id] = (tokens[t.id] ?? BigInt.zero) + t.amount;
+      }
+    }
+    rows.add({
+      'tx_id': txId,
+      'height': height,
+      'timestamp': 0,
+      'value_nano_erg': nano,
+      'token_ids': tokens.keys.toList(),
+      'tokens_received': [
+        for (final e in tokens.entries)
+          {'token_id': e.key, 'amount': e.value.toString()},
+      ],
+      'tokens_sent': const [],
+      'confirmed': true,
+      'stealth': true,
+    });
+  });
+  rows.sort((a, b) => (b['height'] as int).compareTo(a['height'] as int));
+  return rows;
+}
+
+/// Merges stealth receipts into the address-derived history, newest first,
+/// without duplicating a transaction the address history already covers.
+List<Map<String, dynamic>> mergeStealthActivity(
+  List<Map<String, dynamic>> history,
+  List<Map<String, dynamic>> stealthRows,
+) {
+  if (stealthRows.isEmpty) return history;
+  final known = {for (final t in history) t['tx_id']?.toString()};
+  final out = [...history, ...stealthRows.where((r) => !known.contains(r['tx_id']))];
+  out.sort((a, b) {
+    final ha = (a['height'] as num?)?.toInt() ?? 0;
+    final hb = (b['height'] as num?)?.toInt() ?? 0;
+    return hb.compareTo(ha);
+  });
+  return out;
+}
+
+/// What one wallet row should show. The active row must agree with the
+/// portfolio card, which counts stealth funds, while a locked row can only
+/// report its cached spendable snapshot.
+({int? balanceNano, String? note}) walletRowDisplay({
+  required bool isActive,
+  required int? spendableNano,
+  required int stealthNano,
+  required int? cachedNano,
+  required bool hidden,
+}) {
+  if (!isActive) return (balanceNano: cachedNano, note: null);
+  final total = spendableNano == null ? null : spendableNano + stealthNano;
+  final note = stealthNano > 0 && !hidden
+      ? 'includes ${formatErg(stealthNano, maxFrac: 4)} stealth'
+      : null;
+  return (balanceNano: total, note: note);
 }

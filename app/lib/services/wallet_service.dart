@@ -898,6 +898,7 @@ class WalletService {
     int? tokenAmount,
     String? nodeUrl,
     int? feeNanoErg,
+    List<String>? inputBoxIds,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareSend(
@@ -911,6 +912,7 @@ class WalletService {
       tokenAmount: tokenAmount != null ? BigInt.from(tokenAmount) : null,
       nodeUrl: nodeUrl,
       feeNano: feeNanoErg,
+      inputBoxIds: inputBoxIds,
     );
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -925,6 +927,7 @@ class WalletService {
     required List<Map<String, dynamic>> recipients,
     String? nodeUrl,
     int? feeNanoErg,
+    List<String>? inputBoxIds,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareSendMulti(
@@ -935,6 +938,7 @@ class WalletService {
       recipientsJson: jsonEncode(recipients),
       nodeUrl: nodeUrl,
       feeNano: feeNanoErg,
+      inputBoxIds: inputBoxIds,
     );
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }

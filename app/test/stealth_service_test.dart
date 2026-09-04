@@ -10,6 +10,8 @@ void main() {
   _displayConsistencyTests();
   _stealthMetadataTests();
   _truncationTests();
+  _stealthActivityTests();
+  _walletRowTests();
 }
 
 // Pagination and wallet-switch guards (CodeRabbit review on PR #58)
@@ -153,5 +155,102 @@ void _truncationTests() {
     expect(isTruncatedScan(jsonEncode({'items': const [], 'argus_truncated': true})), isTrue);
     expect(isTruncatedScan(jsonEncode({'items': [box(1)]})), isFalse);
     expect(isTruncatedScan('not json'), isFalse);
+  });
+}
+
+// Stealth receipts in the activity list
+void _stealthActivityTests() {
+  StealthOwnedBox b(String tx, int nano, int height, {List<StealthToken> tokens = const []}) =>
+      StealthOwnedBox(
+        boxId: '$tx-$nano',
+        transactionId: tx,
+        valueNanoErg: nano,
+        creationHeight: height,
+        tokens: tokens,
+      );
+
+  test('boxes from one transaction become one receipt', () {
+    final rows = stealthActivityRows([
+      b('tx1', 1000000000, 100),
+      b('tx1', 500000000, 100, tokens: [StealthToken(id: 'sig', amount: BigInt.from(250))]),
+    ]);
+    expect(rows.length, 1, reason: 'the user saw one payment');
+    expect(rows.single['value_nano_erg'], 1500000000);
+    expect(rows.single['stealth'], isTrue);
+    expect((rows.single['tokens_received'] as List).single['amount'], '250');
+  });
+
+  test('receipts are newest first', () {
+    final rows = stealthActivityRows([b('old', 1, 10), b('new', 1, 900)]);
+    expect(rows.map((r) => r['tx_id']), ['new', 'old']);
+  });
+
+  test('a box with no creating transaction is skipped rather than shown blank', () {
+    expect(stealthActivityRows([b('', 1, 10)]), isEmpty);
+  });
+
+  test('merging keeps address history and adds only unseen stealth receipts', () {
+    final history = [
+      {'tx_id': 'shared', 'height': 500, 'value_nano_erg': 1},
+      {'tx_id': 'plain', 'height': 300, 'value_nano_erg': 1},
+    ];
+    final merged = mergeStealthActivity(history, [
+      {'tx_id': 'shared', 'height': 500, 'value_nano_erg': 9, 'stealth': true},
+      {'tx_id': 'stealthy', 'height': 400, 'value_nano_erg': 1, 'stealth': true},
+    ]);
+    expect(merged.map((t) => t['tx_id']), ['shared', 'stealthy', 'plain']);
+    expect(merged.first['value_nano_erg'], 1, reason: 'the sweep tx keeps its real history row');
+  });
+
+  test('no stealth rows leaves history untouched', () {
+    final history = [
+      {'tx_id': 'a', 'height': 1},
+    ];
+    expect(identical(mergeStealthActivity(history, const []), history), isTrue);
+  });
+}
+
+// The wallet row must not contradict the portfolio card above it.
+// walletRowDisplay is the decision the row makes, so testing it covers the
+// row rather than only the controller behind it.
+void _walletRowTests() {
+  test('the active row shows the same total as the portfolio and names the stealth part', () {
+    // The screenshot that prompted this showed 2.012 in the portfolio and
+    // 1.01 on the same wallet's row.
+    final d = walletRowDisplay(
+      isActive: true,
+      spendableNano: 1012000000,
+      stealthNano: 1000000000,
+      cachedNano: 999,
+      hidden: false,
+    );
+    expect(d.balanceNano, 2012000000);
+    expect(d.note, 'includes 1 ERG stealth');
+  });
+
+  test('no stealth funds means no note', () {
+    final d = walletRowDisplay(
+      isActive: true, spendableNano: 1012000000, stealthNano: 0, cachedNano: null, hidden: false);
+    expect(d.balanceNano, 1012000000);
+    expect(d.note, isNull);
+  });
+
+  test('hidden balances do not leak the stealth amount in the note', () {
+    final d = walletRowDisplay(
+      isActive: true, spendableNano: 1, stealthNano: 1000000000, cachedNano: null, hidden: true);
+    expect(d.note, isNull);
+  });
+
+  test('an inactive row keeps its cached snapshot and gains nothing', () {
+    final d = walletRowDisplay(
+      isActive: false, spendableNano: 5, stealthNano: 1000000000, cachedNano: 26390000000, hidden: false);
+    expect(d.balanceNano, 26390000000);
+    expect(d.note, isNull);
+  });
+
+  test('an unknown spendable balance stays unknown rather than becoming the stealth total', () {
+    final d = walletRowDisplay(
+      isActive: true, spendableNano: null, stealthNano: 1000000000, cachedNano: null, hidden: false);
+    expect(d.balanceNano, isNull);
   });
 }

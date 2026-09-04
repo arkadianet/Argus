@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../format.dart';
+import '../services/stealth_service.dart';
+import '../services/wallet_sync_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'transaction_detail_screen.dart';
@@ -64,7 +66,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       if (!mounted || gen != _loadGeneration) return;
       _hasMore = all.length >= _pageSize;
       setState(() {
-        _txs = all;
+        // Stealth receipts sit on one-time scripts, so the address history
+        // above cannot contain them; merge them in here as well as on home.
+        _txs = mergeStealthActivity(all, walletSyncController.stealthRows);
         _loading = false;
         _loadingMore = false;
         _error = null;
