@@ -3454,6 +3454,20 @@ fn mix_miner_fee(fee_nano: Option<i64>) -> Result<i64, String> {
     Ok(fee)
 }
 
+/// The four ErgoMixer contract trees, so the app can ask an explorer for
+/// unspent boxes under each. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn mix_contract_trees() -> String {
+    serde_json::json!({
+        "half": zerojoin::HALF_MIX_ERGO_TREE_HEX,
+        "full": zerojoin::FULL_MIX_ERGO_TREE_HEX,
+        "fee": zerojoin::FEE_EMISSION_ERGO_TREE_HEX,
+        "token": zerojoin::TOKEN_EMISSION_ERGO_TREE_HEX,
+        "mixing_token_id": zerojoin::MIXING_TOKEN_ID,
+    })
+    .to_string()
+}
+
 /// Rings, token levels and operator boxes in a snapshot. Pure.
 #[flutter_rust_bridge::frb]
 pub fn mix_rings(chain_json: String) -> Result<String, String> {

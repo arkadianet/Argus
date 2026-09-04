@@ -45,6 +45,29 @@ class NotificationService {
     } catch (_) {}
   }
 
+  /// Progress of a mix: a round done, or the money delivered.
+  Future<void> mixProgress({required String title, required String body}) async {
+    if (!_ready) return;
+    try {
+      await _plugin.show(
+        id: (title + body).hashCode & 0x7fffffff,
+        title: title,
+        body: body,
+        notificationDetails: NotificationDetails(
+          android: AndroidNotificationDetails(
+            _channel.id,
+            _channel.name,
+            channelDescription: _channel.description,
+            importance: Importance.defaultImportance,
+            priority: Priority.defaultPriority,
+          ),
+        ),
+      );
+    } catch (e) {
+      debugPrint('argus: notification failed: $e');
+    }
+  }
+
   Future<void> incomingPayment({
     required int nanoErg,
     required String walletName,

@@ -18,6 +18,7 @@ import '../services/portfolio.dart';
 import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
+import '../services/mix_service.dart';
 import '../services/stealth_service.dart';
 import '../services/sigmausd_service.dart';
 import '../services/token_pricer.dart';
@@ -115,6 +116,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     walletService.unlocked.addListener(_syncLock);
     watchOnlyService.addListener(_onWatchOnlyChanged);
     _sync.addListener(_onSyncChanged);
+    mixService.addListener(_onSyncChanged);
     deepLinkController.addListener(_onDeepLink);
     _pollTimer = Timer.periodic(_pollInterval, (_) => _pollTick());
     _probeTimer = Timer.periodic(_probeInterval, (_) => _probeTick());
@@ -218,6 +220,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
     // Routine poll: refresh without flipping the strip to "Syncing…".
     _sync.refresh(discover: false, quiet: true);
+    // Mixes move on the same cadence; the service drops a tick that
+    // arrives while one is running.
+    unawaited(mixService.tick());
   }
 
   void _probeTick() {
@@ -233,6 +238,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     walletService.unlocked.removeListener(_syncLock);
     watchOnlyService.removeListener(_onWatchOnlyChanged);
     _sync.removeListener(_onSyncChanged);
+    mixService.removeListener(_onSyncChanged);
     deepLinkController.removeListener(_onDeepLink);
     _pinCtrl.dispose();
     super.dispose();
@@ -277,6 +283,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       ..add(0);
     _sync.reset();
     stealthService.reset();
+    mixService.reset();
     _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
   }
 
@@ -436,7 +443,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     // be shown before any network call. Restoring a wallet lands here too,
     // and the refresh below runs the first stealth scan.
     stealthService.reset();
+    mixService.reset();
     unawaited(stealthService.loadAddress());
+    unawaited(mixService.load());
     notificationService.requestPermission();
     // 2. Full sync (discovery + balances + activity) in the background.
     await _sync.refresh(discover: true);
@@ -1545,6 +1554,8 @@ class _DashboardScreenState extends State<DashboardScreen>
       publicNano: _sync.balanceNano,
       stealthNano: _sync.stealthNano,
       stealthUnknown: _sync.stealthScanning && _sync.stealthBalanceUnknown,
+      mixedNano: mixService.mixedNano,
+      inMixNano: mixService.inMixNano,
     );
     final breakdown = pocketBreakdown(pockets, hidden: _balanceHidden);
     // Status parts stand on their own: an unpriced wallet must still be
