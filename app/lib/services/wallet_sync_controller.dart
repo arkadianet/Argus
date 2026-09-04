@@ -341,17 +341,24 @@ class WalletSyncController extends ChangeNotifier {
   /// Refreshes balances, activity and UTXO count. With [discover] the
   /// address set is rescanned first and the node list re-probed.
   /// Concurrent callers share the in-flight operation.
-  Future<void> refresh({required bool discover}) {
+  /// [quiet] is for the background poll: it refreshes without announcing
+  /// itself, so the status strip does not flip to "Syncing…" and back every
+  /// 20 seconds. The result still updates the phase, so a failure or stale
+  /// balance is reported as soon as it happens.
+  Future<void> refresh({required bool discover, bool quiet = false}) {
     final running = _inFlight;
     if (running != null) return running;
-    final op = _refresh(discover).whenComplete(() => _inFlight = null);
+    final op = _refresh(discover, quiet: quiet).whenComplete(() => _inFlight = null);
     _inFlight = op;
     return op;
   }
 
-  Future<void> _refresh(bool discover) async {
-    phase = SyncPhase.syncing;
-    notifyListeners();
+  Future<void> _refresh(bool discover, {bool quiet = false}) async {
+    // A first load has nothing to show yet, so it always announces itself.
+    if (!quiet || phase == SyncPhase.idle) {
+      phase = SyncPhase.syncing;
+      notifyListeners();
+    }
 
     if (discover) {
       _gw.probeNetwork();
@@ -426,6 +433,10 @@ class WalletSyncController extends ChangeNotifier {
         'wallet_id': _cacheKey(receive),
         'primary_address': receive,
         'used_addresses': usedAddresses,
+        // A locked wallet cannot derive its stealth key, so it can never
+        // rescan; the last known figure is the only thing it can honestly
+        // show, and it is labelled as of a time.
+        'stealth_nano_erg': stealthNano,
         'balance_nano_erg': balanceNano ?? 0,
         'tokens': [
           for (final t in tokens)

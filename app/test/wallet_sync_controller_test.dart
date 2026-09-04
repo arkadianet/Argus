@@ -134,6 +134,7 @@ class FakeGateway implements WalletSyncGateway {
 }
 
 void main() {
+  _quietRefreshTests();
   late FakeGateway gw;
   late WalletSyncController c;
 
@@ -532,5 +533,64 @@ void main() {
       expect(c.stealthTokens, isEmpty);
       expect(c.stealthBalanceUnknown, isTrue);
     });
+  });
+}
+
+// A routine poll should not make the status strip flicker
+void _quietRefreshTests() {
+  test('a quiet refresh does not announce itself once something is shown', () async {
+    final gw = FakeGateway()
+      ..discovered = [
+        {'index': 0, 'address': 'addr0', 'balance_nano_erg': 100, 'tokens': []},
+      ]
+      ..nextUnused = 1
+      ..balances = {
+        'addr0': {'balance_nano_erg': 100, 'tokens': []},
+        'addr1': {'balance_nano_erg': 0, 'tokens': []},
+      };
+    final c = WalletSyncController(gw);
+    await c.refresh(discover: true);
+    expect(c.phase, SyncPhase.synced);
+
+    final seen = <SyncPhase>[];
+    c.addListener(() => seen.add(c.phase));
+    await c.refresh(discover: false, quiet: true);
+    expect(seen.contains(SyncPhase.syncing), isFalse,
+        reason: 'a 20-second poll must not flip the strip to Syncing');
+    expect(c.phase, SyncPhase.synced);
+  });
+
+  test('the first load still announces itself, quiet or not', () async {
+    final gw = FakeGateway()
+      ..discovered = [
+        {'index': 0, 'address': 'addr0', 'balance_nano_erg': 100, 'tokens': []},
+      ]
+      ..nextUnused = 1
+      ..balances = {
+        'addr0': {'balance_nano_erg': 100, 'tokens': []},
+        'addr1': {'balance_nano_erg': 0, 'tokens': []},
+      };
+    final c = WalletSyncController(gw);
+    final seen = <SyncPhase>[];
+    c.addListener(() => seen.add(c.phase));
+    await c.refresh(discover: true, quiet: true);
+    expect(seen.first, SyncPhase.syncing, reason: 'nothing was on screen yet');
+  });
+
+  test('a quiet refresh still reports a failure', () async {
+    final gw = FakeGateway()
+      ..discovered = [
+        {'index': 0, 'address': 'addr0', 'balance_nano_erg': 100, 'tokens': []},
+      ]
+      ..nextUnused = 1
+      ..balances = {
+        'addr0': {'balance_nano_erg': 100, 'tokens': []},
+        'addr1': {'balance_nano_erg': 0, 'tokens': []},
+      };
+    final c = WalletSyncController(gw);
+    await c.refresh(discover: true);
+    gw.balances.clear();
+    await c.refresh(discover: false, quiet: true);
+    expect(c.phase, SyncPhase.failed);
   });
 }

@@ -22,6 +22,7 @@ class LastKnownBalance {
     required this.age,
     this.tokens = const [],
     this.addresses = const [],
+    this.stealthNano = 0,
   });
   final int balanceNano;
   final Duration age;
@@ -30,6 +31,10 @@ class LastKnownBalance {
   /// A locked wallet cannot derive new ones (that needs the seed), but its
   /// known addresses can still be queried live.
   final List<String> addresses;
+
+  /// Stealth ERG at the last sync. A locked wallet cannot rescan for it,
+  /// because detection needs its seed.
+  final int stealthNano;
 
   /// Token holdings from the same snapshot, for portfolio valuation.
   final List<({String id, int amount, int decimals})> tokens;
@@ -132,6 +137,7 @@ class WalletDatabaseService {
     return LastKnownBalance(
       balanceNano: (map['balance_nano_erg'] as num?)?.toInt() ?? 0,
       age: at == null ? Duration.zero : DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(at)),
+      stealthNano: (map['stealth_nano_erg'] as num?)?.toInt() ?? 0,
       addresses: [
         for (final a in (map['used_addresses'] as List? ?? const []))
           if (a is Map && a['address'] != null) a['address'].toString()

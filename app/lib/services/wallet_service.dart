@@ -780,6 +780,21 @@ class WalletService {
 
   /// Returns the pinned address index for [walletId] (defaults to the active
   /// wallet), or 0 if none pinned.
+  /// Fills in the pinned address for a wallet that has a pinned *index*
+  /// but no stored address, which is every pin made before the address was
+  /// recorded alongside it. Without this a locked wallet shows its index-0
+  /// address instead of the one the user pinned.
+  Future<void> backfillPinnedAddress() async {
+    final id = _currentWalletId;
+    if (id == null || !isUnlocked) return;
+    final meta = await _loadWalletMeta(id);
+    final index = meta.pinnedAddressIndex ?? 0;
+    if (index <= 0 || meta.pinnedAddress != null) return;
+    final addr = await tryDeriveAddress(index);
+    if (addr == null) return;
+    await setPinnedAddressIndex(id, index, address: addr);
+  }
+
   Future<int> getPinnedAddressIndex({String? walletId}) async {
     final id = walletId ?? _currentWalletId;
     if (id == null) return 0;
