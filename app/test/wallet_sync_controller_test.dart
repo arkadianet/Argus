@@ -134,6 +134,7 @@ class FakeGateway implements WalletSyncGateway {
 }
 
 void main() {
+  _stealthSnapshotTests();
   _quietRefreshTests();
   late FakeGateway gw;
   late WalletSyncController c;
@@ -592,5 +593,58 @@ void _quietRefreshTests() {
     gw.balances.clear();
     await c.refresh(discover: false, quiet: true);
     expect(c.phase, SyncPhase.failed);
+  });
+}
+
+// The stealth figure a locked wallet inherits must not pretend to be fresh
+void _stealthSnapshotTests() {
+  FakeGateway gw() => FakeGateway()
+    ..discovered = [
+      {'index': 0, 'address': 'addr0', 'balance_nano_erg': 100, 'tokens': []},
+    ]
+    ..nextUnused = 1
+    ..balances = {
+      'addr0': {'balance_nano_erg': 100, 'tokens': []},
+      'addr1': {'balance_nano_erg': 0, 'tokens': []},
+    };
+
+  test('a successful scan is stamped with the time it happened', () async {
+    final g = gw()..stealthResult = const StealthScanResult(
+        scanned: 1, ownedCount: 1, totalNanoErg: 5000000000, tokens: [], boxIds: ['b']);
+    final c = WalletSyncController(g);
+    await c.refresh(discover: true);
+    expect(c.stealthNano, 5000000000);
+    expect(c.stealthScannedAt, isNotNull);
+    expect(g.savedCache?['stealth_nano_erg'], 5000000000);
+    expect(g.savedCache?['stealth_scanned_at'], isNotNull);
+  });
+
+  test('a failed scan keeps the old figure and its old timestamp', () async {
+    final g = gw()..stealthResult = const StealthScanResult(
+        scanned: 1, ownedCount: 1, totalNanoErg: 5000000000, tokens: [], boxIds: ['b']);
+    final c = WalletSyncController(g);
+    await c.refresh(discover: true);
+    final firstStamp = g.savedCache?['stealth_scanned_at'];
+
+    // Now the explorer stops answering.
+    g.stealthResult = null;
+    await c.refresh(discover: false);
+    expect(c.stealthBalanceUnknown, isTrue);
+    expect(g.savedCache?['stealth_nano_erg'], 5000000000,
+        reason: 'the last figure is still the best known');
+    expect(g.savedCache?['stealth_scanned_at'], firstStamp,
+        reason: 'but it must not claim to have been checked just now');
+  });
+
+  test('turning the scan off clears the figure and its timestamp', () async {
+    final g = gw()
+      ..stealthResult = const StealthScanResult(
+          scanned: 1, ownedCount: 1, totalNanoErg: 5000000000, tokens: [], boxIds: ['b']);
+    final c = WalletSyncController(g);
+    await c.refresh(discover: true);
+    g.stealthEnabled = false;
+    await c.refresh(discover: false);
+    expect(c.stealthNano, 0);
+    expect(c.stealthScannedAt, isNull);
   });
 }

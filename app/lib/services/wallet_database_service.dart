@@ -23,6 +23,7 @@ class LastKnownBalance {
     this.tokens = const [],
     this.addresses = const [],
     this.stealthNano = 0,
+    this.stealthScannedAt,
   });
   final int balanceNano;
   final Duration age;
@@ -35,6 +36,10 @@ class LastKnownBalance {
   /// Stealth ERG at the last sync. A locked wallet cannot rescan for it,
   /// because detection needs its seed.
   final int stealthNano;
+
+  /// When [stealthNano] was last confirmed by a successful scan. Null means
+  /// it was never scanned, so the figure is not to be trusted as current.
+  final DateTime? stealthScannedAt;
 
   /// Token holdings from the same snapshot, for portfolio valuation.
   final List<({String id, int amount, int decimals})> tokens;
@@ -111,6 +116,8 @@ class WalletDatabaseService {
     required List<Map<String, dynamic>> transactions,
     required int utxoCount,
     int lastSyncedHeight = 0,
+    int stealthNano = 0,
+    DateTime? stealthScannedAt,
   }) async {
     if (walletId.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
@@ -118,6 +125,11 @@ class WalletDatabaseService {
       'wallet_id': walletId,
       'primary_address': primaryAddress,
       'used_addresses': usedAddresses,
+      // A locked wallet cannot rescan for stealth funds: detection needs
+      // its seed. The last successful figure is kept with the time it was
+      // taken, so the row can say how old it is rather than imply it is now.
+      'stealth_nano_erg': stealthNano,
+      'stealth_scanned_at': stealthScannedAt?.millisecondsSinceEpoch,
       'balance_nano_erg': balanceNano,
       'tokens': tokens,
       'transactions': transactions,
@@ -138,6 +150,10 @@ class WalletDatabaseService {
       balanceNano: (map['balance_nano_erg'] as num?)?.toInt() ?? 0,
       age: at == null ? Duration.zero : DateTime.now().difference(DateTime.fromMillisecondsSinceEpoch(at)),
       stealthNano: (map['stealth_nano_erg'] as num?)?.toInt() ?? 0,
+      stealthScannedAt: (map['stealth_scanned_at'] as num?) == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(
+              (map['stealth_scanned_at'] as num).toInt()),
       addresses: [
         for (final a in (map['used_addresses'] as List? ?? const []))
           if (a is Map && a['address'] != null) a['address'].toString()

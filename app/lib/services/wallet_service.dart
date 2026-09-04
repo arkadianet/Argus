@@ -792,6 +792,12 @@ class WalletService {
     if (index <= 0 || meta.pinnedAddress != null) return;
     final addr = await tryDeriveAddress(index);
     if (addr == null) return;
+    // Deriving is async: the user may have switched wallets, locked, or
+    // changed the pin meanwhile. Writing then would restore a pin they
+    // just cleared, or record an address for the wrong wallet.
+    if (_currentWalletId != id || !isUnlocked) return;
+    final now = await _loadWalletMeta(id);
+    if ((now.pinnedAddressIndex ?? 0) != index || now.pinnedAddress != null) return;
     await setPinnedAddressIndex(id, index, address: addr);
   }
 

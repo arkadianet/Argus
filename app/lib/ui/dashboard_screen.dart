@@ -1670,10 +1670,11 @@ class _DashboardScreenState extends State<DashboardScreen>
           : live + cachedStealth,
       hidden: _balanceHidden,
     );
-    final lockedStealthNote =
-        !isActive && cachedStealth > 0 && !_balanceHidden
-            ? 'includes ${formatErg(cachedStealth, maxFrac: 4)} stealth, as last seen'
-            : null;
+    final stealthSeen = known?.stealthScannedAt;
+    final lockedStealthNote = !isActive && cachedStealth > 0 && !_balanceHidden
+        ? 'includes ${formatErg(cachedStealth, maxFrac: 4)} stealth'
+            '${stealthSeen == null ? '' : ', as of ${formatSyncAge(stealthSeen)}'}'
+        : null;
     final balance = display.balanceNano;
     final stealthNote = display.note;
     final addr = isActive ? (_sync.receiveAddress ?? w.displayAddress) : w.displayAddress;

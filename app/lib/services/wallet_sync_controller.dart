@@ -132,6 +132,11 @@ class LiveWalletSyncGateway implements WalletSyncGateway {
         primaryAddress: snapshot['primary_address'] as String?,
         usedAddresses:
             (snapshot['used_addresses'] as List).cast<Map<String, dynamic>>(),
+        stealthNano: (snapshot['stealth_nano_erg'] as num?)?.toInt() ?? 0,
+        stealthScannedAt: (snapshot['stealth_scanned_at'] as num?) == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(
+                (snapshot['stealth_scanned_at'] as num).toInt()),
         balanceNano: snapshot['balance_nano_erg'] as int,
         tokens: (snapshot['tokens'] as List).cast<Map<String, dynamic>>(),
         transactions:
@@ -200,6 +205,9 @@ class WalletSyncController extends ChangeNotifier {
   /// balance shown is unknown rather than zero. Also true right after a
   /// failed explorer call.
   bool stealthBalanceUnknown = true;
+
+  /// When [stealthNano] was last confirmed. Untouched by a failed scan.
+  DateTime? stealthScannedAt;
 
   /// True when the user has the scan on, so an unknown stealth balance is
   /// worth reporting rather than simply "not in use".
@@ -289,6 +297,7 @@ class WalletSyncController extends ChangeNotifier {
     stealthTokens = const [];
     stealthRows = const [];
     stealthBalanceUnknown = true;
+    stealthScannedAt = null;
     notifyListeners();
   }
 
@@ -437,6 +446,9 @@ class WalletSyncController extends ChangeNotifier {
         // rescan; the last known figure is the only thing it can honestly
         // show, and it is labelled as of a time.
         'stealth_nano_erg': stealthNano,
+        // Only a successful scan moves this on, so a failed one preserves
+        // both the figure and how old it is.
+        'stealth_scanned_at': stealthScannedAt?.millisecondsSinceEpoch,
         'balance_nano_erg': balanceNano ?? 0,
         'tokens': [
           for (final t in tokens)
@@ -557,6 +569,7 @@ class WalletSyncController extends ChangeNotifier {
       stealthTokens = const [];
       stealthRows = const [];
       stealthBalanceUnknown = false;
+      stealthScannedAt = null;
       return;
     }
     StealthScanResult? result;
@@ -597,6 +610,7 @@ class WalletSyncController extends ChangeNotifier {
     ];
     stealthRows = stealthActivityRows(result.boxes);
     stealthBalanceUnknown = false;
+    stealthScannedAt = DateTime.now();
   }
 
   /// Null when the history call itself failed.
