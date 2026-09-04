@@ -64,15 +64,91 @@ int ergForDexyDeposit(DexyState st, int dexyAmount) {
   return (n ~/ BigInt.from(st.lpDexyReserves)).toInt();
 }
 
-/// Raw tokens needed to pair [ergNano] at the current pool ratio.
-/// Counterpart of [ergForDexyDeposit]; same rounding rationale.
+/// Raw tokens [ergNano] can fully pay for at the current pool ratio,
+/// rounded down: the token side is never rounded up, because for a
+/// zero-decimal token that hands the pool a whole unit for nothing.
 int dexyForErgDeposit(DexyState st, int ergNano) {
   if (st.lpDexyReserves <= 0 || st.lpErgReserves <= 0 || ergNano <= 0) {
     return 0;
   }
-  final n = BigInt.from(ergNano) * BigInt.from(st.lpDexyReserves) +
-      BigInt.from(st.lpErgReserves - 1);
+  final n = BigInt.from(ergNano) * BigInt.from(st.lpDexyReserves);
   return (n ~/ BigInt.from(st.lpErgReserves)).toInt();
+}
+
+/// An LP deposit sized so the pool contract consumes exactly what is
+/// offered: the token side is whole units the ERG fully justifies, the ERG
+/// side is the minimum that mints [lp], and nothing is rounded up.
+class LpDepositPlan {
+  const LpDepositPlan({
+    required this.lp,
+    required this.ergNano,
+    required this.dexyUnits,
+    required this.ergTyped,
+    required this.ergForOneMore,
+  });
+
+  /// LP tokens the deposit mints; 0 means no deposit is possible.
+  final int lp;
+
+  /// ERG the transaction will consume.
+  final int ergNano;
+
+  /// Token base units the transaction will consume.
+  final int dexyUnits;
+
+  /// ERG the user offered; whatever exceeds [ergNano] stays in the wallet.
+  final int ergTyped;
+
+  /// ERG that would pair one more token unit, when known.
+  final int? ergForOneMore;
+
+  int get ergLeftover => ergTyped - ergNano;
+  bool get valid => lp > 0 && dexyUnits > 0 && ergNano > 0;
+}
+
+BigInt _big(int v) => BigInt.from(v);
+
+/// LP minted by [dexyUnits] on the token side, per the mint contract.
+int _lpForDexy(DexyState st, int dexyUnits) =>
+    (_big(dexyUnits) * _big(st.lpCirculating) ~/ _big(st.lpDexyReserves)).toInt();
+
+/// Smallest ERG that mints [lp]: ceil(lp * reservesX / supply).
+int _ergForLp(DexyState st, int lp) {
+  final s = _big(st.lpCirculating);
+  return ((_big(lp) * _big(st.lpErgReserves) + s - BigInt.one) ~/ s).toInt();
+}
+
+/// Plans a deposit from the side the user edited. Token-led: the ERG is
+/// derived. ERG-led: the largest whole token count the ERG justifies is
+/// used and the ERG actually consumed is derived from it, so the typed
+/// ERG is an upper bound rather than an amount that forces a round-up.
+LpDepositPlan planLpDeposit(DexyState st, {int? ergNano, int? dexyUnits, required bool ergLed}) {
+  const none = LpDepositPlan(lp: 0, ergNano: 0, dexyUnits: 0, ergTyped: 0, ergForOneMore: null);
+  if (st.lpDexyReserves <= 0 || st.lpErgReserves <= 0 || st.lpCirculating <= 0) return none;
+  final int dexy;
+  final int typed;
+  if (ergLed) {
+    if (ergNano == null || ergNano <= 0) return none;
+    typed = ergNano;
+    dexy = dexyForErgDeposit(st, ergNano);
+  } else {
+    if (dexyUnits == null || dexyUnits <= 0) return none;
+    dexy = dexyUnits;
+    typed = -1;
+  }
+  final lp = _lpForDexy(st, dexy);
+  final erg = _ergForLp(st, lp);
+  final oneMore = _ergForLp(st, _lpForDexy(st, dexy + 1));
+  if (dexy <= 0 || lp <= 0) {
+    return LpDepositPlan(lp: 0, ergNano: 0, dexyUnits: 0, ergTyped: typed < 0 ? 0 : typed, ergForOneMore: oneMore);
+  }
+  return LpDepositPlan(
+    lp: lp,
+    ergNano: erg,
+    dexyUnits: dexy,
+    ergTyped: typed < 0 ? erg : typed,
+    ergForOneMore: oneMore,
+  );
 }
 
 /// Tokens that must be acquired to deliver [wanted] while holding [held].

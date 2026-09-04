@@ -288,11 +288,24 @@ pub fn summarize_tx_for_address(
             }
         }
     }
+    let spent_total = spent.clone();
     let tokens_sent: Vec<TokenReceived> = spent
         .into_iter()
         .filter_map(|(token_id, out)| {
             let back = received.get(&token_id).copied().unwrap_or(0);
             let net = out.saturating_sub(back);
+            (net > 0).then_some(TokenReceived { token_id, amount: net })
+        })
+        .collect();
+
+    // Net arrivals: tokens that merely came back as change (they were in
+    // our inputs too) are not received. A Dexy deposit's change box carries
+    // every other token the spent boxes held; only the LP token is new.
+    let tokens_received: Vec<TokenReceived> = received
+        .into_iter()
+        .filter_map(|(token_id, back)| {
+            let out = spent_total.get(&token_id).copied().unwrap_or(0);
+            let net = back.saturating_sub(out);
             (net > 0).then_some(TokenReceived { token_id, amount: net })
         })
         .collect();
@@ -303,10 +316,7 @@ pub fn summarize_tx_for_address(
         timestamp,
         value_nano_erg,
         token_ids,
-        tokens_received: received
-            .into_iter()
-            .map(|(token_id, amount)| TokenReceived { token_id, amount })
-            .collect(),
+        tokens_received,
         tokens_sent,
         fee_nano_erg,
         counterparty,
@@ -1023,6 +1033,30 @@ mod tests {
         assert_eq!(s.tokens_sent.len(), 1);
         assert_eq!(s.tokens_sent[0].token_id, "tokA");
         assert_eq!(s.tokens_sent[0].amount, 30);
+        // The 20 tokA that came back is change, not a receipt.
+        assert!(s.tokens_received.is_empty(), "change must not count as received");
+
+        // A deposit-style tx: our box with tokA+tokB in, LP token out plus
+        // tokA+tokB change. Only the LP token is received.
+        let deposit = serde_json::json!({
+            "id": "tx4",
+            "inputs": [
+                {"boxId": "b1", "address": addr, "value": 1000,
+                 "assets": [{"tokenId": "tokA", "amount": 5}, {"tokenId": "tokB", "amount": 7}]}
+            ],
+            "outputs": [
+                {"address": "9pool", "value": 500, "ergoTree": "02", "assets": [{"tokenId": "tokA", "amount": 2}]},
+                {"address": addr, "value": 490, "ergoTree": "01",
+                 "assets": [{"tokenId": "lp", "amount": 470}, {"tokenId": "tokA", "amount": 3}, {"tokenId": "tokB", "amount": 7}]},
+                {"address": "9miner", "value": 10, "ergoTree": fee_tree, "assets": []}
+            ]
+        });
+        let s = summarize_tx_for_address(&deposit, addr).expect("summary");
+        assert_eq!(s.tokens_received.len(), 1);
+        assert_eq!(s.tokens_received[0].token_id, "lp");
+        assert_eq!(s.tokens_received[0].amount, 470);
+        assert_eq!(s.tokens_sent.len(), 1);
+        assert_eq!(s.tokens_sent[0].amount, 2);
 
         // Incoming: counterparty is the sender's input address.
         let incoming = serde_json::json!({

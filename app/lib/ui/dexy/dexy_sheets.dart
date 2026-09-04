@@ -534,15 +534,17 @@ class DexyLiquiditySheetState extends State<DexyLiquiditySheet> {
   /// that field's own onChanged and fight the user's cursor.
   bool _pairing = false;
 
+  /// The exact pairing the transaction will use; null until both sides
+  /// resolve to a mintable amount.
+  LpDepositPlan? _plan;
+
   void _onErgChanged() {
     if (_pairing) return;
     _pairing = true;
     final erg = parseErgToNano(_ergCtrl.text);
-    final dexy = (erg == null || erg <= 0)
-        ? 0
-        : dexyForErgDeposit(widget.state, erg);
-    _dexyCtrl.text =
-        dexy <= 0 ? '' : formatTokenAmount(dexy, widget.variant.decimals);
+    final plan = planLpDeposit(widget.state, ergNano: erg, ergLed: true);
+    _plan = plan.valid ? plan : null;
+    _dexyCtrl.text = plan.valid ? formatTokenAmount(plan.dexyUnits, widget.variant.decimals) : '';
     _pairing = false;
     _onChanged();
   }
@@ -550,12 +552,10 @@ class DexyLiquiditySheetState extends State<DexyLiquiditySheet> {
   void _onDexyChanged() {
     if (_pairing) return;
     _pairing = true;
-    final dexy =
-        parseDecimalToBase(_dexyCtrl.text, widget.variant.decimals);
-    final erg = (dexy == null || dexy <= 0)
-        ? 0
-        : ergForDexyDeposit(widget.state, dexy);
-    _ergCtrl.text = erg <= 0 ? '' : formatErg(erg, unit: false);
+    final dexy = parseDecimalToBase(_dexyCtrl.text, widget.variant.decimals);
+    final plan = planLpDeposit(widget.state, dexyUnits: dexy, ergLed: false);
+    _plan = plan.valid ? plan : null;
+    _ergCtrl.text = plan.valid ? formatErg(plan.ergNano, unit: false) : '';
     _pairing = false;
     _onChanged();
   }
@@ -563,9 +563,8 @@ class DexyLiquiditySheetState extends State<DexyLiquiditySheet> {
   Future<void> _refresh() async {
     final variant = widget.variant;
     final isDeposit = _action == 'deposit';
-    final erg = isDeposit ? parseErgToNano(_ergCtrl.text) : 0;
-    final dexy =
-        isDeposit ? parseDecimalToBase(_dexyCtrl.text, variant.decimals) : 0;
+    final erg = isDeposit ? _plan?.ergNano : 0;
+    final dexy = isDeposit ? _plan?.dexyUnits : 0;
     final lp = !isDeposit ? parseDecimalToBase(_lpCtrl.text, 0) : 0;
 
     if ((isDeposit && (erg == null || erg <= 0 || dexy == null || dexy <= 0)) ||
@@ -602,20 +601,18 @@ class DexyLiquiditySheetState extends State<DexyLiquiditySheet> {
   }
 
   Future<void> _review() async {
-    final variant = widget.variant;
     final int erg;
     final int dexy;
     final int lp;
     if (_action == 'deposit') {
-      final e = parseErgToNano(_ergCtrl.text);
-      final d = parseDecimalToBase(_dexyCtrl.text, variant.decimals);
-      if (e == null || e <= 0 || d == null || d <= 0) {
+      final plan = _plan;
+      if (plan == null || !plan.valid) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Enter both ERG and token amounts')));
+            const SnackBar(content: Text('Enter an amount that pairs at least one whole unit')));
         return;
       }
-      erg = e;
-      dexy = d;
+      erg = plan.ergNano;
+      dexy = plan.dexyUnits;
       lp = 0;
     } else {
       final l = parseDecimalToBase(_lpCtrl.text, 0);
@@ -761,6 +758,10 @@ class DexyLiquiditySheetState extends State<DexyLiquiditySheet> {
                 ),
               ),
             ),
+            if (depositPlanNote(_plan, widget.state, variant, ergTyped: parseErgToNano(_ergCtrl.text)) case final note?) ...[
+              const SizedBox(height: 8),
+              Text(note, style: Theme.of(context).textTheme.bodySmall),
+            ],
           ] else
             TextField(
               controller: _lpCtrl,
@@ -907,4 +908,26 @@ String? redeemRoundingNote(DexyLpPreview p, DexyVariant variant) {
       '${variant.shortName} is paid in steps of $unit, so ${formatTokenAmount(p.dexyOut, variant.decimals)} is returned and the rest stays in the pool.';
   if (next == null || next <= p.lpAmount) return base;
   return '$base Redeeming $next LP tokens would return ${formatTokenAmount(p.dexyOut + 1, variant.decimals)}.';
+}
+
+/// What the planned deposit consumes and what stays behind. For a
+/// zero-decimal token this is where the user learns that 1 ERG buys one
+/// whole unit's worth of pool share and the remainder is not taken.
+String? depositPlanNote(LpDepositPlan? plan, DexyState st, DexyVariant variant, {int? ergTyped}) {
+  if (ergTyped != null && ergTyped > 0 && (plan == null || !plan.valid)) {
+    final probe = planLpDeposit(st, ergNano: ergTyped, ergLed: true);
+    final need = probe.ergForOneMore;
+    return need == null
+        ? null
+        : '${formatErg(ergTyped)} pairs less than one ${variant.shortName}; '
+            '${formatErg(need)} pairs ${formatTokenAmount(1, variant.decimals)}.';
+  }
+  if (plan == null || !plan.valid) return null;
+  final units = '${formatTokenAmount(plan.dexyUnits, variant.decimals)} ${variant.shortName}';
+  final base = '$units pairs with ${formatErg(plan.ergNano)} for ${plan.lp} LP tokens.';
+  final leftover = plan.ergLeftover;
+  if (leftover < 50000) return base;
+  final more = plan.ergForOneMore;
+  final hint = more == null ? '' : ' ${formatErg(more)} would pair ${formatTokenAmount(plan.dexyUnits + 1, variant.decimals)}.';
+  return '$base ${formatErg(leftover)} stays in your wallet.$hint';
 }
