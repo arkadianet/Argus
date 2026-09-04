@@ -20,6 +20,7 @@ ergo-node-client = { workspace = true }
 dexy = { workspace = true }
 sigmausd = { workspace = true }
 amm = { workspace = true }
+stealth = { workspace = true }
 rand = { workspace = true }
 flutter_rust_bridge = "=2.11.1"
 once_cell = "1"

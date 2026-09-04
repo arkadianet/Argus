@@ -17,6 +17,7 @@ import '../services/portfolio.dart';
 import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
+import '../services/stealth_service.dart';
 import '../services/sigmausd_service.dart';
 import '../services/token_pricer.dart';
 import '../services/token_pricing.dart';
@@ -270,6 +271,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       ..clear()
       ..add(0);
     _sync.reset();
+    stealthService.reset();
     _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
   }
 
@@ -412,6 +414,11 @@ class _DashboardScreenState extends State<DashboardScreen>
       _status = 'Unlocked';
     });
     _incoming.reset();
+    // The published stealth string comes straight from the seed, so it can
+    // be shown before any network call. Restoring a wallet lands here too,
+    // and the refresh below runs the first stealth scan.
+    stealthService.reset();
+    unawaited(stealthService.loadAddress());
     notificationService.requestPermission();
     // 2. Full sync (discovery + balances + activity) in the background.
     await _sync.refresh(discover: true);
@@ -748,6 +755,20 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (ok != true) return;
     await addressLabelService.setLabel(address, label);
     if (mounted) setState(() {});
+  }
+
+  /// Route args for read-only asset views: totals include stealth holdings.
+  /// Send, Swap and the UTXO tools keep [_args], whose amounts are spendable.
+  WalletRouteArgs _displayArgs() {
+    final a = _args();
+    return WalletRouteArgs(
+      senderAddress: a.senderAddress,
+      receiveAddress: a.receiveAddress,
+      changeAddress: a.changeAddress,
+      historyAddresses: a.historyAddresses,
+      tokens: _sync.displayTokens,
+      spendableNano: _sync.totalNanoWithStealth,
+    );
   }
 
   WalletRouteArgs _args({Map<String, dynamic>? transaction}) {
@@ -1172,8 +1193,11 @@ class _DashboardScreenState extends State<DashboardScreen>
     return ListenableBuilder(
       listenable: Listenable.merge([networkController, tokenPricer]),
       builder: (context, _) {
-        final fungible = _sync.tokens.where((t) => !t.isNft).toList();
-        final nfts = _sync.tokens.where((t) => t.isNft).toList();
+        // Stealth holdings are part of what the wallet owns, so they belong
+        // in the asset list; each tile knows how much of it is stealth.
+        final holdings = _sync.displayTokens;
+        final fungible = holdings.where((t) => !t.isNft).toList();
+        final nfts = holdings.where((t) => t.isNft).toList();
         final fragmented = _sync.utxoCount > utxoFragmentationThreshold;
         Widget tokenTile(TokenBalance t) => AssetTile.token(
               t,
@@ -1183,11 +1207,14 @@ class _DashboardScreenState extends State<DashboardScreen>
             );
         final assets = <Widget>[
           AssetTile.erg(
-            balanceNano: _sync.balanceNano,
-            fiatText: networkController.fiatText(_sync.balanceNano),
+            // Display surface: stealth ERG is included, as it is in the
+            // portfolio card above and in the token tiles below. Send and
+            // coin selection still use _sync.balanceNano.
+            balanceNano: _sync.totalNanoWithStealth,
+            fiatText: networkController.fiatText(_sync.totalNanoWithStealth),
             hidden: _balanceHidden,
             onTap: () => Navigator.push(
-                context, fadeRoute(AssetsScreen(args: _args()))),
+                context, fadeRoute(AssetsScreen(args: _displayArgs()))),
           ),
           ...fungible.map(tokenTile),
           ...nfts.map(tokenTile),
@@ -1213,7 +1240,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ? 'View all (${assets.length})'
                     : 'View all',
                 onTap: () => Navigator.push(context,
-                    fadeRoute(AssetsScreen(args: _args())))),
+                    fadeRoute(AssetsScreen(args: _displayArgs())))),
             const SizedBox(height: 10),
             SoftCard(
               padding: EdgeInsets.zero,
@@ -1472,7 +1499,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     final colors = ArgusColors.of(context);
     final muted = colors.muted;
     final portfolio = portfolioTotal([
-      _sync.balanceNano,
+      // Stealth ERG is the wallet's money too; only send and coin selection
+      // use the spendable figure.
+      _sync.totalNanoWithStealth,
       for (final w in _wallets)
         if (w.walletId != _walletId) _otherBalances[w.walletId],
       for (final a in watchOnlyService.addresses) _watchBalances[a],
@@ -1485,22 +1514,27 @@ class _DashboardScreenState extends State<DashboardScreen>
     final value = holdingsValue(
       ergNano: portfolio.totalNano,
       tokens: [
-        for (final t in _sync.tokens) (id: t.id, amount: t.amount, decimals: t.decimals),
+        for (final t in _sync.displayTokens) (id: t.id, amount: t.amount, decimals: t.decimals),
         for (final w in _wallets)
           if (w.walletId != _walletId) ...?_lastKnown[w.walletId]?.tokens,
       ],
       result: tokenPricer.result,
     );
     final fiatValue = tokenPricer.fiatTextForUsd(tokenPricer.result.ergUsd == null ? null : value.usd);
+    // Status parts stand on their own: an unpriced wallet must still be
+    // told that the total omits stealth funds nobody could look up.
+    final statusParts = <String>[
+      if (fiatValue != null) '$fiatValue ${networkController.fiatCode.toUpperCase()}',
+      if (fiatValue != null && value.unpriced + value.excluded > 0)
+        '${value.unpriced + value.excluded} unpriced',
+      if (_sync.stealthScanning && _sync.stealthBalanceUnknown) 'stealth unknown',
+      if (fiatValue != null && tokenPricer.stale) 'prices stale',
+    ];
     final fiat = _balanceHidden
         ? '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}'
-        : fiatValue == null
+        : statusParts.isEmpty
             ? null
-            : [
-                '$fiatValue ${networkController.fiatCode.toUpperCase()}',
-                if (value.unpriced + value.excluded > 0) '${value.unpriced + value.excluded} unpriced',
-                if (tokenPricer.stale) 'prices stale',
-              ].join(' · ');
+            : statusParts.join(' · ');
     return SoftCard(
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
       child: Column(

@@ -1,0 +1,101 @@
+{
+ "items": [
+  {
+   "boxId": "291c4ab0c373ee5fff31b996c9cbc169ff5bb6cc471e8334acc6fb7d0916274d",
+   "transactionId": "0d3dc7ab70e7e75d4c192c26e8036209ac04380c626e9431e70918176ce8d8ec",
+   "blockId": "33c7f3b8ba726c7df490ca8dcb00fa3e7626f5345768ea33a3bb321bc305cee2",
+   "value": 122400,
+   "index": 1,
+   "globalIndex": 32663444,
+   "creationHeight": 1091392,
+   "settlementHeight": 1091394,
+   "ergoTree": "10040e2103a61135dd122ff3b7a9a2529644f196cf22533ebe8b8e664fb9b84d9f003eccad0e2102def407e179e0b4550dd94ea38d7f6cf63d8a7f726f73d49b24d21bb4aa772b590e2103f78cf1f2e10b0ef224e88a84146a0646a5ca12f1aec79e5dc370549f91704da90e21022ed401b62c61706e2f96c2d2bba52b367b874981dc0f9ee1c7218dec755a40b9ceee7300ee7301ee7302ee7303",
+   "ergoTreeConstants": "[\n  0: Coll[SByte$] = Coll(3,-90,17,53,-35,18,47,-13,-73,-87,-94,82,-106,68,-15,-106,-49,34,83,62,-66,-117,-114,102,79,-71,-72,77,-97,0,62,-52,-83),\n  1: Coll[SByte$] = Coll(2,-34,-12,7,-31,121,-32,-76,85,13,-39,78,-93,-115,127,108,-10,61,-118,127,114,111,115,-44,-101,36,-46,27,-76,-86,119,43,89),\n  2: Coll[SByte$] = Coll(3,-9,-116,-15,-14,-31,11,14,-14,36,-24,-118,-124,20,106,6,70,-91,-54,18,-15,-82,-57,-98,93,-61,112,84,-97,-111,112,77,-87),\n  3: Coll[SByte$] = Coll(2,46,-44,1,-74,44,97,112,110,47,-106,-62,-46,-69,-91,43,54,123,-121,73,-127,-36,15,-98,-31,-57,33,-115,-20,117,90,64,-71)\n]",
+   "ergoTreeScript": "Right(CreateProveDHTuple(DecodePoint(ConstantPlaceholder(0,Coll[SByte$])),DecodePoint(ConstantPlaceholder(1,Coll[SByte$])),DecodePoint(ConstantPlaceholder(2,Coll[SByte$])),DecodePoint(ConstantPlaceholder(3,Coll[SByte$]))))",
+   "address": "6QBPS6hGXTwe584Q6U55pCzGfs3St96rHTz7K73jaHy8XrnBSvsBXNZvvcvCTriYMmdXx79vU3EzSQo9bB5axTjKUiZS65YUxV9vbNQwcUT2X7JkTcGyJZVzKcgnTmv6Z4eFcfZv85fRqgXhiDfUeBo1nvgVtK5z6u1VweCkh4kD41pwLrsdnLigaPCw3oQmbcZ891zMzrwGswUrnhZY8BaC3K",
+   "assets": [
+    {
+     "tokenId": "30974274078845f263b4f21787e33cc99e9ec19a17ad85a5bc6da2cca91c5a2e",
+     "index": 0,
+     "amount": 50000000000,
+     "name": "WT_ADA",
+     "decimals": 8,
+     "type": "EIP-004"
+    },
+    {
+     "tokenId": "ef802b475c06189fdbf844153cdc1d449a5ba87cce13d11bb47b5a539f27f12b",
+     "index": 1,
+     "amount": 25000000000,
+     "name": "WT_ERG",
+     "decimals": 9,
+     "type": "EIP-004"
+    },
+    {
+     "tokenId": "e91cbc48016eb390f8f872aa2962772863e2e840708517d1ab85e57451f91bed",
+     "index": 2,
+     "amount": 1200,
+     "name": "Ergold",
+     "decimals": 0,
+     "type": "EIP-004"
+    },
+    {
+     "tokenId": "fbbaac7337d051c10fc3da0ccb864f4d32d40027551e1c3ea3ce361f39b91e40",
+     "index": 3,
+     "amount": 200,
+     "name": "kushti",
+     "decimals": 0,
+     "type": "EIP-004"
+    }
+   ],
+   "additionalRegisters": {},
+   "spentTransactionId": null,
+   "mainChain": true
+  },
+  {
+   "boxId": "9c57ca5f4f758814e999e2c95eff12fe4f671e71b965971736dc1176f17dd617",
+   "transactionId": "1d8d8382d709949851e594bf785084b8c37e3c1e32956ce87a831141cdf075b3",
+   "blockId": "64e0f30f0dec875a2918544c98f3177a090c81212c3e62a4ddec833363d13780",
+   "value": 10000000,
+   "index": 0,
+   "globalIndex": 33508704,
+   "creationHeight": 1114231,
+   "settlementHeight": 1114233,
+   "ergoTree": "10040e2103b38f4a8f3469485c5efc53d1a7a3d5f6328108e55a50b310e61cd2d5b23e68970e2102abeedb3f86f15dcef2bba8d6df349688c8e257237905725d8fca49ac25ee57820e2103a2fd8d159872d01e1079a97d849eff798493221329eae43ca6bfd850054acca60e21020492ee1b28a03d9e5cb3146ad345f8e6320f7d515fc45bc182541a27bb2dcc22ceee7300ee7301ee7302ee7303",
+   "ergoTreeConstants": "[\n  0: Coll[SByte$] = Coll(3,-77,-113,74,-113,52,105,72,92,94,-4,83,-47,-89,-93,-43,-10,50,-127,8,-27,90,80,-77,16,-26,28,-46,-43,-78,62,104,-105),\n  1: Coll[SByte$] = Coll(2,-85,-18,-37,63,-122,-15,93,-50,-14,-69,-88,-42,-33,52,-106,-120,-56,-30,87,35,121,5,114,93,-113,-54,73,-84,37,-18,87,-126),\n  2: Coll[SByte$] = Coll(3,-94,-3,-115,21,-104,114,-48,30,16,121,-87,125,-124,-98,-1,121,-124,-109,34,19,41,-22,-28,60,-90,-65,-40,80,5,74,-52,-90),\n  3: Coll[SByte$] = Coll(2,4,-110,-18,27,40,-96,61,-98,92,-77,20,106,-45,69,-8,-26,50,15,125,81,95,-60,91,-63,-126,84,26,39,-69,45,-52,34)\n]",
+   "ergoTreeScript": "Right(CreateProveDHTuple(DecodePoint(ConstantPlaceholder(0,Coll[SByte$])),DecodePoint(ConstantPlaceholder(1,Coll[SByte$])),DecodePoint(ConstantPlaceholder(2,Coll[SByte$])),DecodePoint(ConstantPlaceholder(3,Coll[SByte$]))))",
+   "address": "6QBPS6hGiHgxanv3Rztmqjd1F17VvXFGaBEQ5MaBdWMwe8kP7yHa3Q1KHTPBupqJWDhAZmuJr8qdj6kjGVye9tTUvYmamZJXh2y9MoMhYf6yF7AAbjmzsXvz5N99VTjCauXwVkxwd9h8Nv13QKEtgW3eyQn3Zu7z6TNUHGFcHh7PGYdMFAJsD5Bzz1f3u54za7dSotYZY6LE2EUTvPjVvpR5TU",
+   "assets": [],
+   "additionalRegisters": {},
+   "spentTransactionId": null,
+   "mainChain": true
+  },
+  {
+   "boxId": "aa833fc4bbe4c86055d89eb52d3f37a9c936ed10979a6afea81991c6b2ce2657",
+   "transactionId": "ff2198ac7d0e0aab59b00724809770818aae4228d06f7f0137caa1f2d02dbcf5",
+   "blockId": "e430ed8f9c4bcce6fcc68ea5a815ae15049d4f348c76b376cc85d5dc9b8b6942",
+   "value": 1000000000,
+   "index": 0,
+   "globalIndex": 3490726,
+   "creationHeight": 1221228,
+   "settlementHeight": 1221230,
+   "ergoTree": "10040e2102ad76e6d0253768e36d72555f98dcc98edce432f3928234952fadf4f1397671150e2102f372bb3b17551ad240ab1b35cc166df7e1e36d2e55b9c3a7d39d06e7235d90e00e2102f025b8dcee3c3195475c359d488a25276f7e27c4253f649158dc55bf27e6c2450e2103faf6264865c9326b547ea9a00999560ea1c5358479245dea6c7ea9d01493679bceee7300ee7301ee7302ee7303",
+   "ergoTreeConstants": "[\n  0: Coll[SByte$] = Coll(2,-83,118,-26,-48,37,55,104,-29,109,114,85,95,-104,-36,-55,-114,-36,-28,50,-13,-110,-126,52,-107,47,-83,-12,-15,57,118,113,21),\n  1: Coll[SByte$] = Coll(2,-13,114,-69,59,23,85,26,-46,64,-85,27,53,-52,22,109,-9,-31,-29,109,46,85,-71,-61,-89,-45,-99,6,-25,35,93,-112,-32),\n  2: Coll[SByte$] = Coll(2,-16,37,-72,-36,-18,60,49,-107,71,92,53,-99,72,-118,37,39,111,126,39,-60,37,63,100,-111,88,-36,85,-65,39,-26,-62,69),\n  3: Coll[SByte$] = Coll(3,-6,-10,38,72,101,-55,50,107,84,126,-87,-96,9,-103,86,14,-95,-59,53,-124,121,36,93,-22,108,126,-87,-48,20,-109,103,-101)\n]",
+   "ergoTreeScript": "Right(CreateProveDHTuple(DecodePoint(ConstantPlaceholder(0,Coll[SByte$])),DecodePoint(ConstantPlaceholder(1,Coll[SByte$])),DecodePoint(ConstantPlaceholder(2,Coll[SByte$])),DecodePoint(ConstantPlaceholder(3,Coll[SByte$]))))",
+   "address": "6QBPS6hD63YmhoJMDEaV9TvRKe7ytnahtgZKYZfYDMJfQdKU8j6UW13abBQnSc6jZUr8YyqCeFmEc2tkmBLgvzDJY6qvsQt1BbGErHGZTmMVpabeupn7GE28MSRMYZGxX9bQp5PeuoVoRTddc69zBcusJrJ7ZfWCHWiqqEoSHEXYsai6vH7TBL6CNTwwYHM3QJ3L4Pbhq7KgGQds2QMbHXyqUN",
+   "assets": [
+    {
+     "tokenId": "0fdb7ff8b37479b6eb7aab38d45af2cfeefabbefdc7eebc0348d25dd65bc2c91",
+     "index": 0,
+     "amount": 100,
+     "name": "$Lambo",
+     "decimals": 0,
+     "type": "EIP-004"
+    }
+   ],
+   "additionalRegisters": {},
+   "spentTransactionId": null,
+   "mainChain": true
+  }
+ ],
+ "total": 3
+}

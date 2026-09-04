@@ -91,6 +91,11 @@ class TokenBalance {
   final int? emissionAmount;
   final String? iconUrl;
 
+  /// How much of [amount] sits in stealth boxes rather than in the wallet's
+  /// own P2PK boxes. Stealth funds are real but are not offered to ordinary
+  /// coin selection; they are swept first.
+  final int stealthAmount;
+
   TokenBalance({
     required this.id,
     required this.amount,
@@ -98,7 +103,11 @@ class TokenBalance {
     this.decimals = 0,
     this.emissionAmount,
     this.iconUrl,
+    this.stealthAmount = 0,
   });
+
+  /// True when any part of this holding is in stealth boxes.
+  bool get hasStealth => stealthAmount > 0;
 
   bool get isNft =>
       amount == 1 && decimals == 0 && (emissionAmount == null || emissionAmount == 1);
@@ -1032,6 +1041,44 @@ class WalletService {
     );
     final map = jsonDecode(raw) as Map<String, dynamic>;
     return map['tx_id'] as String? ?? raw;
+  }
+
+  // ── Stealth addresses ───────────────────────────────────────────────
+
+  /// This wallet's published `stealth…` string.
+  Future<String> stealthAddress() {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiStealthAddress(handleId: _handleId!);
+  }
+
+  /// Which of the explorer's stealth boxes this wallet can spend.
+  /// [explorerBoxesJson] is the raw body of the template-hash endpoint.
+  Future<Map<String, dynamic>> stealthScan(String explorerBoxesJson) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiStealthScan(
+      handleId: _handleId!,
+      explorerBoxesJson: explorerBoxesJson,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  /// Prepare a sweep of every owned stealth box to one of our own addresses.
+  /// Broadcast it with [sendErg], like any other preparation.
+  Future<SendPreview> prepareStealthSweep({
+    required String explorerBoxesJson,
+    required String destinationAddress,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareStealthSweep(
+      handleId: _handleId!,
+      explorerBoxesJson: explorerBoxesJson,
+      destinationAddress: destinationAddress,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+    return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
 
   // ── ErgoPay (EIP-20) ────────────────────────────────────────────────

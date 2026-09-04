@@ -80,6 +80,24 @@ class TokenDetailSheet extends StatelessWidget {
               const SizedBox(height: 12),
               _PriceLine(token: token),
             ],
+            if (token.hasStealth) ...[
+              const SizedBox(height: 12),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.visibility_off_outlined, size: 16, color: muted),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${formatTokenAmountGrouped(token.stealthAmount, token.decimals)} '
+                      'of this sits in stealth boxes. Sweep it from Receive '
+                      'before spending it.',
+                      style: TextStyle(fontSize: 12.5, color: muted),
+                    ),
+                  ),
+                ],
+              ),
+            ],
             if (media != null) ...[
               const SizedBox(height: 16),
               ClipRRect(

@@ -2574,6 +2574,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "stealth"
+version = "0.1.0"
+dependencies = [
+ "bs58",
+ "ergo-chain-types",
+ "ergo-lib",
+ "ergotree-interpreter",
+ "ergotree-ir",
+ "hex",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "sigma-ser",
+ "thiserror 1.0.69",
+ "zeroize",
+]
+
+[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3030,6 +3049,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "stealth",
  "thiserror 1.0.69",
  "zeroize",
 ]
@@ -3053,6 +3073,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigmausd",
+ "stealth",
  "thiserror 1.0.69",
  "tokio",
  "tracing",

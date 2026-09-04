@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:argus_wallet/services/stealth_service.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -113,6 +114,23 @@ class FakeGateway implements WalletSyncGateway {
   final prefetched = <String>[];
   @override
   Future<void> prefetchTokenMeta(Iterable<String> ids) async => prefetched.addAll(ids);
+
+  bool stealthEnabled = true;
+
+  /// Null models an unreachable explorer.
+  StealthScanResult? stealthResult;
+  bool stealthThrows = false;
+  int stealthCalls = 0;
+
+  @override
+  bool get stealthScanEnabled => stealthEnabled;
+
+  @override
+  Future<StealthScanResult?> scanStealth() async {
+    stealthCalls++;
+    if (stealthThrows) throw Exception('explorer down');
+    return stealthResult;
+  }
 }
 
 void main() {
@@ -411,5 +429,108 @@ void main() {
     expect(a.receiveAddress, 'addr0');
     expect(a.spendableNano, 5);
     expect(a.historyAddresses, ['addr0']);
+  });
+
+  group('stealth scan', () {
+    setUp(() async {
+      gw.balances = {
+        'addr0': {'balance_nano_erg': 100, 'tokens': []},
+      };
+      await c.hydrateAfterUnlock();
+    });
+
+    test('folds stealth ERG and tokens into the wallet view', () async {
+      gw.stealthResult = StealthScanResult(
+        scanned: 20,
+        ownedCount: 2,
+        totalNanoErg: 750,
+        tokens: [StealthToken(id: 'aa', amount: BigInt.from(7))],
+        boxIds: const ['b1', 'b2'],
+      );
+
+      await c.refresh(discover: false);
+
+      expect(gw.stealthCalls, 1);
+      expect(c.stealthNano, 750);
+      expect(c.stealthBalanceUnknown, isFalse);
+      // Spendable stays what ordinary coin selection can reach.
+      expect(c.balanceNano, 100);
+      expect(c.routeArgs.spendableNano, 100);
+      expect(c.totalNanoWithStealth, 850);
+      final aa = c.displayTokens.singleWhere((t) => t.id == 'aa');
+      expect(aa.amount, 7);
+      expect(aa.stealthAmount, 7);
+      expect(c.phase, SyncPhase.synced);
+    });
+
+    test('an unreachable explorer leaves the balance unknown, not the sync',
+        () async {
+      gw.stealthResult = null;
+
+      await c.refresh(discover: false);
+
+      expect(c.stealthBalanceUnknown, isTrue);
+      expect(c.stealthNano, 0);
+      expect(c.balanceNano, 100);
+      // A stealth failure must never degrade the sync phase.
+      expect(c.phase, SyncPhase.synced);
+    });
+
+    test('a throwing scan is caught and does not fail the refresh', () async {
+      gw.stealthThrows = true;
+
+      await c.refresh(discover: false);
+
+      expect(c.stealthBalanceUnknown, isTrue);
+      expect(c.phase, SyncPhase.synced);
+    });
+
+    test('a later failure keeps the last known stealth balance', () async {
+      gw.stealthResult = const StealthScanResult(
+        scanned: 20,
+        ownedCount: 1,
+        totalNanoErg: 500,
+        tokens: [],
+        boxIds: ['b1'],
+      );
+      await c.refresh(discover: false);
+      expect(c.stealthNano, 500);
+
+      gw.stealthResult = null;
+      await c.refresh(discover: false);
+
+      expect(c.stealthNano, 500, reason: 'stale is better than a wrong zero');
+      expect(c.stealthBalanceUnknown, isTrue);
+    });
+
+    test('with the scan off the explorer is never asked and zero is honest',
+        () async {
+      gw.stealthEnabled = false;
+
+      await c.refresh(discover: false);
+
+      expect(gw.stealthCalls, 0);
+      expect(c.stealthNano, 0);
+      expect(c.stealthBalanceUnknown, isFalse);
+      expect(c.displayTokens, isEmpty);
+    });
+
+    test('reset clears the stealth view', () async {
+      gw.stealthResult = StealthScanResult(
+        scanned: 1,
+        ownedCount: 1,
+        totalNanoErg: 42,
+        tokens: [StealthToken(id: 'aa', amount: BigInt.one)],
+        boxIds: const ['b1'],
+      );
+      await c.refresh(discover: false);
+      expect(c.stealthNano, 42);
+
+      c.reset();
+
+      expect(c.stealthNano, 0);
+      expect(c.stealthTokens, isEmpty);
+      expect(c.stealthBalanceUnknown, isTrue);
+    });
   });
 }

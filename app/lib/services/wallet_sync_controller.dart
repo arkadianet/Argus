@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 
 import 'network_controller.dart';
 import 'privacy_service.dart';
+import 'stealth_service.dart';
 import 'wallet_database_service.dart';
 import 'wallet_service.dart';
 
@@ -56,6 +57,14 @@ abstract class WalletSyncGateway {
 
   /// Learns names and decimals for tokens seen in activity, best effort.
   Future<void> prefetchTokenMeta(Iterable<String> ids);
+
+  /// Whether the user has left the stealth scan on.
+  bool get stealthScanEnabled;
+
+  /// Queries the explorer for stealth boxes and tests them against this
+  /// wallet's key. Returns null when the explorer could not be reached,
+  /// which must degrade the view rather than fail the sync.
+  Future<StealthScanResult?> scanStealth();
 }
 
 /// Production gateway over the app's singleton services.
@@ -138,6 +147,12 @@ class LiveWalletSyncGateway implements WalletSyncGateway {
   @override
   Future<void> prefetchTokenMeta(Iterable<String> ids) =>
       walletService.prefetchTokenMeta(ids).catchError((_) {});
+
+  @override
+  bool get stealthScanEnabled => stealthService.scanEnabled;
+
+  @override
+  Future<StealthScanResult?> scanStealth() => stealthService.scan();
 }
 
 /// Owns the unlocked wallet's synced view: addresses, balances, activity and
@@ -167,6 +182,36 @@ class WalletSyncController extends ChangeNotifier {
   List<String> frontierAddresses = const [];
   int utxoCount = 0;
   DateTime? lastSyncedAt;
+
+  /// ERG sitting in stealth boxes this wallet can spend. Zero when the scan
+  /// found none; see [stealthBalanceUnknown] for "we could not look".
+  int stealthNano = 0;
+
+  /// Tokens held in stealth boxes, with [TokenBalance.stealthAmount] equal
+  /// to the whole amount.
+  List<TokenBalance> stealthTokens = const [];
+
+  /// True when the scan is on but has never succeeded, so the stealth
+  /// balance shown is unknown rather than zero. Also true right after a
+  /// failed explorer call.
+  bool stealthBalanceUnknown = true;
+
+  /// True when the user has the scan on, so an unknown stealth balance is
+  /// worth reporting rather than simply "not in use".
+  bool get stealthScanning => _gw.stealthScanEnabled;
+
+  /// True when the stealth scan is switched off in Settings.
+  bool get stealthScanEnabled => _gw.stealthScanEnabled;
+
+  /// Balance including stealth funds — what the wallet is worth. Distinct
+  /// from [balanceNano], which is what ordinary coin selection can spend.
+  int? get totalNanoWithStealth =>
+      balanceNano == null ? null : balanceNano! + stealthNano;
+
+  /// The asset list as the user should see it: spendable holdings merged
+  /// with stealth ones, each carrying how much of it is in stealth boxes.
+  List<TokenBalance> get displayTokens =>
+      mergeStealthTokens(tokens, stealthTokens);
 
   /// Non-null when the stored pinned address index can't be derived.
   String? pinIssue;
@@ -225,6 +270,9 @@ class WalletSyncController extends ChangeNotifier {
     utxoCount = 0;
     pinIssue = null;
     lastSyncedAt = null;
+    stealthNano = 0;
+    stealthTokens = const [];
+    stealthBalanceUnknown = true;
     notifyListeners();
   }
 
@@ -302,11 +350,14 @@ class WalletSyncController extends ChangeNotifier {
       return;
     }
 
-    // Balances, activity and UTXO count don't depend on each other.
+    // Balances, activity, UTXO count and the stealth scan don't depend on
+    // each other. The stealth leg never throws: an unreachable explorer
+    // leaves the stealth balance unknown and the rest of the sync intact.
     final results = await Future.wait<Object?>([
       _fetchBalances(addresses),
       _fetchHistory(addresses),
       _gw.countUnspentBoxes(addresses).catchError((_) => utxoCount),
+      _scanStealth(),
     ]);
     if (!_gw.isUnlocked) {
       reset();
@@ -467,6 +518,56 @@ class WalletSyncController extends ChangeNotifier {
       }
     }
     return _BalanceResult(erg, merged.values.toList(), failed);
+  }
+
+  /// Folds a stealth scan into [stealthNano] and [stealthTokens].
+  ///
+  /// Off means "no stealth funds to show"; on but unreachable means
+  /// "unknown", which the UI says out loud instead of showing a wrong zero.
+  Future<void> _scanStealth() async {
+    if (!_gw.stealthScanEnabled) {
+      stealthNano = 0;
+      stealthTokens = const [];
+      stealthBalanceUnknown = false;
+      return;
+    }
+    StealthScanResult? result;
+    try {
+      result = await _gw.scanStealth();
+    } catch (_) {
+      result = null;
+    }
+    if (result == null) {
+      stealthBalanceUnknown = true;
+      return;
+    }
+    stealthNano = result.totalNanoErg;
+    // Names and decimals, so a token held only in stealth boxes is not
+    // rendered in base units and priced as if it had none. Hydration is
+    // best effort: on failure the raw amounts still show.
+    final raw = [
+      for (final t in result.tokens) {'id': t.id, 'amount': t.amount.toInt()},
+    ];
+    List<TokenBalance> hydrated;
+    try {
+      hydrated = await _gw.hydrateTokens(raw);
+    } catch (_) {
+      hydrated = const [];
+    }
+    final meta = {for (final t in hydrated) t.id: t};
+    stealthTokens = [
+      for (final t in result.tokens)
+        TokenBalance(
+          id: t.id,
+          amount: t.amount.toInt(),
+          name: meta[t.id]?.name,
+          decimals: meta[t.id]?.decimals ?? 0,
+          emissionAmount: meta[t.id]?.emissionAmount,
+          iconUrl: meta[t.id]?.iconUrl,
+          stealthAmount: t.amount.toInt(),
+        ),
+    ];
+    stealthBalanceUnknown = false;
   }
 
   /// Null when the history call itself failed.

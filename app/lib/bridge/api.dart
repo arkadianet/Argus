@@ -118,6 +118,68 @@ Future<bool> walletOwnsAddress({
   address: address,
 );
 
+/// This wallet's published `stealth…` string. Requires an unlocked wallet.
+Future<String> stealthAddress({required BigInt handleId}) =>
+    RustLib.instance.api.crateApiStealthAddress(handleId: handleId);
+
+/// `sha256` of the stealth script template — the path segment for the
+/// explorer's `boxes/unspent/byErgoTreeTemplateHash/{hash}` endpoint.
+String stealthTemplateHash() =>
+    RustLib.instance.api.crateApiStealthTemplateHash();
+
+/// The BIP-32 path the stealth secret is derived on, for display in Settings.
+String stealthDerivationPath() =>
+    RustLib.instance.api.crateApiStealthDerivationPath();
+
+/// Validate a `stealth…` string: prefix, Base58, length, blake2b checksum
+/// and that the key is a point on the curve.
+bool validateStealthAddress({required String address}) =>
+    RustLib.instance.api.crateApiValidateStealthAddress(address: address);
+
+/// True when a recipient string was *meant* to be a stealth address, so the
+/// UI can say "bad checksum" rather than "unknown address".
+bool looksLikeStealthAddress({required String address}) =>
+    RustLib.instance.api.crateApiLooksLikeStealthAddress(address: address);
+
+/// Derive a fresh one-time payment address for a `stealth…` recipient.
+///
+/// Call this once per payment: `r` and `y` are drawn here and discarded, so
+/// two calls for the same recipient return unlinkable addresses.
+Future<String> stealthPaymentAddress({required String stealthAddress}) =>
+    RustLib.instance.api.crateApiStealthPaymentAddress(
+      stealthAddress: stealthAddress,
+    );
+
+/// Given the explorer's response for the stealth template hash, report which
+/// boxes this wallet can spend, with ERG and token totals.
+///
+/// Dart owns the HTTP call (it already has the configured explorer and can
+/// degrade to "stealth balance unknown" when it fails); this is the local,
+/// private half of detection.
+Future<String> stealthScan({
+  required BigInt handleId,
+  required String explorerBoxesJson,
+}) => RustLib.instance.api.crateApiStealthScan(
+  handleId: handleId,
+  explorerBoxesJson: explorerBoxesJson,
+);
+
+/// Prepare a transaction moving every owned stealth box to one of this
+/// wallet's own addresses. Confirm and broadcast it with `send_erg`.
+Future<String> prepareStealthSweep({
+  required BigInt handleId,
+  required String explorerBoxesJson,
+  required String destinationAddress,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiPrepareStealthSweep(
+  handleId: handleId,
+  explorerBoxesJson: explorerBoxesJson,
+  destinationAddress: destinationAddress,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+);
+
 Future<String> generateMnemonic({required int strength}) =>
     RustLib.instance.api.crateApiGenerateMnemonic(strength: strength);
 

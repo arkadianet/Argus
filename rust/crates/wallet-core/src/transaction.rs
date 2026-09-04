@@ -161,4 +161,82 @@ mod tests {
         assert_eq!(signed.inputs.len(), 1);
         assert!(!signed.sigma_serialize_bytes().unwrap().is_empty());
     }
+
+    /// A stealth box can only be spent with the DH-tuple secret derived from
+    /// the wallet's stealth branch — and the wallet's ordinary P2PK keys are
+    /// not enough.
+    #[test]
+    fn signs_stealth_input_only_with_the_dht_secret() {
+        use ergo_lib::ergotree_ir::ergo_tree::ErgoTree;
+        use ergo_lib::wallet::secret_key::SecretKey;
+
+        let phrase = MnemonicPhrase::parse(APPKIT).unwrap();
+        let handle = WalletHandle::create(phrase, "").unwrap();
+        let me = handle.stealth_secret().unwrap();
+        let sweep_to = handle.derive_address(0).unwrap();
+
+        // Someone pays our published stealth address.
+        let tree_hex = stealth::build_payment_tree_hex(me.public_key()).unwrap();
+        let stealth_tree =
+            ErgoTree::sigma_parse_bytes(&hex::decode(&tree_hex).unwrap()).unwrap();
+
+        let value = BoxValue::try_from(2_000_000_000u64).unwrap();
+        let input_box = ErgoBox::new(
+            value,
+            stealth_tree,
+            None,
+            NonMandatoryRegisters::empty(),
+            1000,
+            TxId::zero(),
+            0,
+        )
+        .unwrap();
+
+        let fee = 1_100_000u64;
+        let out_value = *value.as_u64() - fee;
+        let sweep_out = ErgoBoxCandidateBuilder::new(
+            BoxValue::try_from(out_value).unwrap(),
+            p2pk_tree(&sweep_to),
+            2000,
+        )
+        .build()
+        .unwrap();
+        let fee_out = ErgoBoxCandidateBuilder::new(
+            BoxValue::try_from(fee).unwrap(),
+            ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS.script().unwrap(),
+            2000,
+        )
+        .build()
+        .unwrap();
+
+        let inputs = TxIoVec::from_vec(vec![UnsignedInput::new(
+            input_box.box_id(),
+            ergo_lib::ergotree_ir::chain::context_extension::ContextExtension::empty(),
+        )])
+        .unwrap();
+        let outputs = TxIoVec::from_vec(vec![sweep_out, fee_out]).unwrap();
+        let unsigned =
+            UnsignedTransaction::new(inputs, None::<TxIoVec<DataInput>>, outputs).unwrap();
+
+        let reduced = build_reduced_transaction(
+            unsigned,
+            vec![input_box],
+            vec![],
+            &dummy_state_context(2000),
+        )
+        .unwrap();
+
+        // Without the DHT secret the wallet cannot prove the tuple.
+        assert!(handle.sign_reduced(reduced.clone()).is_err());
+
+        let dht = me.dht_prover_input_for_tree(&tree_hex).unwrap();
+        let signed = handle
+            .sign_reduced_with_secrets(reduced, vec![SecretKey::DhtSecretKey(dht)])
+            .unwrap();
+        assert_eq!(signed.inputs.len(), 1);
+        assert!(matches!(
+            signed.inputs.first().spending_proof.proof,
+            ergo_lib::ergotree_interpreter::sigma_protocol::prover::ProofBytes::Some(_)
+        ));
+    }
 }
