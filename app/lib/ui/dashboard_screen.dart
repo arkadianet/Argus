@@ -1625,7 +1625,14 @@ class _DashboardScreenState extends State<DashboardScreen>
     final colors = ArgusColors.of(context);
     final isActive = w.walletId == _walletId && walletService.isUnlocked;
     final known = _lastKnown[w.walletId];
-    final balance = isActive ? _sync.balanceNano : (known?.balanceNano ?? _otherBalances[w.walletId]);
+    // The active row must agree with the portfolio card above it: both are
+    // display surfaces, so both include stealth funds.
+    final balance = isActive
+        ? _sync.totalNanoWithStealth
+        : (known?.balanceNano ?? _otherBalances[w.walletId]);
+    final stealthNote = isActive && _sync.stealthNano > 0
+        ? 'includes ${formatErg(_sync.stealthNano, maxFrac: 4)} stealth'
+        : null;
     final addr = isActive ? (_sync.receiveAddress ?? w.displayAddress) : w.displayAddress;
     final asOf = !isActive && known != null ? formatSyncAge(DateTime.now().subtract(known.age)) : null;
     return InkWell(
@@ -1701,7 +1708,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               ),
             ),
             const SizedBox(width: 8),
-            _rowBalance(balance, isActive ? _sync.isSyncing : false, asOf: asOf),
+            _rowBalance(balance, isActive ? _sync.isSyncing : false, asOf: asOf, note: stealthNote),
             const SizedBox(width: 4),
             Icon(Icons.chevron_right, size: 18, color: colors.muted),
           ],
@@ -1758,15 +1765,17 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _rowBalance(int? nano, bool loading, {String? asOf}) {
+  Widget _rowBalance(int? nano, bool loading, {String? asOf, String? note}) {
     final colors = ArgusColors.of(context);
     final text = nano == null
         ? (loading ? '…' : '—')
         : (_balanceHidden ? '••••' : formatErg(nano, unit: false, maxFrac: 2));
     final fiatText = nano == null || _balanceHidden ? null : networkController.fiatText(nano);
-    final fiat = asOf != null && asOf.isNotEmpty
-        ? [if (fiatText != null) fiatText, 'as of $asOf'].join(' · ')
-        : fiatText;
+    final fiat = [
+      if (fiatText != null) fiatText,
+      if (asOf != null && asOf.isNotEmpty) 'as of $asOf',
+      if (note != null && !_balanceHidden) note,
+    ].join(' · ');
     return Column(
       crossAxisAlignment: CrossAxisAlignment.end,
       children: [
@@ -1783,7 +1792,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             Text('ERG', style: TextStyle(fontSize: 12, color: colors.muted)),
           ],
         ),
-        if (fiat != null) Text(fiat, style: TextStyle(fontSize: 12, color: colors.muted)),
+        if (fiat.isNotEmpty) Text(fiat, style: TextStyle(fontSize: 12, color: colors.muted)),
       ],
     );
   }

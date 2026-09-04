@@ -11,6 +11,7 @@ void main() {
   _stealthMetadataTests();
   _truncationTests();
   _stealthActivityTests();
+  _walletRowTests();
 }
 
 // Pagination and wallet-switch guards (CodeRabbit review on PR #58)
@@ -206,5 +207,19 @@ void _stealthActivityTests() {
       {'tx_id': 'a', 'height': 1},
     ];
     expect(identical(mergeStealthActivity(history, const []), history), isTrue);
+  });
+}
+
+// The wallet row must not contradict the portfolio card above it
+void _walletRowTests() {
+  test('the active row total equals the portfolio total', () {
+    final c = WalletSyncController(_DisplayGateway());
+    c.balanceNano = 1012000000;
+    c.stealthNano = 1000000000;
+    // What the portfolio card sums and what the active row shows are the
+    // same number; the screenshot that prompted this showed 2.012 above
+    // 1.01 for one wallet.
+    expect(c.totalNanoWithStealth, 2012000000);
+    expect(c.stealthNano, greaterThan(0), reason: 'the row should say so');
   });
 }
