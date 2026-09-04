@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  _displayAddressTests();
   group('SendPreview.fromJson', () {
     final valid = {
       'preparation_id': 9,
@@ -335,5 +336,37 @@ void main() {
       expect(lineages['singleton_sigusd_bank']['protocol_name'], 'SigmaUSD Bank');
       expect(lineages['singleton_sigusd_bank']['current_box_id'], 'curr_box_009');
     });
+  });
+}
+
+// Which address a wallet shows when it is not the active one
+void _displayAddressTests() {
+  WalletInfo info({int? pinnedIndex, String? pinnedAddress, String? address0}) => WalletInfo(
+        walletId: 'w',
+        name: 'w',
+        createdAt: DateTime(2026),
+        address0: address0,
+        pinnedAddressIndex: pinnedIndex,
+        pinnedAddress: pinnedAddress,
+      );
+
+  test('a vanity address at index 0 needs no pin and is shown as is', () {
+    // The first wallet's vanity address is index 0, so address0 is already
+    // the address the user wants to see, pinned or not.
+    expect(info(address0: '9vanity').displayAddress, '9vanity');
+    expect(info(pinnedIndex: 0, address0: '9vanity').displayAddress, '9vanity');
+  });
+
+  test('a pin above index 0 shows the pinned address', () {
+    expect(
+      info(pinnedIndex: 97, pinnedAddress: '9pinned', address0: '9zero').displayAddress,
+      '9pinned',
+    );
+  });
+
+  test('a pin whose address was never stored falls back, which is what backfill repairs', () {
+    // The locked wallet cannot derive index 97 without its seed, so until
+    // the address is recorded it can only show index 0.
+    expect(info(pinnedIndex: 97, address0: '9zero').displayAddress, '9zero');
   });
 }
