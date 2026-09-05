@@ -677,6 +677,10 @@ Future<String> ammBuildSwap({
   heldTokens: heldTokens,
 );
 
+/// The four ErgoMixer contract trees, so the app can ask an explorer for
+/// unspent boxes under each. Pure.
+String mixContractTrees() => RustLib.instance.api.crateApiMixContractTrees();
+
 /// Rings, token levels and operator boxes in a snapshot. Pure.
 Future<String> mixRings({required String chainJson}) =>
     RustLib.instance.api.crateApiMixRings(chainJson: chainJson);

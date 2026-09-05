@@ -1117,6 +1117,101 @@ class WalletService {
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
 
+  // ── ZeroJoin mixing ─────────────────────────────────────────────────
+  //
+  // Thin JSON pass-throughs; `MixService` owns the meaning of each. The
+  // secret for a mix round is derived inside the handle and never returned.
+
+  Future<String> mixObserve({
+    required String stateJson,
+    required String chainJson,
+    required int nowUnix,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiMixObserve(
+      handleId: _handleId!,
+      stateJson: stateJson,
+      chainJson: chainJson,
+      nowUnix: nowUnix,
+    );
+  }
+
+  Future<String> mixRecover({required String chainJson, required int nowUnix}) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiMixRecover(
+      handleId: _handleId!,
+      chainJson: chainJson,
+      nowUnix: nowUnix,
+    );
+  }
+
+  /// Prepare a mix entry; confirm it with [sendErg] like any send.
+  Future<String> mixPrepareEntry({
+    required String stateJson,
+    required String chainJson,
+    required String fundingAddress,
+    required String fundingBoxId,
+    required List<String> ownHalfBoxIds,
+    String? nodeUrl,
+    int? feeNanoErg,
+    required int nowUnix,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiMixPrepareEntry(
+      handleId: _handleId!,
+      stateJson: stateJson,
+      chainJson: chainJson,
+      fundingAddress: fundingAddress,
+      fundingBoxId: fundingBoxId,
+      ownHalfBoxIds: ownHalfBoxIds,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+      nowUnix: nowUnix,
+    );
+  }
+
+  /// Build, sign and broadcast one remix or withdrawal.
+  Future<String> mixAdvance({
+    required String stateJson,
+    required String chainJson,
+    required List<String> ownHalfBoxIds,
+    String? nodeUrl,
+    int? feeNanoErg,
+    required int nowUnix,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiMixAdvance(
+      handleId: _handleId!,
+      stateJson: stateJson,
+      chainJson: chainJson,
+      ownHalfBoxIds: ownHalfBoxIds,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+      nowUnix: nowUnix,
+    );
+  }
+
+  /// Withdraw or reclaim a mix now.
+  Future<String> mixLeave({
+    required String stateJson,
+    required String chainJson,
+    String? destinationAddress,
+    String? nodeUrl,
+    int? feeNanoErg,
+    required int nowUnix,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiMixLeave(
+      handleId: _handleId!,
+      stateJson: stateJson,
+      chainJson: chainJson,
+      destinationAddress: destinationAddress,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+      nowUnix: nowUnix,
+    );
+  }
+
   // ── ErgoPay (EIP-20) ────────────────────────────────────────────────
 
   /// Summary JSON for a reduced transaction (see `describe_reduced_transaction`).
