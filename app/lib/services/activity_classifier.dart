@@ -1,7 +1,7 @@
 import '../format.dart';
 
 /// What a history entry did, from the wallet's point of view.
-enum ActivityKind { received, sent, swap, selfTransfer, contract }
+enum ActivityKind { received, sent, swap, selfTransfer, contract, mix }
 
 /// Mainnet P2PK addresses are 51 base58 characters starting with 9; anything
 /// longer is a script (pool, bank, dApp contract).
@@ -14,6 +14,7 @@ List<Map> _tokens(Map<String, dynamic> tx, String key) =>
     (tx[key] as List?)?.whereType<Map>().toList() ?? const [];
 
 ActivityKind classifyActivity(Map<String, dynamic> tx) {
+  if (tx['mix'] == true) return ActivityKind.mix;
   final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
   final counterparty = tx['counterparty']?.toString();
   final tokensIn = _tokens(tx, 'tokens_received').isNotEmpty;
@@ -37,6 +38,7 @@ String activityTitle(ActivityKind kind) => switch (kind) {
       ActivityKind.swap => 'Swapped',
       ActivityKind.selfTransfer => 'Moved',
       ActivityKind.contract => 'Contract',
+      ActivityKind.mix => 'Mix',
     };
 
 /// `1.50 SigUSD` for one token, `3 tokens` for several, null for none.

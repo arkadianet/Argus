@@ -107,7 +107,8 @@ mod tests {
             transaction_id: "tx123".to_string(),
             index: 0,
             value: value.to_string(),
-            ergo_tree: "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798".to_string(),
+            ergo_tree: "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+                .to_string(),
             assets: assets
                 .into_iter()
                 .map(|(id, amt)| Eip12Asset {
@@ -204,7 +205,7 @@ mod tests {
         let result = append_change_output(
             &mut vec![],
             &selected,
-            2_100_000, // all ERG used, 0 change
+            2_100_000,         // all ERG used, 0 change
             &[("tokenA", 50)], // but 50 tokens left over
             "0008cd...",
             1000,
@@ -224,8 +225,7 @@ mod tests {
     #[test]
     fn test_select_inputs_for_spend_token() {
         let utxos = vec![mock_utxo("box1", 5_000_000_000, vec![("tokenA", 100)])];
-        let result =
-            select_inputs_for_spend(&utxos, 1_000_000_000, Some(("tokenA", 50))).unwrap();
+        let result = select_inputs_for_spend(&utxos, 1_000_000_000, Some(("tokenA", 50))).unwrap();
         assert_eq!(result.token_amount, 100);
     }
 

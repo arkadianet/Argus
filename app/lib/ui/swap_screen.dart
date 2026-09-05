@@ -358,6 +358,7 @@ class _SwapScreenState extends State<SwapScreen> {
       if (!mounted) return;
       final confirmed = await showConfirmTransactionSheet(
         context,
+        preparationId: build.preparationId,
         title: 'Swap ${_symbol(_fromToken)} → ${_symbol(_toToken)}',
         rows: [
           ConfirmTxRow(

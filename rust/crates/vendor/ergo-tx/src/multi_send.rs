@@ -118,11 +118,11 @@ pub fn build_multi_send_tx_with_fee(
     for input in user_inputs {
         for asset in &input.assets {
             let entry = input_tokens.entry(asset.token_id.clone()).or_insert(0);
-            *entry = entry.checked_add(asset.amount.parse::<u64>().unwrap_or(0)).ok_or_else(|| {
-                MultiSendError::TokenTotalOverflow {
+            *entry = entry
+                .checked_add(asset.amount.parse::<u64>().unwrap_or(0))
+                .ok_or_else(|| MultiSendError::TokenTotalOverflow {
                     token_id: asset.token_id.clone(),
-                }
-            })?;
+                })?;
         }
     }
 

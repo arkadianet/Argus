@@ -80,6 +80,7 @@ class _MixScreenState extends State<MixScreen> {
           return switch (step) {
             MixStartStep.funding => showConfirmTransactionSheet(
                 context,
+                preparationId: prepared.preparationId,
                 title: 'Fund the mix',
                 detail: 'A box of exactly this size, on your own address, is what '
                     'the mixing contract accepts. Entering is the next step.',
@@ -91,6 +92,7 @@ class _MixScreenState extends State<MixScreen> {
               ),
             MixStartStep.entry => showConfirmTransactionSheet(
                 context,
+                preparationId: prepared.preparationId,
                 title: 'Enter the mix',
                 detail: 'The operator fee buys the mixing tokens that pay for each '
                     'round. From here on the rounds run on their own '

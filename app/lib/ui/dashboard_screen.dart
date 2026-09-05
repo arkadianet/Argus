@@ -46,6 +46,7 @@ import 'widgets/activity_tile.dart';
 import 'widgets/asset_tile.dart';
 import 'widgets/discover_sheet.dart';
 import 'widgets/action_row.dart';
+import 'widgets/mix_strip.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/soft_card.dart';
 import 'widgets/token_detail_sheet.dart';
@@ -1264,6 +1265,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             _walletsCard(),
             const SizedBox(height: 12),
             _actionsRow(),
+            MixStrip(onOpen: () => _go('/mix')),
             const SizedBox(height: 28),
             _sectionHeader('Assets · $_activeWalletName',
                 action: hiddenAssets > 0

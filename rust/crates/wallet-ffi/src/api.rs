@@ -1790,6 +1790,49 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+/// The transaction behind a preparation, summarised for a confirm sheet's
+/// details: inputs, outputs by kind (recipient, change, miner fee, app
+/// fee), data inputs, and the unsigned EIP-12 JSON for the user to copy.
+/// Does not consume the preparation.
+#[flutter_rust_bridge::frb]
+pub fn preparation_details(handle_id: u64, preparation_id: u64) -> Result<String, String> {
+    let (unsigned, boxes, data_inputs, miner_fee) = {
+        let cache = recover(PREPARATIONS.lock());
+        let p = cache
+            .get(&preparation_id)
+            .filter(|p| p.handle_id == handle_id)
+            .ok_or_else(|| {
+                ArgusError::TxBuildFailed("unknown or stale send preparation".into())
+                    .to_json_string()
+            })?;
+        (
+            p.unsigned_tx.clone(),
+            p.ergo_boxes.clone(),
+            p.data_input_boxes
+                .iter()
+                .map(|b| b.box_id().to_string())
+                .collect::<Vec<_>>(),
+            p.miner_fee,
+        )
+    };
+    let tx = ergo_tx::chain::to_unsigned_transaction(&unsigned)
+        .map_err(|e| ArgusError::TxBuildFailed(e).to_json_string())?;
+    let input_boxes: Vec<Option<serde_json::Value>> =
+        boxes.iter().map(|b| serde_json::to_value(b).ok()).collect();
+    let mut summary = with_handle(handle_id, "preparation_details", |h| {
+        Ok(crate::api_ergopay_impl::summarize_unsigned(
+            &tx,
+            &|addr| h.owns_address(addr).unwrap_or(false),
+            &input_boxes,
+        ))
+    })?;
+    summary["unsigned_tx"] = serde_json::to_value(&unsigned)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    summary["data_inputs"] = serde_json::json!(data_inputs);
+    summary["miner_fee_nano_erg"] = serde_json::json!(miner_fee);
+    Ok(summary.to_string())
+}
+
 /// Sign a prepared transaction without submitting it. Returns the raw signed
 /// transaction as an EIP-12 JSON string. Use this for air-gapped / raw-tx
 /// export workflows.
@@ -3313,6 +3356,39 @@ mod tests {
         assert!(MnemonicPhrase::parse(phrase).is_ok());
         let phrase24 = generate_mnemonic(256).unwrap();
         assert_eq!(phrase24.split_whitespace().count(), 24);
+    }
+
+    #[test]
+    fn preparation_details_reads_without_consuming() {
+        // Unknown id, or another wallet's, is refused.
+        assert!(preparation_details(1, 424242).is_err());
+        let id = store_preparation(CachedPreparation {
+            handle_id: 5,
+            ergo_boxes: Vec::new(),
+            stealth_trees: Vec::new(),
+            mix_proofs: Vec::new(),
+            data_input_boxes: Vec::new(),
+            unsigned_tx: ergo_tx::Eip12UnsignedTx {
+                inputs: Vec::new(),
+                data_inputs: Vec::new(),
+                outputs: Vec::new(),
+            },
+            miner_fee: 1_100_000,
+            change_erg: 0,
+            recipient_erg: 0,
+            node_url: None,
+        });
+        assert!(
+            preparation_details(6, id).is_err(),
+            "another wallet's preparation"
+        );
+        // An empty transaction cannot be converted, but the preparation must
+        // still be there afterwards: details never consume.
+        let _ = preparation_details(5, id);
+        assert!(
+            take_preparation(5, id).is_ok(),
+            "still cached after details"
+        );
     }
 
     #[test]

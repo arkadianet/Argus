@@ -171,7 +171,9 @@ pub fn build_consolidate_tx(
 
 #[derive(Debug, Clone)]
 pub enum SplitMode {
-    Erg { amount_per_box: i64 },
+    Erg {
+        amount_per_box: i64,
+    },
     Token {
         token_id: String,
         amount_per_box: u64,
@@ -507,9 +509,7 @@ pub fn build_restructure_tx(
     for input in user_inputs {
         for asset in &input.assets {
             let amount = asset.amount.parse::<u64>().unwrap_or(0);
-            *available_tokens
-                .entry(asset.token_id.clone())
-                .or_insert(0) += amount;
+            *available_tokens.entry(asset.token_id.clone()).or_insert(0) += amount;
         }
     }
 
@@ -549,12 +549,13 @@ pub fn build_restructure_tx(
             *assigned_tokens.entry(tid).or_insert(0) += amt;
         }
 
-        allocated_erg = allocated_erg.checked_add(out.value).ok_or(
-            UtxoManagementError::InsufficientErg {
-                have: total_erg,
-                need: i64::MAX,
-            },
-        )?;
+        allocated_erg =
+            allocated_erg
+                .checked_add(out.value)
+                .ok_or(UtxoManagementError::InsufficientErg {
+                    have: total_erg,
+                    need: i64::MAX,
+                })?;
     }
 
     for (tid, assigned) in &assigned_tokens {
@@ -901,7 +902,10 @@ mod tests {
         };
         let err = build_split_tx(&inputs, &mode, 101, USER_TREE, 50000).unwrap_err();
         match err {
-            UtxoManagementError::TooManyOutputs { count: 101, max: 100 } => {}
+            UtxoManagementError::TooManyOutputs {
+                count: 101,
+                max: 100,
+            } => {}
             _ => panic!("Expected TooManyOutputs, got {:?}", err),
         }
     }
@@ -1159,7 +1163,11 @@ mod tests {
 
     #[test]
     fn test_restructure_unassigned_tokens_need_change_erg() {
-        let inputs = vec![mock_input("box1", TX_FEE + MIN_BOX_VALUE, vec![(TOKEN_A, 10)])];
+        let inputs = vec![mock_input(
+            "box1",
+            TX_FEE + MIN_BOX_VALUE,
+            vec![(TOKEN_A, 10)],
+        )];
         let outs = vec![RestructureOutputSpec {
             value: MIN_BOX_VALUE,
             tokens: vec![],

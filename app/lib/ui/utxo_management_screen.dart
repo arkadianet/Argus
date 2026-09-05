@@ -278,6 +278,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
 
       final confirmed = await showConfirmTransactionSheet(
         context,
+        preparationId: preview.preparationId,
         title: 'Split UTXO',
         rows: [
           ConfirmTxRow('Outputs Created', '${preview.splitCount} boxes'),
@@ -354,6 +355,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
 
       final confirmed = await showConfirmTransactionSheet(
         context,
+        preparationId: preview.preparationId,
         title: 'Restructure UTXOs',
         rows: [
           ConfirmTxRow('Inputs Consumed', '${preview.inputCount} boxes'),

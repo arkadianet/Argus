@@ -392,6 +392,18 @@ Future<String> sendErg({
   preparationId: preparationId,
 );
 
+/// The transaction behind a preparation, summarised for a confirm sheet's
+/// details: inputs, outputs by kind (recipient, change, miner fee, app
+/// fee), data inputs, and the unsigned EIP-12 JSON for the user to copy.
+/// Does not consume the preparation.
+Future<String> preparationDetails({
+  required BigInt handleId,
+  required BigInt preparationId,
+}) => RustLib.instance.api.crateApiPreparationDetails(
+  handleId: handleId,
+  preparationId: preparationId,
+);
+
 /// Sign a prepared transaction without submitting it. Returns the raw signed
 /// transaction as an EIP-12 JSON string. Use this for air-gapped / raw-tx
 /// export workflows.

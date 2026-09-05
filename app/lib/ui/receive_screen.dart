@@ -157,6 +157,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       if (!mounted) return;
       final ok = await showConfirmTransactionSheet(
         context,
+        preparationId: preview.preparationId,
         title: 'Sweep stealth funds',
         rows: [
           ConfirmTxRow('To', shorten(destination, head: 8, tail: 6)),

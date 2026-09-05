@@ -178,6 +178,7 @@ class _DexyScreenState extends State<DexyScreen> {
     final c = dexyMintConfirm(build, _variant);
     final confirmed = await showConfirmTransactionSheet(
       context,
+      preparationId: build.preparationId,
       title: c.title,
       rows: c.rows,
       detail: c.detail,
@@ -214,6 +215,7 @@ class _DexyScreenState extends State<DexyScreen> {
     final c = dexySwapConfirm(build, _variant);
     final confirmed = await showConfirmTransactionSheet(
       context,
+      preparationId: build.preparationId,
       title: c.title,
       rows: c.rows,
       detail: c.detail,
@@ -262,6 +264,7 @@ class _DexyScreenState extends State<DexyScreen> {
     final c = dexyLiquidityConfirm(build, _variant);
     final confirmed = await showConfirmTransactionSheet(
       context,
+      preparationId: build.preparationId,
       title: c.title,
       rows: c.rows,
       detail: c.detail,
