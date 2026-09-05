@@ -6,6 +6,8 @@ import 'package:share_plus/share_plus.dart';
 
 import '../format.dart';
 import '../services/contacts_service.dart';
+import '../services/wallet_service.dart';
+import '../services/stealth_service.dart';
 import '../theme/argus_theme.dart';
 
 class ContactsScreen extends StatefulWidget {
@@ -18,6 +20,40 @@ class ContactsScreen extends StatefulWidget {
 class _ContactsScreenState extends State<ContactsScreen> {
   bool get _selectMode =>
       ModalRoute.of(context)?.settings.arguments == true;
+
+  /// The user's other wallets as destinations: each one's address, and
+  /// its stealth address where one has been seen. Only in select mode.
+  List<WalletContact> _ownWallets = const [];
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadOwnWallets());
+  }
+
+  Future<void> _loadOwnWallets() async {
+    if (!mounted || !_selectMode) return;
+    try {
+      final wallets = await walletService.listWallets();
+      final stealth = await StealthService.rememberedAddresses();
+      final active = walletService.activeWalletId;
+      final out = <WalletContact>[];
+      for (final w in wallets) {
+        if (w.walletId == active) continue;
+        final addr = w.pinnedAddress ?? w.address0;
+        if (addr != null && addr.isNotEmpty) {
+          out.add(WalletContact(id: 'wallet:${w.walletId}', name: w.name, address: addr));
+        }
+        final s = stealth[w.walletId];
+        if (s != null) {
+          out.add(WalletContact(id: 'wallet-stealth:${w.walletId}', name: '${w.name} · stealth', address: s));
+        }
+      }
+      if (mounted) setState(() => _ownWallets = out);
+    } catch (_) {
+      // The picker still offers saved contacts.
+    }
+  }
 
   void _addOrEdit([WalletContact? existing]) {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
@@ -134,7 +170,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   Widget _contactList() {
     final contacts = contactsService.contacts;
-    if (contacts.isEmpty) {
+    if (contacts.isEmpty && _ownWallets.isEmpty) {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(28),
@@ -148,12 +184,27 @@ class _ContactsScreenState extends State<ContactsScreen> {
         ),
       );
     }
+    // In select mode the user's other wallets come first, then contacts.
+    final rows = <Object>[
+      if (_ownWallets.isNotEmpty) 'Your wallets',
+      ..._ownWallets,
+      if (_ownWallets.isNotEmpty && contacts.isNotEmpty) 'Contacts',
+      ...contacts,
+    ];
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 80),
-      itemCount: contacts.length,
-      separatorBuilder: (_, __) => const Hairline(),
+      itemCount: rows.length,
+      separatorBuilder: (_, i) => rows[i] is String || rows[i + 1] is String ? const SizedBox.shrink() : const Hairline(),
       itemBuilder: (context, i) {
-        final c = contacts[i];
+        final row = rows[i];
+        if (row is String) {
+          return Padding(
+            padding: EdgeInsets.fromLTRB(0, i == 0 ? 4 : 20, 0, 8),
+            child: SectionLabel(row),
+          );
+        }
+        final c = row as WalletContact;
+        final own = c.id.startsWith('wallet');
         return InkWell(
           onTap: () {
             if (_selectMode) {
@@ -180,6 +231,14 @@ class _ContactsScreenState extends State<ContactsScreen> {
             padding: const EdgeInsets.symmetric(vertical: 14),
             child: Row(
               children: [
+                if (own) ...[
+                  Icon(
+                    c.id.startsWith('wallet-stealth') ? Icons.visibility_off_outlined : Icons.account_balance_wallet_outlined,
+                    size: 20,
+                    color: ArgusColors.of(context).muted,
+                  ),
+                  const SizedBox(width: 12),
+                ],
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,

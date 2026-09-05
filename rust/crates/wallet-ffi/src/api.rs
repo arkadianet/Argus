@@ -1849,11 +1849,12 @@ pub async fn sign_preparation(handle_id: u64, preparation_id: u64) -> Result<Str
 struct ParsedRecipient {
     address: String,
     amount_nano_erg: i64,
-    token: Option<(String, u64)>,
+    tokens: Vec<(String, u64)>,
 }
 
 /// Prepare a multi-recipient send. Each element of `recipients_json` is a JSON
-/// object: `{"address":"...","amount_nano_erg":123,"token_id":"...","token_amount":456}`.
+/// object: `{"address":"...","amount_nano_erg":123,"tokens":[{"token_id":"...","amount":456}]}`;
+/// a single `token_id`/`token_amount` pair is accepted too.
 /// At least one recipient must carry ERG or tokens. The change goes to
 /// `change_address`. Supports all `prepare_send` options (fee_nano, etc.).
 #[flutter_rust_bridge::frb]
@@ -1895,10 +1896,23 @@ pub async fn prepare_send_multi(
         let addr = rcpt["address"].as_str().ok_or_else(|| {
             ArgusError::TxBuildFailed("recipient missing address".into()).to_json_string()
         })?;
-        let token = resolve_send_token(
+        let mut tokens: Vec<(String, u64)> = Vec::new();
+        if let Some(list) = rcpt["tokens"].as_array() {
+            for t in list {
+                if let Some(pair) = resolve_send_token(
+                    t["token_id"].as_str().map(|id| id.to_string()),
+                    t["amount"].as_u64(),
+                )? {
+                    tokens.push(pair);
+                }
+            }
+        }
+        if let Some(pair) = resolve_send_token(
             rcpt["token_id"].as_str().map(|id| id.to_string()),
             rcpt["token_amount"].as_u64(),
-        )?;
+        )? {
+            tokens.push(pair);
+        }
         let mut amount = match rcpt.get("amount_nano_erg") {
             None | Some(serde_json::Value::Null) => 0,
             Some(value) => value.as_i64().ok_or_else(|| {
@@ -1906,7 +1920,7 @@ pub async fn prepare_send_multi(
                     .to_json_string()
             })?,
         };
-        if token.is_some() {
+        if !tokens.is_empty() {
             if amount < MIN_BOX_VALUE_NANO {
                 amount = MIN_BOX_VALUE_NANO;
             }
@@ -1923,11 +1937,11 @@ pub async fn prepare_send_multi(
         parsed.push(ParsedRecipient {
             address: addr.to_string(),
             amount_nano_erg: amount,
-            token,
+            tokens,
         });
     }
 
-    let has_sent_tokens = parsed.iter().any(|rcpt| rcpt.token.is_some());
+    let has_sent_tokens = parsed.iter().any(|rcpt| !rcpt.tokens.is_empty());
     if total_send_erg <= 0 && !has_sent_tokens {
         return Err(ArgusError::TxBuildFailed(
             "at least one recipient must receive ERG or tokens".into(),
@@ -1943,7 +1957,7 @@ pub async fn prepare_send_multi(
         recipient_specs.push(ergo_tx::RecipientSpec {
             ergo_tree: tree,
             amount_nano_erg: rcpt.amount_nano_erg,
-            token: rcpt.token.clone(),
+            tokens: rcpt.tokens.clone(),
         });
     }
 
@@ -1982,7 +1996,7 @@ pub async fn prepare_send_multi(
     // Collect tokens we need to cover
     let mut needed_tokens: HashMap<String, u64> = HashMap::new();
     for rcpt in &parsed {
-        if let Some((id, amt)) = &rcpt.token {
+        for (id, amt) in &rcpt.tokens {
             let entry = needed_tokens.entry(id.clone()).or_insert(0);
             *entry = entry.checked_add(*amt).ok_or_else(|| {
                 ArgusError::TxBuildFailed("token requirement out of range".into()).to_json_string()
@@ -2119,8 +2133,9 @@ pub async fn prepare_send_multi(
             serde_json::json!({
                 "address": rcpt.address,
                 "amount_nano_erg": rcpt.amount_nano_erg,
-                "token_id": rcpt.token.as_ref().map(|(id, _)| id),
-                "token_amount": rcpt.token.as_ref().map(|(_, amt)| amt),
+                "token_id": rcpt.tokens.first().map(|(id, _)| id),
+                "token_amount": rcpt.tokens.first().map(|(_, amt)| amt),
+                "tokens": rcpt.tokens.iter().map(|(id, amt)| serde_json::json!({"token_id": id, "amount": amt})).collect::<Vec<_>>(),
             })
         })
         .collect();
