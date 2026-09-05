@@ -550,6 +550,18 @@ void main() {
     await pending;
     expect(svc.loans.single.boxId, 'loan-1', reason: 'the w1 read stays');
     expect(svc.loansError, isNull);
+    // The same when the read names its wallet and another one takes over.
+    gw.wallet = 'w1';
+    final named = svc.refreshLoans(const ['9me'], walletId: 'w1');
+    gw.wallet = 'w2';
+    await named;
+    gw.wallet = 'w1';
+    expect(svc.loans.single.boxId, 'loan-1');
+    // A read by id with no wallet active (locked) still lands.
+    gw.wallet = null;
+    await svc.refreshLoans(const ['9me'], walletId: 'w1');
+    expect(svc.loansRefreshedAt, isNotNull);
+    gw.wallet = 'w1';
 
     // A pool whose parameter box cannot be read says so and offers no borrowing.
     withParams = false;
