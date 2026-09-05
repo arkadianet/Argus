@@ -1338,6 +1338,17 @@ class _DashboardScreenState extends State<DashboardScreen>
                     icon: Icons.swap_horiz,
                     onTap: () => _goHub(SwapVenue.spectrum),
                   ),
+                  _discoverCard(
+                    title: 'Mix',
+                    onLearn: () => _go('/mix'),
+                    subtitle: mixService.enabled
+                        ? (mixService.active.isEmpty
+                            ? 'Break the link between what goes in and what comes out.'
+                            : '${mixService.active.length} ${mixService.active.length == 1 ? 'mix' : 'mixes'} in the pool.')
+                        : 'Private ERG through the ErgoMixer pool. Off until you turn it on.',
+                    icon: Icons.blender_outlined,
+                    onTap: () => _go('/mix'),
+                  ),
                 ],
               ),
             ),
