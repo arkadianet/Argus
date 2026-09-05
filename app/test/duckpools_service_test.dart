@@ -310,6 +310,18 @@ void main() {
     expect(svc2.lastError, contains('ERG'));
   });
 
+  test('typed amounts are parsed exactly and refused beyond the asset\'s decimals', () {
+    expect(parseDuckAmount('1.5', 9), 1500000000);
+    expect(parseDuckAmount('1,000.25', 2), 100025);
+    expect(parseDuckAmount('.5', 2), 50);
+    expect(parseDuckAmount('7', 0), 7);
+    expect(parseDuckAmount('1.0000000005', 9), isNull, reason: 'ten decimals on a nine-decimal asset');
+    expect(parseDuckAmount('0.001', 2), isNull);
+    expect(parseDuckAmount('0', 2), isNull);
+    expect(parseDuckAmount('abc', 2), isNull);
+    expect(parseDuckAmount('', 2), isNull);
+  });
+
   test('an unreachable chain leaves the last state and reports the error', () async {
     final svc = DuckpoolsService(
       gateway: FakeGateway(),
