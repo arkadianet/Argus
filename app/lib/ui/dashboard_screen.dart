@@ -894,6 +894,16 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
     if (switchedTo != _walletId) {
       _selectTab(0);
+      // A wallet just created or restored from Settings is already
+      // unlocked: take it as the home wallet without a second unlock.
+      if (walletService.isUnlocked && walletService.activeWalletId == switchedTo) {
+        _walletId = switchedTo;
+        await sessionLock.run(() async {
+          await _refreshUnlockMethods();
+          await _afterUnlock();
+        });
+        return;
+      }
       await _switchWallet(switchedTo);
       return;
     }

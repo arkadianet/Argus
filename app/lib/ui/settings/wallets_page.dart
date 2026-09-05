@@ -85,8 +85,33 @@ class _WalletsPageState extends State<WalletsPage> {
   }
 
   Future<void> _openCreateOrRestore(String route) async {
-    await Navigator.pushNamed(context, route);
+    final created = await Navigator.pushNamed(context, route);
+    if (!mounted) return;
+    // A new wallet is unlocked and ready: hand it to the home screen at
+    // once rather than leaving it to be found after a lock.
+    if (created is String && created.isNotEmpty) {
+      _handOff(created);
+      return;
+    }
     _refresh();
+  }
+
+  /// The user dragged a wallet to a new place: keep the order and let the
+  /// home screen redraw its list in it.
+  Future<void> _reorder(List<WalletInfo> wallets, int oldIndex, int newIndex) async {
+    final ids = [for (final w in wallets) w.walletId];
+    final moved = ids.removeAt(oldIndex);
+    ids.insert(newIndex > oldIndex ? newIndex - 1 : newIndex, moved);
+    try {
+      await walletService.setWalletOrder(ids);
+    } catch (_) {
+      _snack('Could not save the order');
+      return;
+    }
+    _refresh();
+    final cb = widget.onWalletSwitched;
+    final id = _walletId;
+    if (cb != null && id != null && id.isNotEmpty) cb(id);
   }
 
   @override
@@ -107,16 +132,20 @@ class _WalletsPageState extends State<WalletsPage> {
                 const SizedBox(height: 10),
                 SoftCard(
                   padding: EdgeInsets.zero,
-                  child: DividedColumn(
-                    indent: 16,
-                    children: [
-                      if (wallets.isEmpty)
-                        Padding(
+                  child: wallets.isEmpty
+                      ? Padding(
                           padding: const EdgeInsets.all(16),
                           child: Text('No wallets stored.', style: Theme.of(context).textTheme.bodySmall),
-                        ),
-                      for (final w in wallets)
+                        )
+                      : ReorderableListView(
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    buildDefaultDragHandles: false,
+                    onReorder: (o, n) => _reorder(wallets, o, n),
+                    children: [
+                      for (final (i, w) in wallets.indexed)
                         InkWell(
+                          key: ValueKey(w.walletId),
                           onTap: w.walletId == currentId ? null : () => _handOff(w.walletId),
                           borderRadius: BorderRadius.circular(cardRadius),
                           child: Padding(
@@ -161,6 +190,13 @@ class _WalletsPageState extends State<WalletsPage> {
                                   icon: const Icon(Icons.edit_outlined, size: 18),
                                   onPressed: () => _rename(w),
                                 ),
+                                ReorderableDragStartListener(
+                                  index: i,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                                    child: Icon(Icons.drag_handle, size: 20, color: colors.muted),
+                                  ),
+                                ),
                                 IconButton(
                                   tooltip: 'Delete',
                                   icon: Icon(Icons.delete_outline, size: 18, color: rustFor(context)),
@@ -194,7 +230,7 @@ class _WalletsPageState extends State<WalletsPage> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                const SettingsNote('Tap a wallet to switch to it. Each wallet has its own PIN and its own settings.'),
+                const SettingsNote('Tap a wallet to switch to it; drag the handle to change the order on the home screen. Each wallet has its own PIN and its own settings.'),
               ],
             );
           },
