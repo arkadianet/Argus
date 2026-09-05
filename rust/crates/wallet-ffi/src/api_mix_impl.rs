@@ -176,6 +176,35 @@ pub fn funding_requirement(
     }))
 }
 
+/// Where a round's secret comes from: the unlocked handle in the
+/// foreground, a stored mix key in the background.
+pub type SecretFor<'a> = dyn Fn(u32) -> Result<zerojoin::MixSecret, String> + 'a;
+
+/// A provider backed by the unlocked wallet.
+pub fn handle_secrets<'a>(
+    handle: &'a WalletHandle,
+    mix_id: u32,
+) -> impl Fn(u32) -> Result<zerojoin::MixSecret, String> + 'a {
+    move |round| handle.mix_secret(mix_id, round).map_err(err)
+}
+
+/// A provider backed by an exported mix key.
+pub fn key_secrets<'a>(
+    key: &'a zerojoin::MixKey,
+) -> impl Fn(u32) -> Result<zerojoin::MixSecret, String> + 'a {
+    move |round| key.round_secret(round).map_err(err)
+}
+
+/// Parse a hex mix key exported by `mix_export_key`.
+pub fn parse_key(hex_key: &str, mix_id: u32) -> Result<zerojoin::MixKey, String> {
+    // The decoded secret is wiped when this scope ends; the caller's hex
+    // string is theirs to clear.
+    let bytes = zeroize::Zeroizing::new(
+        hex::decode(hex_key.trim()).map_err(|e| ser_err(format!("mix key: {e}")))?,
+    );
+    zerojoin::MixKey::from_bytes(&bytes, mix_id).map_err(ser_err)
+}
+
 /// One built move, with everything the caller needs to reduce and sign it.
 pub struct BuiltMove {
     pub tx: MixTx,
@@ -225,7 +254,7 @@ fn inputs_in_order(tx: &MixTx, pool: &[&Eip12InputBox]) -> Result<Vec<Eip12Input
 
 /// Build the entry transaction for a pending mix from `funding`.
 pub fn build_entry(
-    handle: &WalletHandle,
+    secret_for: &SecretFor<'_>,
     state: &MixState,
     view: &ChainView,
     funding: &Eip12InputBox,
@@ -239,7 +268,7 @@ pub fn build_entry(
     let token_box = view
         .token_box()
         .ok_or_else(|| err("no token emission box: the mixer operator has none for sale"))?;
-    let secret = handle.mix_secret(state.mix_id, state.round).map_err(err)?;
+    let secret = secret_for(state.round)?;
     match plan(state, view, own_half_ids) {
         Plan::EnterAsAlice => {
             let tx = build_alice_entry(&AliceEntry {
@@ -301,7 +330,7 @@ pub fn build_entry(
 /// Build the next move for a mix already in the pool, or `None` when the
 /// plan is to wait.
 pub fn build_move(
-    handle: &WalletHandle,
+    secret_for: &SecretFor<'_>,
     state: &MixState,
     view: &ChainView,
     own_half_ids: &[String],
@@ -324,16 +353,14 @@ pub fn build_move(
     let fee_box = view
         .fee_box()
         .ok_or_else(|| err("no fee emission box to pay the miner from"))?;
-    let current = handle.mix_secret(state.mix_id, state.round).map_err(err)?;
+    let current = secret_for(state.round)?;
     match next {
         Plan::Wait { .. } => Ok(None),
         Plan::RemixAsBob { half_box_id } => {
             let half = view
                 .half_by_id(&half_box_id)
                 .ok_or_else(|| err("the half-mix box to join is not in the snapshot"))?;
-            let next_y = handle
-                .mix_secret(state.mix_id, state.round + 1)
-                .map_err(err)?;
+            let next_y = secret_for(state.round + 1)?;
             let tx = build_remix_as_bob(&RemixAsBob {
                 half,
                 full,
@@ -355,9 +382,7 @@ pub fn build_move(
             }))
         }
         Plan::RemixAsAlice => {
-            let next_x = handle
-                .mix_secret(state.mix_id, state.round + 1)
-                .map_err(err)?;
+            let next_x = secret_for(state.round + 1)?;
             let tx = build_remix_as_alice(&RemixAsAlice {
                 full,
                 current: &current,
@@ -428,14 +453,14 @@ fn withdraw(
 /// Take the money out now, whatever the round count: withdraw a full-mix
 /// box, or reclaim a half-mix box nobody joined.
 pub fn build_leave(
-    handle: &WalletHandle,
+    secret_for: &SecretFor<'_>,
     state: &MixState,
     view: &ChainView,
     destination_ergo_tree: &str,
     miner_fee: i64,
     height: i32,
 ) -> Result<BuiltMove, String> {
-    let current = handle.mix_secret(state.mix_id, state.round).map_err(err)?;
+    let current = secret_for(state.round)?;
     match &state.phase {
         MixPhase::FullOwned { box_id, .. } => {
             let full = view
@@ -550,7 +575,16 @@ mod tests {
         let fund = funding(need["needed_nano_erg"].as_i64().unwrap());
         let state = MixState::new(0, ring.clone(), level, 2, DEST.into(), 1);
 
-        let entry = build_entry(&h, &state, &v, &fund, &[], MINER_FEE, HEIGHT).expect("Bob entry");
+        let entry = build_entry(
+            &handle_secrets(&h, 0),
+            &state,
+            &v,
+            &fund,
+            &[],
+            MINER_FEE,
+            HEIGHT,
+        )
+        .expect("Bob entry");
         let Applied::EnteredAsBob { full_box_id } = &entry.applied else {
             panic!(
                 "a waiting half box means a Bob entry, got {:?}",
@@ -605,9 +639,16 @@ mod tests {
             .clone();
         let alone = view("[]", vec![ours.clone()]);
         assert_eq!(plan(&state, &alone, &[]), Plan::RemixAsAlice);
-        let remix = build_move(&h, &state, &alone, &[], MINER_FEE, HEIGHT)
-            .unwrap()
-            .expect("a move, not a wait");
+        let remix = build_move(
+            &handle_secrets(&h, 0),
+            &state,
+            &alone,
+            &[],
+            MINER_FEE,
+            HEIGHT,
+        )
+        .unwrap()
+        .expect("a move, not a wait");
         let Applied::RemixedAsAlice { half_box_id } = &remix.applied else {
             panic!("expected a remix as Alice, got {:?}", remix.applied);
         };
@@ -630,12 +671,27 @@ mod tests {
                 reason: zerojoin::WaitReason::CounterpartNeeded
             }
         );
-        assert!(build_move(&h, &state, &waiting, &[], MINER_FEE, HEIGHT)
-            .unwrap()
-            .is_none());
+        assert!(build_move(
+            &handle_secrets(&h, 0),
+            &state,
+            &waiting,
+            &[],
+            MINER_FEE,
+            HEIGHT
+        )
+        .unwrap()
+        .is_none());
 
         // Leaving early reclaims the half box to the destination.
-        let leave = build_leave(&h, &state, &waiting, DEST, MINER_FEE, HEIGHT).unwrap();
+        let leave = build_leave(
+            &handle_secrets(&h, 0),
+            &state,
+            &waiting,
+            DEST,
+            MINER_FEE,
+            HEIGHT,
+        )
+        .unwrap();
         assert_eq!(leave.applied, Applied::Reclaimed);
         assert!(leave.tx.summary.action.contains("reclaim"));
 
@@ -652,11 +708,52 @@ mod tests {
             },
             ..done
         };
-        let out = build_move(&h, &done, &alone, &[], MINER_FEE, HEIGHT)
-            .unwrap()
-            .unwrap();
+        let out = build_move(
+            &handle_secrets(&h, 0),
+            &done,
+            &alone,
+            &[],
+            MINER_FEE,
+            HEIGHT,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(out.applied, Applied::Withdrawn);
         assert_eq!(out.tx.unsigned_tx.outputs[0].ergo_tree, DEST);
+    }
+
+    #[test]
+    fn a_stored_mix_key_builds_the_same_moves_as_the_unlocked_wallet() {
+        let h = handle();
+        let exported = hex::encode(&h.mix_key(0).unwrap().to_bytes().unwrap()[..]);
+        let key = parse_key(&exported, 0).unwrap();
+        let v = view("[]", vec![]);
+        let level = v.token_box().unwrap().levels()[0];
+        let need = funding_requirement(&v, 1_000_000_000, level, MINER_FEE).unwrap();
+        let fund = funding(need["needed_nano_erg"].as_i64().unwrap());
+        let state = MixState::new(0, RingSpec::erg(1_000_000_000), level, 2, DEST.into(), 1);
+        let a = build_entry(
+            &handle_secrets(&h, 0),
+            &state,
+            &v,
+            &fund,
+            &[],
+            MINER_FEE,
+            HEIGHT,
+        )
+        .unwrap();
+        let b = build_entry(
+            &key_secrets(&key),
+            &state,
+            &v,
+            &fund,
+            &[],
+            MINER_FEE,
+            HEIGHT,
+        )
+        .unwrap();
+        assert_eq!(a.applied, b.applied, "same gX, same half box id");
+        assert!(parse_key("zz", 0).is_err());
     }
 
     #[test]
@@ -667,17 +764,37 @@ mod tests {
         let need = funding_requirement(&v, 1_000_000_000, level, MINER_FEE).unwrap();
         let fund = funding(need["needed_nano_erg"].as_i64().unwrap());
         let state = MixState::new(0, RingSpec::erg(1_000_000_000), level, 2, DEST.into(), 1);
-        let entry = build_entry(&h, &state, &v, &fund, &[], MINER_FEE, HEIGHT).unwrap();
+        let entry = build_entry(
+            &handle_secrets(&h, 0),
+            &state,
+            &v,
+            &fund,
+            &[],
+            MINER_FEE,
+            HEIGHT,
+        )
+        .unwrap();
         assert!(matches!(entry.applied, Applied::EnteredAsAlice { .. }));
         assert!(
             entry.recipes.is_empty(),
             "Alice signs with a wallet key only"
         );
         let entered = state.after(entry.applied, "tx", 2);
-        assert!(build_entry(&h, &entered, &v, &fund, &[], MINER_FEE, HEIGHT).is_err());
-        assert!(build_move(&h, &entered, &v, &[], MINER_FEE, HEIGHT)
-            .unwrap()
-            .is_none());
+        assert!(build_entry(
+            &handle_secrets(&h, 0),
+            &entered,
+            &v,
+            &fund,
+            &[],
+            MINER_FEE,
+            HEIGHT
+        )
+        .is_err());
+        assert!(
+            build_move(&handle_secrets(&h, 0), &entered, &v, &[], MINER_FEE, HEIGHT)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

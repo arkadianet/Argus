@@ -22,6 +22,29 @@ class ScriptedGateway implements MixGateway {
   @override
   int? get chainHeight => nodeHeight;
   int? nodeHeight;
+
+  /// Keystore stand-in: "walletId:mixId" → key hex.
+  final keys = <String, String>{};
+  @override
+  Future<String> exportKey(int mixId) async {
+    calls.add('exportKey:$mixId');
+    return 'key-$mixId';
+  }
+  @override
+  Future<void> saveKey({required String walletId, required int mixId, required String keyHex}) async {
+    keys['$walletId:$mixId'] = keyHex;
+  }
+  @override
+  Future<String?> loadKey({required String walletId, required int mixId}) async => keys['$walletId:$mixId'];
+  @override
+  Future<void> deleteKey({required String walletId, required int mixId}) async {
+    keys.remove('$walletId:$mixId');
+  }
+  @override
+  Future<List<({String walletId, int mixId})>> listKeys() async => [
+        for (final k in keys.keys)
+          (walletId: k.substring(0, k.lastIndexOf(':')), mixId: int.parse(k.substring(k.lastIndexOf(':') + 1))),
+      ];
   @override
   String contractTrees() => '{"half":"aa","full":"bb","fee":"cc","token":"dd"}';
 
@@ -92,6 +115,10 @@ class ScriptedGateway implements MixGateway {
   Future<String> recover(String c, int n) async => jsonEncode(recovered);
   @override
   Future<void> notify({required String title, required String body}) async {}
+  @override
+  Future<String> observeWithKey(String s, String c, String k, int n) async => s;
+  @override
+  Future<String> advanceWithKey(String s, String c, List<String> o, String? n, int t, String k) async => '{}';
 }
 
 Future<String> fakeExplorer(Uri uri) async {

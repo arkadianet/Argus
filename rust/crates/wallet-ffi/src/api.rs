@@ -3607,7 +3607,7 @@ pub async fn mix_prepare_entry(
 
     let built = with_handle(handle_id, "mix_prepare_entry", |h| {
         crate::api_mix_impl::build_entry(
-            h,
+            &crate::api_mix_impl::handle_secrets(h, state.mix_id),
             &state,
             &view,
             funding,
@@ -3647,12 +3647,32 @@ pub async fn mix_prepare_entry(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
-/// Reduce, sign and broadcast one built move. Returns the transaction id.
+/// Reduce, sign and broadcast one built move with the unlocked wallet.
 async fn broadcast_mix_move(
     handle_id: u64,
     built: crate::api_mix_impl::BuiltMove,
     client: &ErgoNodeClient,
     op: &'static str,
+) -> Result<String, String> {
+    broadcast_mix_move_with(built, client, |reduced, extra| {
+        with_handle(handle_id, op, |handle| {
+            handle
+                .sign_reduced_with_secrets(reduced, extra)
+                .map_err(err_str)
+        })
+    })
+    .await
+}
+
+/// Reduce, sign with `sign` and broadcast one built move. Returns the
+/// transaction id.
+async fn broadcast_mix_move_with(
+    built: crate::api_mix_impl::BuiltMove,
+    client: &ErgoNodeClient,
+    sign: impl FnOnce(
+        ReducedTransaction,
+        Vec<ergo_lib::wallet::secret_key::SecretKey>,
+    ) -> Result<ergo_lib::chain::transaction::Transaction, String>,
 ) -> Result<String, String> {
     let ergo_boxes = built
         .inputs
@@ -3676,19 +3696,104 @@ async fn broadcast_mix_move(
         .into_iter()
         .map(|p| p.into_secret_key())
         .collect();
-    let tx_json = with_handle(handle_id, op, |handle| {
-        let reduced = ReducedTransaction::sigma_parse_bytes(&reduced_bytes)
-            .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-        let signed = handle
-            .sign_reduced_with_secrets(reduced, extra)
-            .map_err(err_str)?;
-        serde_json::to_value(&signed)
-            .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
-    })?;
+    let reduced = ReducedTransaction::sigma_parse_bytes(&reduced_bytes)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let signed = sign(reduced, extra)?;
+    let tx_json = serde_json::to_value(&signed)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
     client
         .submit_transaction(&tx_json)
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())
+}
+
+// ---------------------------------------------------------------------------
+// Background mixing: the same moves from a stored mix key, no wallet needed
+// ---------------------------------------------------------------------------
+
+/// The key for one mix, as hex, for the app's keystore. It derives every
+/// round of that mix and nothing else; see `zerojoin::MixKey`.
+#[flutter_rust_bridge::frb]
+pub fn mix_export_key(handle_id: u64, mix_id: u32) -> Result<String, String> {
+    with_handle(handle_id, "mix_export_key", |h| {
+        let key = h.mix_key(mix_id).map_err(err_str)?;
+        let bytes = key
+            .to_bytes()
+            .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+        Ok(hex::encode(&bytes[..]))
+    })
+}
+
+/// `mix_observe` from a stored key instead of the unlocked wallet.
+#[flutter_rust_bridge::frb]
+pub fn mix_observe_with_key(
+    state_json: String,
+    chain_json: String,
+    key_hex: String,
+    now_unix: i64,
+) -> Result<String, String> {
+    let state = crate::api_mix_impl::parse_state(&state_json)?;
+    let view = crate::api_mix_impl::parse_view(&chain_json)?;
+    let key = crate::api_mix_impl::parse_key(&key_hex, state.mix_id)?;
+    let g = *key
+        .round_secret(state.round)
+        .map_err(|e| ArgusError::SigningFailed(e.to_string()).to_json_string())?
+        .public_key();
+    let next = zerojoin::observe(state, &view, &g, mix_now(now_unix));
+    crate::api_mix_impl::state_json(&next)
+}
+
+/// `mix_advance` from a stored key. Remixes and withdrawals spend only mix
+/// boxes and the operator's fee box, so the round secrets sign them alone:
+/// no wallet key, no seed, no unlock.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn mix_advance_with_key(
+    state_json: String,
+    chain_json: String,
+    own_half_box_ids: Vec<String>,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+    now_unix: i64,
+    key_hex: String,
+) -> Result<String, String> {
+    let now = mix_now(now_unix);
+    let state = crate::api_mix_impl::parse_state(&state_json)?;
+    let view = crate::api_mix_impl::parse_view(&chain_json)?;
+    let key = crate::api_mix_impl::parse_key(&key_hex, state.mix_id)?;
+    let miner_fee = mix_miner_fee(fee_nano)?;
+    let client = node_client(node_url).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+
+    let built = crate::api_mix_impl::build_move(
+        &crate::api_mix_impl::key_secrets(&key),
+        &state,
+        &view,
+        &own_half_box_ids,
+        miner_fee,
+        height,
+    )?;
+    let Some(built) = built else {
+        let plan = zerojoin::plan(&state, &view, &own_half_box_ids);
+        return serde_json::to_string(&serde_json::json!({
+            "state": state,
+            "action": "wait",
+            "plan": plan,
+        }))
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string());
+    };
+    let applied = built.applied.clone();
+    let summary = built.tx.summary.clone();
+    let tx_id = broadcast_mix_move_with(built, &client, |reduced, extra| {
+        ergo_lib::wallet::Wallet::from_secrets(extra)
+            .sign_reduced_transaction(reduced, None)
+            .map_err(|e| ArgusError::SigningFailed(e.to_string()).to_json_string())
+    })
+    .await?;
+    mix_move_result(state, applied, summary, &tx_id, now)
 }
 
 fn mix_move_result(
@@ -3733,7 +3838,14 @@ pub async fn mix_advance(
         .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
 
     let built = with_handle(handle_id, "mix_advance", |h| {
-        crate::api_mix_impl::build_move(h, &state, &view, &own_half_box_ids, miner_fee, height)
+        crate::api_mix_impl::build_move(
+            &crate::api_mix_impl::handle_secrets(h, state.mix_id),
+            &state,
+            &view,
+            &own_half_box_ids,
+            miner_fee,
+            height,
+        )
     })?;
     let Some(built) = built else {
         let plan = zerojoin::plan(&state, &view, &own_half_box_ids);
@@ -3779,7 +3891,14 @@ pub async fn mix_leave(
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
     let built = with_handle(handle_id, "mix_leave", |h| {
-        crate::api_mix_impl::build_leave(h, &state, &view, &destination, miner_fee, height)
+        crate::api_mix_impl::build_leave(
+            &crate::api_mix_impl::handle_secrets(h, state.mix_id),
+            &state,
+            &view,
+            &destination,
+            miner_fee,
+            height,
+        )
     })?;
     let applied = built.applied.clone();
     let summary = built.tx.summary.clone();

@@ -26,6 +26,7 @@ import 'ui/settings_screen.dart';
 import 'ui/swap_hub_screen.dart';
 import 'ui/transaction_detail_screen.dart';
 import 'ui/transactions_screen.dart';
+import 'services/mix_background.dart';
 import 'ui/mix_screen.dart';
 import 'ui/utxo_management_screen.dart';
 
@@ -47,6 +48,7 @@ Future<void> main() async {
     stealthService.loadSelfChangeTrees().catchError((_) {}),
   ]);
   networkController.priceRefresher = tokenPricer.refresh;
+  await MixBackground.init();
   runApp(const ArgusApp());
 }
 

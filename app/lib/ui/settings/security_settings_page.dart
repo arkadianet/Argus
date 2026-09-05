@@ -20,6 +20,31 @@ class SecuritySettingsPage extends StatefulWidget {
   State<SecuritySettingsPage> createState() => _SecuritySettingsPageState();
 }
 
+/// The trade, stated before the switch flips: a key per mix in flight,
+/// spendable by anyone with full access to the unlocked phone, and
+/// nothing else.
+Future<bool> _confirmBackgroundMixing(BuildContext context) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Mix with Argus closed?'),
+      content: const Text(
+        'Argus will keep, in the phone\'s keystore, one key for each mix that '
+        'is in the pool. That key can spend that mix\'s money and nothing '
+        'else: not your other funds, not your seed. Someone with full '
+        'access to this unlocked phone could use it. A lost or wiped phone '
+        'loses nothing, because every mix can be rebuilt from your seed. '
+        'Keys are deleted when a mix ends or when you turn this off.',
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
+        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Turn on')),
+      ],
+    ),
+  );
+  return ok == true;
+}
+
 class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
   bool _canBiometric = false;
   bool _hasPin = false;
@@ -395,6 +420,30 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                       _snack('Could not save the mixing setting');
                     }
                   },
+                ),
+              ),
+              SettingsRow(
+                icon: Icons.nightlight_outlined,
+                title: 'Keep mixing in the background',
+                subtitle: !mixService.enabled
+                    ? 'Turn on mixing first'
+                    : mixService.backgroundEnabled
+                        ? 'Mixes move about every fifteen minutes with Argus closed, from '
+                            'per-mix keys in the phone\'s keystore'
+                        : 'Off: mixes move only while Argus is open and unlocked',
+                trailing: Switch(
+                  key: const Key('mixing-background-switch'),
+                  value: mixService.backgroundEnabled,
+                  onChanged: !mixService.enabled
+                      ? null
+                      : (v) async {
+                          if (v && !await _confirmBackgroundMixing(context)) return;
+                          try {
+                            await mixService.setBackgroundEnabled(v);
+                          } catch (e) {
+                            _snack('Could not change background mixing: $e');
+                          }
+                        },
                 ),
               ),
             ],

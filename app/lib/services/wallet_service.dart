@@ -1197,6 +1197,13 @@ class WalletService {
     );
   }
 
+  /// The key for one mix, for the background job's keystore. It can spend
+  /// that mix's boxes and nothing else.
+  Future<String> mixExportKey(int mixId) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiMixExportKey(handleId: _handleId!, mixId: mixId);
+  }
+
   /// Withdraw or reclaim a mix now.
   Future<String> mixLeave({
     required String stateJson,

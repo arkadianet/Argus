@@ -16,8 +16,8 @@ class FakeGateway implements MixGateway {
   /// call name; each is consumed in order, the last repeats.
   final Map<String, List<Object>> script = {};
 
-  Future<Object> _next(String name) async {
-    calls.add(name);
+  Future<Object> _next(String name, {bool log = true}) async {
+    if (log) calls.add(name);
     final list = script[name];
     if (list == null || list.isEmpty) throw StateError('no script for $name');
     var v = list.length == 1 ? list.first : list.removeAt(0);
@@ -39,6 +39,29 @@ class FakeGateway implements MixGateway {
   @override
   int? get chainHeight => nodeHeight;
   int? nodeHeight;
+
+  /// Keystore stand-in: "walletId:mixId" → key hex.
+  final keys = <String, String>{};
+  @override
+  Future<String> exportKey(int mixId) async {
+    calls.add('exportKey:$mixId');
+    return 'key-$mixId';
+  }
+  @override
+  Future<void> saveKey({required String walletId, required int mixId, required String keyHex}) async {
+    keys['$walletId:$mixId'] = keyHex;
+  }
+  @override
+  Future<String?> loadKey({required String walletId, required int mixId}) async => keys['$walletId:$mixId'];
+  @override
+  Future<void> deleteKey({required String walletId, required int mixId}) async {
+    keys.remove('$walletId:$mixId');
+  }
+  @override
+  Future<List<({String walletId, int mixId})>> listKeys() async => [
+        for (final k in keys.keys)
+          (walletId: k.substring(0, k.lastIndexOf(':')), mixId: int.parse(k.substring(k.lastIndexOf(':') + 1))),
+      ];
 
   @override
   String contractTrees() => jsonEncode({'half': 'aa', 'full': 'bb', 'fee': 'cc', 'token': 'dd'});
@@ -75,6 +98,23 @@ class FakeGateway implements MixGateway {
   @override
   Future<String> advance(String s, String c, List<String> own, String? n, int now) async =>
       jsonEncode(await _next('advance'));
+  @override
+  Future<String> observeWithKey(String stateJson, String c, String keyHex, int now) async {
+    calls.add('withKey:$keyHex');
+    final v = await _next('observe', log: false);
+    return v == 'same' ? stateJson : jsonEncode(v);
+  }
+
+  /// Runs before each keyed advance: a stand-in for the other isolate
+  /// writing meanwhile.
+  Future<void> Function()? beforeAdvanceWithKey;
+
+  @override
+  Future<String> advanceWithKey(String s, String c, List<String> own, String? n, int now, String keyHex) async {
+    calls.add('advanceWithKey:$keyHex');
+    await beforeAdvanceWithKey?.call();
+    return jsonEncode(await _next('advance', log: false));
+  }
   @override
   Future<String> leave(String s, String c, String? d, String? n, int now) async =>
       jsonEncode(await _next('leave'));
@@ -586,5 +626,207 @@ void main() {
     final snap2 = await svc.snapshot();
     expect((jsonDecode(snap2.json) as Map)['half_boxes'].map((b) => b['boxId']), ['eh1']);
     expect(ex.requests.where((r) => r.startsWith('POST')).length, 3, reason: 'tried the node once per list');
+  });
+
+  test('background mixing exports a key when a mix enters, drops it when it ends', () async {
+    final gw = FakeGateway();
+    final wanted = <bool>[];
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true});
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post, schedule: wanted.add);
+    await svc.load();
+    expect(svc.backgroundEnabled, isFalse, reason: 'opt in');
+
+    final created = await svc.createMix(denomination: 1000000000, level: 20, rounds: 1, destinationAddress: '9a');
+    await svc.commitEntry(created, state(mixId: 0, kind: 'half_posted', boxId: 'hb', done: 0), 'tx');
+    expect(gw.keys, isEmpty, reason: 'no key while background mixing is off');
+
+    await svc.setBackgroundEnabled(true);
+    expect(gw.keys, {'w1:0': 'key-0'}, reason: 'switching on exports every mix in the pool');
+    expect(wanted.last, isFalse, reason: 'in front, the foreground tick drives; no job yet');
+    await svc.setForeground(false);
+    expect(wanted.last, isTrue, reason: 'in the back, a job is wanted');
+    await svc.setForeground(true);
+
+    created.state = state(mixId: 0, kind: 'reclaimed');
+    await svc.remove(created);
+    expect(gw.keys, isEmpty, reason: 'a removed mix loses its key');
+    expect(wanted.last, isFalse, reason: 'nothing left to move');
+
+    await svc.setBackgroundEnabled(false);
+    expect(svc.backgroundEnabled, isFalse);
+  });
+
+  test('turning mixing off also turns background mixing off and deletes every key', () async {
+    final gw = FakeGateway()..keys['w1:3'] = 'k'..keys['other:9'] = 'k';
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true, 'argus_mixing_background': true});
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post);
+    await svc.load();
+    expect(svc.backgroundEnabled, isTrue);
+    await svc.setEnabled(false);
+    expect(svc.backgroundEnabled, isFalse);
+    expect(gw.keys, isEmpty, reason: 'keys of every wallet are gone');
+  });
+
+  test('the headless tick drives every wallet with keys, without an unlocked wallet', () async {
+    final gw = FakeGateway()
+      ..unlocked = false
+      ..wallet = null
+      ..keys['w1:0'] = 'key-0'
+      ..keys['w2:5'] = 'key-5'
+      ..script['observe'] = ['same']
+      ..script['plan'] = [
+        {'action': 'withdraw', 'reason': 'rounds_done'},
+      ]
+      ..script['advance'] = [
+        {'state': state(mixId: 0, kind: 'withdrawn', done: 3), 'action': 'withdraw', 'tx_id': 'tw'},
+        {'state': state(mixId: 5, kind: 'full_owned', boxId: 'b5', done: 2, target: 3), 'action': 'remix_bob', 'tx_id': 'tr'},
+      ];
+    final ex = FakeExplorer()
+      ..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null}
+      ..boxes['b5'] = {'boxId': 'b5', 'spentTransactionId': null};
+    SharedPreferences.setMockInitialValues({
+      'argus_mixing_enabled': true,
+      'argus_mixing_background': true,
+      'argus_mixes_v1_w1': jsonEncode([
+        {'state': state(mixId: 0, done: 3, target: 3)},
+      ]),
+      'argus_mixes_v1_w2': jsonEncode([
+        {'state': state(mixId: 5, boxId: 'b5', done: 1, target: 3)},
+        {'state': state(mixId: 6, boxId: 'b6', done: 1, target: 3)},
+      ]),
+    });
+    final svc = MixService(gateway: gw, get: ex.get, post: ex.post);
+    await svc.tickHeadless();
+
+    expect(gw.calls.where((c) => c.startsWith('withKey')), ['withKey:key-0', 'withKey:key-5']);
+    expect(gw.calls.where((c) => c.startsWith('advanceWithKey')), ['advanceWithKey:key-0', 'advanceWithKey:key-5']);
+    expect(gw.calls.where((c) => c == 'observe' || c == 'advance'), isEmpty, reason: 'never the wallet path');
+    expect(gw.keys.keys, ['w2:5'], reason: 'the finished mix lost its key');
+    expect(gw.notifications.first, startsWith('Mix finished'));
+
+    final prefs = await SharedPreferences.getInstance();
+    final w1 = jsonDecode(prefs.getString('argus_mixes_v1_w1')!) as List;
+    expect((w1.single as Map)['state']['phase']['kind'], 'withdrawn');
+    final w2 = jsonDecode(prefs.getString('argus_mixes_v1_w2')!) as List;
+    expect((w2[0] as Map)['state']['rounds_done'], 2);
+    expect((w2[1] as Map)['state']['rounds_done'], 1, reason: 'no key, untouched');
+  });
+
+  test('the headless tick does nothing unless both switches are on', () async {
+    final gw = FakeGateway()..keys['w1:0'] = 'key-0';
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true, 'argus_mixing_background': false});
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post);
+    await svc.tickHeadless();
+    expect(gw.calls, isEmpty);
+  });
+
+  test('background mixing cannot be switched on while the wallet is locked', () async {
+    final gw = FakeGateway()..unlocked = false;
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true});
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post);
+    await svc.load();
+    await expectLater(svc.setBackgroundEnabled(true), throwsStateError);
+    expect(svc.backgroundEnabled, isFalse);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getBool('argus_mixing_background'), isNull, reason: 'nothing persisted');
+  });
+
+  test('loading with background mixing on exports keys that are missing', () async {
+    final gw = FakeGateway();
+    SharedPreferences.setMockInitialValues({
+      'argus_mixing_enabled': true,
+      'argus_mixing_background': true,
+      'argus_mixes_v1_w1': jsonEncode([
+        {'state': state(mixId: 2)},
+        {'state': state(mixId: 3, kind: 'withdrawn')},
+      ]),
+    });
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post);
+    await svc.load();
+    expect(gw.keys.keys, ['w1:2'], reason: 'the live mix, not the finished one');
+  });
+
+  test('the foreground tick stands down while the app is in the back and the job is on', () async {
+    final gw = FakeGateway()..script['observe'] = ['same']..script['plan'] = [{'action': 'wait', 'reason': 'counterpart_needed'}];
+    final wanted = <bool>[];
+    SharedPreferences.setMockInitialValues({
+      'argus_mixing_enabled': true,
+      'argus_mixing_background': true,
+      'argus_mixes_v1_w1': jsonEncode([{'state': state()}]),
+    });
+    final ex = FakeExplorer()..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null};
+    final svc = MixService(gateway: gw, get: ex.get, post: ex.post, schedule: wanted.add);
+    await svc.load();
+    expect(wanted.last, isFalse, reason: 'in front: no job');
+
+    await svc.setForeground(false);
+    expect(wanted.last, isTrue, reason: 'in the back: the job takes over');
+    await svc.tick();
+    expect(gw.calls.where((c) => c == 'observe'), isEmpty, reason: 'the UI does not tick meanwhile');
+
+    // The job advanced the mix on disk while the app was in the back.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('argus_mixes_v1_w1', jsonEncode([{'state': state(done: 2, target: 3)}]));
+    await svc.setForeground(true);
+    expect(svc.records.single.roundsDone, 2, reason: 'coming to the front re-reads the records');
+    expect(wanted.last, isFalse, reason: 'in front again: job cancelled');
+    await svc.tick();
+    expect(gw.calls.where((c) => c == 'observe').length, 1);
+  });
+
+  test('a tick yields to an unexpired lease held by the other driver', () async {
+    final gw = FakeGateway()..script['observe'] = ['same']..script['plan'] = [{'action': 'wait', 'reason': 'counterpart_needed'}];
+    final ex = FakeExplorer()..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null};
+    SharedPreferences.setMockInitialValues({
+      'argus_mixing_enabled': true,
+      'argus_mixes_v1_w1': jsonEncode([{'state': state()}]),
+      'argus_mix_lease': 'bg:${5000 + 60000}',
+    });
+    final svc = MixService(gateway: gw, get: ex.get, post: ex.post, clock: () => DateTime.fromMillisecondsSinceEpoch(5000));
+    await svc.load();
+    await svc.tick();
+    expect(gw.calls, isEmpty, reason: 'the job holds the lease');
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('argus_mix_lease', 'bg:${5000 - 1}');
+    await svc.tick();
+    expect(gw.calls.where((c) => c == 'observe').length, 1, reason: 'an expired lease is taken over');
+    expect(prefs.getString('argus_mix_lease'), isNull, reason: 'released after the pass');
+  });
+
+  test('the headless tick merges by mix id so a concurrent write is not lost', () async {
+    final gw = FakeGateway()
+      ..unlocked = false
+      ..wallet = null
+      ..keys['w1:0'] = 'key-0'
+      ..script['observe'] = ['same']
+      ..script['plan'] = [{'action': 'withdraw', 'reason': 'rounds_done'}]
+      ..script['advance'] = [
+        {'state': state(mixId: 0, kind: 'withdrawn', done: 3), 'action': 'withdraw', 'tx_id': 'tw'},
+      ];
+    final ex = FakeExplorer()..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null};
+    SharedPreferences.setMockInitialValues({
+      'argus_mixing_enabled': true,
+      'argus_mixing_background': true,
+      'argus_mixes_v1_w1': jsonEncode([
+        {'state': state(mixId: 0, done: 3, target: 3)},
+        {'state': state(mixId: 1, boxId: 'b1', done: 1, target: 3)},
+      ]),
+    });
+    // While the job works on mix 0, something else records progress on mix 1.
+    gw.beforeAdvanceWithKey = () async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('argus_mixes_v1_w1', jsonEncode([
+        {'state': state(mixId: 0, done: 3, target: 3)},
+        {'state': state(mixId: 1, boxId: 'b1', done: 2, target: 3)},
+      ]));
+    };
+    final svc = MixService(gateway: gw, get: ex.get, post: ex.post);
+    await svc.tickHeadless();
+    final prefs = await SharedPreferences.getInstance();
+    final saved = jsonDecode(prefs.getString('argus_mixes_v1_w1')!) as List;
+    expect((saved[0] as Map)['state']['phase']['kind'], 'withdrawn');
+    expect((saved[1] as Map)['state']['rounds_done'], 2, reason: 'the concurrent change survived');
+    expect(prefs.getString('argus_mix_lease'), isNull);
   });
 }

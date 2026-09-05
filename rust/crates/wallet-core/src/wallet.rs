@@ -195,6 +195,15 @@ impl WalletHandle {
             .map_err(|e| CoreError::Stealth(e.to_string()))
     }
 
+    /// The key for every round of one mix, derived on demand. Handed to
+    /// the background job's keystore only when the user opts in.
+    pub fn mix_key(&self, mix_id: u32) -> Result<zerojoin::MixKey, CoreError> {
+        let guard = recover(self.inner.lock());
+        let unlocked = guard.as_ref().ok_or(CoreError::WalletLocked)?;
+        zerojoin::MixKey::derive(&unlocked.ext_secret_key, mix_id)
+            .map_err(|e| CoreError::Stealth(e.to_string()))
+    }
+
     /// The published `stealth…` string for this wallet.
     pub fn stealth_address(&self) -> Result<String, CoreError> {
         self.stealth_secret()?

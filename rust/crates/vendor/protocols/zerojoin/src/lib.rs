@@ -69,7 +69,7 @@ pub use mix::{
     RingSpec, WaitReason, WithdrawReason,
 };
 pub use round::{MixTokenSplit, PairOrder};
-pub use secret::{MixSecret, Role, MIX_DERIVATION_BRANCH};
+pub use secret::{MixKey, MixSecret, Role, MIX_DERIVATION_BRANCH, MIX_KEY_LEN};
 pub use tx_builder::{
     build_alice_entry, build_bob_entry, build_reclaim_half_mix, build_remix_as_alice,
     build_remix_as_bob, build_withdraw, AliceEntry, BobEntry, MixProverInput, MixTx, MixTxSummary,
