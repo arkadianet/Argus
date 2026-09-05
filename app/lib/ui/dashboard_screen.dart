@@ -242,6 +242,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     // Mixes move on the same cadence; the service drops a tick that
     // arrives while one is running.
     unawaited(mixService.tick());
+    unawaited(duckpoolsService.tickOrders());
   }
 
   void _probeTick() {
@@ -306,6 +307,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     _sync.reset();
     stealthService.reset();
     mixService.reset();
+    duckpoolsService.reset();
     _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
   }
 
@@ -466,8 +468,10 @@ class _DashboardScreenState extends State<DashboardScreen>
     // and the refresh below runs the first stealth scan.
     stealthService.reset();
     mixService.reset();
+    duckpoolsService.reset();
     unawaited(stealthService.loadAddress());
     unawaited(mixService.load());
+    unawaited(duckpoolsService.load());
     notificationService.requestPermission();
     // 2. Full sync (discovery + balances + activity) in the background.
     await _sync.refresh(discover: true);

@@ -1,7 +1,7 @@
 # Duckpools in Argus: integration plan
 
 Date: 2026-09-05
-Status: batch 1 in progress. Follows `2026-09-05-duckpools-exploration.md`,
+Status: batch 1 in review (#74), batch 2 in review stacked on it. Follows `2026-09-05-duckpools-exploration.md`,
 which found the protocol shape (proxy orders filled by off-chain bots), the
 live pool map, the pool arithmetic and the fee tiers.
 
@@ -43,9 +43,31 @@ transaction, never on the fill, whose outputs the contract pins.
 
 | Batch | Contents | Done when |
 |---|---|---|
-| 1 (this PR) | `duckpools` crate: identities, `PoolBox::parse`, `lend_token_value`, `position_value`, fixtures, live test. FFI `duckpools_pools` (identities) and `duckpools_state(pool_boxes_json, holdings_json)` (per pool: pooled, borrowed, utilisation, lend-token value, the wallet's lend tokens and their value). Dart `DuckpoolsService` (fetch the eight pool boxes by script through node then explorer, compute state), a Duckpools screen listing pools and the wallet's positions, a Discover card with a position line, lend tokens named in the verified list. | Positions and pool state render from live boxes; unit tests on the arithmetic against the fixtures. |
-| 2 | Lend and withdraw orders: proxy-box builders in Rust proven against the pool box (fixtures, live reduction), an order record with refund height, an order tracker on the poll tick (filled, refunded, refundable), the refund transaction, confirm sheets with the fee tiers, interest boxes read for the rate. | A lend order fills against the live ERG pool and a withdraw returns the asset; a deliberately unfilled order is refunded by Argus. |
+| 1 (#74) | `duckpools` crate: identities, `PoolBox::parse`, `lend_token_value`, `position_value`, fixtures, live test. FFI `duckpools_pools` (identities) and `duckpools_state(pool_boxes_json, holdings_json)` (per pool: pooled, borrowed, utilisation, lend-token value, the wallet's lend tokens and their value). Dart `DuckpoolsService` (fetch the eight pool boxes by script through node then explorer, compute state), a Duckpools screen listing pools and the wallet's positions, a Discover card with a position line, lend tokens named in the verified list. | Positions and pool state render from live boxes; unit tests on the arithmetic against the fixtures. |
+| 2 (this PR) | Lend and withdraw orders: proxy-box builders in Rust proven against the pool box (fixtures, live reduction), an order record with refund height, an order tracker on the poll tick (filled, refunded, refundable), the refund transaction, confirm sheets with the fee tiers, interest boxes read for the rate. | A lend order fills against the live ERG pool and a withdraw returns the asset; a deliberately unfilled order is refunded by Argus. |
 | 3 | Borrow, repay, partial repay, collateral top-up, liquidation risk display. Only once a pool shows real borrowing to quote against and the v2 interest and logic contracts have settled. | Device-tested against SigUSD, the pool with borrowing today. |
+
+## Found while building batch 2
+
+**Two `MaxLendTokens`.** The ERG pool contract sets it one million above
+the true maximum; every token pool's contract sets it ten above. Batch 1
+used the ERG value for all eight and halved the token pools' lend-token
+price; fixed on the batch 1 branch, with the SigUSD fixture pinning
+1.7047 SigUSD per lend token.
+
+**The fee tiers, literally.** Above the second step the contract charges
+`(delta − step2 − step1)/250 + step2/200 + step1/160`: the whole second
+step at 1/200, not only its excess. The crate follows the contract, not
+the FAQ's description.
+
+**Refunds need exactly one fee.** The proxy contracts allow at most
+`minTxFee` (0.001 ERG) to leave the box on a refund, so the refund
+transaction uses that fee, not the wallet's default.
+
+**The rate is readable.** The interest parameter box holds six
+coefficients; the rate per 120-block period is a polynomial in
+utilisation. Today's curve gives 1.07% a year at zero utilisation, and
+lenders earn that times utilisation.
 
 ## Live map used by batch 1
 

@@ -3365,7 +3365,8 @@ mod tests {
             include_str!("../../vendor/protocols/duckpools/test/fixtures/pool_erg.json")
         );
         let lend = duckpools::POOLS[0].lend_token;
-        let out = duckpools_state(boxes, format!(r#"{{"{lend}": 482880000}}"#)).unwrap();
+        let out =
+            duckpools_state(boxes, format!(r#"{{"{lend}": 482880000}}"#), String::new()).unwrap();
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         let erg = &v[0];
         assert_eq!(erg["pool"], "erg");
@@ -3373,7 +3374,7 @@ mod tests {
         let value = erg["wallet_value"].as_i64().unwrap();
         assert!((999_000_000..=1_000_100_000).contains(&value), "{value}");
         assert!(duckpools_pools().contains(lend));
-        assert!(duckpools_state("[]".into(), "nope".into()).is_err());
+        assert!(duckpools_state("[]".into(), "nope".into(), String::new()).is_err());
     }
 
     #[test]
@@ -4019,50 +4020,227 @@ pub fn duckpools_pools() -> String {
             "borrow_token": p.borrow_token,
             "currency_id": p.currency_id,
             "ergo_tree": p.ergo_tree,
+            "interest_param_nft": p.interest_param_nft,
+            "lend_proxy_address": p.lend_proxy_address,
+            "withdraw_proxy_address": p.withdraw_proxy_address,
+            "fee_thresholds": [p.fee_thresholds.0, p.fee_thresholds.1],
         }))
         .collect::<Vec<_>>())
     .to_string()
 }
 
 /// Pool state from a list of pool boxes (explorer or node shape), with the
-/// wallet's position in each. `holdings_json` maps token id to the amount
-/// the wallet holds, as a number or a string. Pure.
+/// wallet's position in each and, when the interest parameter boxes are
+/// given, the yearly rates. `holdings_json` maps token id to the amount
+/// the wallet holds. Pure.
 #[flutter_rust_bridge::frb(sync)]
-pub fn duckpools_state(pool_boxes_json: String, holdings_json: String) -> Result<String, String> {
-    let states = duckpools::parse_pool_boxes(&pool_boxes_json)
-        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-    let holdings: serde_json::Value = serde_json::from_str(&holdings_json)
-        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-    let held = |id: &str| -> i64 {
-        holdings
-            .get(id)
-            .and_then(|v| {
-                v.as_i64()
-                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
-            })
-            .unwrap_or(0)
+pub fn duckpools_state(
+    pool_boxes_json: String,
+    holdings_json: String,
+    interest_boxes_json: String,
+) -> Result<String, String> {
+    crate::api_duckpools_impl::state_json(&pool_boxes_json, &holdings_json, &interest_boxes_json)
+}
+
+/// A lend or withdraw quote at today's pool state. `amount` is asset units
+/// for a lend, lend tokens for a withdraw. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn duckpools_quote(
+    pool_boxes_json: String,
+    pool_key: String,
+    kind: String,
+    amount: i64,
+    slippage_bps: i64,
+    refund_height: i64,
+) -> Result<String, String> {
+    let (pool, state) = crate::api_duckpools_impl::state_for(&pool_boxes_json, &pool_key)?;
+    let q = crate::api_duckpools_impl::Quote::new(
+        pool,
+        &state,
+        &kind,
+        amount,
+        slippage_bps,
+        refund_height,
+    )?;
+    Ok(q.json().to_string())
+}
+
+/// Prepare an order: the proxy box from the wallet's boxes, confirmed with
+/// `send_erg`. The proxy pays fills and refunds to `user_address`, which
+/// must be this wallet's. Returns the preparation, the quote, the proxy
+/// box id (known before signing) and the refund height.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn duckpools_prepare_order(
+    handle_id: u64,
+    pool_boxes_json: String,
+    pool_key: String,
+    kind: String,
+    amount: i64,
+    slippage_bps: i64,
+    refund_after_blocks: i64,
+    user_address: String,
+    spend_addresses: Vec<String>,
+    change_address: String,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+) -> Result<String, String> {
+    let (pool, state) = crate::api_duckpools_impl::state_for(&pool_boxes_json, &pool_key)?;
+    let miner_fee = mix_miner_fee(fee_nano)?;
+    let (user_tree, change_tree) = with_handle(handle_id, "duckpools_prepare_order", |h| {
+        for a in [&user_address, &change_address] {
+            if !h.owns_address(a).map_err(err_str)? {
+                return Err(ArgusError::InvalidAddress(
+                    "order addresses must belong to this wallet".into(),
+                )
+                .to_json_string());
+            }
+        }
+        Ok((
+            address_to_ergo_tree(&user_address)
+                .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?,
+            address_to_ergo_tree(&change_address)
+                .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?,
+        ))
+    })?;
+    let client = node_client(node_url.clone()).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    if refund_after_blocks < 30 {
+        return Err(ArgusError::TxBuildFailed(
+            "give the bots at least 30 blocks before a refund".into(),
+        )
+        .to_json_string());
+    }
+    let refund_height = height as i64 + refund_after_blocks;
+    let quote = crate::api_duckpools_impl::Quote::new(
+        pool,
+        &state,
+        &kind,
+        amount,
+        slippage_bps,
+        refund_height,
+    )?;
+    let proxy = quote.proxy_box(pool, &user_tree)?;
+    let spend: Vec<String> = if spend_addresses.is_empty() {
+        vec![user_address.clone()]
+    } else {
+        spend_addresses
     };
-    let out: Vec<serde_json::Value> = states
+    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let fee_cfg = ergo_tx::resolved_dev_fee_config();
+    let app_fee = if fee_cfg.enabled {
+        Some((fee_cfg.recipient_ergo_tree.as_str(), fee_cfg.budget()))
+    } else {
+        None
+    };
+    let token = quote.token_needed(pool);
+    let (unsigned_tx, used) = crate::api_duckpools_impl::build_order(
+        &proxy,
+        &utxos,
+        token.as_ref().map(|(id, n)| (id.as_str(), *n)),
+        &change_tree,
+        app_fee,
+        miner_fee,
+        height,
+    )?;
+    let ergo_boxes = used
         .iter()
-        .map(|s| {
-            let tokens = held(s.lend_token);
-            serde_json::json!({
-                "pool": s.pool,
-                "ticker": s.ticker,
-                "decimals": s.decimals,
-                "pool_nft": s.pool_nft,
-                "lend_token": s.lend_token,
-                "box_id": s.box_id,
-                "creation_height": s.creation_height,
-                "pooled": s.pooled,
-                "borrowed": s.borrowed,
-                "lend_circulating": s.lend_circulating,
-                "utilisation_bps": s.utilisation_bps(),
-                "lend_token_price": s.lend_token_price(),
-                "wallet_lend_tokens": tokens,
-                "wallet_value": s.position_value(tokens),
-            })
-        })
-        .collect();
-    Ok(serde_json::json!(out).to_string())
+        .map(crate::api_mix_impl::to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let proxy_box_id = ergo_tx::chain::derive_output_boxes(&unsigned_tx)
+        .map(|(_, outs)| outs.first().map(|b| b.box_id.clone()).unwrap_or_default())
+        .map_err(|e| ArgusError::TxBuildFailed(e).to_json_string())?;
+    let input_boxes = input_boxes_json(&used);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes,
+        data_input_boxes: Vec::new(),
+        unsigned_tx,
+        miner_fee,
+        change_erg: 0,
+        recipient_erg: quote.box_value(),
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "quote": quote.json(),
+        "proxy_box_id": proxy_box_id,
+        "refund_height": refund_height,
+        "height": height,
+        "miner_fee": miner_fee,
+        "app_fee_nano": app_fee.map(|(_, n)| n).unwrap_or(0),
+        "input_boxes": input_boxes,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Prepare the refund of an unfilled order after its refund height: the
+/// proxy box back to `user_address` less the contract's one fee. Confirm
+/// with `send_erg`. The proxy contract needs no signature for this; it
+/// checks the outputs.
+#[flutter_rust_bridge::frb]
+pub async fn duckpools_prepare_refund(
+    handle_id: u64,
+    proxy_box_json: String,
+    user_address: String,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let boxes = duckpools::parse_pool_boxes(&format!("[{proxy_box_json}]"))
+        .map(|_| ())
+        .ok();
+    let _ = boxes;
+    let proxy = zerojoin::parse_explorer_boxes(&format!("[{proxy_box_json}]"))
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| ArgusError::SerializationError("no proxy box".into()).to_json_string())?;
+    let user_tree = with_handle(handle_id, "duckpools_prepare_refund", |h| {
+        if !h.owns_address(&user_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "refund address must belong to this wallet".into(),
+            )
+            .to_json_string());
+        }
+        address_to_ergo_tree(&user_address)
+            .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())
+    })?;
+    let client = node_client(node_url.clone()).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    let unsigned_tx = duckpools::build_refund_tx(&proxy, &user_tree, height)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let value: i64 = unsigned_tx.outputs[0].value.parse().unwrap_or(0);
+    let ergo_box = crate::api_mix_impl::to_ergo_box(&proxy)?;
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes: vec![ergo_box],
+        data_input_boxes: Vec::new(),
+        unsigned_tx,
+        miner_fee: duckpools::TX_FEE,
+        change_erg: 0,
+        recipient_erg: value,
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "value_nano_erg": value,
+        "miner_fee": duckpools::TX_FEE,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// What the transaction that spent a proxy box did with it: filled,
+/// refunded, or something else. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn duckpools_order_outcome(proxy_box_id: String, tx_json: String) -> Result<String, String> {
+    crate::api_duckpools_impl::outcome_json(&proxy_box_id, &tx_json)
 }
