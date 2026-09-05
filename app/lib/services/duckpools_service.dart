@@ -474,6 +474,21 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
       bridge.duckpoolsOrderOutcome(kind: kind, proxyBoxId: proxyBoxId, txJson: txJson);
 }
 
+/// Parse a typed amount into units exactly: digits, one optional point,
+/// at most `decimals` fractional digits. Null for anything else, so a
+/// figure the asset cannot represent is refused rather than rounded.
+int? parseDuckAmount(String text, int decimals) {
+  final t = text.trim().replaceAll(',', '');
+  if (t.isEmpty || !RegExp(r'^\d*\.?\d*$').hasMatch(t) || t == '.') return null;
+  final parts = t.split('.');
+  final whole = parts[0].isEmpty ? '0' : parts[0];
+  final frac = parts.length > 1 ? parts[1] : '';
+  if (frac.length > decimals) return null;
+  final units = int.tryParse(whole + frac.padRight(decimals, '0'));
+  if (units == null || units <= 0) return null;
+  return units;
+}
+
 typedef DuckHttpGet = Future<String> Function(Uri uri);
 typedef DuckHttpPost = Future<String> Function(Uri uri, String jsonBody);
 
@@ -607,8 +622,11 @@ class DuckpoolsService extends ChangeNotifier {
   Future<void> _persistOrders() async {
     final id = _walletId;
     if (id == null) return;
+    // Serialise before the await, so a reset or load in between cannot
+    // change what is written under this wallet's key.
+    final snapshot = jsonEncode([for (final o in orders) o.toJson()]);
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_ordersKey(id), jsonEncode([for (final o in orders) o.toJson()]));
+    await prefs.setString(_ordersKey(id), snapshot);
     notifyListeners();
   }
 

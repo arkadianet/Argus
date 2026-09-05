@@ -597,24 +597,17 @@ class _OrderSheetState extends State<_OrderSheet> {
     super.dispose();
   }
 
-  int? get _units {
-    final text = _ctl.text.trim().replaceAll(',', '');
-    if (text.isEmpty) return null;
-    final v = double.tryParse(text);
-    if (v == null || v <= 0) return null;
-    var scaled = v;
-    for (var i = 0; i < widget.state.decimals; i++) {
-      scaled *= 10;
-    }
-    return scaled.round();
-  }
+  int? get _units => parseDuckAmount(_ctl.text, widget.state.decimals);
 
   void _requote() {
     final units = _units;
     setState(() {
       _quote = null;
       _error = null;
-      if (units == null) return;
+      if (units == null) {
+        if (_ctl.text.trim().isNotEmpty) _error = 'Use at most ${widget.state.decimals} decimal places.';
+        return;
+      }
       try {
         _quote = duckpoolsService.quote(poolKey: widget.state.pool, kind: widget.kind, amount: units);
       } catch (e) {
