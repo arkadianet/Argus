@@ -33,9 +33,7 @@ pub enum SendError {
         need: u64,
     },
 
-    #[error(
-        "Change amount {change} nanoERG is below minimum box value of {min} nanoERG"
-    )]
+    #[error("Change amount {change} nanoERG is below minimum box value of {min} nanoERG")]
     ChangeBelowMin { change: i64, min: i64 },
 
     #[error("Input ERG total exceeds the representable range")]
@@ -109,9 +107,7 @@ pub fn build_send_tx_with_fee(
         return Err(SendError::EmptySend);
     }
     if send_erg < MIN_BOX_VALUE {
-        return Err(SendError::BelowMinBoxValue {
-            min: MIN_BOX_VALUE,
-        });
+        return Err(SendError::BelowMinBoxValue { min: MIN_BOX_VALUE });
     }
     if let Some((_, amt)) = send_token {
         if amt == 0 {
@@ -130,11 +126,11 @@ pub fn build_send_tx_with_fee(
         for asset in &input.assets {
             let amount = asset.amount.parse::<u64>().unwrap_or(0);
             let entry = token_totals.entry(asset.token_id.clone()).or_insert(0);
-            *entry = entry.checked_add(amount).ok_or_else(|| {
-                SendError::TokenTotalOverflow {
+            *entry = entry
+                .checked_add(amount)
+                .ok_or_else(|| SendError::TokenTotalOverflow {
                     token_id: asset.token_id.clone(),
-                }
-            })?;
+                })?;
         }
     }
 
@@ -331,10 +327,7 @@ mod tests {
             assert_eq!(result.unsigned_tx.outputs.len(), 4);
             let fee_out = &result.unsigned_tx.outputs[2];
             assert_eq!(fee_out.value, DEV_FEE_NANO.to_string());
-            assert_eq!(
-                fee_out.ergo_tree,
-                crate::dev_fee::DEFAULT_DEV_FEE_ERGO_TREE
-            );
+            assert_eq!(fee_out.ergo_tree, crate::dev_fee::DEFAULT_DEV_FEE_ERGO_TREE);
         });
     }
 
@@ -344,15 +337,8 @@ mod tests {
             let send = 5_000_000_000i64;
             // Exactly send + miner — missing citadel fee
             let inputs = vec![make_box(&(send + TX_FEE).to_string(), vec![])];
-            let err = build_send_tx(
-                &inputs,
-                RECIPIENT_TREE,
-                USER_TREE,
-                send,
-                None,
-                50000,
-            )
-            .unwrap_err();
+            let err =
+                build_send_tx(&inputs, RECIPIENT_TREE, USER_TREE, send, None, 50000).unwrap_err();
             match err {
                 SendError::InsufficientErg { need, .. } => {
                     assert_eq!(need, send + TX_FEE + DEV_FEE_NANO);
@@ -364,10 +350,7 @@ mod tests {
 
     #[test]
     fn send_token_with_min_erg() {
-        let inputs = vec![make_box(
-            "5000000000",
-            vec![("tok_a", "100")],
-        )];
+        let inputs = vec![make_box("5000000000", vec![("tok_a", "100")])];
         let result = build_send_tx(
             &inputs,
             RECIPIENT_TREE,
@@ -389,15 +372,8 @@ mod tests {
     #[test]
     fn reject_below_min_box() {
         let inputs = vec![make_box("10000000000", vec![])];
-        let err = build_send_tx(
-            &inputs,
-            RECIPIENT_TREE,
-            USER_TREE,
-            500_000,
-            None,
-            50000,
-        )
-        .unwrap_err();
+        let err =
+            build_send_tx(&inputs, RECIPIENT_TREE, USER_TREE, 500_000, None, 50000).unwrap_err();
         assert!(matches!(err, SendError::BelowMinBoxValue { .. }));
     }
 
@@ -421,15 +397,7 @@ mod tests {
         // send + fee exactly consumes inputs, no leftover tokens
         let send = 5_000_000_000i64;
         let inputs = vec![make_box(&(send + TX_FEE).to_string(), vec![])];
-        let result = build_send_tx(
-            &inputs,
-            RECIPIENT_TREE,
-            USER_TREE,
-            send,
-            None,
-            50000,
-        )
-        .unwrap();
+        let result = build_send_tx(&inputs, RECIPIENT_TREE, USER_TREE, send, None, 50000).unwrap();
         assert_eq!(result.summary.change_erg, 0);
         assert_eq!(result.unsigned_tx.outputs.len(), 2); // recipient + fee only
     }
@@ -440,15 +408,7 @@ mod tests {
         // of erroring, it joins the miner fee and no change box is emitted.
         let send = 9_998_000_000i64;
         let inputs = vec![make_box("10000000000", vec![])];
-        let result = build_send_tx(
-            &inputs,
-            RECIPIENT_TREE,
-            USER_TREE,
-            send,
-            None,
-            50000,
-        )
-        .unwrap();
+        let result = build_send_tx(&inputs, RECIPIENT_TREE, USER_TREE, send, None, 50000).unwrap();
         assert_eq!(result.summary.change_erg, 0);
         assert_eq!(result.summary.miner_fee, TX_FEE + 900_000);
         assert_eq!(result.unsigned_tx.outputs.len(), 2); // recipient + fee only

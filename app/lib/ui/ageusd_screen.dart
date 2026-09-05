@@ -220,6 +220,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     final isMint = !(_action.isRedeem);
     final confirmed = await showConfirmTransactionSheet(
       context,
+      preparationId: build.preparationId,
       title: '${_action.verb} ${_action.tokenName}',
       rows: [
         ConfirmTxRow(

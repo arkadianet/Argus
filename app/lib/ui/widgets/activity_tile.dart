@@ -37,6 +37,7 @@ class ActivityTile extends StatelessWidget {
       ActivityKind.received => moss,
       ActivityKind.sent => rust,
       ActivityKind.swap => accentOf(context),
+      ActivityKind.mix => accentOf(context),
       _ => muted,
     };
     final icon = switch (kind) {
@@ -45,6 +46,7 @@ class ActivityTile extends StatelessWidget {
       ActivityKind.swap => Icons.swap_horiz,
       ActivityKind.selfTransfer => Icons.sync_alt,
       ActivityKind.contract => Icons.code,
+      ActivityKind.mix => Icons.blender_outlined,
     };
     final line = activityLine(
       tx,
@@ -55,7 +57,10 @@ class ActivityTile extends StatelessWidget {
     // A stealth receipt has no counterparty to name: the payer built a
     // one-time script, and nothing on chain says who they were.
     final isStealth = tx['stealth'] == true;
-    final who = isStealth
+    final mixLabel = tx['mix'] == true ? tx['mix_label']?.toString() : null;
+    final who = mixLabel != null
+        ? mixLabel
+        : isStealth
         ? 'stealth payment'
         : counterparty == null || counterparty.isEmpty
         ? null

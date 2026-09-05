@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 
 import 'network_controller.dart';
 import 'privacy_service.dart';
+import 'mix_activity.dart';
+import 'mix_service.dart';
 import 'stealth_service.dart';
 import 'wallet_database_service.dart';
 import 'wallet_service.dart';
@@ -233,8 +235,10 @@ class WalletSyncController extends ChangeNotifier {
 
   /// Activity as the user should see it: address history plus stealth
   /// receipts, newest first.
-  List<Map<String, dynamic>> get displayActivity =>
-      mergeStealthActivity(recentTxs, stealthRows);
+  List<Map<String, dynamic>> get displayActivity => mergeStealthActivity(
+        mergeMixActivity(recentTxs, mixService.mixActivityRows()),
+        stealthRows,
+      );
 
   /// Non-null when the stored pinned address index can't be derived.
   String? pinIssue;

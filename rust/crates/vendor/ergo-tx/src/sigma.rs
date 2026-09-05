@@ -419,10 +419,7 @@ mod tests {
 
         assert!(matches!(
             decode_sigma_group_element("070102"),
-            Err(SigmaDecodeError::InvalidLength {
-                expected: 34,
-                ..
-            })
+            Err(SigmaDecodeError::InvalidLength { expected: 34, .. })
         ));
     }
 

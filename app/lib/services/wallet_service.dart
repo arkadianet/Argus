@@ -1204,6 +1204,17 @@ class WalletService {
     return RustLib.instance.api.crateApiMixExportKey(handleId: _handleId!, mixId: mixId);
   }
 
+  /// Everything a preparation will do, for the confirm sheet's details.
+  /// Does not consume the preparation.
+  Future<Map<String, dynamic>> preparationDetails(int preparationId) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPreparationDetails(
+      handleId: _handleId!,
+      preparationId: BigInt.from(preparationId),
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
   /// Withdraw or reclaim a mix now.
   Future<String> mixLeave({
     required String stateJson,

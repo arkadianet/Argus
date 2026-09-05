@@ -44,7 +44,8 @@ pub fn derive_output_boxes(tx: &Eip12UnsignedTx) -> Result<(String, Vec<Eip12Inp
     Ok((tx_id_str, boxes))
 }
 
-fn to_unsigned_transaction(tx: &Eip12UnsignedTx) -> Result<UnsignedTransaction, String> {
+/// The EIP-12 transaction as ergo-lib's unsigned transaction.
+pub fn to_unsigned_transaction(tx: &Eip12UnsignedTx) -> Result<UnsignedTransaction, String> {
     let inputs: Vec<UnsignedInput> = tx
         .inputs
         .iter()

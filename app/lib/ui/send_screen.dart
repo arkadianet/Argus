@@ -717,7 +717,6 @@ class _SendScreenState extends State<SendScreen> {
       }
     }
     if (!mounted) return;
-    final token = _selectedToken;
     final tokenId = preview.tokenId;
     final rows = <ConfirmTxRow>[
       if (isMulti)
@@ -760,10 +759,7 @@ class _SendScreenState extends State<SendScreen> {
         networkController.activeUrl ?? 'Node not chosen yet',
       ].join('  ·  '),
       allowSignOnly: true,
-      expandableTitle: 'Show ${preview.inputBoxes.length} input UTXOs',
-      expandable: preview.inputBoxes.isEmpty
-          ? null
-          : _InputBoxList(preview.inputBoxes, token),
+      preparationId: preview.preparationId,
     );
     if (!mounted) return;
     switch (choice) {
@@ -1480,69 +1476,6 @@ class _SendScreenState extends State<SendScreen> {
   }
 }
 
-class _InputBoxList extends StatelessWidget {
-  const _InputBoxList(this.inputBoxes, this.selectedToken);
-
-  final List<InputBoxInput> inputBoxes;
-  final TokenBalance? selectedToken;
-
-  String _formatAsset(InputAsset asset) {
-    final known = selectedToken?.id == asset.tokenId ? selectedToken : null;
-    final label = known != null
-        ? known.label
-        : shorten(asset.tokenId, head: 8, tail: 8);
-    if (known != null) {
-      return '$label  ${formatTokenAmountBigInt(asset.amount, known.decimals)}';
-    }
-    return '$label  ${asset.amount.toString()}';
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Text('Selected inputs', style: TextStyle(fontWeight: FontWeight.w600)),
-        const SizedBox(height: 6),
-        Text('Inputs: ${inputBoxes.length}', style: Theme.of(context).textTheme.bodySmall),
-        const SizedBox(height: 8),
-        ...inputBoxes.map((box) {
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 6),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(shorten(box.boxId, head: 8, tail: 8), style: monoStyle(context, size: 11)),
-                const SizedBox(height: 2),
-                Text(
-                  '${formatNanoErg(box.valueNanoErg)} (height ${box.creationHeight})',
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                if (box.assets.isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Wrap(
-                    spacing: 12,
-                    runSpacing: 4,
-                    children: [
-                      for (final a in box.assets)
-                        Text(
-                          _formatAsset(a),
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          );
-        }),
-      ],
-    );
-  }
-}
-
-/// Per-box input chooser. Shows what each box holds and where it sits, so
-/// the user can decide what their transaction will link together.
 class _InputPickerSheet extends StatelessWidget {
   const _InputPickerSheet({
     required this.boxes,

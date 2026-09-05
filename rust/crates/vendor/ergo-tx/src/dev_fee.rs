@@ -22,8 +22,7 @@ use citadel_core::constants::DEV_FEE_NANO;
 use std::sync::OnceLock;
 
 /// Hardcoded mainnet P2PK for Citadel app fee (user-requested default).
-pub const DEFAULT_DEV_FEE_ADDRESS: &str =
-    "9eoLQ6FFKJPqZXeBFvd3CKu7DRfXavKo7n9PFkVypSmXgD6ActU";
+pub const DEFAULT_DEV_FEE_ADDRESS: &str = "9eoLQ6FFKJPqZXeBFvd3CKu7DRfXavKo7n9PFkVypSmXgD6ActU";
 
 /// ErgoTree hex for [`DEFAULT_DEV_FEE_ADDRESS`] (P2PK `0008cd…`).
 pub const DEFAULT_DEV_FEE_ERGO_TREE: &str =

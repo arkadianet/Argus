@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../theme/argus_theme.dart';
+import 'widgets/tx_details.dart';
 
 /// A single summary line shown inside the confirmation sheet.
 class ConfirmTxRow {
@@ -223,7 +224,13 @@ Future<ConfirmChoice> showConfirmTransactionChoice(
   bool allowSignOnly = false,
   String? expandableTitle,
   Widget? expandable,
+  int? preparationId,
 }) async {
+  // Every wallet-built transaction can show its whole shape on request.
+  if (expandable == null && preparationId != null) {
+    expandable = TxDetailsExpander(preparationId: preparationId);
+    expandableTitle ??= 'Transaction details';
+  }
   final result = await showModalBottomSheet<ConfirmChoice>(
     context: context,
     backgroundColor: Theme.of(context).colorScheme.surface,
@@ -253,6 +260,7 @@ Future<bool> showConfirmTransactionSheet(
   required List<ConfirmTxRow> rows,
   String confirmLabel = 'Sign & broadcast',
   String? detail,
+  int? preparationId,
 }) async {
   final choice = await showConfirmTransactionChoice(
     context,
@@ -260,6 +268,7 @@ Future<bool> showConfirmTransactionSheet(
     rows: rows,
     confirmLabel: confirmLabel,
     detail: detail,
+    preparationId: preparationId,
   );
   return choice == ConfirmChoice.broadcast;
 }

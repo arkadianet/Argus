@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../bridge/api.dart' as bridge;
 import '../format.dart';
 import 'network_controller.dart';
+import 'mix_activity.dart';
 import 'mix_background.dart';
 import 'notification_service.dart';
 import 'secure_storage.dart';
@@ -26,6 +27,7 @@ class MixRecord {
     this.fundingBoxIds = const [],
     this.entryAttempt,
     this.entryTxId,
+    this.acknowledged = false,
   });
 
   Map<String, dynamic> state;
@@ -46,6 +48,16 @@ class MixRecord {
   /// broadcast. Still here after a crash means the entry may be on chain.
   Map<String, dynamic>? entryAttempt;
   String? entryTxId;
+
+  /// The user has seen that this mix finished; the home strip stops
+  /// announcing it.
+  bool acknowledged;
+
+  /// What happened, for the activity list: `(action, tx id, at, round,
+  /// height)` per event, oldest first.
+  List<Map<String, dynamic>> get events =>
+      (state['events'] as List?)?.cast<Map>().map((m) => m.cast<String, dynamic>()).toList() ??
+      const [];
 
   int get mixId => (state['mix_id'] as num).toInt();
   Map<String, dynamic> get phase => (state['phase'] as Map).cast<String, dynamic>();
@@ -85,6 +97,7 @@ class MixRecord {
         if (fundingBoxIds.isNotEmpty) 'funding_box_ids': fundingBoxIds,
         if (entryAttempt != null) 'entry_attempt': entryAttempt,
         if (entryTxId != null) 'entry_tx_id': entryTxId,
+        if (acknowledged) 'acknowledged': true,
       };
 
   static MixRecord fromJson(Map<String, dynamic> m) => MixRecord(
@@ -95,6 +108,7 @@ class MixRecord {
         fundingBoxIds: (m['funding_box_ids'] as List?)?.cast<String>() ?? const [],
         entryAttempt: (m['entry_attempt'] as Map?)?.cast<String, dynamic>(),
         entryTxId: m['entry_tx_id'] as String?,
+        acknowledged: m['acknowledged'] == true,
         lastCheckedAt: (m['last_checked_at'] as num?) == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch((m['last_checked_at'] as num).toInt()),
@@ -746,6 +760,29 @@ class MixService extends ChangeNotifier {
 
   bool _lastListTruncated = false;
 
+  /// Height of the last snapshot, stamped on the events it leads to so the
+  /// activity list can place them among ordinary transactions.
+  int _lastHeight = 0;
+
+  /// Give the newest event the height of the snapshot that produced it.
+  void _stampHeight(MixRecord r) {
+    final events = (r.state['events'] as List?);
+    if (events == null || events.isEmpty || _lastHeight <= 0) return;
+    final last = events.last;
+    if (last is Map && last['height'] == null) last['height'] = _lastHeight;
+  }
+
+  /// Rows for the activity list, newest first. Rounds never touch the
+  /// wallet's addresses, so the address history cannot show them.
+  List<Map<String, dynamic>> mixActivityRows() => mixActivityRowsFor(records);
+
+  /// The user has seen that [r] finished.
+  Future<void> acknowledge(MixRecord r) async {
+    if (r.acknowledged) return;
+    r.acknowledged = true;
+    await _persist();
+  }
+
   /// One box by id, with its `spentTransactionId`: node first, then explorer.
   Future<Map<String, dynamic>> _boxById(String base, String id) async {
     final node = _nodeBase;
@@ -804,6 +841,7 @@ class MixService extends ChangeNotifier {
     final lists = results[0] as List<List<dynamic>>;
     final own = results[1] as List<_OwnBox>;
     final height = results[2] as int;
+    _lastHeight = height;
     final half = lists[0];
     final fee = lists[1];
     final token = lists[2];
@@ -985,6 +1023,7 @@ class MixService extends ChangeNotifier {
       events.last['tx_id'] = txId;
     }
     record.state = nextState;
+    _stampHeight(record);
     record.entryAttempt = null;
     record.entryTxId = txId.isEmpty ? null : txId;
     record.lastError = null;
@@ -1051,7 +1090,10 @@ class MixService extends ChangeNotifier {
     try {
       final observed = await _gw.observe(jsonEncode(r.state), snap.json, _now);
       r.state = (jsonDecode(observed) as Map).cast<String, dynamic>();
-      if (r.roundsDone > before) await _announceRound(r);
+      if (r.roundsDone > before) {
+        _stampHeight(r);
+        await _announceRound(r);
+      }
 
       final plan = (jsonDecode(await _gw.plan(jsonEncode(r.state), snap.json, ownHalfBoxIds)) as Map)
           .cast<String, dynamic>();
@@ -1072,6 +1114,7 @@ class MixService extends ChangeNotifier {
         return;
       }
       r.state = (result['state'] as Map).cast<String, dynamic>();
+      _stampHeight(r);
       r.lastError = null;
       if (r.finished) {
         await _gw.notify(
@@ -1106,6 +1149,7 @@ class MixService extends ChangeNotifier {
           await _gw.leave(jsonEncode(r.state), snap.json, destinationAddress, _gw.nodeUrl, _now);
       final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
       r.state = (result['state'] as Map).cast<String, dynamic>();
+      _stampHeight(r);
       r.lastError = null;
       r.lastCheckedAt = _clock();
       await _persist();
@@ -1183,6 +1227,7 @@ class MixService extends ChangeNotifier {
             final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
             if (result['action'] != 'wait') {
               r.state = (result['state'] as Map).cast<String, dynamic>();
+              _stampHeight(r);
               if (r.finished) {
                 await _gw.notify(
                   title: 'Mix finished',

@@ -99,7 +99,6 @@ pub struct Eip12UnsignedTx {
     pub outputs: Vec<Eip12Output>,
 }
 
-
 #[cfg(feature = "ergo-lib")]
 mod ergo_lib_conversion {
     use super::*;

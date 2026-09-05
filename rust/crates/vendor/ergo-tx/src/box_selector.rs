@@ -100,7 +100,9 @@ pub fn select_erg_boxes(
         }
         let erg = utxos[idx].value.parse::<u64>().unwrap_or(0);
         selected.push(utxos[idx].clone());
-        total_erg = total_erg.checked_add(erg).ok_or(BoxSelectorError::TotalOverflow)?;
+        total_erg = total_erg
+            .checked_add(erg)
+            .ok_or(BoxSelectorError::TotalOverflow)?;
     }
 
     if total_erg < required_erg {
@@ -156,7 +158,9 @@ pub fn select_token_boxes(
             break;
         }
         selected_indices.push(idx);
-        total_tokens = total_tokens.checked_add(tok_amt).ok_or(BoxSelectorError::TotalOverflow)?;
+        total_tokens = total_tokens
+            .checked_add(tok_amt)
+            .ok_or(BoxSelectorError::TotalOverflow)?;
         total_erg = total_erg
             .checked_add(utxos[idx].value.parse::<u64>().unwrap_or(0))
             .ok_or(BoxSelectorError::TotalOverflow)?;
@@ -185,7 +189,9 @@ pub fn select_token_boxes(
                 break;
             }
             selected_indices.push(idx);
-            total_erg = total_erg.checked_add(erg).ok_or(BoxSelectorError::TotalOverflow)?;
+            total_erg = total_erg
+                .checked_add(erg)
+                .ok_or(BoxSelectorError::TotalOverflow)?;
         }
 
         if total_erg < min_erg {
@@ -296,7 +302,9 @@ pub fn select_multi_token_boxes(
                 break;
             }
             selected_indices.push(idx);
-            total_erg = total_erg.checked_add(erg).ok_or(BoxSelectorError::TotalOverflow)?;
+            total_erg = total_erg
+                .checked_add(erg)
+                .ok_or(BoxSelectorError::TotalOverflow)?;
         }
 
         if total_erg < min_erg {
