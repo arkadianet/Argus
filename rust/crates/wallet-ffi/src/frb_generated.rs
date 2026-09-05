@@ -928,15 +928,16 @@ fn wire__crate__api__duckpools_loan_quote_impl(
     )
 }
 fn wire__crate__api__duckpools_loans_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
     data_len_: i32,
-) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
-    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
         flutter_rust_bridge::for_generated::TaskInfo {
             debug_name: "duckpools_loans",
-            port: None,
-            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
         },
         move || {
             let message = unsafe {
@@ -952,14 +953,20 @@ fn wire__crate__api__duckpools_loans_impl(
             let api_wallet_addresses = <Vec<String>>::sse_decode(&mut deserializer);
             let api_height = <i64>::sse_decode(&mut deserializer);
             deserializer.end();
-            transform_result_sse::<_, String>((move || {
-                let output_ok = crate::api::duckpools_loans(
-                    api_loan_boxes_json,
-                    api_wallet_addresses,
-                    api_height,
-                )?;
-                Ok(output_ok)
-            })())
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::duckpools_loans(
+                            api_loan_boxes_json,
+                            api_wallet_addresses,
+                            api_height,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
         },
     )
 }
@@ -3600,6 +3607,7 @@ fn pde_ffi_dispatcher_primary_impl(
         16 => wire__crate__api__dexy_preview_swap_impl(port, ptr, rust_vec_len, data_len),
         17 => wire__crate__api__dexy_state_impl(port, ptr, rust_vec_len, data_len),
         18 => wire__crate__api__discover_addresses_impl(port, ptr, rust_vec_len, data_len),
+        21 => wire__crate__api__duckpools_loans_impl(port, ptr, rust_vec_len, data_len),
         24 => wire__crate__api__duckpools_prepare_adjust_impl(port, ptr, rust_vec_len, data_len),
         25 => wire__crate__api__duckpools_prepare_order_impl(port, ptr, rust_vec_len, data_len),
         26 => wire__crate__api__duckpools_prepare_refund_impl(port, ptr, rust_vec_len, data_len),
@@ -3667,7 +3675,6 @@ fn pde_ffi_dispatcher_sync_impl(
         5 => wire__crate__api__app_fee_info_impl(ptr, rust_vec_len, data_len),
         19 => wire__crate__api__duckpools_adjust_quote_impl(ptr, rust_vec_len, data_len),
         20 => wire__crate__api__duckpools_loan_quote_impl(ptr, rust_vec_len, data_len),
-        21 => wire__crate__api__duckpools_loans_impl(ptr, rust_vec_len, data_len),
         22 => wire__crate__api__duckpools_order_outcome_impl(ptr, rust_vec_len, data_len),
         23 => wire__crate__api__duckpools_pools_impl(ptr, rust_vec_len, data_len),
         27 => wire__crate__api__duckpools_quote_impl(ptr, rust_vec_len, data_len),

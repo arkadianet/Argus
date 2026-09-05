@@ -226,7 +226,7 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 height,
   });
 
-  String crateApiDuckpoolsLoans({
+  Future<String> crateApiDuckpoolsLoans({
     required String loanBoxesJson,
     required List<String> walletAddresses,
     required PlatformInt64 height,
@@ -1520,19 +1520,24 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
-  String crateApiDuckpoolsLoans({
+  Future<String> crateApiDuckpoolsLoans({
     required String loanBoxesJson,
     required List<String> walletAddresses,
     required PlatformInt64 height,
   }) {
-    return handler.executeSync(
-      SyncTask(
-        callFfi: () {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(loanBoxesJson, serializer);
           sse_encode_list_String(walletAddresses, serializer);
           sse_encode_i_64(height, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 21)!;
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 21,
+            port: port_,
+          );
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
