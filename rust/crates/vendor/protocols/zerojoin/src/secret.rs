@@ -47,6 +47,111 @@ pub fn mix_derivation_path(mix_id: u32, round: u32) -> Result<String, ZeroJoinEr
     Ok(format!("{MIX_DERIVATION_BRANCH}/{mix_id}/{round}"))
 }
 
+/// The extended key one level above a mix's rounds: `m/44'/429'/0'/4'/<mix>`.
+///
+/// Both trailing indices of the mix path are soft, so this key derives
+/// every round of one mix and nothing else: not another mix, not a
+/// payment key, not the stealth key. It is what a background job may hold
+/// to keep a mix moving without the seed. Exposure is bounded to that
+/// mix's boxes, and a lost copy loses nothing: the seed re-derives it.
+pub struct MixKey {
+    key: ExtSecretKey,
+    mix_id: u32,
+}
+
+impl core::fmt::Debug for MixKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("MixKey")
+            .field("key", &"*****")
+            .field("mix_id", &self.mix_id)
+            .finish()
+    }
+}
+
+/// Serialised [`MixKey`] size: 32 bytes of secret, 32 of chain code.
+pub const MIX_KEY_LEN: usize = 64;
+
+impl MixKey {
+    /// Derive the key for `mix_id` from a wallet root key.
+    pub fn derive(root: &ExtSecretKey, mix_id: u32) -> Result<Self, ZeroJoinError> {
+        if mix_id > MAX_DERIVATION_INDEX {
+            return Err(ZeroJoinError::Derivation(format!(
+                "mix id {mix_id} exceeds the soft derivation range"
+            )));
+        }
+        let path = format!("{MIX_DERIVATION_BRANCH}/{mix_id}")
+            .parse::<DerivationPath>()
+            .map_err(|e| ZeroJoinError::Derivation(e.to_string()))?;
+        let key = root
+            .derive(path)
+            .map_err(|e| ZeroJoinError::Derivation(e.to_string()))?;
+        Ok(Self { key, mix_id })
+    }
+
+    pub fn mix_id(&self) -> u32 {
+        self.mix_id
+    }
+
+    /// The secret for one round of this mix; identical to
+    /// [`MixSecret::derive`] with the same mix and round.
+    pub fn round_secret(&self, round: u32) -> Result<MixSecret, ZeroJoinError> {
+        if round > MAX_DERIVATION_INDEX {
+            return Err(ZeroJoinError::Derivation(format!(
+                "round {round} exceeds the soft derivation range"
+            )));
+        }
+        let index = ergo_lib::wallet::derivation_path::ChildIndex::normal(round)
+            .map_err(|e| ZeroJoinError::Derivation(e.to_string()))?;
+        let child = self
+            .key
+            .child(index)
+            .map_err(|e| ZeroJoinError::Derivation(e.to_string()))?;
+        let mut bytes = child.secret_key_bytes();
+        let scalar = Wscalar::from_bytes(&bytes);
+        bytes.zeroize();
+        let scalar = scalar.ok_or_else(|| {
+            ZeroJoinError::Derivation("derived mix key is not a valid scalar".into())
+        })?;
+        Ok(MixSecret::from_scalar(scalar, self.mix_id, round))
+    }
+
+    /// Secret bytes then chain code, for a keystore. Zeroised on drop.
+    pub fn to_bytes(&self) -> Result<zeroize::Zeroizing<[u8; MIX_KEY_LEN]>, ZeroJoinError> {
+        let chain = self
+            .key
+            .public_key()
+            .map_err(|e| ZeroJoinError::Derivation(e.to_string()))?
+            .chain_code();
+        let mut out = zeroize::Zeroizing::new([0u8; MIX_KEY_LEN]);
+        let mut secret = self.key.secret_key_bytes();
+        out[..32].copy_from_slice(&secret);
+        out[32..].copy_from_slice(&chain);
+        secret.zeroize();
+        Ok(out)
+    }
+
+    /// Rebuild from [`Self::to_bytes`] output.
+    pub fn from_bytes(bytes: &[u8], mix_id: u32) -> Result<Self, ZeroJoinError> {
+        if bytes.len() != MIX_KEY_LEN {
+            return Err(ZeroJoinError::Derivation(format!(
+                "mix key must be {MIX_KEY_LEN} bytes, got {}",
+                bytes.len()
+            )));
+        }
+        let mut secret = [0u8; 32];
+        secret.copy_from_slice(&bytes[..32]);
+        let mut chain = [0u8; 32];
+        chain.copy_from_slice(&bytes[32..]);
+        let path = format!("{MIX_DERIVATION_BRANCH}/{mix_id}")
+            .parse::<DerivationPath>()
+            .map_err(|e| ZeroJoinError::Derivation(e.to_string()))?;
+        let key = ExtSecretKey::new(secret, chain, path)
+            .map_err(|e| ZeroJoinError::Derivation(e.to_string()))?;
+        secret.zeroize();
+        Ok(Self { key, mix_id })
+    }
+}
+
 /// Which side of a round a box belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -234,6 +339,45 @@ impl MixSecret {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mix_key_derives_the_same_round_secrets_and_survives_a_keystore_round_trip() {
+        let root = ExtSecretKey::derive_master(
+            ergo_lib::wallet::mnemonic::Mnemonic::to_seed(
+                "slow silly start wash bundle suffer bulb ancient height spin express remind today effort helmet",
+                "",
+            ),
+        )
+        .unwrap();
+        let key = MixKey::derive(&root, 7).unwrap();
+        for round in [0u32, 1, 5, 40] {
+            let from_key = key.round_secret(round).unwrap();
+            let from_seed = MixSecret::derive(&root, 7, round).unwrap();
+            assert_eq!(
+                from_key.public_key(),
+                from_seed.public_key(),
+                "round {round}"
+            );
+        }
+        // Another mix's key knows nothing about this one.
+        let other = MixKey::derive(&root, 8).unwrap();
+        assert_ne!(
+            other.round_secret(0).unwrap().public_key(),
+            key.round_secret(0).unwrap().public_key()
+        );
+
+        let bytes = key.to_bytes().unwrap();
+        let back = MixKey::from_bytes(&bytes[..], 7).unwrap();
+        assert_eq!(
+            back.round_secret(3).unwrap().public_key(),
+            key.round_secret(3).unwrap().public_key()
+        );
+        assert!(MixKey::from_bytes(&bytes[..63], 7).is_err());
+        assert!(
+            !format!("{key:?}").contains(&hex::encode(&bytes[..32])),
+            "Debug hides the key"
+        );
+    }
     use ergo_lib::wallet::mnemonic::Mnemonic;
 
     const MNEMONIC: &str = "slow silly start wash bundle suffer bulb ancient height spin express remind today effort helmet";

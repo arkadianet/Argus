@@ -95,6 +95,8 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
     private fun seedKey(walletId: String?) =
         if (walletId != null) "seed_${walletId}" else "encrypted_seed"
 
+    private fun mixKey(walletId: String, mixId: Int) = "mix_key_${walletId}:${mixId}"
+
     private fun wrapKey(walletId: String?) =
         if (walletId != null) "wrap_${walletId}" else "wrap_key"
 
@@ -142,6 +144,47 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                     result.success(true)
                 }
                 "loadWrapKey" -> result.success(getPrefs().getString(wrapKey(walletId), null))
+                // Mix keys: one per mix in flight, so the background job can
+                // sign that mix's rounds without the seed. Deleted when the
+                // mix ends or background mixing is turned off.
+                "saveMixKey" -> {
+                    val mixId = call.argument<Int>("mixId")
+                    val key = call.argument<String>("key")
+                    if (walletId.isNullOrEmpty() || mixId == null || key.isNullOrEmpty()) {
+                        result.error("INVALID_ARGS", "Missing walletId, mixId or key", null)
+                        return
+                    }
+                    if (!getPrefs().edit().putString(mixKey(walletId, mixId), key).commit()) {
+                        result.error("STORAGE_ERROR", "Failed to persist mix key", null)
+                        return
+                    }
+                    result.success(true)
+                }
+                "loadMixKey" -> {
+                    val mixId = call.argument<Int>("mixId")
+                    if (walletId.isNullOrEmpty() || mixId == null) {
+                        result.error("INVALID_ARGS", "Missing walletId or mixId", null)
+                        return
+                    }
+                    result.success(getPrefs().getString(mixKey(walletId, mixId), null))
+                }
+                "deleteMixKey" -> {
+                    val mixId = call.argument<Int>("mixId")
+                    if (walletId.isNullOrEmpty() || mixId == null) {
+                        result.error("INVALID_ARGS", "Missing walletId or mixId", null)
+                        return
+                    }
+                    getPrefs().edit().remove(mixKey(walletId, mixId)).commit()
+                    result.success(true)
+                }
+                "listMixKeys" -> {
+                    // "walletId:mixId" for every stored key, across wallets.
+                    val prefix = "mix_key_"
+                    val found = getPrefs().all.keys
+                        .filter { it.startsWith(prefix) }
+                        .map { it.removePrefix(prefix) }
+                    result.success(found)
+                }
                 "savePinWrap" -> {
                     val json = call.argument<String>("pinWrapJson")
                     if (json.isNullOrEmpty()) {

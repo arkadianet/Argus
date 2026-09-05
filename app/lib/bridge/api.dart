@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `broadcast_mix_move`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `broadcast_mix_move_with`, `broadcast_mix_move`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 
 /// The app fee as the UI should display it.
@@ -782,6 +782,45 @@ Future<String> mixPrepareEntry({
   nodeUrl: nodeUrl,
   feeNano: feeNano,
   nowUnix: nowUnix,
+);
+
+/// The key for one mix, as hex, for the app's keystore. It derives every
+/// round of that mix and nothing else; see `zerojoin::MixKey`.
+Future<String> mixExportKey({required BigInt handleId, required int mixId}) =>
+    RustLib.instance.api.crateApiMixExportKey(handleId: handleId, mixId: mixId);
+
+/// `mix_observe` from a stored key instead of the unlocked wallet.
+Future<String> mixObserveWithKey({
+  required String stateJson,
+  required String chainJson,
+  required String keyHex,
+  required PlatformInt64 nowUnix,
+}) => RustLib.instance.api.crateApiMixObserveWithKey(
+  stateJson: stateJson,
+  chainJson: chainJson,
+  keyHex: keyHex,
+  nowUnix: nowUnix,
+);
+
+/// `mix_advance` from a stored key. Remixes and withdrawals spend only mix
+/// boxes and the operator's fee box, so the round secrets sign them alone:
+/// no wallet key, no seed, no unlock.
+Future<String> mixAdvanceWithKey({
+  required String stateJson,
+  required String chainJson,
+  required List<String> ownHalfBoxIds,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+  required PlatformInt64 nowUnix,
+  required String keyHex,
+}) => RustLib.instance.api.crateApiMixAdvanceWithKey(
+  stateJson: stateJson,
+  chainJson: chainJson,
+  ownHalfBoxIds: ownHalfBoxIds,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+  nowUnix: nowUnix,
+  keyHex: keyHex,
 );
 
 /// Advance a mix already in the pool by one move: remix as Bob or Alice,

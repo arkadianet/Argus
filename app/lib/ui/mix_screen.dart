@@ -312,10 +312,17 @@ class _MixScreenState extends State<MixScreen> {
               Text(
                 'A mix moves a fixed amount through rounds with strangers until '
                 'nothing on chain ties what comes out to what went in. Each round '
-                'needs a counterpart, so a mix can take hours or days, and only '
-                'moves while Argus is open and unlocked. The pool is shared with '
-                'ErgoMixer; today it is thin.',
+                'needs a counterpart, so a mix can take hours or days. The pool is '
+                'shared with ErgoMixer; today it is thin.',
                 style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                mixService.backgroundEnabled
+                    ? 'Mixes keep moving about every fifteen minutes while Argus is closed.'
+                    : 'Mixes move only while Argus is open and unlocked. Settings → Security '
+                        'can keep them moving in the background.',
+                style: TextStyle(color: ArgusColors.of(context).muted, fontSize: 12),
               ),
               const SizedBox(height: 16),
               if (_working) ...[

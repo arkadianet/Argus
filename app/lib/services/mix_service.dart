@@ -8,7 +8,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../bridge/api.dart' as bridge;
 import '../format.dart';
 import 'network_controller.dart';
+import 'mix_background.dart';
 import 'notification_service.dart';
+import 'secure_storage.dart';
 import 'wallet_service.dart';
 
 /// One mix as the app keeps it: the Rust engine's state JSON, which is the
@@ -151,6 +153,23 @@ abstract class MixGateway {
     required int nowUnix,
   });
   Future<void> notify({required String title, required String body});
+
+  // Background mixing: a per-mix key in the app's keystore, and the same
+  // engine calls driven by it instead of the unlocked wallet.
+  Future<String> exportKey(int mixId);
+  Future<void> saveKey({required String walletId, required int mixId, required String keyHex});
+  Future<String?> loadKey({required String walletId, required int mixId});
+  Future<void> deleteKey({required String walletId, required int mixId});
+  Future<List<({String walletId, int mixId})>> listKeys();
+  Future<String> observeWithKey(String stateJson, String chainJson, String keyHex, int nowUnix);
+  Future<String> advanceWithKey(
+    String stateJson,
+    String chainJson,
+    List<String> ownHalfBoxIds,
+    String? nodeUrl,
+    int nowUnix,
+    String keyHex,
+  );
 }
 
 /// The real thing: every call goes through the Rust bridge.
@@ -272,6 +291,46 @@ class LiveMixGateway implements MixGateway {
   @override
   Future<void> notify({required String title, required String body}) =>
       notificationService.mixProgress(title: title, body: body);
+
+  @override
+  Future<String> exportKey(int mixId) => walletService.mixExportKey(mixId);
+  @override
+  Future<void> saveKey({required String walletId, required int mixId, required String keyHex}) =>
+      SecureStorageService.saveMixKey(walletId: walletId, mixId: mixId, keyHex: keyHex);
+  @override
+  Future<String?> loadKey({required String walletId, required int mixId}) =>
+      SecureStorageService.loadMixKey(walletId: walletId, mixId: mixId);
+  @override
+  Future<void> deleteKey({required String walletId, required int mixId}) =>
+      SecureStorageService.deleteMixKey(walletId: walletId, mixId: mixId);
+  @override
+  Future<List<({String walletId, int mixId})>> listKeys() => SecureStorageService.listMixKeys();
+  @override
+  Future<String> observeWithKey(String stateJson, String chainJson, String keyHex, int nowUnix) =>
+      bridge.mixObserveWithKey(
+        stateJson: stateJson,
+        chainJson: chainJson,
+        keyHex: keyHex,
+        nowUnix: nowUnix,
+      );
+  @override
+  Future<String> advanceWithKey(
+    String stateJson,
+    String chainJson,
+    List<String> ownHalfBoxIds,
+    String? nodeUrl,
+    int nowUnix,
+    String keyHex,
+  ) =>
+      bridge.mixAdvanceWithKey(
+        stateJson: stateJson,
+        chainJson: chainJson,
+        ownHalfBoxIds: ownHalfBoxIds,
+        nodeUrl: nodeUrl,
+        feeNano: null,
+        nowUnix: nowUnix,
+        keyHex: keyHex,
+      );
 }
 
 /// One HTTP GET returning the body, so the snapshot builder can be tested
@@ -336,12 +395,15 @@ class MixService extends ChangeNotifier {
     MixHttpGet? get,
     MixHttpPost? post,
     DateTime Function()? clock,
+    void Function(bool wanted)? schedule,
   })  : _gw = gateway ?? const LiveMixGateway(),
         _get = get ?? _httpGet,
         _post = post ?? _httpPost,
-        _clock = clock ?? DateTime.now;
+        _clock = clock ?? DateTime.now,
+        _schedule = schedule;
 
   static const _enabledKey = 'argus_mixing_enabled';
+  static const _backgroundKey = 'argus_mixing_background';
   static String _recordsKey(String walletId) => 'argus_mixes_v1_$walletId';
 
   /// A copy of a records value that could not be read, kept so the next
@@ -359,8 +421,16 @@ class MixService extends ChangeNotifier {
   final MixHttpPost _post;
   final DateTime Function() _clock;
 
+  /// Told whether a periodic background job is wanted, whenever that
+  /// answer may have changed.
+  final void Function(bool wanted)? _schedule;
+
   /// Off until the user turns mixing on in Settings → Privacy.
   bool enabled = false;
+
+  /// Keep mixes moving with the app closed, from per-mix keys in the
+  /// keystore. Off until the user opts in; see [setBackgroundEnabled].
+  bool backgroundEnabled = false;
 
   /// Every mix of the loaded wallet, newest first.
   List<MixRecord> records = const [];
@@ -412,6 +482,7 @@ class MixService extends ChangeNotifier {
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     enabled = prefs.getBool(_enabledKey) ?? false;
+    backgroundEnabled = prefs.getBool(_backgroundKey) ?? false;
     final id = _gw.walletId;
     _walletId = id;
     recordsUnreadable = false;
@@ -446,7 +517,51 @@ class MixService extends ChangeNotifier {
       throw StateError('Failed to persist the mixing setting');
     }
     enabled = value;
+    if (!value && backgroundEnabled) await setBackgroundEnabled(false);
+    _reschedule();
     notifyListeners();
+  }
+
+  /// Opt in or out of background mixing. On: every mix in the pool gets
+  /// its key exported to the keystore. Off: every stored key is deleted,
+  /// for this wallet and any other.
+  Future<void> setBackgroundEnabled(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setBool(_backgroundKey, value)) {
+      throw StateError('Failed to persist the background mixing setting');
+    }
+    backgroundEnabled = value;
+    if (value) {
+      for (final r in active) {
+        await _exportKey(r);
+      }
+    } else {
+      for (final k in await _gw.listKeys()) {
+        await _gw.deleteKey(walletId: k.walletId, mixId: k.mixId);
+      }
+    }
+    _reschedule();
+    notifyListeners();
+  }
+
+  void _reschedule() => _schedule?.call(enabled && backgroundEnabled && active.isNotEmpty);
+
+  Future<void> _exportKey(MixRecord r) async {
+    final id = _walletId;
+    if (id == null || !backgroundEnabled || !_gw.isUnlocked) return;
+    final hex = await _gw.exportKey(r.mixId);
+    await _gw.saveKey(walletId: id, mixId: r.mixId, keyHex: hex);
+  }
+
+  Future<void> _dropKey(MixRecord r) async {
+    final id = _walletId;
+    if (id == null) return;
+    try {
+      await _gw.deleteKey(walletId: id, mixId: r.mixId);
+    } catch (_) {
+      // A key that could not be deleted is useless once the box is spent;
+      // the switch-off path sweeps the store anyway.
+    }
   }
 
   /// Forget the loaded wallet's mixes in memory (never on disk).
@@ -803,6 +918,8 @@ class MixService extends ChangeNotifier {
     record.lastError = null;
     record.lastCheckedAt = _clock();
     await _persist();
+    if (record.inPool) await _exportKey(record);
+    _reschedule();
   }
 
   /// Drop a finished or never-started mix from the list. A mix with money
@@ -811,7 +928,9 @@ class MixService extends ChangeNotifier {
   Future<void> remove(MixRecord record) async {
     if (record.inPool) throw StateError('This mix still has money in the pool');
     records = records.where((r) => r.mixId != record.mixId).toList();
+    await _dropKey(record);
     await _persist();
+    _reschedule();
   }
 
   /// Look at the chain once and move every active mix that can move.
@@ -835,6 +954,10 @@ class MixService extends ChangeNotifier {
       }
       lastTickAt = _clock();
       await _persist();
+      for (final r in records) {
+        if (r.finished) await _dropKey(r);
+      }
+      _reschedule();
     } catch (e) {
       if (gen != _generation) return;
       lastTickError = e.toString();
@@ -909,8 +1032,89 @@ class MixService extends ChangeNotifier {
       r.lastError = null;
       r.lastCheckedAt = _clock();
       await _persist();
+      await _dropKey(r);
+      _reschedule();
       return result['tx_id'] as String? ?? '';
     });
+  }
+
+  /// One pass over every wallet with stored mix keys, from a background
+  /// isolate: no unlocked wallet, no PIN. Each mix is observed and
+  /// advanced with its key; a finished mix loses its key. Never throws.
+  Future<void> tickHeadless() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!(prefs.getBool(_enabledKey) ?? false) || !(prefs.getBool(_backgroundKey) ?? false)) {
+      return;
+    }
+    final keys = await _gw.listKeys();
+    if (keys.isEmpty) return;
+    final byWallet = <String, List<int>>{};
+    for (final k in keys) {
+      byWallet.putIfAbsent(k.walletId, () => []).add(k.mixId);
+    }
+    for (final entry in byWallet.entries) {
+      final walletId = entry.key;
+      final records = _decode(prefs.getString(_recordsKey(walletId)));
+      if (records == null) continue;
+      final own = [
+        for (final r in records)
+          if (r.phaseKind == 'half_posted' && r.boxId != null) r.boxId!,
+      ];
+      final targets = records.where((r) => r.inPool && r.boxId != null && entry.value.contains(r.mixId)).toList();
+      if (targets.isEmpty) continue;
+      MixSnapshot snap;
+      try {
+        snap = await snapshot(ownBoxIds: [for (final r in targets) r.boxId!]);
+      } catch (_) {
+        continue;
+      }
+      var changed = false;
+      for (final r in targets) {
+        final keyHex = await _gw.loadKey(walletId: walletId, mixId: r.mixId);
+        if (keyHex == null) continue;
+        final before = r.roundsDone;
+        r.lastCheckedAt = _clock();
+        try {
+          final observed = await _gw.observeWithKey(jsonEncode(r.state), snap.json, keyHex, _now);
+          r.state = (jsonDecode(observed) as Map).cast<String, dynamic>();
+          if (r.roundsDone > before) await _announceRound(r);
+          final plan = (jsonDecode(await _gw.plan(jsonEncode(r.state), snap.json, own)) as Map)
+              .cast<String, dynamic>();
+          final action = plan['action'] as String? ?? 'wait';
+          if (action != 'wait' && !(action == 'withdraw' && r.destinationErgoTree.isEmpty)) {
+            final raw = await _gw.advanceWithKey(
+              jsonEncode(r.state),
+              snap.json,
+              own,
+              _gw.nodeUrl,
+              _now,
+              keyHex,
+            );
+            final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
+            if (result['action'] != 'wait') {
+              r.state = (result['state'] as Map).cast<String, dynamic>();
+              if (r.finished) {
+                await _gw.notify(
+                  title: 'Mix finished',
+                  body: '${formatErg(r.denomination, maxFrac: 4)} delivered after ${r.roundsDone} '
+                      '${r.roundsDone == 1 ? 'round' : 'rounds'}',
+                );
+                await _gw.deleteKey(walletId: walletId, mixId: r.mixId);
+              } else if (r.roundsDone > before) {
+                await _announceRound(r);
+              }
+            }
+          }
+          r.lastError = null;
+        } catch (e) {
+          r.lastError = e.toString();
+        }
+        changed = true;
+      }
+      if (changed) {
+        await prefs.setString(_recordsKey(walletId), jsonEncode([for (final r in records) r.toJson()]));
+      }
+    }
   }
 
   /// Find mixes of this wallet the records do not know about, from the
@@ -958,7 +1162,7 @@ class MixService extends ChangeNotifier {
   }
 }
 
-final mixService = MixService();
+final mixService = MixService(schedule: (wanted) => MixBackground.schedule(wanted));
 
 /// What the chain says about one of our boxes.
 class _OwnBox {

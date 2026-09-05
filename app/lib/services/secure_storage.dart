@@ -29,6 +29,66 @@ class SecureStorageService {
     }
   }
 
+  // ── Mix keys ────────────────────────────────────────────────────────
+  //
+  // The extended key one level above a mix's rounds, kept only while
+  // background mixing is on and the mix is in flight. It can spend that
+  // mix's boxes and nothing else.
+
+  static Future<void> saveMixKey({
+    required String walletId,
+    required int mixId,
+    required String keyHex,
+  }) async {
+    try {
+      await _channel.invokeMethod('saveMixKey', {
+        'walletId': walletId,
+        'mixId': mixId,
+        'key': keyHex,
+      });
+    } on PlatformException catch (e) {
+      throw _map(e, 'Failed to save mix key');
+    }
+  }
+
+  static Future<String?> loadMixKey({required String walletId, required int mixId}) async {
+    try {
+      return await _channel.invokeMethod<String>('loadMixKey', {
+        'walletId': walletId,
+        'mixId': mixId,
+      });
+    } on PlatformException catch (e) {
+      throw _map(e, 'Failed to load mix key');
+    }
+  }
+
+  static Future<void> deleteMixKey({required String walletId, required int mixId}) async {
+    try {
+      await _channel.invokeMethod('deleteMixKey', {'walletId': walletId, 'mixId': mixId});
+    } on PlatformException catch (e) {
+      throw _map(e, 'Failed to delete mix key');
+    }
+  }
+
+  /// `(walletId, mixId)` for every stored key.
+  static Future<List<({String walletId, int mixId})>> listMixKeys() async {
+    try {
+      final raw = await _channel.invokeMethod<List<dynamic>>('listMixKeys') ?? const [];
+      final out = <({String walletId, int mixId})>[];
+      for (final item in raw) {
+        final s = item.toString();
+        final i = s.lastIndexOf(':');
+        if (i <= 0) continue;
+        final id = int.tryParse(s.substring(i + 1));
+        if (id == null) continue;
+        out.add((walletId: s.substring(0, i), mixId: id));
+      }
+      return out;
+    } on PlatformException catch (e) {
+      throw _map(e, 'Failed to list mix keys');
+    }
+  }
+
   static Future<void> savePinWrap(String pinWrapJson, {String? walletId}) async {
     try {
       await _channel.invokeMethod('savePinWrap', {
