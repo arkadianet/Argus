@@ -18,6 +18,7 @@ import '../services/portfolio.dart';
 import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
+import '../services/duckpools_service.dart';
 import '../services/mix_service.dart';
 import '../services/stealth_service.dart';
 import '../services/sigmausd_service.dart';
@@ -119,6 +120,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     watchOnlyService.addListener(_onWatchOnlyChanged);
     _sync.addListener(_onSyncChanged);
     mixService.addListener(_onSyncChanged);
+    duckpoolsService.addListener(_onDuckpoolsChanged);
     deepLinkController.addListener(_onDeepLink);
     _pollTimer = Timer.periodic(_pollInterval, (_) => _pollTick());
     _probeTimer = Timer.periodic(_probeInterval, (_) => _probeTick());
@@ -129,6 +131,21 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (mounted) setState(() {});
     _openPendingDeepLink();
     _announceIncoming();
+    _refreshDuckpoolsIfDue();
+  }
+
+  void _onDuckpoolsChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// Value the wallet's lend tokens once per sync, at most every few
+  /// minutes: the pools change slowly and the read is eight requests.
+  void _refreshDuckpoolsIfDue() {
+    if (!_walletUnlocked || _sync.isSyncing) return;
+    final last = duckpoolsService.lastRefreshedAt;
+    if (last != null && DateTime.now().difference(last) < const Duration(minutes: 5)) return;
+    final holdings = {for (final t in _sync.tokens) t.id: t.amount};
+    unawaited(duckpoolsService.refresh(holdings));
   }
 
   /// Announces payments that appeared since the last refresh. Only fires
@@ -241,6 +258,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     watchOnlyService.removeListener(_onWatchOnlyChanged);
     _sync.removeListener(_onSyncChanged);
     mixService.removeListener(_onSyncChanged);
+    duckpoolsService.removeListener(_onDuckpoolsChanged);
     deepLinkController.removeListener(_onDeepLink);
     _pinCtrl.dispose();
     super.dispose();
@@ -1342,6 +1360,14 @@ class _DashboardScreenState extends State<DashboardScreen>
                     subtitle: 'Permissionless token swaps on Ergo.',
                     icon: Icons.swap_horiz,
                     onTap: () => _goHub(SwapVenue.spectrum),
+                  ),
+                  _discoverCard(
+                    title: 'Duckpools',
+                    onLearn: () => _go('/duckpools'),
+                    subtitle: duckpoolsService.positionLine(formatTokenAmountGrouped) ??
+                        'Lend and borrow on Ergo. Read-only for now.',
+                    icon: Icons.water_outlined,
+                    onTap: () => _go('/duckpools'),
                   ),
                   _discoverCard(
                     title: 'Mix',

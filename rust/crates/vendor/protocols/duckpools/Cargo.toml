@@ -1,0 +1,14 @@
+[package]
+name = "duckpools"
+version = "0.1.0"
+edition = "2021"
+description = "Duckpools lending pools on Ergo: identities, pool state and position arithmetic"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true }
+tokio = { workspace = true }
