@@ -885,12 +885,9 @@ class DuckpoolsService extends ChangeNotifier {
   }) async {
     final boxes = lastPoolBoxesJson;
     if (boxes == null) throw StateError('Read the pools first');
-<<<<<<< HEAD
     final loanSide = kind == 'borrow' || kind == 'repay' || kind == 'partial_repay';
     if (loanSide && lastLoanBoxesJson == null) throw StateError('Read the loans first');
-=======
     final walletId = _gw.walletId;
->>>>>>> feat/duckpools-orders
     final raw = await _gw.prepareOrder(
       poolBoxesJson: boxes,
       poolKey: poolKey,
