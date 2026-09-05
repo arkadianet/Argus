@@ -1,0 +1,66 @@
+{
+ "boxId": "647554bcefe5025dd472a64d74d2099c7d6222b57fbdc0269d2c61d4650e34cd",
+ "transactionId": "4e2d8743e381b7309fe6bc9db2beb97cf7c7b62823894d7efd43dbe9873851f4",
+ "blockId": "77078ef12b17af9fc6c7bf32c40a3a19ef8008276414caf49e9b2210ac04bad1",
+ "value": 35000000,
+ "index": 0,
+ "globalIndex": 214093,
+ "creationHeight": 1840029,
+ "settlementHeight": 1840030,
+ "ergoTree": "1012040004dc06058092f401040204020400040004020580ade204040004000502058084af5f058084af5f04dc060400058084af5f0402d80ed601b2a5730000d6029c7e7301057302d603db63087201d604db6308a7d605b27203730300d606b27204730400d6078c720601d608e4c6a70411d609b2db6501fe730500d60ae4c672090411d60be4c672010411d60cb2db63087209730600d60db2a5730700d60edb6308720dd1edededededededededededededededededed93c27201c2a792c172019999c1a77308720293b27203730900b27204730a00938c7205017207938c720502998c720602730b93b37208830105b0720a730cd9010f599d9c8c720f018c720f02730d720b93b17203b17204edededede4c672010501e4c672010601e4c672010701e4c672010801e4c672010901938c720c01720793e4c672090604b1720892b1720a730e93c2720dc2720992c1720d720293b2720e730f00720c93e4c6720d0604b1720b93e4c6720d0411830105731093e4c6720d0505e4c672090505edede4c6720d0701e4c6720d0801e4c6720d090193b1720e7311",
+ "ergoTreeConstants": "[\n  0: SInt$ = 0,\n  1: SInt$ = 430,\n  2: SLong$ = 2000000,\n  3: SInt$ = 1,\n  4: SInt$ = 1,\n  5: SInt$ = 0,\n  6: SInt$ = 0,\n  7: SInt$ = 1,\n  8: SLong$ = 5000000,\n  9: SInt$ = 0,\n  10: SInt$ = 0,\n  11: SLong$ = 1,\n  12: SLong$ = 100000000,\n  13: SLong$ = 100000000,\n  14: SInt$ = 430,\n  15: SInt$ = 0,\n  16: SLong$ = 100000000,\n  17: SInt$ = 1\n]",
+ "ergoTreeScript": "Right(BlockValue(WrappedArray(ValDef(1,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(0,SInt$),None)), ValDef(2,WrappedArray(),Multiply(Upcast(ConstantPlaceholder(1,SInt$),SLong$), ConstantPlaceholder(2,SLong$))), ValDef(3,WrappedArray(),MethodCall(ValUse(1,SBox),SMethod(SBox,tokens,(SBox) => Coll[(Coll[SByte$],SLong$)],8,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),Secondary tokens,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map())), ValDef(4,WrappedArray(),MethodCall(Self$(167),SMethod(SBox,tokens,(SBox) => Coll[(Coll[SByte$],SLong$)],8,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),Secondary tokens,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map())), ValDef(5,WrappedArray(),ByIndex(ValUse(3,Coll[(Coll[SByte$],SLong$)]),ConstantPlaceholder(3,SInt$),None)), ValDef(6,WrappedArray(),ByIndex(ValUse(4,Coll[(Coll[SByte$],SLong$)]),ConstantPlaceholder(4,SInt$),None)), ValDef(7,WrappedArray(),SelectField(ValUse(6,(Coll[SByte$],SLong$)),1)), ValDef(8,WrappedArray(),ExtractRegisterAs(Self$(167),R4,Option[Coll[SLong$]]).get), ValDef(9,WrappedArray(),ByIndex(MethodCall(Context$(254),SMethod(SContext,dataInputs,(SContext) => Coll[SBox],1,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map()),ConstantPlaceholder(5,SInt$),None)), ValDef(10,WrappedArray(),ExtractRegisterAs(ValUse(9,SBox),R4,Option[Coll[SLong$]]).get), ValDef(11,WrappedArray(),ExtractRegisterAs(ValUse(1,SBox),R4,Option[Coll[SLong$]]).get), ValDef(12,WrappedArray(),ByIndex(MethodCall(ValUse(9,SBox),SMethod(SBox,tokens,(SBox) => Coll[(Coll[SByte$],SLong$)],8,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),Secondary tokens,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map()),ConstantPlaceholder(6,SInt$),None)), ValDef(13,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(7,SInt$),None)), ValDef(14,WrappedArray(),MethodCall(ValUse(13,SBox),SMethod(SBox,tokens,(SBox) => Coll[(Coll[SByte$],SLong$)],8,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),Secondary tokens,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map()))),BoolToSigmaProp(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(BinAnd(EQ(ExtractScriptBytes(ValUse(1,SBox)),ExtractScriptBytes(Self$(167))),GE(ExtractAmount(ValUse(1,SBox)),Minus(Minus(ExtractAmount(Self$(167)), ConstantPlaceholder(8,SLong$)), ValUse(2,SLong$)))),EQ(ByIndex(ValUse(3,Coll[(Coll[SByte$],SLong$)]),ConstantPlaceholder(9,SInt$),None),ByIndex(ValUse(4,Coll[(Coll[SByte$],SLong$)]),ConstantPlaceholder(10,SInt$),None))),EQ(SelectField(ValUse(5,(Coll[SByte$],SLong$)),1),ValUse(7,Coll[SByte$]))),EQ(SelectField(ValUse(5,(Coll[SByte$],SLong$)),2),Minus(SelectField(ValUse(6,(Coll[SByte$],SLong$)),2), ConstantPlaceholder(11,SLong$)))),EQ(Append(ValUse(8,Coll[SLong$]),ConcreteCollection(WrappedArray(Fold(ValUse(10,Coll[SLong$]),ConstantPlaceholder(12,SLong$),FuncValue(WrappedArray((15,(SLong$,SLong$))),Divide(Multiply(SelectField(ValUse(15,(SLong$,SLong$)),1), SelectField(ValUse(15,(SLong$,SLong$)),2)), ConstantPlaceholder(13,SLong$))))),SLong$)),ValUse(11,Coll[SLong$]))),EQ(SizeOf(ValUse(3,Coll[(Coll[SByte$],SLong$)])),SizeOf(ValUse(4,Coll[(Coll[SByte$],SLong$)])))),BinAnd(BinAnd(BinAnd(BinAnd(ExtractRegisterAs(ValUse(1,SBox),R5,Option[SBoolean]).get,ExtractRegisterAs(ValUse(1,SBox),R6,Option[SBoolean]).get),ExtractRegisterAs(ValUse(1,SBox),R7,Option[SBoolean]).get),ExtractRegisterAs(ValUse(1,SBox),R8,Option[SBoolean]).get),ExtractRegisterAs(ValUse(1,SBox),R9,Option[SBoolean]).get)),EQ(SelectField(ValUse(12,(Coll[SByte$],SLong$)),1),ValUse(7,Coll[SByte$]))),EQ(ExtractRegisterAs(ValUse(9,SBox),R6,Option[SInt$]).get,SizeOf(ValUse(8,Coll[SLong$])))),GE(SizeOf(ValUse(10,Coll[SLong$])),ConstantPlaceholder(14,SInt$))),EQ(ExtractScriptBytes(ValUse(13,SBox)),ExtractScriptBytes(ValUse(9,SBox)))),GE(ExtractAmount(ValUse(13,SBox)),ValUse(2,SLong$))),EQ(ByIndex(ValUse(14,Coll[(Coll[SByte$],SLong$)]),ConstantPlaceholder(15,SInt$),None),ValUse(12,(Coll[SByte$],SLong$)))),EQ(ExtractRegisterAs(ValUse(13,SBox),R6,Option[SInt$]).get,SizeOf(ValUse(11,Coll[SLong$])))),EQ(ExtractRegisterAs(ValUse(13,SBox),R4,Option[Coll[SLong$]]).get,ConcreteCollection(WrappedArray(ConstantPlaceholder(16,SLong$)),SLong$))),EQ(ExtractRegisterAs(ValUse(13,SBox),R5,Option[SLong$]).get,ExtractRegisterAs(ValUse(9,SBox),R5,Option[SLong$]).get)),BinAnd(BinAnd(ExtractRegisterAs(ValUse(13,SBox),R7,Option[SBoolean]).get,ExtractRegisterAs(ValUse(13,SBox),R8,Option[SBoolean]).get),ExtractRegisterAs(ValUse(13,SBox),R9,Option[SBoolean]).get)),EQ(SizeOf(ValUse(14,Coll[(Coll[SByte$],SLong$)])),ConstantPlaceholder(17,SInt$))))))",
+ "address": "5s1ivH9pMoYPPX5YV8GZ71xNw14vbWYx5Bp1KbD3kFxPkmxMx3PQMPRF2pXMRcECbQ5bJ9J1Jaysmv1LmBC1yUM44pnLBjE8LT7Ld6Ym9VLyUAXuHvDFHvVek6gvrkbWJy8Rc6RRbx5v5x9QyiCfVquR8z7GFbbysvsvbBpJ4bM2kzY61DiQuZLB9JYNdEKAvRXazGZyr3MwqqZZYjfpBs3tJSo1haBLwxL5ZnP2fsyAaoZfB3n9xjiBv9u71ydbZ8z8D52bStnai8V5VSybLFNTYPuHFeEUSvNt689nchEmyygEH8BJfz6fXFtJZiKMbKZK2Q84hYm2QtoEqWzJBK4Pmmmjm1LM2MZ35iZKmezBoQKHmhfiL6Fxpy6ttTLbeKhFy7D7t1CZehnqf3phtnJFSuGdyN3LJkqsk1myrpRP3nH3oqcZhjY6HMYvvHea7fSpATmzMYuegQHgW33nC74jVnMd1CWdx7LRGCBWWCYHiQNxxVCvec6jdc1sZ6Wa18vBDhAtxyVsHxkQoE3DLxn66Qzv9ik8HC1wjCGq4ZSyfYWTtzKyxDiH4",
+ "assets": [
+  {
+   "tokenId": "d45bc0077acf66b60e59d24d181e29570955c830399ede244d59d5ff726ad18e",
+   "index": 0,
+   "amount": 1,
+   "name": "Parent NFT SigUSD-1e",
+   "decimals": 0,
+   "type": "EIP-004"
+  },
+  {
+   "tokenId": "35d6f883bc9b09cec95de38bc3b7c5d01d519b88ad3512bba6643eb5c1090780",
+   "index": 1,
+   "amount": 8999999999999987,
+   "name": "Child Token SigUSD-1e",
+   "decimals": 0,
+   "type": "EIP-004"
+  }
+ ],
+ "additionalRegisters": {
+  "R5": {
+   "serializedValue": "0101",
+   "sigmaType": "SBoolean",
+   "renderedValue": "true"
+  },
+  "R6": {
+   "serializedValue": "0101",
+   "sigmaType": "SBoolean",
+   "renderedValue": "true"
+  },
+  "R8": {
+   "serializedValue": "0101",
+   "sigmaType": "SBoolean",
+   "renderedValue": "true"
+  },
+  "R7": {
+   "serializedValue": "0101",
+   "sigmaType": "SBoolean",
+   "renderedValue": "true"
+  },
+  "R9": {
+   "serializedValue": "0101",
+   "sigmaType": "SBoolean",
+   "renderedValue": "true"
+  },
+  "R4": {
+   "serializedValue": "110e8084af5fd29f9a668c91a16ae088b96c92e6a166baedcb61f8d3d7629e93e46380b69164c89cf960f4eb886484ccd361acee8e60c0beec5f",
+   "sigmaType": "Coll[SLong]",
+   "renderedValue": "[100000000,107169769,111420486,113713712,107231625,102333277,103478524,104629455,105000320,101656356,104930042,102396674,100785046,100503456]"
+  }
+ },
+ "spentTransactionId": null,
+ "mainChain": true
+}

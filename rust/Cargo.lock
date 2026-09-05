@@ -734,6 +734,9 @@ dependencies = [
 name = "duckpools"
 version = "0.1.0"
 dependencies = [
+ "ergo-lib",
+ "ergo-tx",
+ "hex",
  "reqwest",
  "serde",
  "serde_json",

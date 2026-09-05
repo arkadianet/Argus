@@ -883,12 +883,91 @@ Future<String> mixLeave({
 String duckpoolsPools() => RustLib.instance.api.crateApiDuckpoolsPools();
 
 /// Pool state from a list of pool boxes (explorer or node shape), with the
-/// wallet's position in each. `holdings_json` maps token id to the amount
-/// the wallet holds, as a number or a string. Pure.
+/// wallet's position in each and, when the interest parameter boxes are
+/// given, the yearly rates. `holdings_json` maps token id to the amount
+/// the wallet holds. Pure.
 String duckpoolsState({
   required String poolBoxesJson,
   required String holdingsJson,
+  required String interestBoxesJson,
 }) => RustLib.instance.api.crateApiDuckpoolsState(
   poolBoxesJson: poolBoxesJson,
   holdingsJson: holdingsJson,
+  interestBoxesJson: interestBoxesJson,
+);
+
+/// A lend or withdraw quote at today's pool state. `amount` is asset units
+/// for a lend, lend tokens for a withdraw. Pure.
+String duckpoolsQuote({
+  required String poolBoxesJson,
+  required String poolKey,
+  required String kind,
+  required PlatformInt64 amount,
+  required PlatformInt64 slippageBps,
+  required PlatformInt64 refundHeight,
+}) => RustLib.instance.api.crateApiDuckpoolsQuote(
+  poolBoxesJson: poolBoxesJson,
+  poolKey: poolKey,
+  kind: kind,
+  amount: amount,
+  slippageBps: slippageBps,
+  refundHeight: refundHeight,
+);
+
+/// Prepare an order: the proxy box from the wallet's boxes, confirmed with
+/// `send_erg`. The proxy pays fills and refunds to `user_address`, which
+/// must be this wallet's. Returns the preparation, the quote, the proxy
+/// box id (known before signing) and the refund height.
+Future<String> duckpoolsPrepareOrder({
+  required BigInt handleId,
+  required String poolBoxesJson,
+  required String poolKey,
+  required String kind,
+  required PlatformInt64 amount,
+  required PlatformInt64 slippageBps,
+  required PlatformInt64 refundAfterBlocks,
+  required String userAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiDuckpoolsPrepareOrder(
+  handleId: handleId,
+  poolBoxesJson: poolBoxesJson,
+  poolKey: poolKey,
+  kind: kind,
+  amount: amount,
+  slippageBps: slippageBps,
+  refundAfterBlocks: refundAfterBlocks,
+  userAddress: userAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+);
+
+/// Prepare the refund of an unfilled order after its refund height: the
+/// proxy box back to `user_address` less the contract's one fee. Confirm
+/// with `send_erg`. The proxy contract needs no signature for this; it
+/// checks the outputs.
+Future<String> duckpoolsPrepareRefund({
+  required BigInt handleId,
+  required String proxyBoxJson,
+  required String userAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDuckpoolsPrepareRefund(
+  handleId: handleId,
+  proxyBoxJson: proxyBoxJson,
+  userAddress: userAddress,
+  nodeUrl: nodeUrl,
+);
+
+/// What the transaction that spent a proxy box did with it: filled,
+/// refunded, or something else. Pure.
+String duckpoolsOrderOutcome({
+  required String proxyBoxId,
+  required String txJson,
+}) => RustLib.instance.api.crateApiDuckpoolsOrderOutcome(
+  proxyBoxId: proxyBoxId,
+  txJson: txJson,
 );
