@@ -29,6 +29,19 @@ impl Pool {
     pub fn is_erg(&self) -> bool {
         self.currency_id.is_none()
     }
+
+    /// `MaxLendTokens` in this pool's contract. The ERG pool was deployed
+    /// with one million above the true maximum; every token pool with ten
+    /// above (see `QUACKS-POOL/pool.md` and the bot's token handlers).
+    /// Circulating lend tokens are this minus what the pool box holds, so
+    /// the wrong constant misprices every lend token.
+    pub fn max_lend_tokens(&self) -> i64 {
+        if self.is_erg() {
+            9_000_000_001_000_000
+        } else {
+            9_000_000_000_000_010
+        }
+    }
 }
 
 /// Every pool, in the bot's order.

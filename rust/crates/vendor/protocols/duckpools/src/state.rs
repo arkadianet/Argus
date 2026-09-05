@@ -1,7 +1,7 @@
 //! A pool box, read.
 
 use crate::pools::{pool_by_nft, Pool};
-use crate::{MAX_BORROW_TOKENS, MAX_LEND_TOKENS};
+use crate::MAX_BORROW_TOKENS;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PoolsError {
@@ -88,7 +88,7 @@ impl PoolState {
         let borrow_held = amount(pool.borrow_token);
         if lend_held <= 0
             || borrow_held <= 0
-            || lend_held > MAX_LEND_TOKENS
+            || lend_held > pool.max_lend_tokens()
             || borrow_held > MAX_BORROW_TOKENS
         {
             return Err(PoolsError::NotAPoolBox {
@@ -121,7 +121,7 @@ impl PoolState {
                 .unwrap_or(0),
             pooled,
             borrowed: MAX_BORROW_TOKENS - borrow_held,
-            lend_circulating: MAX_LEND_TOKENS - lend_held,
+            lend_circulating: pool.max_lend_tokens() - lend_held,
         })
     }
 
@@ -245,7 +245,10 @@ mod tests {
         let s = PoolState::parse(&POOLS[0], &fixture("erg")).unwrap();
         assert_eq!(s.pooled, 15_055_088_456_407);
         assert_eq!(s.borrowed, 0, "nobody had borrowed ERG on 2026-09-05");
-        assert_eq!(s.lend_circulating, MAX_LEND_TOKENS - 8_992_729_440_272_047);
+        assert_eq!(
+            s.lend_circulating,
+            9_000_000_001_000_000 - 8_992_729_440_272_047
+        );
         assert_eq!(s.utilisation_bps(), 0);
         // About 2.07 nanoERG per lend token.
         assert!(
@@ -264,6 +267,16 @@ mod tests {
         let s = PoolState::parse(&POOLS[1], &fixture("sigusd")).unwrap();
         assert_eq!(s.pooled, 1_467_024, "14,670.24 SigUSD in cents");
         assert_eq!(s.borrowed, 555_799, "5,557.99 SigUSD out on loan");
+        // Token pools cap lend tokens ten above the maximum, not a million.
+        assert_eq!(
+            s.lend_circulating,
+            9_000_000_000_000_010 - 8_999_999_998_813_195
+        );
+        assert!(
+            (s.lend_token_price() - 1.7047).abs() < 0.001,
+            "{}",
+            s.lend_token_price()
+        );
         assert_eq!(s.utilisation_bps(), 2747, "floored");
     }
 
