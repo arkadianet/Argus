@@ -283,6 +283,16 @@ class MixService extends ChangeNotifier {
   static const _enabledKey = 'argus_mixing_enabled';
   static String _recordsKey(String walletId) => 'argus_mixes_v1_$walletId';
 
+  /// A copy of a records value that could not be read, kept so the next
+  /// write cannot destroy it. The boxes are still on chain and recovery
+  /// finds them, but the destinations they carried live only here.
+  static String _salvageKey(String walletId) => 'argus_mixes_v1_${walletId}_unreadable';
+
+  /// The next mix index, kept apart from the records: a mix index names a
+  /// derivation path, and reusing one after its record was removed would
+  /// reuse a secret and its public commitment on chain.
+  static String _nextIdKey(String walletId) => 'argus_mixes_v1_${walletId}_next_id';
+
   final MixGateway _gw;
   final MixHttpGet _get;
   final DateTime Function() _clock;
@@ -304,6 +314,12 @@ class MixService extends ChangeNotifier {
   String? lastTickError;
   DateTime? lastTickAt;
 
+  /// True when the stored records for this wallet could not be read. They
+  /// were copied aside; a recovery scan can find the boxes again.
+  bool recordsUnreadable = false;
+
+  int _nextId = 0;
+
   bool get busy => _ticking;
 
   /// Mixes waiting in or moving through the pool.
@@ -322,6 +338,13 @@ class MixService extends ChangeNotifier {
           if (r.phaseKind == 'half_posted' && r.boxId != null) r.boxId!,
       ];
 
+  /// Box ids of the mixes in the pool. A record whose phase somehow lacks
+  /// one is left out rather than allowed to stop every other mix.
+  List<String> get _activeBoxIds => [
+        for (final r in active)
+          if (r.boxId != null) r.boxId!,
+      ];
+
   int get _now => _clock().millisecondsSinceEpoch ~/ 1000;
 
   Future<void> load() async {
@@ -329,7 +352,26 @@ class MixService extends ChangeNotifier {
     enabled = prefs.getBool(_enabledKey) ?? false;
     final id = _gw.walletId;
     _walletId = id;
-    records = id == null ? const [] : _decode(prefs.getString(_recordsKey(id)));
+    recordsUnreadable = false;
+    _nextId = 0;
+    if (id == null) {
+      records = const [];
+    } else {
+      final raw = prefs.getString(_recordsKey(id));
+      final decoded = _decode(raw);
+      if (decoded == null) {
+        // Copy the unreadable value aside before anything can overwrite it.
+        recordsUnreadable = true;
+        await prefs.setString(_salvageKey(id), raw!);
+        records = const [];
+      } else {
+        records = decoded;
+      }
+      _nextId = prefs.getInt(_nextIdKey(id)) ?? 0;
+      for (final r in records) {
+        if (r.mixId + 1 > _nextId) _nextId = r.mixId + 1;
+      }
+    }
     notifyListeners();
   }
 
@@ -354,16 +396,30 @@ class MixService extends ChangeNotifier {
     notifyListeners();
   }
 
-  static List<MixRecord> _decode(String? raw) {
+  /// Null when the stored value exists but cannot be read.
+  static List<MixRecord>? _decode(String? raw) {
     if (raw == null || raw.isEmpty) return const [];
     try {
       final list = jsonDecode(raw) as List;
       return [for (final m in list) MixRecord.fromJson((m as Map).cast<String, dynamic>())];
     } catch (_) {
-      // A record we cannot read must not be dropped silently: the box is
-      // still on chain and recovery can find it. Keep the raw text out of
-      // the way and start empty.
-      return const [];
+      return null;
+    }
+  }
+
+  /// Runs [body] alone: never alongside a tick or another call that
+  /// broadcasts or rewrites the records. Waits for a running tick.
+  Future<T> _exclusive<T>(Future<T> Function() body) async {
+    while (_ticking) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    _ticking = true;
+    notifyListeners();
+    try {
+      return await body();
+    } finally {
+      _ticking = false;
+      notifyListeners();
     }
   }
 
@@ -481,8 +537,6 @@ class MixService extends ChangeNotifier {
     return (jsonDecode(raw) as Map).cast<String, dynamic>();
   }
 
-  int get _nextMixId => records.fold(0, (a, r) => r.mixId + 1 > a ? r.mixId + 1 : a);
-
   /// A new mix, persisted as pending. Nothing is on chain until
   /// [prepareEntry] is confirmed and [commitEntry] records it.
   Future<MixRecord> createMix({
@@ -493,8 +547,16 @@ class MixService extends ChangeNotifier {
     required int rounds,
     required String destinationAddress,
   }) async {
+    final id = _walletId;
+    if (id == null) throw StateError('No wallet is loaded');
+    final mixId = _nextId;
+    // Reserve the index before the record exists, so a crash in between
+    // still never hands this path to another mix.
+    final prefs = await SharedPreferences.getInstance();
+    _nextId = mixId + 1;
+    await prefs.setInt(_nextIdKey(id), _nextId);
     final raw = await _gw.newState(
-      mixId: _nextMixId,
+      mixId: mixId,
       denomination: denomination,
       tokenId: tokenId,
       tokenAmount: tokenAmount,
@@ -565,7 +627,7 @@ class MixService extends ChangeNotifier {
     _ticking = true;
     final gen = _generation;
     try {
-      final snap = await snapshot(ownBoxIds: [for (final r in active) r.boxId!]);
+      final snap = await snapshot(ownBoxIds: _activeBoxIds);
       if (gen != _generation) return;
       lastTickError = null;
       for (final r in active) {
@@ -633,34 +695,47 @@ class MixService extends ChangeNotifier {
 
   /// Withdraw or reclaim now. Broadcasts and records the result.
   Future<String> leave(MixRecord r, {String? destinationAddress}) async {
-    if (!r.inPool) throw StateError('This mix has nothing in the pool');
+    if (!r.inPool || r.boxId == null) throw StateError('This mix has nothing in the pool');
     if (destinationAddress == null && r.destinationErgoTree.isEmpty) {
       throw StateError('Choose where the money should go');
     }
-    final snap = await snapshot(ownBoxIds: [r.boxId!]);
-    final raw = await _gw.leave(jsonEncode(r.state), snap.json, destinationAddress, _gw.nodeUrl, _now);
-    final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
-    r.state = (result['state'] as Map).cast<String, dynamic>();
-    r.lastError = null;
-    r.lastCheckedAt = _clock();
-    await _persist();
-    return result['tx_id'] as String? ?? '';
+    // Exclusive with the tick: both would try to spend the same box, and
+    // whichever lost on the node must not be the state that survives.
+    return _exclusive(() async {
+      final snap = await snapshot(ownBoxIds: [r.boxId!]);
+      final raw =
+          await _gw.leave(jsonEncode(r.state), snap.json, destinationAddress, _gw.nodeUrl, _now);
+      final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
+      r.state = (result['state'] as Map).cast<String, dynamic>();
+      r.lastError = null;
+      r.lastCheckedAt = _clock();
+      await _persist();
+      return result['tx_id'] as String? ?? '';
+    });
   }
 
   /// Find mixes of this wallet the records do not know about, from the
   /// seed and every unspent pool box. Returns how many were added.
   Future<int> recover() async {
     if (!_gw.isUnlocked || _walletId == null) return 0;
-    final snap = await snapshot(allFullBoxes: true);
-    final found = (jsonDecode(await _gw.recover(snap.json, _now)) as List)
-        .map((m) => MixRecord(state: (m as Map).cast<String, dynamic>()))
-        .toList();
-    final known = {for (final r in records) r.mixId};
-    final fresh = found.where((r) => !known.contains(r.mixId)).toList();
-    if (fresh.isEmpty) return 0;
-    records = [...fresh, ...records];
-    await _persist();
-    return fresh.length;
+    return _exclusive(() async {
+      final snap = await snapshot(allFullBoxes: true);
+      final found = (jsonDecode(await _gw.recover(snap.json, _now)) as List)
+          .map((m) => MixRecord(state: (m as Map).cast<String, dynamic>()))
+          .toList();
+      final known = {for (final r in records) r.mixId};
+      final fresh = found.where((r) => !known.contains(r.mixId)).toList();
+      if (fresh.isEmpty) return 0;
+      records = [...fresh, ...records];
+      // A recovered index is taken: nothing new may derive on it.
+      final prefs = await SharedPreferences.getInstance();
+      for (final r in fresh) {
+        if (r.mixId + 1 > _nextId) _nextId = r.mixId + 1;
+      }
+      await prefs.setInt(_nextIdKey(_walletId!), _nextId);
+      await _persist();
+      return fresh.length;
+    });
   }
 }
 

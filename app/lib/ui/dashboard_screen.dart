@@ -1525,10 +1525,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _portfolioCard(bool fragmented) {
     final colors = ArgusColors.of(context);
     final muted = colors.muted;
+    final total = _sync.totalNanoWithStealth;
     final portfolio = portfolioTotal([
-      // Stealth ERG is the wallet's money too; only send and coin selection
-      // use the spendable figure.
-      _sync.totalNanoWithStealth,
+      // Stealth ERG and money in the mixing pool are the wallet's too; only
+      // send and coin selection use the spendable figure. The headline must
+      // never be smaller than the pockets it is broken down into.
+      total == null ? null : total + mixService.inMixNano + mixService.mixedNano,
       for (final w in _wallets)
         if (w.walletId != _walletId) _otherBalances[w.walletId],
       for (final a in watchOnlyService.addresses) _watchBalances[a],

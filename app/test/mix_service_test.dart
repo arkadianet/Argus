@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:argus_wallet/services/mix_service.dart';
@@ -15,11 +16,13 @@ class FakeGateway implements MixGateway {
   /// call name; each is consumed in order, the last repeats.
   final Map<String, List<Object>> script = {};
 
-  Object _next(String name) {
+  Future<Object> _next(String name) async {
     calls.add(name);
     final list = script[name];
     if (list == null || list.isEmpty) throw StateError('no script for $name');
-    final v = list.length == 1 ? list.first : list.removeAt(0);
+    var v = list.length == 1 ? list.first : list.removeAt(0);
+    // A Future in the script holds the call until the test completes it.
+    if (v is Future) v = await v as Object;
     if (v is Exception || v is Error) throw v;
     return v;
   }
@@ -58,21 +61,21 @@ class FakeGateway implements MixGateway {
       '{"needed_nano_erg":1}';
   @override
   Future<String> plan(String stateJson, String chainJson, List<String> own) async =>
-      jsonEncode(_next('plan'));
+      jsonEncode(await _next('plan'));
   @override
   Future<String> observe(String stateJson, String chainJson, int nowUnix) async {
-    final v = _next('observe');
+    final v = await _next('observe');
     return v == 'same' ? stateJson : jsonEncode(v);
   }
 
   @override
   Future<String> advance(String s, String c, List<String> own, String? n, int now) async =>
-      jsonEncode(_next('advance'));
+      jsonEncode(await _next('advance'));
   @override
   Future<String> leave(String s, String c, String? d, String? n, int now) async =>
-      jsonEncode(_next('leave'));
+      jsonEncode(await _next('leave'));
   @override
-  Future<String> recover(String c, int now) async => jsonEncode(_next('recover'));
+  Future<String> recover(String c, int now) async => jsonEncode(await _next('recover'));
   @override
   Future<String> prepareEntry({
     required String stateJson,
@@ -83,7 +86,7 @@ class FakeGateway implements MixGateway {
     String? nodeUrl,
     required int nowUnix,
   }) async =>
-      jsonEncode(_next('prepareEntry'));
+      jsonEncode(await _next('prepareEntry'));
   @override
   Future<void> notify({required String title, required String body}) async {
     notifications.add('$title | $body');
@@ -380,5 +383,106 @@ void main() {
     expect(tx, 'txr');
     expect(svc.records.single.finished, isTrue);
     expect(svc.inMixNano, 0);
+  });
+
+  test('unreadable stored records are copied aside and never overwritten', () async {
+    final gw = FakeGateway();
+    SharedPreferences.setMockInitialValues({
+      'argus_mixing_enabled': true,
+      'argus_mixes_v1_w1': '{not json',
+    });
+    final svc = MixService(gateway: gw, get: FakeExplorer().get);
+    await svc.load();
+    expect(svc.recordsUnreadable, isTrue);
+    expect(svc.records, isEmpty);
+    await svc.createMix(denomination: 1, level: 20, rounds: 1, destinationAddress: '9a');
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('argus_mixes_v1_w1_unreadable'), '{not json');
+  });
+
+  test('a removed mix never gives its index, and so its secrets, to a new one', () async {
+    final gw = FakeGateway();
+    final svc = await loaded(gw, FakeExplorer(), [state(mixId: 6, kind: 'withdrawn')]);
+    await svc.remove(svc.records.single);
+    expect(svc.records, isEmpty);
+    final created = await svc.createMix(
+      denomination: 1000000000,
+      level: 20,
+      rounds: 1,
+      destinationAddress: '9a',
+    );
+    expect(created.mixId, 7);
+
+    // The counter is on disk, so a reload cannot rewind it either.
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getInt('argus_mixes_v1_w1_next_id'), 8);
+    await svc.remove(created..state = state(mixId: 7, kind: 'reclaimed'));
+    final again = MixService(gateway: gw, get: FakeExplorer().get);
+    await again.load();
+    final next = await again.createMix(
+      denomination: 1000000000,
+      level: 20,
+      rounds: 1,
+      destinationAddress: '9a',
+    );
+    expect(next.mixId, 8);
+  });
+
+  test('recovery reserves the indices it finds', () async {
+    final gw = FakeGateway()
+      ..script['recover'] = [
+        [state(mixId: 12, destination: '')],
+      ];
+    final svc = await loaded(gw, FakeExplorer(), []);
+    await svc.recover();
+    final created = await svc.createMix(
+      denomination: 1000000000,
+      level: 20,
+      rounds: 1,
+      destinationAddress: '9a',
+    );
+    expect(created.mixId, 13);
+  });
+
+  test('an in-pool record without a box id is skipped, not fatal', () async {
+    final gw = FakeGateway()
+      ..script['observe'] = ['same']
+      ..script['plan'] = [
+        {'action': 'wait', 'reason': 'counterpart_needed'},
+      ];
+    final broken = state(mixId: 1, kind: 'half_posted', boxId: null, done: 0);
+    (broken['phase'] as Map).remove('box_id');
+    final ex = FakeExplorer()..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null};
+    final svc = await loaded(gw, ex, [state(mixId: 0), broken]);
+    await svc.tick();
+    expect(svc.lastTickError, isNull);
+    expect(gw.calls.where((c) => c == 'observe').length, 2, reason: 'both mixes were looked at');
+  });
+
+  test('leave waits for a running tick instead of racing it for the box', () async {
+    final hold = Completer<Object>();
+    final gw = FakeGateway()
+      ..script['observe'] = [hold.future]
+      ..script['plan'] = [
+        {'action': 'wait', 'reason': 'counterpart_needed'},
+      ]
+      ..script['leave'] = [
+        {'state': state(kind: 'reclaimed'), 'action': 'reclaim', 'tx_id': 'txr'},
+      ];
+    final ex = FakeExplorer()..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null};
+    final svc = await loaded(gw, ex, [state(kind: 'half_posted', done: 0)]);
+
+    final ticking = svc.tick();
+    await Future<void>.delayed(Duration.zero);
+    expect(svc.busy, isTrue);
+    final leaving = svc.leave(svc.records.single);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(gw.calls, ['observe'], reason: 'leave has not started while the tick runs');
+
+    hold.complete('same');
+    await ticking;
+    expect(await leaving, 'txr');
+    expect(gw.calls, ['observe', 'plan', 'leave']);
+    expect(svc.busy, isFalse);
   });
 }
