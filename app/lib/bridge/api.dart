@@ -6,8 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `broadcast_mix_move_with`, `broadcast_mix_move`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `babel_json`, `broadcast_mix_move_with`, `broadcast_mix_move`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `BabelPick`, `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 
 /// The app fee as the UI should display it.
 String appFeeInfo() => RustLib.instance.api.crateApiAppFeeInfo();
@@ -274,6 +274,7 @@ Future<String> prepareSend({
   PlatformInt64? feeNano,
   List<String>? inputBoxIds,
   String? stealthBoxesJson,
+  String? babelTokenId,
 }) => RustLib.instance.api.crateApiPrepareSend(
   handleId: handleId,
   senderAddress: senderAddress,
@@ -287,6 +288,7 @@ Future<String> prepareSend({
   feeNano: feeNano,
   inputBoxIds: inputBoxIds,
   stealthBoxesJson: stealthBoxesJson,
+  babelTokenId: babelTokenId,
 );
 
 /// Prepare a UTXO consolidation transaction to merge multiple boxes into one.
@@ -429,6 +431,7 @@ Future<String> prepareSendMulti({
   PlatformInt64? feeNano,
   List<String>? inputBoxIds,
   String? stealthBoxesJson,
+  String? babelTokenId,
 }) => RustLib.instance.api.crateApiPrepareSendMulti(
   handleId: handleId,
   senderAddress: senderAddress,
@@ -439,6 +442,7 @@ Future<String> prepareSendMulti({
   feeNano: feeNano,
   inputBoxIds: inputBoxIds,
   stealthBoxesJson: stealthBoxesJson,
+  babelTokenId: babelTokenId,
 );
 
 /// Live Dexy protocol state + mint-path rates for `gold` or `usd`.

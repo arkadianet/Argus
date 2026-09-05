@@ -181,6 +181,10 @@ class _SendScreenState extends State<SendScreen> {
     if (mounted) setState(() {});
   }
   final _feeCtrl = TextEditingController();
+
+  /// The token the miner fee is paid in through a babel box, or null
+  /// for ERG.
+  String? _feeTokenId;
   final List<_RecipientEntry> _extraRecipients = [];
   bool get _multiRecipient => _extraRecipients.isNotEmpty;
 
@@ -485,6 +489,7 @@ class _SendScreenState extends State<SendScreen> {
           feeNanoErg: parseErgToNano(_feeCtrl.text),
           inputBoxIds: _inputBoxIds,
           stealthBoxesJson: _stealthBoxesJson,
+          babelTokenId: _feeTokenId,
         );
       } else {
         final r = recipients.single;
@@ -500,6 +505,7 @@ class _SendScreenState extends State<SendScreen> {
           feeNanoErg: parseErgToNano(_feeCtrl.text),
           inputBoxIds: _inputBoxIds,
           stealthBoxesJson: _stealthBoxesJson,
+          babelTokenId: _feeTokenId,
         );
       }
       await _confirmAndSend(
@@ -741,7 +747,14 @@ class _SendScreenState extends State<SendScreen> {
               : '${stealthRecipients.length} stealth recipients',
           bold: true,
         ),
-      ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
+      if (preview.babel case final b?)
+        ConfirmTxRow(
+          'Miner fee paid in ${_tokenById(b.tokenId)?.label ?? 'token'}',
+          '${_tokenLabel(b.tokensPaid, b.tokenId)} for ${formatErg(b.feeNano)}',
+          bold: true,
+        )
+      else
+        ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
       argusFeeRow(),
       ConfirmTxRow(
         stealthChange ? 'Change to a new stealth address' : 'Change to you',
@@ -880,7 +893,9 @@ class _SendScreenState extends State<SendScreen> {
     return [
       picked == 0 ? 'All $all addresses' : '$picked of $all addresses',
       if (_chosenBoxIds.isNotEmpty) '${_chosenBoxIds.length} boxes chosen',
-      'Fee ${formatErg(fee, unit: false)} ERG',
+      _feeTokenId == null
+          ? 'Fee ${formatErg(fee, unit: false)} ERG'
+          : 'Fee in ${_tokenById(_feeTokenId)?.label ?? 'token'}',
     ].join('  ·  ');
   }
 
@@ -1438,6 +1453,24 @@ class _SendScreenState extends State<SendScreen> {
                               child: const Text('Use all addresses'),
                             ),
                           ),
+                        if (_args.tokens.any((t) => !t.isNft)) ...[
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<String?>(
+                            key: const Key('send-fee-token'),
+                            initialValue: _feeTokenId,
+                            decoration: const InputDecoration(
+                              labelText: 'Pay the miner fee in',
+                              helperText: 'A token fee is bought from a babel box on chain at its posted price; the ERG fee below is what it buys.',
+                              helperMaxLines: 3,
+                            ),
+                            items: [
+                              const DropdownMenuItem(value: null, child: Text('ERG')),
+                              for (final t in _args.tokens.where((t) => !t.isNft))
+                                DropdownMenuItem(value: t.id, child: Text(t.label, overflow: TextOverflow.ellipsis)),
+                            ],
+                            onChanged: (v) => setState(() => _feeTokenId = v),
+                          ),
+                        ],
                         const SizedBox(height: 12),
                         TextFormField(
                           controller: _feeCtrl,
