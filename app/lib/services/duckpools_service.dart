@@ -26,6 +26,8 @@ class DuckPool {
     this.parentNft = '',
     this.collateralErgoTree = '',
     this.ergDexNft,
+    this.dexNfts = const [],
+    this.tokenCollaterals = const [],
   });
 
   final String key;
@@ -54,8 +56,24 @@ class DuckPool {
   /// takes none (the ERG pool).
   final String? ergDexNft;
 
-  /// Whether Argus can borrow from this pool (ERG collateral).
-  bool get lends => ergDexNft != null && collateralErgoTree.isNotEmpty;
+  /// Every Spectrum pool NFT that prices this pool's collateral.
+  final List<String> dexNfts;
+
+  /// The tokens the ERG pool lends against; empty for token pools.
+  final List<DuckCollateralAsset> tokenCollaterals;
+
+  /// Whether Argus can borrow from this pool.
+  bool get lends => dexNfts.isNotEmpty && collateralErgoTree.isNotEmpty;
+
+  /// Ticker and decimals of a collateral: ERG, or one of the ERG pool's
+  /// tokens.
+  (String, int) collateralUnit(String? asset) {
+    if (asset == null) return ('ERG', 9);
+    for (final c in tokenCollaterals) {
+      if (c.id == asset) return (c.ticker, c.decimals);
+    }
+    return (asset.substring(0, 8), 0);
+  }
 
   static DuckPool fromJson(Map<String, dynamic> m) => DuckPool(
         key: m['key'] as String,
@@ -72,6 +90,26 @@ class DuckPool {
         parentNft: m['parent_nft'] as String? ?? '',
         collateralErgoTree: m['collateral_ergo_tree'] as String? ?? '',
         ergDexNft: m['erg_dex_nft'] as String?,
+        dexNfts: [for (final n in (m['dex_nfts'] as List? ?? const [])) n as String],
+        tokenCollaterals: [
+          for (final c in (m['token_collaterals'] as List? ?? const [])) DuckCollateralAsset.fromJson((c as Map).cast()),
+        ],
+      );
+}
+
+/// A token the ERG pool takes as collateral.
+class DuckCollateralAsset {
+  const DuckCollateralAsset({required this.id, required this.ticker, required this.decimals, required this.dexNft});
+  final String id;
+  final String ticker;
+  final int decimals;
+  final String dexNft;
+
+  static DuckCollateralAsset fromJson(Map<String, dynamic> m) => DuckCollateralAsset(
+        id: m['id'] as String,
+        ticker: m['ticker'] as String,
+        decimals: (m['decimals'] as num).toInt(),
+        dexNft: m['dex_nft'] as String,
       );
 }
 
@@ -85,6 +123,8 @@ class DuckLoan {
     required this.collateralNano,
     required this.loan,
     required this.owed,
+    this.collateralAsset,
+    this.collateralAmount = 0,
     required this.collateralValue,
     required this.threshold,
     required this.penalty,
@@ -98,7 +138,15 @@ class DuckLoan {
   final String ticker;
   final int decimals;
   final String boxId;
+
+  /// The box's ERG: the collateral itself in a token pool.
   final int collateralNano;
+
+  /// The collateral token (ERG pool loans), or null for ERG.
+  final String? collateralAsset;
+
+  /// Units of collateral: nanoERG, or the token's units.
+  final int collateralAmount;
 
   /// Principal, asset units.
   final int loan;
@@ -126,6 +174,8 @@ class DuckLoan {
         decimals: (m['decimals'] as num).toInt(),
         boxId: m['box_id'] as String,
         collateralNano: (m['collateral_nano'] as num).toInt(),
+        collateralAsset: m['collateral_asset'] as String?,
+        collateralAmount: (m['collateral_amount'] as num?)?.toInt() ?? (m['collateral_nano'] as num).toInt(),
         loan: (m['loan'] as num).toInt(),
         owed: (m['owed'] as num).toInt(),
         collateralValue: (m['collateral_value'] as num).toInt(),
@@ -149,6 +199,7 @@ class DuckMarket {
     this.ergValue,
     this.loans,
     this.error,
+    this.collaterals = const [],
   });
 
   final String pool;
@@ -166,7 +217,12 @@ class DuckMarket {
   final int? loans;
   final String? error;
 
-  bool get ready => error == null && threshold != null && ergValue != null;
+  /// The ERG pool's token collaterals and their terms.
+  final List<DuckMarketCollateral> collaterals;
+
+  /// Whether a borrow can be quoted: ERG terms for a token pool, or at
+  /// least one token collateral with a price for the ERG pool.
+  bool get ready => error == null && ((threshold != null && ergValue != null) || collaterals.any((c) => c.ready));
 
   static DuckMarket fromJson(Map<String, dynamic> m) => DuckMarket(
         pool: m['pool'] as String,
@@ -177,6 +233,41 @@ class DuckMarket {
         ergValue: (m['erg_value'] as num?)?.toInt(),
         loans: (m['loans'] as num?)?.toInt(),
         error: m['error'] as String?,
+        collaterals: [
+          for (final c in (m['collaterals'] as List? ?? const [])) DuckMarketCollateral.fromJson((c as Map).cast()),
+        ],
+      );
+}
+
+/// One token the ERG pool takes, with its terms and price right now.
+class DuckMarketCollateral {
+  const DuckMarketCollateral({
+    required this.asset,
+    required this.ticker,
+    required this.decimals,
+    required this.ready,
+    this.threshold,
+    this.penalty,
+    this.unitValueNano,
+  });
+  final String asset;
+  final String ticker;
+  final int decimals;
+  final bool ready;
+  final int? threshold;
+  final int? penalty;
+
+  /// What one whole token sells for, nanoERG, before the network fee.
+  final int? unitValueNano;
+
+  static DuckMarketCollateral fromJson(Map<String, dynamic> m) => DuckMarketCollateral(
+        asset: m['asset'] as String,
+        ticker: m['ticker'] as String,
+        decimals: (m['decimals'] as num).toInt(),
+        ready: m['ready'] == true,
+        threshold: (m['threshold'] as num?)?.toInt(),
+        penalty: (m['penalty'] as num?)?.toInt(),
+        unitValueNano: (m['unit_value_nano'] as num?)?.toInt(),
       );
 }
 
@@ -268,6 +359,7 @@ class DuckOrder {
     this.lastError,
     this.collateralBoxId,
     this.collateralNano,
+    this.collateralAsset,
   });
 
   /// `lend`, `withdraw`, `borrow`, `repay` or `partial_repay`.
@@ -295,9 +387,11 @@ class DuckOrder {
   int? received;
   String? lastError;
 
-  /// The loan a repayment is for; the collateral a borrow puts up.
+  /// The loan a repayment is for; the collateral a borrow puts up (units
+  /// of `collateralAsset`, or nanoERG when that is null).
   final String? collateralBoxId;
   final int? collateralNano;
+  final String? collateralAsset;
 
   bool get isLoanSide => kind == 'borrow' || kind == 'repay' || kind == 'partial_repay';
 
@@ -321,6 +415,7 @@ class DuckOrder {
         if (lastError != null) 'last_error': lastError,
         if (collateralBoxId != null) 'collateral_box_id': collateralBoxId,
         if (collateralNano != null) 'collateral_nano': collateralNano,
+        if (collateralAsset != null) 'collateral_asset': collateralAsset,
       };
 
   static DuckOrder fromJson(Map<String, dynamic> m) => DuckOrder(
@@ -341,6 +436,7 @@ class DuckOrder {
         lastError: m['last_error'] as String?,
         collateralBoxId: m['collateral_box_id'] as String?,
         collateralNano: (m['collateral_nano'] as num?)?.toInt(),
+        collateralAsset: m['collateral_asset'] as String?,
       );
 }
 
@@ -361,7 +457,8 @@ abstract class DuckpoolsGateway {
     required String poolKey,
     required String kind,
     required int amount,
-    required int collateralNano,
+    required String collateralAsset,
+    required int collateralAmount,
     required String collateralBoxId,
     required int height,
   });
@@ -376,7 +473,8 @@ abstract class DuckpoolsGateway {
     required List<String> spendAddresses,
     required String changeAddress,
     String? loanBoxesJson,
-    int? collateralNano,
+    String? collateralAsset,
+    int? collateralAmount,
     String? collateralBoxId,
   });
   Future<String> prepareRefund(String proxyBoxJson, String userAddress);
@@ -423,7 +521,8 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
     required String poolKey,
     required String kind,
     required int amount,
-    required int collateralNano,
+    required String collateralAsset,
+    required int collateralAmount,
     required String collateralBoxId,
     required int height,
   }) =>
@@ -433,7 +532,8 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
         poolKey: poolKey,
         kind: kind,
         amount: amount,
-        collateralNano: collateralNano,
+        collateralAsset: collateralAsset,
+        collateralAmount: collateralAmount,
         collateralBoxId: collateralBoxId,
         height: height,
       );
@@ -449,7 +549,8 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
     required List<String> spendAddresses,
     required String changeAddress,
     String? loanBoxesJson,
-    int? collateralNano,
+    String? collateralAsset,
+    int? collateralAmount,
     String? collateralBoxId,
   }) =>
       walletService.duckpoolsPrepareOrder(
@@ -463,7 +564,8 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
         spendAddresses: spendAddresses,
         changeAddress: changeAddress,
         loanBoxesJson: loanBoxesJson,
-        collateralNano: collateralNano,
+        collateralAsset: collateralAsset,
+        collateralAmount: collateralAmount,
         collateralBoxId: collateralBoxId,
       );
   @override
@@ -727,7 +829,9 @@ class DuckpoolsService extends ChangeNotifier {
         reads.add(gather(collateral, () => _allBoxesUnderTree(p.collateralErgoTree)));
         reads.add(gather(parents, () => _boxesByToken(p.parentNft)));
         reads.add(gather(children, () => _boxesByToken(p.childNft, limit: 50)));
-        reads.add(gather(dex, () => _boxesByToken(p.ergDexNft!)));
+        for (final nft in p.dexNfts) {
+          reads.add(gather(dex, () => _boxesByToken(nft)));
+        }
         reads.add(gather(params, () => _boxesByToken(p.paramNft)));
       }
       await Future.wait(reads);
@@ -757,7 +861,8 @@ class DuckpoolsService extends ChangeNotifier {
     required String poolKey,
     required String kind,
     int amount = 0,
-    int collateralNano = 0,
+    String collateralAsset = '',
+    int collateralAmount = 0,
     String collateralBoxId = '',
   }) {
     final boxes = lastPoolBoxesJson;
@@ -769,7 +874,8 @@ class DuckpoolsService extends ChangeNotifier {
       poolKey: poolKey,
       kind: kind,
       amount: amount,
-      collateralNano: collateralNano,
+      collateralAsset: collateralAsset,
+      collateralAmount: collateralAmount,
       collateralBoxId: collateralBoxId,
       height: _gw.chainHeight ?? 0,
     )) as Map)
@@ -880,7 +986,8 @@ class DuckpoolsService extends ChangeNotifier {
     required String changeAddress,
     int slippageBps = 100,
     int refundAfterBlocks = 720,
-    int? collateralNano,
+    String? collateralAsset,
+    int? collateralAmount,
     String? collateralBoxId,
   }) async {
     final boxes = lastPoolBoxesJson;
@@ -899,7 +1006,8 @@ class DuckpoolsService extends ChangeNotifier {
       spendAddresses: spendAddresses,
       changeAddress: changeAddress,
       loanBoxesJson: loanSide ? lastLoanBoxesJson : null,
-      collateralNano: collateralNano,
+      collateralAsset: collateralAsset,
+      collateralAmount: collateralAmount,
       collateralBoxId: collateralBoxId,
     );
     // The order belongs to the wallet it was prepared for; the commit
@@ -948,7 +1056,8 @@ class DuckpoolsService extends ChangeNotifier {
       refundHeight: (prepared['refund_height'] as num).toInt(),
       createdAt: DateTime.now(),
       collateralBoxId: q['collateral_box_id'] as String?,
-      collateralNano: (q['collateral_nano'] as num?)?.toInt(),
+      collateralNano: (q['collateral_amount'] as num?)?.toInt() ?? (q['collateral_nano'] as num?)?.toInt(),
+      collateralAsset: q['collateral_asset'] as String?,
     );
     orders = [order, ...orders];
     await _persistOrders();

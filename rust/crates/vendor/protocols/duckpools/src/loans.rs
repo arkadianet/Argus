@@ -10,8 +10,10 @@
 //! (`collateralValue`), and lets anyone liquidate once that value falls
 //! to `owed × threshold / 1000`, or after the forced-liquidation height.
 //!
-//! Only token pools with ERG collateral are built here. The ERG pool
-//! lends ERG against tokens, which prices the other way round.
+//! Token pools take ERG collateral and price it in their asset; the ERG
+//! pool takes tokens (SigUSD, SigRSV, RSN, rsADA) and prices them in ERG
+//! through the same Spectrum pools read the other way round. Every
+//! amount below is in the *pool's* asset units unless it says otherwise.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -25,9 +27,16 @@ use crate::orders::ProxyBox;
 use crate::state::{PoolState, PoolsError};
 use crate::{Pool, MIN_BOX_VALUE, TX_FEE};
 
-/// `MaximumNetworkFee` in the collateral contract: taken off the
-/// collateral before it is priced.
+/// `MaximumNetworkFee` in the token pools' collateral contract: taken off
+/// ERG collateral before it is priced.
 pub const MAX_NETWORK_FEE: i64 = 5_000_000;
+/// `MaximumNetworkFee` in the ERG pool's collateral contract: taken off a
+/// token collateral's ERG value.
+pub const ERG_POOL_MAX_NETWORK_FEE: i64 = 4_000_000;
+/// `MinLoanValue` in the ERG pool contract: the least ERG loan, nanoERG.
+pub const MIN_ERG_LOAN: i64 = 50_000_000;
+/// The ERG pool's collateral box carries this much ERG, from the proxy.
+pub const ERG_POOL_COLLATERAL_BOX_VALUE: i64 = 4_000_000;
 /// `Slippage` in the collateral contract, percent.
 pub const PRICE_SLIPPAGE_PERCENT: i128 = 2;
 /// `DexLpTaxDenomination`: the DEX fee in R4 is out of this.
@@ -136,6 +145,9 @@ fn has_nft(v: &serde_json::Value, nft: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct LoanParams {
     pub thresholds: Vec<i64>,
+    /// `R5`: the collateral token per price source; a placeholder byte
+    /// where the collateral is ERG.
+    pub asset_ids: Vec<String>,
     pub dex_nfts: Vec<String>,
     pub penalties: Vec<i64>,
 }
@@ -146,6 +158,10 @@ impl LoanParams {
             return Err(err(format!("not the {} parameter box", pool.key)));
         }
         let thresholds = reg_longs(v, "R4")?;
+        let asset_ids: Vec<String> = reg_byte_colls(v, "R5")?
+            .into_iter()
+            .map(hex::encode)
+            .collect();
         let dex_nfts: Vec<String> = reg_byte_colls(v, "R6")?
             .into_iter()
             .map(hex::encode)
@@ -158,9 +174,22 @@ impl LoanParams {
         }
         Ok(Self {
             thresholds,
+            asset_ids,
             dex_nfts,
             penalties,
         })
+    }
+
+    /// `(price source, threshold, penalty)` for a token collateral, as the
+    /// ERG pool contract looks it up: by the price source whose R5 entry
+    /// names the token.
+    pub fn for_asset(&self, asset_id: &str) -> Option<(String, i64, i64)> {
+        let i = self
+            .asset_ids
+            .iter()
+            .position(|a| a.eq_ignore_ascii_case(asset_id))?;
+        let nft = self.dex_nfts.get(i)?.clone();
+        Some((nft, self.thresholds[i], self.penalties[i]))
     }
 
     /// `(threshold, penalty)` for the collateral priced by `dex_nft`, as
@@ -226,20 +255,51 @@ impl DexPrice {
     /// bisection; the contract's own arithmetic decides, so callers add
     /// their own margin.
     pub fn collateral_for_value(&self, value: i64) -> i64 {
-        if value <= 0 {
+        bisect(value, |c| self.collateral_value(c))
+    }
+
+    /// What `amount` of the pool's token sells for in nanoERG after two
+    /// percent slippage and the DEX fee, before the network fee the ERG
+    /// pool's collateral contract also takes off.
+    pub fn token_value_raw(&self, amount: i64) -> i64 {
+        if amount <= 0 {
             return 0;
         }
-        let (mut lo, mut hi) = (0i64, i64::MAX / 4);
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            if self.collateral_value(mid) >= value {
-                hi = mid;
-            } else {
-                lo = mid + 1;
-            }
-        }
-        lo
+        let input = i128::from(amount);
+        let tok = i128::from(self.token_reserve);
+        let fee = i128::from(self.fee);
+        let n = i128::from(self.erg_reserve) * input * fee;
+        let d = (tok + tok * PRICE_SLIPPAGE_PERCENT / 100) * DEX_FEE_DENOMINATION + input * fee;
+        (n / d) as i64
     }
+
+    /// `collateralValue` in the ERG pool's contracts: what `amount` of the
+    /// token counts for as collateral, nanoERG.
+    pub fn token_collateral_value(&self, amount: i64) -> i64 {
+        (self.token_value_raw(amount) - ERG_POOL_MAX_NETWORK_FEE).max(0)
+    }
+
+    /// The fewest tokens whose [`Self::token_collateral_value`] reaches
+    /// `nano`.
+    pub fn tokens_for_value(&self, nano: i64) -> i64 {
+        bisect(nano, |a| self.token_collateral_value(a))
+    }
+}
+
+fn bisect(target: i64, f: impl Fn(i64) -> i64) -> i64 {
+    if target <= 0 {
+        return 0;
+    }
+    let (mut lo, mut hi) = (0i64, i64::MAX / 4);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if f(mid) >= target {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    lo
 }
 
 /// The pool's interest history: the parent box's compounded rate per
@@ -331,8 +391,13 @@ impl InterestHistory {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct CollateralBox {
     pub box_id: String,
-    /// nanoERG of collateral.
+    /// The box's ERG: the collateral itself in a token pool, the
+    /// contract's fixed carry in the ERG pool.
     pub collateral_nano: i64,
+    /// The collateral token, or none when the collateral is ERG.
+    pub collateral_asset: Option<String>,
+    /// Units of the collateral: nanoERG, or the token's units.
+    pub collateral_amount: i64,
     /// Principal, in the pool's borrow tokens (asset units).
     pub loan: i64,
     pub borrower_tree: String,
@@ -358,9 +423,19 @@ impl CollateralBox {
             return Err(err(format!("not a {} collateral box", pool.key)));
         }
         let a = assets(v);
-        let loan = match a.first() {
-            Some((id, n)) if id.eq_ignore_ascii_case(pool.borrow_token) => *n,
-            _ => return Err(err("collateral box carries no borrow tokens")),
+        let value = box_value(v)?;
+        let (collateral_asset, collateral_amount, loan) = if pool.is_erg() {
+            match (a.first(), a.get(1)) {
+                (Some((c, n)), Some((id, loan))) if id.eq_ignore_ascii_case(pool.borrow_token) => {
+                    (Some(c.clone()), *n, *loan)
+                }
+                _ => return Err(err("collateral box carries no collateral and borrow tokens")),
+            }
+        } else {
+            match a.first() {
+                Some((id, n)) if id.eq_ignore_ascii_case(pool.borrow_token) => (None, value, *n),
+                _ => return Err(err("collateral box carries no borrow tokens")),
+            }
         };
         let (parent_index, child_index) = reg_int_pair(v, "R5")?;
         let (threshold, penalty) = reg_long_pair(v, "R6")?;
@@ -373,7 +448,9 @@ impl CollateralBox {
             .to_ascii_lowercase();
         Ok(Self {
             box_id: box_id(v)?,
-            collateral_nano: box_value(v)?,
+            collateral_nano: value,
+            collateral_asset,
+            collateral_amount,
             loan,
             borrower_tree: hex::encode(reg_bytes(v, "R4")?),
             parent_index,
@@ -395,6 +472,8 @@ pub struct LoanPosition {
     pub box_id: String,
     pub borrower_tree: String,
     pub collateral_nano: i64,
+    pub collateral_asset: Option<String>,
+    pub collateral_amount: i64,
     pub loan: i64,
     /// What repaying today costs, in asset units.
     pub owed: i64,
@@ -425,7 +504,10 @@ impl LoanPosition {
             return Err(err("price box does not match the loan's collateral"));
         }
         let owed = history.owed(c.loan, c.parent_index, c.child_index)?;
-        let collateral_value = dex.collateral_value(c.collateral_nano);
+        let collateral_value = match c.collateral_asset {
+            None => dex.collateral_value(c.collateral_nano),
+            Some(_) => dex.token_collateral_value(c.collateral_amount),
+        };
         let liquidation_value =
             (i128::from(owed) * i128::from(c.threshold) / THRESHOLD_DENOMINATION) as i64;
         let health_bps = if liquidation_value <= 0 {
@@ -441,6 +523,8 @@ impl LoanPosition {
             box_id: c.box_id.clone(),
             borrower_tree: c.borrower_tree.clone(),
             collateral_nano: c.collateral_nano,
+            collateral_asset: c.collateral_asset.clone(),
+            collateral_amount: c.collateral_amount,
             loan: c.loan,
             owed,
             collateral_value,
@@ -457,12 +541,13 @@ impl LoanPosition {
 }
 
 /// Every loan under `pool` whose borrower is one of `wallet_trees`, from
-/// the collateral boxes given (any shape; non-loans are skipped).
+/// the collateral boxes given (any shape; non-loans are skipped), priced
+/// by whichever of `dexes` the loan names.
 pub fn positions(
     pool: &'static Pool,
     collateral_boxes: &[serde_json::Value],
     history: &InterestHistory,
-    dex: &DexPrice,
+    dexes: &[DexPrice],
     wallet_trees: &[String],
     height: i64,
 ) -> Result<Vec<LoanPosition>, PoolsError> {
@@ -478,8 +563,11 @@ pub fn positions(
         {
             continue;
         }
-        // A loan this snapshot cannot price (another collateral type) must
-        // not hide the loans it can.
+        // A loan this snapshot cannot price (another collateral type, or a
+        // price box that could not be read) must not hide the loans it can.
+        let Some(dex) = dexes.iter().find(|d| d.nft.eq_ignore_ascii_case(&c.dex_nft)) else {
+            continue;
+        };
         if let Ok(p) = LoanPosition::value(pool, &c, history, dex, height) {
             out.push(p);
         }
@@ -491,6 +579,12 @@ pub fn positions(
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct BorrowQuote {
     pub pool: &'static str,
+    /// The collateral token, or none for ERG.
+    pub collateral_asset: Option<String>,
+    /// Units of collateral: nanoERG, or the token's units.
+    pub collateral_amount: i64,
+    /// ERG the proxy locks as collateral (token pools), or the fixed
+    /// carry of an ERG pool collateral box.
     pub collateral_nano: i64,
     pub loan: i64,
     /// What the contract will value the collateral at.
@@ -508,59 +602,112 @@ pub struct BorrowQuote {
 }
 
 impl BorrowQuote {
+    /// `collateral_asset` is none for ERG (token pools) or the token the
+    /// ERG pool is asked to lend against; `collateral_amount` is in that
+    /// collateral's units.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: &'static Pool,
         state: &PoolState,
         params: &LoanParams,
         dex: &DexPrice,
-        collateral_nano: i64,
+        collateral_asset: Option<&str>,
+        collateral_amount: i64,
         loan: i64,
         refund_height: i32,
     ) -> Result<Self, PoolsError> {
-        if pool.is_erg() {
-            return Err(err("borrowing from the ERG pool needs token collateral, not built"));
-        }
         if loan <= 0 {
             return Err(err("loan must be positive"));
-        }
-        let dex_nft = pool.erg_dex_nft.ok_or_else(|| err("no price source"))?;
-        if !dex.nft.eq_ignore_ascii_case(dex_nft) {
-            return Err(err("price box is not this pool's ERG market"));
-        }
-        let (threshold, penalty) = params.for_erg(pool)?;
-        if collateral_nano < MIN_COLLATERAL + 2 * MIN_BOX_VALUE {
-            return Err(err(format!(
-                "collateral must be at least {} nanoERG",
-                MIN_COLLATERAL + 2 * MIN_BOX_VALUE
-            )));
         }
         if loan > state.pooled {
             return Err(err("the pool does not hold that much"));
         }
-        let collateral_value = dex.collateral_value(collateral_nano);
-        let max_loan =
-            (i128::from(collateral_value) * THRESHOLD_DENOMINATION / i128::from(threshold)) as i64;
-        // The pool contract demands strictly more collateral than the line.
-        if loan >= max_loan {
-            return Err(err(format!(
-                "collateral only supports a loan below {max_loan}"
-            )));
+        match (pool.is_erg(), collateral_asset) {
+            (true, Some(asset)) => {
+                let (dex_nft, threshold, penalty) = params
+                    .for_asset(asset)
+                    .ok_or_else(|| err("the ERG pool does not take that token as collateral"))?;
+                if !dex.nft.eq_ignore_ascii_case(&dex_nft) {
+                    return Err(err("price box is not this collateral's market"));
+                }
+                if loan < MIN_ERG_LOAN {
+                    return Err(err(format!("the ERG pool lends at least {MIN_ERG_LOAN} nanoERG")));
+                }
+                if collateral_amount <= 0 {
+                    return Err(err("collateral must be positive"));
+                }
+                let collateral_value = dex.token_collateral_value(collateral_amount);
+                let max_loan = (i128::from(collateral_value) * THRESHOLD_DENOMINATION
+                    / i128::from(threshold)) as i64;
+                // The ERG pool contract accepts the line itself.
+                if loan > max_loan {
+                    return Err(err(format!("collateral only supports a loan up to {max_loan}")));
+                }
+                let liquidation_value =
+                    (i128::from(loan) * i128::from(threshold) / THRESHOLD_DENOMINATION) as i64;
+                let health_bps = (i128::from(collateral_value) * 10_000
+                    / i128::from(liquidation_value.max(1))) as i64;
+                Ok(Self {
+                    pool: pool.key,
+                    collateral_asset: Some(asset.to_ascii_lowercase()),
+                    collateral_amount,
+                    collateral_nano: ERG_POOL_COLLATERAL_BOX_VALUE,
+                    loan,
+                    collateral_value,
+                    max_loan,
+                    threshold,
+                    penalty,
+                    health_bps,
+                    // The collateral box's carry, the bot's fee, the fill fee.
+                    box_value: ERG_POOL_COLLATERAL_BOX_VALUE + MIN_BOX_VALUE + TX_FEE,
+                    refund_height,
+                    dex_nft,
+                })
+            }
+            (true, None) => Err(err("the ERG pool lends against tokens; pick a collateral")),
+            (false, Some(_)) => Err(err(format!("the {} pool takes only ERG as collateral", pool.ticker))),
+            (false, None) => {
+                let collateral_nano = collateral_amount;
+                let dex_nft = pool.erg_dex_nft.ok_or_else(|| err("no price source"))?;
+                if !dex.nft.eq_ignore_ascii_case(dex_nft) {
+                    return Err(err("price box is not this pool's ERG market"));
+                }
+                let (threshold, penalty) = params.for_erg(pool)?;
+                if collateral_nano < MIN_COLLATERAL + 2 * MIN_BOX_VALUE {
+                    return Err(err(format!(
+                        "collateral must be at least {} nanoERG",
+                        MIN_COLLATERAL + 2 * MIN_BOX_VALUE
+                    )));
+                }
+                let collateral_value = dex.collateral_value(collateral_nano);
+                let max_loan = (i128::from(collateral_value) * THRESHOLD_DENOMINATION
+                    / i128::from(threshold)) as i64;
+                // The token pool contracts demand strictly more collateral
+                // than the line.
+                if loan >= max_loan {
+                    return Err(err(format!("collateral only supports a loan below {max_loan}")));
+                }
+                let liquidation_value = (i128::from(loan + 1) * i128::from(threshold)
+                    / THRESHOLD_DENOMINATION) as i64;
+                let health_bps = (i128::from(collateral_value) * 10_000
+                    / i128::from(liquidation_value.max(1))) as i64;
+                Ok(Self {
+                    pool: pool.key,
+                    collateral_asset: None,
+                    collateral_amount: collateral_nano,
+                    collateral_nano,
+                    loan,
+                    collateral_value,
+                    max_loan,
+                    threshold,
+                    penalty,
+                    health_bps,
+                    box_value: collateral_nano + MIN_BOX_VALUE + TX_FEE,
+                    refund_height,
+                    dex_nft: dex_nft.to_string(),
+                })
+            }
         }
-        let liquidation_value = (i128::from(loan + 1) * i128::from(threshold) / THRESHOLD_DENOMINATION) as i64;
-        let health_bps = (i128::from(collateral_value) * 10_000 / i128::from(liquidation_value.max(1))) as i64;
-        Ok(Self {
-            pool: pool.key,
-            collateral_nano,
-            loan,
-            collateral_value,
-            max_loan,
-            threshold,
-            penalty,
-            health_bps,
-            box_value: collateral_nano + MIN_BOX_VALUE + TX_FEE,
-            refund_height,
-            dex_nft: dex_nft.to_string(),
-        })
     }
 
     /// The proxy box (`proxyBorrow.md`): R4 user tree, R5 loan, R6 refund
@@ -580,11 +727,18 @@ impl BorrowQuote {
             encode::coll_byte(&hex::decode(&self.dex_nft).map_err(|e| err(e.to_string()))?)?,
         );
         registers.insert("R9".into(), encode::group_element(&pk)?);
+        let assets = match &self.collateral_asset {
+            Some(id) => vec![Eip12Asset {
+                token_id: id.clone(),
+                amount: self.collateral_amount.to_string(),
+            }],
+            None => Vec::new(),
+        };
         Ok(ProxyBox {
             ergo_tree: ergo_tx::address_to_ergo_tree(pool.borrow_proxy_address)
                 .map_err(|e| err(e.to_string()))?,
             value: self.box_value,
-            assets: Vec::new(),
+            assets,
             registers,
         })
     }
@@ -598,10 +752,14 @@ pub struct RepayQuote {
     pub pool: &'static str,
     pub collateral_box_id: String,
     pub owed_now: i64,
-    /// Asset units the proxy carries.
+    /// Asset units the proxy carries: as tokens for a token pool, as the
+    /// box's ERG for the ERG pool.
     pub repayment: i64,
-    /// nanoERG returned to the borrower on fill.
+    /// The collateral returned on fill: its ERG (token pools) or the
+    /// token and amount (ERG pool).
     pub collateral_nano: i64,
+    pub collateral_asset: Option<String>,
+    pub collateral_amount: i64,
     pub box_value: i64,
     pub refund_height: i32,
 }
@@ -622,38 +780,64 @@ impl RepayQuote {
         for _ in 0..margin_periods {
             owed = owed * rate / m + 1;
         }
-        // The collateral contract wants strictly more than owed.
-        let repayment = (owed + 1) as i64;
+        let (repayment, box_value) = if pool.is_erg() {
+            // The fill's repayment box is the proxy less the borrower's
+            // box and the fee, plus the collateral box's own ERG, and must
+            // reach `owed + fee` (`validRepaymentValue`).
+            let need = (owed as i64 + TX_FEE + MIN_BOX_VALUE + TX_FEE - position.collateral_nano)
+                .max(2 * MIN_BOX_VALUE);
+            (need, need)
+        } else {
+            // The collateral contract wants strictly more than owed.
+            ((owed + 1) as i64, MIN_BOX_VALUE + 2 * TX_FEE)
+        };
         Ok(Self {
             pool: pool.key,
             collateral_box_id: position.box_id.clone(),
             owed_now: position.owed,
             repayment,
             collateral_nano: position.collateral_nano,
-            box_value: MIN_BOX_VALUE + 2 * TX_FEE,
+            collateral_asset: position.collateral_asset.clone(),
+            collateral_amount: position.collateral_amount,
+            box_value,
             refund_height,
         })
     }
 
-    /// The proxy box (`repay.md`): R4 the collateral value the borrower
-    /// must get back, R5 borrower tree, R6 refund height, R7 the
-    /// collateral box id; the repayment rides as tokens.
+    /// The proxy box (`repay.md`, `proxyRepay.md`): R4 what the borrower
+    /// must get back (the collateral's ERG, or the token amount), R5
+    /// borrower tree, R6 refund height, R7 the collateral box id, and for
+    /// the ERG pool R8 the collateral token. A token pool's repayment
+    /// rides as tokens; the ERG pool's is the box's ERG.
     pub fn proxy_box(&self, pool: &Pool, user_tree_hex: &str) -> Result<ProxyBox, PoolsError> {
         let user = hex::decode(user_tree_hex).map_err(|e| err(e.to_string()))?;
-        let currency = pool.currency_id.ok_or_else(|| err("ERG pool"))?;
         let mut registers = HashMap::new();
-        registers.insert("R4".into(), encode::long(self.collateral_nano)?);
         registers.insert("R5".into(), encode::coll_byte(&user)?);
         registers.insert("R6".into(), encode::int(self.refund_height)?);
         registers.insert("R7".into(), encode::box_id_register(&self.collateral_box_id)?);
+        let assets = match (&self.collateral_asset, pool.currency_id) {
+            (Some(asset), _) => {
+                registers.insert("R4".into(), encode::long(self.collateral_amount)?);
+                registers.insert(
+                    "R8".into(),
+                    encode::coll_byte(&hex::decode(asset).map_err(|e| err(e.to_string()))?)?,
+                );
+                Vec::new()
+            }
+            (None, Some(currency)) => {
+                registers.insert("R4".into(), encode::long(self.collateral_nano)?);
+                vec![Eip12Asset {
+                    token_id: currency.to_string(),
+                    amount: self.repayment.to_string(),
+                }]
+            }
+            (None, None) => return Err(err("an ERG pool loan has token collateral")),
+        };
         Ok(ProxyBox {
             ergo_tree: ergo_tx::address_to_ergo_tree(pool.repay_proxy_address)
                 .map_err(|e| err(e.to_string()))?,
             value: self.box_value,
-            assets: vec![Eip12Asset {
-                token_id: currency.to_string(),
-                amount: self.repayment.to_string(),
-            }],
+            assets,
             registers,
         })
     }
@@ -696,13 +880,24 @@ impl PartialRepayQuote {
             return Err(err("repayment too large"));
         }
         let owed_after = (1 + expected * z / m) as i64;
+        if pool.is_erg() && owed_after < MIN_ERG_LOAN {
+            return Err(err(format!(
+                "the ERG pool keeps loans at {MIN_ERG_LOAN} nanoERG or more; repay in full instead"
+            )));
+        }
         Ok(Self {
             pool: pool.key,
             collateral_box_id: position.box_id.clone(),
             repayment,
             final_borrow_tokens: expected as i64,
             owed_after,
-            box_value: MIN_BOX_VALUE + 2 * TX_FEE,
+            // A token pool's repayment rides as tokens; the ERG pool's is
+            // the box's ERG less the fee and the repayment box's minimum.
+            box_value: if pool.is_erg() {
+                repayment + MIN_BOX_VALUE + TX_FEE
+            } else {
+                MIN_BOX_VALUE + 2 * TX_FEE
+            },
             refund_height,
         })
     }
@@ -711,20 +906,23 @@ impl PartialRepayQuote {
     /// borrow tokens to leave, R6 user tree, R7 refund height (Long).
     pub fn proxy_box(&self, pool: &Pool, user_tree_hex: &str) -> Result<ProxyBox, PoolsError> {
         let user = hex::decode(user_tree_hex).map_err(|e| err(e.to_string()))?;
-        let currency = pool.currency_id.ok_or_else(|| err("ERG pool"))?;
         let mut registers = HashMap::new();
         registers.insert("R4".into(), encode::box_id_register(&self.collateral_box_id)?);
         registers.insert("R5".into(), encode::long(self.final_borrow_tokens)?);
         registers.insert("R6".into(), encode::coll_byte(&user)?);
         registers.insert("R7".into(), encode::long(self.refund_height)?);
+        let assets = match pool.currency_id {
+            Some(currency) => vec![Eip12Asset {
+                token_id: currency.to_string(),
+                amount: self.repayment.to_string(),
+            }],
+            None => Vec::new(),
+        };
         Ok(ProxyBox {
             ergo_tree: ergo_tx::address_to_ergo_tree(pool.partial_repay_proxy_address)
                 .map_err(|e| err(e.to_string()))?,
             value: self.box_value,
-            assets: vec![Eip12Asset {
-                token_id: currency.to_string(),
-                amount: self.repayment.to_string(),
-            }],
+            assets,
             registers,
         })
     }
@@ -754,10 +952,11 @@ impl OrderKind {
 }
 
 /// Classify the transaction that spent a loan-side proxy box. Borrow and
-/// repay fills mark the user's box with `R4 = proxy id`, as refunds do;
-/// a filled borrow carries the loan as tokens and a filled repay carries
-/// none, where the refunds do the opposite. A partial repay marks
-/// nothing: a fill rebuilds the collateral box, a refund pays the user.
+/// repay fills mark the user's box with `R4 = proxy id`, as refunds do,
+/// so the two are told apart by the transaction's shape: a fill has the
+/// pool, the collateral and the user's box, a refund only the user's box
+/// and the fee. A partial repay marks nothing: a fill rebuilds the
+/// collateral box, a refund pays the user.
 pub fn classify_loan_spend(
     kind: OrderKind,
     proxy_box_id: &str,
@@ -790,7 +989,7 @@ pub fn classify_loan_spend(
         OrderKind::Borrow => match marked {
             Some(o) => {
                 let (value, a) = eip12(o);
-                if !a.is_empty() && fill_shaped {
+                if fill_shaped {
                     OrderOutcome::Filled { value, assets: a }
                 } else {
                     OrderOutcome::Refunded { value, assets: a }
@@ -915,13 +1114,13 @@ mod tests {
     fn positions_only_lists_the_wallets_loans() {
         let boxes = vec![fixture("collateral"), fixture("param")];
         let dex = DexPrice::parse(&fixture("dex")).unwrap();
-        let mine = positions(sigusd(), &boxes, &history(), &dex, &[BORROWER.into()], 1).unwrap();
+        let mine = positions(sigusd(), &boxes, &history(), &[dex.clone()], &[BORROWER.into()], 1).unwrap();
         assert_eq!(mine.len(), 1);
-        let none = positions(sigusd(), &boxes, &history(), &dex, &["0008cd00".into()], 1).unwrap();
+        let none = positions(sigusd(), &boxes, &history(), &[dex.clone()], &["0008cd00".into()], 1).unwrap();
         assert!(none.is_empty());
         // A loan priced through another market is skipped, not fatal.
         let other_dex = DexPrice { nft: "ff".repeat(32), ..dex.clone() };
-        assert!(positions(sigusd(), &boxes, &history(), &other_dex, &[BORROWER.into()], 1).unwrap().is_empty());
+        assert!(positions(sigusd(), &boxes, &history(), &[other_dex], &[BORROWER.into()], 1).unwrap().is_empty());
     }
 
     #[test]
@@ -931,13 +1130,14 @@ mod tests {
         let dex = DexPrice::parse(&fixture("dex")).unwrap();
         // 100 ERG at ~0.25 SigUSD/ERG after slippage and fees: about
         // 25 SigUSD of collateral, so a 10 SigUSD loan opens at ~178%.
-        let q = BorrowQuote::new(sigusd(), &state, &params, &dex, 100_000_000_000, 1_000, 1_000_000).unwrap();
+        let q = BorrowQuote::new(sigusd(), &state, &params, &dex, None, 100_000_000_000, 1_000, 1_000_000).unwrap();
         assert!(q.collateral_value > 2_400 && q.collateral_value < 2_600, "{q:?}");
         assert_eq!(q.max_loan, q.collateral_value * 1000 / 1400);
         assert!(q.health_bps > 10_000);
         assert_eq!(q.box_value, 100_000_000_000 + 2_000_000);
-        assert!(BorrowQuote::new(sigusd(), &state, &params, &dex, 100_000_000_000, q.max_loan, 1).is_err());
-        assert!(BorrowQuote::new(sigusd(), &state, &params, &dex, 10_000_000, 1, 1).is_err());
+        assert!(BorrowQuote::new(sigusd(), &state, &params, &dex, None, 100_000_000_000, q.max_loan, 1).is_err());
+        assert!(BorrowQuote::new(sigusd(), &state, &params, &dex, None, 10_000_000, 1, 1).is_err());
+        assert!(BorrowQuote::new(sigusd(), &state, &params, &dex, Some("03faf2"), 10_000_000, 1, 1).is_err());
         let b = q.proxy_box(sigusd(), BORROWER).unwrap();
         assert_eq!(b.registers["R4"], format!("0e24{BORROWER}"));
         assert_eq!(b.registers["R5"], encode::long(1_000).unwrap());
@@ -990,6 +1190,9 @@ mod tests {
         // Borrow: fill puts the loan tokens in the marked user box.
         let fill = tx(vec![out(1, 3, None), out(2, 1, None), out(3, 1, Some(&marker)), out(4, 0, None)]);
         assert!(filled(classify_loan_spend(OrderKind::Borrow, &id, &fill).unwrap()));
+        // The ERG pool pays the loan as ERG: still a fill by shape.
+        let fill = tx(vec![out(1, 3, None), out(2, 2, None), out(3, 0, Some(&marker)), out(4, 0, None)]);
+        assert!(filled(classify_loan_spend(OrderKind::Borrow, &id, &fill).unwrap()));
         let refund = tx(vec![out(9, 0, Some(&marker)), out(1, 0, None)]);
         assert!(refunded(classify_loan_spend(OrderKind::Borrow, &id, &refund).unwrap()));
         // Repay: fill returns the collateral with no tokens; refund returns the tokens.
@@ -1011,5 +1214,131 @@ mod tests {
         assert!(filled(classify_loan_spend(OrderKind::PartialRepay, &id, &fill).unwrap()));
         assert!(refunded(classify_loan_spend(OrderKind::PartialRepay, &id, &refund).unwrap()));
         assert!(matches!(classify_loan_spend(OrderKind::Borrow, &id, &tx(vec![out(1, 0, None)])).unwrap(), OrderOutcome::Unknown));
+    }
+
+    fn erg_pool() -> &'static Pool {
+        pool_by_key("erg").unwrap()
+    }
+
+    fn erg_params() -> LoanParams {
+        LoanParams::parse(erg_pool(), &serde_json::from_str(include_str!("../test/fixtures/pool_param_erg.json")).unwrap()).unwrap()
+    }
+
+    /// A loan in the ERG pool: 1,000 SigUSD locked against 1,000 ERG, as
+    /// the bot would build it, priced through the same SigUSD market.
+    fn erg_loan_box(loan: i64) -> serde_json::Value {
+        let sigusd = crate::pools::ERG_POOL_COLLATERALS[0];
+        serde_json::json!({
+            "boxId": "cc".repeat(32),
+            "value": ERG_POOL_COLLATERAL_BOX_VALUE,
+            "ergoTree": ergo_tx::address_to_ergo_tree(erg_pool().collateral_address).unwrap(),
+            "assets": [
+                {"tokenId": sigusd.id, "amount": 100_000},
+                {"tokenId": erg_pool().borrow_token, "amount": loan},
+            ],
+            "additionalRegisters": {
+                "R4": encode::coll_byte(&hex::decode(BORROWER).unwrap()).unwrap(),
+                "R5": encode::int_pair(0, 0).unwrap(),
+                "R6": encode::long_pair(1250, 300).unwrap(),
+                "R7": encode::coll_byte(&hex::decode(sigusd.dex_nft).unwrap()).unwrap(),
+                "R8": encode::group_element(&BORROWER[6..]).unwrap(),
+                "R9": encode::long_pair(1_930_000, 100_000_000).unwrap(),
+            }
+        })
+    }
+
+    fn flat_history() -> InterestHistory {
+        // One child, one period at the idle rate.
+        let mut children = BTreeMap::new();
+        children.insert(0, vec![100_000_490]);
+        InterestHistory {
+            parent_rates: vec![],
+            children,
+        }
+    }
+
+    #[test]
+    fn the_erg_pool_parameter_box_lists_four_token_collaterals() {
+        let p = erg_params();
+        assert_eq!(p.asset_ids.len(), 4);
+        let (nft, thr, pen) = p.for_asset(crate::pools::ERG_POOL_COLLATERALS[0].id).unwrap();
+        assert_eq!((nft.as_str(), thr, pen), (crate::pools::ERG_POOL_COLLATERALS[0].dex_nft, 1250, 300));
+        assert_eq!(p.for_asset(crate::pools::ERG_POOL_COLLATERALS[3].id).unwrap().1, 1500);
+        assert!(p.for_asset("ff").is_none());
+        assert!(p.for_erg(erg_pool()).is_err());
+        assert_eq!(erg_pool().dex_nfts().len(), 4);
+        assert!(erg_pool().lends() && sigusd().lends());
+    }
+
+    #[test]
+    fn token_collateral_is_priced_in_erg_the_way_the_erg_pool_contract_does() {
+        let dex = DexPrice::parse(&fixture("dex")).unwrap();
+        // 1,000 SigUSD through the live market: recomputed by hand from
+        // the contract's formula, network fee off.
+        assert_eq!(dex.token_collateral_value(100_000), 3_716_169_901_634);
+        assert_eq!(dex.token_collateral_value(5_000), 188_709_605_368);
+        assert_eq!(dex.token_collateral_value(0), 0);
+        assert_eq!(dex.tokens_for_value(3_716_169_901_634), 100_000);
+        assert!(dex.token_collateral_value(dex.tokens_for_value(1_000_000_000_000)) >= 1_000_000_000_000);
+    }
+
+    #[test]
+    fn an_erg_pool_loan_is_read_valued_and_repaid_in_erg() {
+        let c = CollateralBox::parse(erg_pool(), &erg_loan_box(1_000_000_000_000)).unwrap();
+        assert_eq!(c.collateral_asset.as_deref(), Some(crate::pools::ERG_POOL_COLLATERALS[0].id));
+        assert_eq!(c.collateral_amount, 100_000);
+        assert_eq!(c.loan, 1_000_000_000_000);
+        assert!(CollateralBox::parse(sigusd(), &erg_loan_box(1)).is_err(), "another pool's script");
+        let dex = DexPrice::parse(&fixture("dex")).unwrap();
+        let h = flat_history();
+        let p = LoanPosition::value(erg_pool(), &c, &h, &dex, 1).unwrap();
+        assert_eq!(p.owed, 1 + (1_000_000_000_000i128 * 100_000_490 / 100_000_000) as i64);
+        assert_eq!(p.collateral_value, 3_716_169_901_634);
+        assert_eq!(p.liquidation_value, p.owed * 1250 / 1000);
+        assert!(p.health_bps > 29_000 && p.health_bps < 30_000, "{}", p.health_bps);
+        let mine = positions(erg_pool(), &[erg_loan_box(5)], &h, &[dex.clone()], &[BORROWER.into()], 1).unwrap();
+        assert_eq!(mine.len(), 1);
+
+        let r = RepayQuote::new(erg_pool(), &p, &h, 0, 1_000_000).unwrap();
+        // The proxy's ERG plus the collateral box's 0.004, less the
+        // borrower's box and the fee, must reach owed + fee.
+        assert_eq!(r.repayment + ERG_POOL_COLLATERAL_BOX_VALUE - MIN_BOX_VALUE - TX_FEE, p.owed + TX_FEE);
+        assert_eq!(r.box_value, r.repayment);
+        let b = r.proxy_box(erg_pool(), BORROWER).unwrap();
+        assert!(b.assets.is_empty());
+        assert_eq!(b.registers["R4"], encode::long(100_000).unwrap());
+        assert_eq!(b.registers["R8"], format!("0e20{}", crate::pools::ERG_POOL_COLLATERALS[0].id));
+
+        let part = PartialRepayQuote::new(erg_pool(), &p, &h, 400_000_000_000, 1_000_000).unwrap();
+        assert_eq!(part.box_value, 400_000_000_000 + MIN_BOX_VALUE + TX_FEE);
+        assert!(part.proxy_box(erg_pool(), BORROWER).unwrap().assets.is_empty());
+        assert!(
+            PartialRepayQuote::new(erg_pool(), &p, &h, p.owed - 10_000_000, 1).is_err(),
+            "would leave less than the minimum loan"
+        );
+    }
+
+    #[test]
+    fn an_erg_pool_borrow_locks_tokens_and_asks_for_erg() {
+        let state = PoolState::parse(erg_pool(), &serde_json::from_str(include_str!("../test/fixtures/pool_erg.json")).unwrap()).unwrap();
+        let dex = DexPrice::parse(&fixture("dex")).unwrap();
+        let sigusd = crate::pools::ERG_POOL_COLLATERALS[0].id;
+        let q = BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, Some(sigusd), 100_000, 1_000_000_000_000, 1_900_000).unwrap();
+        assert_eq!(q.collateral_value, 3_716_169_901_634);
+        assert_eq!(q.max_loan, 2_972_935_921_307);
+        assert_eq!(q.box_value, 6_000_000);
+        assert_eq!((q.threshold, q.penalty), (1250, 300));
+        // The ERG pool accepts a loan on the line itself.
+        assert!(BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, Some(sigusd), 100_000, q.max_loan, 1).is_ok());
+        assert!(BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, Some(sigusd), 100_000, q.max_loan + 1, 1).is_err());
+        assert!(BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, Some(sigusd), 100_000, 1_000, 1).is_err(), "below the minimum loan");
+        assert!(BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, None, 100_000, 1_000_000_000, 1).is_err());
+        let b = q.proxy_box(erg_pool(), BORROWER).unwrap();
+        assert_eq!(b.assets.len(), 1);
+        assert_eq!(b.assets[0].token_id, sigusd);
+        assert_eq!(b.assets[0].amount, "100000");
+        assert_eq!(b.registers["R7"], encode::long_pair(1250, 300).unwrap());
+        assert_eq!(b.registers["R8"], format!("0e20{}", crate::pools::ERG_POOL_COLLATERALS[0].dex_nft));
+        assert_eq!(b.ergo_tree, ergo_tx::address_to_ergo_tree(erg_pool().borrow_proxy_address).unwrap());
     }
 }

@@ -123,7 +123,9 @@ pub struct LoanSnapshot {
     pub pool: &'static duckpools::Pool,
     pub params: LoanParams,
     pub history: InterestHistory,
-    pub dex: DexPrice,
+    /// Every price box read for this pool: one for a token pool, one per
+    /// collateral the ERG pool takes (those that could be read).
+    pub dexes: Vec<DexPrice>,
     pub collateral: Vec<serde_json::Value>,
 }
 
@@ -152,9 +154,9 @@ fn carries(v: &serde_json::Value, nft: &str) -> bool {
 impl LoanSnapshot {
     /// The snapshot for one pool, or why it cannot be read.
     pub fn parse(pool: &'static duckpools::Pool, root: &serde_json::Value) -> Result<Self, String> {
-        let dex_nft = pool
-            .erg_dex_nft
-            .ok_or_else(|| err(format!("the {} pool takes no ERG collateral", pool.ticker)))?;
+        if !pool.lends() {
+            return Err(err(format!("the {} pool takes no collateral Argus prices", pool.ticker)));
+        }
         let param_box = list(root, "params")
             .into_iter()
             .find(|b| carries(b, pool.param_nft))
@@ -168,10 +170,15 @@ impl LoanSnapshot {
             .filter(|b| carries(b, pool.child_nft))
             .cloned()
             .collect();
-        let dex_box = list(root, "dex")
+        let dexes: Vec<DexPrice> = pool
+            .dex_nfts()
             .into_iter()
-            .find(|b| carries(b, dex_nft))
-            .ok_or_else(|| err(format!("the ERG/{} price box is missing", pool.ticker)))?;
+            .filter_map(|nft| list(root, "dex").into_iter().find(|b| carries(b, nft)))
+            .filter_map(|b| DexPrice::parse(b).ok())
+            .collect();
+        if dexes.is_empty() {
+            return Err(err(format!("no price box for the {} pool's collateral", pool.ticker)));
+        }
         let collateral_tree =
             ergo_tx::address_to_ergo_tree(pool.collateral_address).map_err(err)?;
         let collateral: Vec<serde_json::Value> = list(root, "collateral")
@@ -188,13 +195,35 @@ impl LoanSnapshot {
             pool,
             params: LoanParams::parse(pool, param_box).map_err(err)?,
             history: InterestHistory::parse(pool, parent, &children).map_err(err)?,
-            dex: DexPrice::parse(dex_box).map_err(err)?,
+            dexes,
             collateral,
         })
     }
 
+    /// The price box for a collateral: ERG (none) or a token of the ERG
+    /// pool.
+    pub fn dex_for(&self, collateral_asset: Option<&str>) -> Result<&DexPrice, String> {
+        let nft = match collateral_asset {
+            None => self
+                .pool
+                .erg_dex_nft
+                .ok_or_else(|| err("the ERG pool lends against tokens; pick a collateral"))?
+                .to_string(),
+            Some(asset) => {
+                self.params
+                    .for_asset(asset)
+                    .ok_or_else(|| err("the pool does not take that token as collateral"))?
+                    .0
+            }
+        };
+        self.dexes
+            .iter()
+            .find(|d| d.nft.eq_ignore_ascii_case(&nft))
+            .ok_or_else(|| err("the price box for that collateral could not be read"))
+    }
+
     pub fn positions(&self, wallet_trees: &[String], height: i64) -> Result<Vec<LoanPosition>, String> {
-        duckpools::positions(self.pool, &self.collateral, &self.history, &self.dex, wallet_trees, height)
+        duckpools::positions(self.pool, &self.collateral, &self.history, &self.dexes, wallet_trees, height)
             .map_err(err)
     }
 
@@ -206,7 +235,12 @@ impl LoanSnapshot {
             .find(|b| b.get("boxId").and_then(|x| x.as_str()) == Some(collateral_box_id))
             .ok_or_else(|| err("that loan is not in the snapshot; refresh and try again"))?;
         let c = duckpools::CollateralBox::parse(self.pool, v).map_err(err)?;
-        LoanPosition::value(self.pool, &c, &self.history, &self.dex, height).map_err(err)
+        let dex = self
+            .dexes
+            .iter()
+            .find(|d| d.nft.eq_ignore_ascii_case(&c.dex_nft))
+            .ok_or_else(|| err("the price box for that loan's collateral could not be read"))?;
+        LoanPosition::value(self.pool, &c, &self.history, dex, height).map_err(err)
     }
 }
 
@@ -217,37 +251,66 @@ pub fn loans_json(loan_boxes_json: &str, wallet_trees: &[String], height: i64) -
     let mut positions = Vec::new();
     let mut markets = Vec::new();
     for pool in POOLS {
-        if pool.erg_dex_nft.is_none() {
+        if !pool.lends() {
             continue;
         }
         match LoanSnapshot::parse(pool, &root) {
             Ok(snap) => {
-                // A parameter box without ERG terms is this pool's problem,
-                // not every pool's.
-                let (threshold, penalty) = match snap.params.for_erg(pool) {
-                    Ok(pair) => pair,
-                    Err(e) => {
-                        markets.push(serde_json::json!({
-                            "pool": pool.key,
-                            "ticker": pool.ticker,
-                            "decimals": pool.decimals,
-                            "error": err(e),
-                        }));
-                        continue;
-                    }
-                };
-                markets.push(serde_json::json!({
+                let mut market = serde_json::json!({
                     "pool": pool.key,
                     "ticker": pool.ticker,
                     "decimals": pool.decimals,
-                    "threshold": threshold,
-                    "penalty": penalty,
-                    // What one ERG of collateral counts for, after the
-                    // contract's slippage and fees.
-                    "erg_value": snap.dex.collateral_value(1_000_000_000 + duckpools::loans::MAX_NETWORK_FEE),
                     "latest_rate": snap.history.latest_rate(),
                     "loans": snap.collateral.len(),
-                }));
+                });
+                if pool.is_erg() {
+                    // One entry per token the ERG pool takes: its terms and
+                    // what a whole unit sells for, before the network fee.
+                    let collaterals: Vec<serde_json::Value> = pool
+                        .token_collaterals
+                        .iter()
+                        .map(|c| {
+                            let terms = snap.params.for_asset(c.id);
+                            let dex = snap.dexes.iter().find(|d| d.nft.eq_ignore_ascii_case(c.dex_nft));
+                            serde_json::json!({
+                                "asset": c.id,
+                                "ticker": c.ticker,
+                                "decimals": c.decimals,
+                                "dex_nft": c.dex_nft,
+                                "threshold": terms.as_ref().map(|t| t.1),
+                                "penalty": terms.as_ref().map(|t| t.2),
+                                "unit_value_nano": dex.map(|d| d.token_value_raw(10i64.pow(u32::from(c.decimals)))),
+                                "ready": terms.is_some() && dex.is_some(),
+                            })
+                        })
+                        .collect();
+                    market["collaterals"] = serde_json::json!(collaterals);
+                } else {
+                    // A parameter box without ERG terms, or a price box that
+                    // could not be read, is this pool's problem, not every
+                    // pool's.
+                    let terms = snap.params.for_erg(pool).map_err(err).and_then(|t| Ok((t, snap.dex_for(None)?)));
+                    let ((threshold, penalty), dex) = match terms {
+                        Ok(v) => v,
+                        Err(e) => {
+                            markets.push(serde_json::json!({
+                                "pool": pool.key,
+                                "ticker": pool.ticker,
+                                "decimals": pool.decimals,
+                                "error": e,
+                            }));
+                            continue;
+                        }
+                    };
+                    market["threshold"] = serde_json::json!(threshold);
+                    market["penalty"] = serde_json::json!(penalty);
+                    // What one ERG of collateral counts for, after the
+                    // contract's slippage and fees.
+                    market["erg_value"] = serde_json::json!(
+                        dex.collateral_value(1_000_000_000 + duckpools::loans::MAX_NETWORK_FEE)
+                    );
+                }
+                markets.push(market);
                 for p in snap.positions(wallet_trees, height)? {
                     let mut v = serde_json::to_value(&p).map_err(ser_err)?;
                     v["ticker"] = serde_json::json!(pool.ticker);
@@ -278,7 +341,10 @@ pub enum Quote {
 /// What a loan-side quote needs beyond the amount.
 pub struct LoanArgs<'a> {
     pub snapshot: &'a LoanSnapshot,
-    pub collateral_nano: i64,
+    /// The collateral token for an ERG pool borrow; empty for ERG.
+    pub collateral_asset: &'a str,
+    /// Units of collateral for a borrow: nanoERG, or the token's units.
+    pub collateral_amount: i64,
     pub collateral_box_id: &'a str,
     pub height: i64,
 }
@@ -306,12 +372,14 @@ impl Quote {
                 .map_err(err),
             "borrow" => {
                 let l = loan_args()?;
+                let asset = Some(l.collateral_asset).filter(|a| !a.is_empty());
                 BorrowQuote::new(
                     pool,
                     state,
                     &l.snapshot.params,
-                    &l.snapshot.dex,
-                    l.collateral_nano,
+                    l.snapshot.dex_for(asset)?,
+                    asset,
+                    l.collateral_amount,
                     amount,
                     refund_i32()?,
                 )
@@ -379,7 +447,10 @@ impl Quote {
         match self {
             Quote::Lend(q) => pool.currency_id.map(|id| (id.to_string(), q.amount as u64)),
             Quote::Withdraw(q) => Some((pool.lend_token.to_string(), q.lend_tokens as u64)),
-            Quote::Borrow(_) => None,
+            Quote::Borrow(q) => q
+                .collateral_asset
+                .as_ref()
+                .map(|id| (id.clone(), q.collateral_amount as u64)),
             Quote::Repay(q) => pool.currency_id.map(|id| (id.to_string(), q.repayment as u64)),
             Quote::PartialRepay(q) => pool.currency_id.map(|id| (id.to_string(), q.repayment as u64)),
         }
@@ -541,7 +612,8 @@ mod tests {
         let snap = LoanSnapshot::parse(pool, &root).unwrap();
         let args = |id: &'static str, nano: i64| LoanArgs {
             snapshot: &snap,
-            collateral_nano: nano,
+            collateral_asset: "",
+            collateral_amount: nano,
             collateral_box_id: id,
             height: 1_866_418,
         };
@@ -557,5 +629,52 @@ mod tests {
         assert_eq!(p.token_needed(pool).unwrap().1, 5_000);
         assert!(Quote::new(pool, &state, "repay", 0, 0, 1_900_000, Some(args("ff", 0))).is_err());
         assert!(Quote::new(pool, &state, "borrow", 1, 0, 1_900_000, None).is_err());
+    }
+
+    #[test]
+    fn the_erg_pool_borrows_against_a_token_from_the_same_snapshot() {
+        let pool = duckpools::pool_by_key("erg").unwrap();
+        let state = PoolState::parse(
+            pool,
+            &serde_json::from_str(include_str!("../../vendor/protocols/duckpools/test/fixtures/pool_erg.json")).unwrap(),
+        )
+        .unwrap();
+        // The ERG pool's parameter box and interest boxes, the SigUSD
+        // market as the one price box that could be read.
+        let mut root: serde_json::Value = serde_json::from_str(&loan_boxes()).unwrap();
+        root["params"] = serde_json::json!([serde_json::from_str::<serde_json::Value>(include_str!("../../vendor/protocols/duckpools/test/fixtures/pool_param_erg.json")).unwrap()]);
+        root["parents"] = serde_json::json!([serde_json::from_str::<serde_json::Value>(include_str!("../../vendor/protocols/duckpools/test/fixtures/interest_parent_erg.json")).unwrap()]);
+        root["children"] = serde_json::from_str::<serde_json::Value>(include_str!("../../vendor/protocols/duckpools/test/fixtures/interest_children_erg.json")).unwrap();
+        let snap = LoanSnapshot::parse(pool, &root).unwrap();
+        assert_eq!(snap.dexes.len(), 1);
+        let sigusd = duckpools::pools::ERG_POOL_COLLATERALS[0].id;
+        let q = Quote::new(
+            pool,
+            &state,
+            "borrow",
+            1_000_000_000_000,
+            0,
+            1_900_000,
+            Some(LoanArgs { snapshot: &snap, collateral_asset: sigusd, collateral_amount: 100_000, collateral_box_id: "", height: 1 }),
+        )
+        .unwrap();
+        assert_eq!(q.token_needed(pool).unwrap(), (sigusd.to_string(), 100_000));
+        assert_eq!(q.box_value(), 6_000_000);
+        // rsADA's market was not given: the quote says so instead of guessing.
+        let rsada = duckpools::pools::ERG_POOL_COLLATERALS[3].id;
+        let e = match Quote::new(pool, &state, "borrow", 1_000_000_000_000, 0, 1_900_000, Some(LoanArgs { snapshot: &snap, collateral_asset: rsada, collateral_amount: 1, collateral_box_id: "", height: 1 })) {
+            Ok(_) => panic!("quoted without a price box"),
+            Err(e) => e,
+        };
+        assert!(e.contains("price box"), "{e}");
+        let out = loans_json(&root.to_string(), &[], 1).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let erg = v["markets"].as_array().unwrap().iter().find(|m| m["pool"] == "erg").unwrap();
+        let cols = erg["collaterals"].as_array().unwrap();
+        assert_eq!(cols.len(), 4);
+        assert_eq!(cols[0]["ready"], true);
+        assert_eq!(cols[0]["threshold"], 1250);
+        assert!(cols[0]["unit_value_nano"].as_i64().unwrap() > 3_000_000_000, "1 SigUSD is about 3.7 ERG here");
+        assert_eq!(cols[3]["ready"], false);
     }
 }
