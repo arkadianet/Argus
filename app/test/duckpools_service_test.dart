@@ -50,6 +50,10 @@ class FakeGateway implements DuckpoolsGateway {
   List<String>? lastLoanAddresses;
   String? lastPrepareLoanBoxes;
 
+  /// Health the fake reports for the wallet's loan, so a test can tell
+  /// one read's result from another's.
+  int healthBps = 18594;
+
   @override
   Future<String> loans(String loanBoxesJson, List<String> walletAddresses, int height) async {
     lastLoanBoxes = loanBoxesJson;
@@ -65,7 +69,7 @@ class FakeGateway implements DuckpoolsGateway {
             {
               'pool': 'sigusd', 'ticker': 'SigUSD', 'decimals': 2, 'box_id': c['boxId'],
               'collateral_nano': c['value'], 'loan': 23899, 'owed': 23939, 'collateral_value': 62316,
-              'threshold': 1400, 'penalty': 400, 'health_bps': 18594, 'liquidation_value': 33514,
+              'threshold': 1400, 'penalty': 400, 'health_bps': healthBps, 'liquidation_value': 33514,
               'liquidatable': false, 'forced_liquidation_height': 1920515,
             },
       ],
@@ -509,17 +513,25 @@ void main() {
     await pending;
     expect(svc.loans.single.boxId, 'loan-1', reason: 'the w1 read stays');
     expect(svc.loansError, isNull);
-    // The same when the read names its wallet and another one takes over.
+    // The same when the read names its wallet and another one takes over:
+    // the list and its timestamp are exactly what they were.
     gw.wallet = 'w1';
+    final before = svc.loans;
+    final beforeAt = svc.loansRefreshedAt;
+    gw.healthBps = 12000;
     final named = svc.refreshLoans(const ['9me'], walletId: 'w1');
     gw.wallet = 'w2';
     await named;
     gw.wallet = 'w1';
-    expect(svc.loans.single.boxId, 'loan-1');
-    // A read by id with no wallet active (locked) still lands.
+    expect(identical(svc.loans, before), isTrue, reason: 'the stale read installed nothing');
+    expect(svc.loansRefreshedAt, beforeAt);
+    // A read by id with no wallet active (locked) lands: new figures, new time.
     gw.wallet = null;
+    await Future<void>.delayed(const Duration(milliseconds: 2));
     await svc.refreshLoans(const ['9me'], walletId: 'w1');
-    expect(svc.loansRefreshedAt, isNotNull);
+    expect(svc.loans.single.healthBps, 12000, reason: 'this read replaced the list');
+    expect(svc.loansRefreshedAt!.isAfter(beforeAt!), isTrue);
+    gw.healthBps = 18594;
     gw.wallet = 'w1';
 
     // A pool whose parameter box cannot be read says so and offers no borrowing.
