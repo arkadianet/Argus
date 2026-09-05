@@ -593,17 +593,25 @@ void main() {
     await pending;
     expect(svc.loans.single.boxId, 'loan-1', reason: 'the w1 read stays');
     expect(svc.loansError, isNull);
-    // The same when the read names its wallet and another one takes over.
+    // The same when the read names its wallet and another one takes over:
+    // the list and its timestamp are exactly what they were.
     gw.wallet = 'w1';
+    final before = svc.loans;
+    final beforeAt = svc.loansRefreshedAt;
+    gw.healthBps = 12000;
     final named = svc.refreshLoans(const ['9me'], walletId: 'w1');
     gw.wallet = 'w2';
     await named;
     gw.wallet = 'w1';
-    expect(svc.loans.single.boxId, 'loan-1');
-    // A read by id with no wallet active (locked) still lands.
+    expect(identical(svc.loans, before), isTrue, reason: 'the stale read installed nothing');
+    expect(svc.loansRefreshedAt, beforeAt);
+    // A read by id with no wallet active (locked) lands: new figures, new time.
     gw.wallet = null;
+    await Future<void>.delayed(const Duration(milliseconds: 2));
     await svc.refreshLoans(const ['9me'], walletId: 'w1');
-    expect(svc.loansRefreshedAt, isNotNull);
+    expect(svc.loans.single.healthBps, 12000, reason: 'this read replaced the list');
+    expect(svc.loansRefreshedAt!.isAfter(beforeAt!), isTrue);
+    gw.healthBps = 18594;
     gw.wallet = 'w1';
 
     // A pool whose parameter box cannot be read says so and offers no borrowing.
