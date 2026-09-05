@@ -30,8 +30,9 @@ pub use orders::{
 pub use pools::{pool_by_key, pool_by_lend_token, pool_by_nft, Pool, POOLS};
 pub use state::{parse_pool_boxes, PoolState, PoolsError};
 
-/// `MaxLendTokens` in the pool contract: one million above the true
-/// maximum so the genesis lend token is worth exactly one unit.
+/// `MaxLendTokens` in the ERG pool contract: one million above the true
+/// maximum so the genesis lend token is worth exactly one unit. Token
+/// pools differ; use [`Pool::max_lend_tokens`].
 pub const MAX_LEND_TOKENS: i64 = 9_000_000_001_000_000;
 /// `MaxBorrowTokens` in the pool contract.
 pub const MAX_BORROW_TOKENS: i64 = 9_000_000_000_000_000;

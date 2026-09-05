@@ -63,8 +63,10 @@ mod tests {
         assert_eq!(service_fee(erg, 20_000_000_000), 125_000_000);
         // 100 ERG: 20/160 + 80/200 = 0.125 + 0.4.
         assert_eq!(service_fee(erg, 100_000_000_000), 525_000_000);
-        // 300 ERG: 0.125 + 180/200 + 100/250 = 0.125 + 0.9 + 0.4.
-        assert_eq!(service_fee(erg, 300_000_000_000), 1_425_000_000);
+        // 300 ERG, as the contract literally computes it: (300 − 200 − 20)/250
+        // + 200/200 + 20/160 = 0.32 + 1.0 + 0.125. The second step is
+        // charged in full above it, not just its excess.
+        assert_eq!(service_fee(erg, 300_000_000_000), 1_445_000_000);
         // Tiny amounts pay the minimum box.
         assert_eq!(service_fee(erg, 1_000), 1_000_000);
     }

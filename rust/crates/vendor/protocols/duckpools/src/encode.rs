@@ -38,7 +38,8 @@ mod tests {
         assert_eq!(long(0).unwrap(), "0500");
         assert_eq!(long(1).unwrap(), "0502");
         assert_eq!(long(-1).unwrap(), "0501");
-        assert_eq!(long(1_000_000).unwrap(), "058092f401");
+        // zigzag(1_000_000) = 2_000_000 = 0x1e8480, VLQ 80 89 7a.
+        assert_eq!(long(1_000_000).unwrap(), "0580897a");
         assert_eq!(coll_byte(&[0xab, 0xcd]).unwrap(), "0e02abcd");
         assert_eq!(
             box_id_register(&"ab".repeat(32)).unwrap(),
