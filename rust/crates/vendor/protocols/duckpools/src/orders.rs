@@ -404,8 +404,11 @@ pub fn classify_spend(
             })
             .unwrap_or(0)
     };
+    // Explorer and node may differ in hex case; the marker follows the
+    // caller's.
+    let same = |r: Option<String>| r.map(|h| h.eq_ignore_ascii_case(&marker)).unwrap_or(false);
     for o in outputs {
-        if reg(o, "R7").as_deref() == Some(marker.as_str()) {
+        if same(reg(o, "R7")) {
             return Ok(OrderOutcome::Filled {
                 value: value_of(o),
                 assets: assets_of(o),
@@ -413,7 +416,7 @@ pub fn classify_spend(
         }
     }
     for o in outputs {
-        if reg(o, "R4").as_deref() == Some(marker.as_str()) {
+        if same(reg(o, "R4")) {
             return Ok(OrderOutcome::Refunded {
                 value: value_of(o),
                 assets: assets_of(o),
@@ -619,6 +622,11 @@ mod tests {
             {"value": 2, "additionalRegisters": {}},
             {"value": 1000000, "assets": [{"tokenId": "aa", "amount": 42}], "additionalRegisters": {"R7": {"serializedValue": marker}}},
         ]});
+        // The explorer may answer in upper-case hex.
+        let upper = serde_json::json!({"outputs": [
+            {"value": 1000000, "additionalRegisters": {"R7": marker.to_uppercase()}},
+        ]});
+        assert!(matches!(classify_spend(&id, &upper).unwrap(), OrderOutcome::Filled { .. }), "case-insensitive marker");
         match classify_spend(&id, &filled).unwrap() {
             OrderOutcome::Filled { value, assets } => {
                 assert_eq!(value, 1_000_000);
