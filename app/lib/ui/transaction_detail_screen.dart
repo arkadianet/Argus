@@ -85,7 +85,11 @@ class TransactionDetailScreen extends StatelessWidget {
           ],
           const SizedBox(height: 8),
           Text(
-            confirmed ? 'Confirmed ${formatHeight(height)}' : 'Not yet in a block',
+            confirmed
+                ? 'Confirmed ${formatHeight(height)}'
+                : tx['confirmed'] == true
+                    ? 'Confirmed'
+                    : 'Not yet in a block',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           if (formatTxTime(ts).isNotEmpty) ...[
@@ -93,6 +97,17 @@ class TransactionDetailScreen extends StatelessWidget {
             Text(formatTxTime(ts), style: Theme.of(context).textTheme.bodySmall),
           ],
           const SizedBox(height: 24),
+          if (tx['mix'] == true) ...[
+            const SectionLabel('Mix'),
+            const SizedBox(height: 8),
+            Text(
+              '${tx['mix_label'] ?? 'Mix transaction'}. Rounds move between mixing '
+              'contracts, not your addresses, so this is known from the mix record, '
+              'not from the address history.',
+              style: Theme.of(context).textTheme.bodyMedium,
+            ),
+            const SizedBox(height: 16),
+          ],
           if (counterparty != null && counterparty.isNotEmpty) ...[
             SectionLabel(outgoing ? 'To' : 'From'),
             const SizedBox(height: 8),
