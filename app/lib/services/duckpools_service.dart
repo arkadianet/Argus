@@ -397,34 +397,51 @@ class DuckpoolsService extends ChangeNotifier {
     _busy = true;
     notifyListeners();
     try {
+      // Every pool at once: one slow explorer answer must not hold the
+      // others, or `_busy`, for its whole timeout.
+      final results = await Future.wait([
+        for (final p in pools)
+          _boxesUnderScript(p).then<(DuckPool, List<dynamic>?, Object?)>(
+            (b) => (p, b, null),
+            onError: (Object e) => (p, null, e),
+          ),
+      ]);
       final boxes = <dynamic>[];
       final failures = <String>[];
-      for (final p in pools) {
-        try {
-          boxes.addAll(await _boxesUnderScript(p));
-        } catch (e) {
+      final read = <String>{};
+      for (final (p, b, e) in results) {
+        if (b != null) {
+          boxes.addAll(b);
+          read.add(p.key);
+        } else {
           failures.add('${p.ticker}: $e');
         }
       }
-      if (boxes.isEmpty && failures.isNotEmpty) {
+      if (read.isEmpty) {
         throw StateError(failures.first);
       }
       // The parameter boxes share one script and are few; a failure here
-      // only costs the rates.
+      // only costs the rates. Read together, like the pools.
       final params = <dynamic>[];
-      for (final p in pools) {
-        try {
-          params.addAll(await _boxesByToken(p.interestParamNft));
-        } catch (_) {
-          // No rate for this pool this time.
-        }
-      }
+      await Future.wait([
+        for (final p in pools)
+          _boxesByToken(p.interestParamNft).then(params.addAll, onError: (Object _) {
+            // No rate for this pool this time.
+          }),
+      ]);
       lastPoolBoxesJson = jsonEncode(boxes);
       final raw = _gw.state(lastPoolBoxesJson!, jsonEncode(holdings), jsonEncode(params));
+      final fresh = {
+        for (final m in (jsonDecode(raw) as List)) (m as Map)['pool'] as String: DuckPoolState.fromJson(m.cast()),
+      };
+      // A pool that could not be read keeps its last state rather than
+      // vanishing, and the failure is reported alongside the fresh data.
+      final prior = {for (final s in states) s.pool: s};
       states = [
-        for (final m in (jsonDecode(raw) as List)) DuckPoolState.fromJson((m as Map).cast()),
+        for (final p in pools)
+          if (fresh[p.key] != null || (!read.contains(p.key) && prior[p.key] != null)) (fresh[p.key] ?? prior[p.key])!,
       ];
-      lastError = null;
+      lastError = failures.isEmpty ? null : 'Some pools could not be read: ${failures.join('; ')}';
       lastRefreshedAt = DateTime.now();
     } catch (e) {
       lastError = e.toString();

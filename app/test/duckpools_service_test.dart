@@ -167,6 +167,55 @@ void main() {
     expect(svc.positionLine((a, d) => '$a'), isNull);
   });
 
+  test('a pool that cannot be read keeps its last state and is reported, the rest refresh', () async {
+    final gw = FakeGateway(node: 'http://node');
+    var sigusdDown = false;
+    final started = <String>[];
+    final svc = DuckpoolsService(
+      gateway: gw,
+      get: (uri) async => throw StateError('explorer down'),
+      post: (uri, body) async {
+        started.add(body);
+        if (body == '"bb"' && sigusdDown) {
+          // Slow and failing: the other pool must not wait for this.
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          throw StateError('timeout');
+        }
+        return jsonEncode(body == '"aa"' ? [ergBox] : []);
+      },
+    );
+    await svc.refresh(const {});
+    expect(svc.lastError, isNull);
+    expect(svc.states.map((s) => s.pool), ['erg']);
+
+    sigusdDown = true;
+    started.clear();
+    await svc.refresh(const {});
+    expect(started.length, 2, reason: 'both reads started');
+    expect(svc.lastError, contains('SigUSD'));
+    expect(svc.states.map((s) => s.pool), ['erg'], reason: 'the ERG pool still refreshed');
+
+    // Had the SigUSD pool been read before, its last state would stay.
+    // The fake only values the ERG pool, so prove it the other way round.
+    sigusdDown = false;
+    var ergDown = true;
+    final svc2 = DuckpoolsService(
+      gateway: gw,
+      get: (uri) async => throw StateError('explorer down'),
+      post: (uri, body) async {
+        if (body == '"aa"' && ergDown) throw StateError('timeout');
+        return jsonEncode(body == '"aa"' ? [ergBox] : []);
+      },
+    );
+    ergDown = false;
+    await svc2.refresh(const {});
+    expect(svc2.states.single.pool, 'erg');
+    ergDown = true;
+    await svc2.refresh(const {});
+    expect(svc2.states.single.pool, 'erg', reason: 'kept from the last read');
+    expect(svc2.lastError, contains('ERG'));
+  });
+
   test('an unreachable chain leaves the last state and reports the error', () async {
     final svc = DuckpoolsService(
       gateway: FakeGateway(),
