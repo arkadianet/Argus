@@ -35,6 +35,9 @@ class FakeGateway implements MixGateway {
   String? get nodeUrl => 'http://node';
   @override
   String get explorerBase => 'https://explorer/';
+  @override
+  int? get chainHeight => nodeHeight;
+  int? nodeHeight;
 
   @override
   String contractTrees() => jsonEncode({'half': 'aa', 'full': 'bb', 'fee': 'cc', 'token': 'dd'});
@@ -129,11 +132,22 @@ class FakeExplorer {
   Map<String, Object> txs = {};
   Map<String, List<Object>> lists = {};
   int height = 1500000;
+  bool networkState = true;
 
   Future<String> get(Uri uri) async {
     requests.add(uri.toString());
     final p = uri.path;
-    if (p.endsWith('/networkState')) return jsonEncode({'height': height});
+    if (p.endsWith('/networkState')) {
+      if (!networkState) throw StateError('explorer returned HTTP 404 for $p');
+      return jsonEncode({'height': height});
+    }
+    if (p.endsWith('/blocks')) {
+      return jsonEncode({
+        'items': [
+          {'height': 777},
+        ],
+      });
+    }
     final tree = RegExp(r'byErgoTree/([0-9a-f]+)').firstMatch(p)?.group(1);
     if (tree != null) {
       final all = lists[tree] ?? const [];
@@ -484,5 +498,22 @@ void main() {
     expect(await leaving, 'txr');
     expect(gw.calls, ['observe', 'plan', 'leave']);
     expect(svc.busy, isFalse);
+  });
+
+  test('height comes from the node when known, else the explorer, else the newest block', () async {
+    final gw = FakeGateway()..nodeHeight = 1234;
+    final ex = FakeExplorer();
+    final svc = await loaded(gw, ex, []);
+    expect((await svc.snapshot()).height, 1234);
+    expect(ex.requests.where((r) => r.contains('networkState')), isEmpty);
+
+    gw.nodeHeight = null;
+    expect((await svc.snapshot()).height, 1500000, reason: 'explorer networkState');
+
+    // An explorer without networkState (HTTP 404) still yields a height.
+    final noState = FakeExplorer()..networkState = false;
+    final svc2 = await loaded(gw, noState, []);
+    expect((await svc2.snapshot()).height, 777);
+    expect(noState.requests.last, contains('/api/v1/blocks?limit=1'));
   });
 }

@@ -107,6 +107,9 @@ abstract class MixGateway {
   String? get nodeUrl;
   String get explorerBase;
 
+  /// The chain height the wallet already knows from its node, if any.
+  int? get chainHeight;
+
   /// `{"half","full","fee","token","mixing_token_id"}` ErgoTree hexes.
   String contractTrees();
   Future<String> newState({
@@ -162,6 +165,8 @@ class LiveMixGateway implements MixGateway {
   String? get nodeUrl => networkController.activeUrl;
   @override
   String get explorerBase => networkController.explorer;
+  @override
+  int? get chainHeight => networkController.height;
 
   @override
   String contractTrees() => bridge.mixContractTrees();
@@ -539,8 +544,7 @@ class MixService extends ChangeNotifier {
         // The engine will report the box as not seen and wait.
       }
     }
-    final state = jsonDecode(await _get(Uri.parse('$base/api/v1/networkState'))) as Map;
-    final height = (state['height'] as num).toInt();
+    final height = await _height(base);
     return MixSnapshot(
       json: jsonEncode({
         'half_boxes': half,
@@ -552,6 +556,28 @@ class MixService extends ChangeNotifier {
       height: height,
       truncated: _lastListTruncated,
     );
+  }
+
+  /// The current height: from the node the wallet is already talking to,
+  /// else from the explorer. Not every explorer serves `networkState`, so
+  /// the newest block is the second try.
+  Future<int> _height(String base) async {
+    final known = _gw.chainHeight;
+    if (known != null && known > 0) return known;
+    try {
+      final state = jsonDecode(await _get(Uri.parse('$base/api/v1/networkState'))) as Map;
+      final h = (state['height'] as num?)?.toInt();
+      if (h != null && h > 0) return h;
+    } catch (_) {
+      // Fall through to the block list.
+    }
+    final blocks = jsonDecode(await _get(Uri.parse('$base/api/v1/blocks?limit=1'))) as Map;
+    final items = blocks['items'] as List? ?? const [];
+    final h = items.isEmpty ? null : ((items.first as Map)['height'] as num?)?.toInt();
+    if (h == null || h <= 0) {
+      throw StateError('Could not learn the chain height from the node or the explorer');
+    }
+    return h;
   }
 
   /// What the pool offers now, as the engine reports it.
