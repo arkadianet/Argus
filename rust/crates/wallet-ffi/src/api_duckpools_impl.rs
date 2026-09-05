@@ -3,7 +3,9 @@
 //! one). Fills are the bots' business.
 
 use duckpools::{
-    build_order_tx, classify_spend, InterestParams, LendQuote, PoolState, WithdrawQuote, POOLS,
+    build_order_tx, classify_loan_spend, BorrowQuote, DexPrice, InterestHistory, InterestParams,
+    LendQuote, LoanParams, LoanPosition, OrderKind, PartialRepayQuote, PoolState, RepayQuote,
+    WithdrawQuote, POOLS,
 };
 use ergo_tx::Eip12InputBox;
 
@@ -114,10 +116,158 @@ pub fn state_json(
     Ok(serde_json::json!(out).to_string())
 }
 
-/// One order's quote and proxy box, either kind.
+/// The boxes a pool's loans are read from, as the app hands them over in
+/// one JSON object: `collateral`, `parents`, `children`, `dex`, `params`
+/// (each a list of boxes, all pools mixed). Rust sorts them by NFT.
+pub struct LoanSnapshot {
+    pub pool: &'static duckpools::Pool,
+    pub params: LoanParams,
+    pub history: InterestHistory,
+    pub dex: DexPrice,
+    pub collateral: Vec<serde_json::Value>,
+}
+
+fn list<'a>(root: &'a serde_json::Value, key: &str) -> Vec<&'a serde_json::Value> {
+    root.get(key)
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().collect())
+        .unwrap_or_default()
+}
+
+fn carries(v: &serde_json::Value, nft: &str) -> bool {
+    v.get("assets")
+        .and_then(|a| a.as_array())
+        .map(|a| {
+            a.iter().any(|t| {
+                t.get("tokenId")
+                    .and_then(|x| x.as_str())
+                    .map(|x| x.eq_ignore_ascii_case(nft))
+                    .unwrap_or(false)
+                    && t.get("amount").and_then(|x| x.as_i64()) == Some(1)
+            })
+        })
+        .unwrap_or(false)
+}
+
+impl LoanSnapshot {
+    /// The snapshot for one pool, or why it cannot be read.
+    pub fn parse(pool: &'static duckpools::Pool, root: &serde_json::Value) -> Result<Self, String> {
+        let dex_nft = pool
+            .erg_dex_nft
+            .ok_or_else(|| err(format!("the {} pool takes no ERG collateral", pool.ticker)))?;
+        let param_box = list(root, "params")
+            .into_iter()
+            .find(|b| carries(b, pool.param_nft))
+            .ok_or_else(|| err(format!("the {} parameter box is missing", pool.ticker)))?;
+        let parent = list(root, "parents")
+            .into_iter()
+            .find(|b| carries(b, pool.parent_nft))
+            .ok_or_else(|| err(format!("the {} interest box is missing", pool.ticker)))?;
+        let children: Vec<serde_json::Value> = list(root, "children")
+            .into_iter()
+            .filter(|b| carries(b, pool.child_nft))
+            .cloned()
+            .collect();
+        let dex_box = list(root, "dex")
+            .into_iter()
+            .find(|b| carries(b, dex_nft))
+            .ok_or_else(|| err(format!("the ERG/{} price box is missing", pool.ticker)))?;
+        let collateral_tree =
+            ergo_tx::address_to_ergo_tree(pool.collateral_address).map_err(err)?;
+        let collateral: Vec<serde_json::Value> = list(root, "collateral")
+            .into_iter()
+            .filter(|b| {
+                b.get("ergoTree")
+                    .and_then(|t| t.as_str())
+                    .map(|t| t.eq_ignore_ascii_case(&collateral_tree))
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        Ok(Self {
+            pool,
+            params: LoanParams::parse(pool, param_box).map_err(err)?,
+            history: InterestHistory::parse(pool, parent, &children).map_err(err)?,
+            dex: DexPrice::parse(dex_box).map_err(err)?,
+            collateral,
+        })
+    }
+
+    pub fn positions(&self, wallet_trees: &[String], height: i64) -> Result<Vec<LoanPosition>, String> {
+        duckpools::positions(self.pool, &self.collateral, &self.history, &self.dex, wallet_trees, height)
+            .map_err(err)
+    }
+
+    /// One loan by its collateral box id, whoever the borrower is.
+    pub fn position(&self, collateral_box_id: &str, height: i64) -> Result<LoanPosition, String> {
+        let v = self
+            .collateral
+            .iter()
+            .find(|b| b.get("boxId").and_then(|x| x.as_str()) == Some(collateral_box_id))
+            .ok_or_else(|| err("that loan is not in the snapshot; refresh and try again"))?;
+        let c = duckpools::CollateralBox::parse(self.pool, v).map_err(err)?;
+        LoanPosition::value(self.pool, &c, &self.history, &self.dex, height).map_err(err)
+    }
+}
+
+/// The loans JSON the app reads: the wallet's positions and, per pool
+/// that takes ERG collateral, the market it borrows against.
+pub fn loans_json(loan_boxes_json: &str, wallet_trees: &[String], height: i64) -> Result<String, String> {
+    let root: serde_json::Value = serde_json::from_str(loan_boxes_json).map_err(ser_err)?;
+    let mut positions = Vec::new();
+    let mut markets = Vec::new();
+    for pool in POOLS {
+        if pool.erg_dex_nft.is_none() {
+            continue;
+        }
+        match LoanSnapshot::parse(pool, &root) {
+            Ok(snap) => {
+                let (threshold, penalty) = snap.params.for_erg(pool).map_err(err)?;
+                markets.push(serde_json::json!({
+                    "pool": pool.key,
+                    "ticker": pool.ticker,
+                    "decimals": pool.decimals,
+                    "threshold": threshold,
+                    "penalty": penalty,
+                    // What one ERG of collateral counts for, after the
+                    // contract's slippage and fees.
+                    "erg_value": snap.dex.collateral_value(1_000_000_000 + duckpools::loans::MAX_NETWORK_FEE),
+                    "latest_rate": snap.history.latest_rate(),
+                    "loans": snap.collateral.len(),
+                }));
+                for p in snap.positions(wallet_trees, height)? {
+                    let mut v = serde_json::to_value(&p).map_err(ser_err)?;
+                    v["ticker"] = serde_json::json!(pool.ticker);
+                    v["decimals"] = serde_json::json!(pool.decimals);
+                    positions.push(v);
+                }
+            }
+            Err(e) => markets.push(serde_json::json!({
+                "pool": pool.key,
+                "ticker": pool.ticker,
+                "decimals": pool.decimals,
+                "error": e,
+            })),
+        }
+    }
+    Ok(serde_json::json!({"positions": positions, "markets": markets}).to_string())
+}
+
+/// One order's quote and proxy box, any kind.
 pub enum Quote {
     Lend(LendQuote),
     Withdraw(WithdrawQuote),
+    Borrow(BorrowQuote),
+    Repay(RepayQuote),
+    PartialRepay(PartialRepayQuote),
+}
+
+/// What a loan-side quote needs beyond the amount.
+pub struct LoanArgs<'a> {
+    pub snapshot: &'a LoanSnapshot,
+    pub collateral_nano: i64,
+    pub collateral_box_id: &'a str,
+    pub height: i64,
 }
 
 impl Quote {
@@ -128,7 +278,12 @@ impl Quote {
         amount: i64,
         slippage_bps: i64,
         refund_height: i64,
+        loan: Option<LoanArgs<'_>>,
     ) -> Result<Self, String> {
+        let refund_i32 = || -> Result<i32, String> {
+            i32::try_from(refund_height).map_err(|_| err("refund height out of range"))
+        };
+        let loan_args = || loan.as_ref().ok_or_else(|| err("loan boxes are needed for this order"));
         match kind {
             "lend" => LendQuote::new(pool, state, amount, slippage_bps, refund_height)
                 .map(Quote::Lend)
@@ -136,23 +291,59 @@ impl Quote {
             "withdraw" => WithdrawQuote::new(pool, state, amount, slippage_bps, refund_height)
                 .map(Quote::Withdraw)
                 .map_err(err),
+            "borrow" => {
+                let l = loan_args()?;
+                BorrowQuote::new(
+                    pool,
+                    state,
+                    &l.snapshot.params,
+                    &l.snapshot.dex,
+                    l.collateral_nano,
+                    amount,
+                    refund_i32()?,
+                )
+                .map(Quote::Borrow)
+                .map_err(err)
+            }
+            "repay" => {
+                let l = loan_args()?;
+                let position = l.snapshot.position(l.collateral_box_id, l.height)?;
+                RepayQuote::new(pool, &position, &l.snapshot.history, 2, refund_i32()?)
+                    .map(Quote::Repay)
+                    .map_err(err)
+            }
+            "partial_repay" => {
+                let l = loan_args()?;
+                let position = l.snapshot.position(l.collateral_box_id, l.height)?;
+                PartialRepayQuote::new(pool, &position, &l.snapshot.history, amount, refund_height)
+                    .map(Quote::PartialRepay)
+                    .map_err(err)
+            }
             other => Err(err(format!("unknown order kind {other:?}"))),
         }
     }
 
-    pub fn json(&self) -> serde_json::Value {
+    pub fn kind(&self) -> &'static str {
         match self {
-            Quote::Lend(q) => {
-                let mut v = serde_json::to_value(q).unwrap_or_default();
-                v["kind"] = serde_json::json!("lend");
-                v
-            }
-            Quote::Withdraw(q) => {
-                let mut v = serde_json::to_value(q).unwrap_or_default();
-                v["kind"] = serde_json::json!("withdraw");
-                v
-            }
+            Quote::Lend(_) => "lend",
+            Quote::Withdraw(_) => "withdraw",
+            Quote::Borrow(_) => "borrow",
+            Quote::Repay(_) => "repay",
+            Quote::PartialRepay(_) => "partial_repay",
         }
+    }
+
+    pub fn json(&self) -> serde_json::Value {
+        let mut v = match self {
+            Quote::Lend(q) => serde_json::to_value(q),
+            Quote::Withdraw(q) => serde_json::to_value(q),
+            Quote::Borrow(q) => serde_json::to_value(q),
+            Quote::Repay(q) => serde_json::to_value(q),
+            Quote::PartialRepay(q) => serde_json::to_value(q),
+        }
+        .unwrap_or_default();
+        v["kind"] = serde_json::json!(self.kind());
+        v
     }
 
     pub fn proxy_box(
@@ -161,9 +352,13 @@ impl Quote {
         user_tree: &str,
     ) -> Result<duckpools::ProxyBox, String> {
         match self {
-            Quote::Lend(q) => q.proxy_box(pool, user_tree).map_err(err),
-            Quote::Withdraw(q) => q.proxy_box(pool, user_tree).map_err(err),
+            Quote::Lend(q) => q.proxy_box(pool, user_tree),
+            Quote::Withdraw(q) => q.proxy_box(pool, user_tree),
+            Quote::Borrow(q) => q.proxy_box(pool, user_tree),
+            Quote::Repay(q) => q.proxy_box(pool, user_tree),
+            Quote::PartialRepay(q) => q.proxy_box(pool, user_tree),
         }
+        .map_err(err)
     }
 
     /// The wallet token the order must carry, if any.
@@ -171,6 +366,9 @@ impl Quote {
         match self {
             Quote::Lend(q) => pool.currency_id.map(|id| (id.to_string(), q.amount as u64)),
             Quote::Withdraw(q) => Some((pool.lend_token.to_string(), q.lend_tokens as u64)),
+            Quote::Borrow(_) => None,
+            Quote::Repay(q) => pool.currency_id.map(|id| (id.to_string(), q.repayment as u64)),
+            Quote::PartialRepay(q) => pool.currency_id.map(|id| (id.to_string(), q.repayment as u64)),
         }
     }
 
@@ -178,6 +376,9 @@ impl Quote {
         match self {
             Quote::Lend(q) => q.box_value,
             Quote::Withdraw(q) => q.box_value,
+            Quote::Borrow(q) => q.box_value,
+            Quote::Repay(q) => q.box_value,
+            Quote::PartialRepay(q) => q.box_value,
         }
     }
 }
@@ -214,9 +415,10 @@ pub fn build_order(
     Err(err("could not select inputs that leave a valid change box"))
 }
 
-pub fn outcome_json(proxy_box_id: &str, tx_json: &str) -> Result<String, String> {
+pub fn outcome_json(kind: &str, proxy_box_id: &str, tx_json: &str) -> Result<String, String> {
+    let kind = OrderKind::parse(kind).ok_or_else(|| err(format!("unknown order kind {kind:?}")))?;
     let tx: serde_json::Value = serde_json::from_str(tx_json).map_err(ser_err)?;
-    let outcome = classify_spend(proxy_box_id, &tx).map_err(ser_err)?;
+    let outcome = classify_loan_spend(kind, proxy_box_id, &tx).map_err(ser_err)?;
     serde_json::to_string(&outcome).map_err(ser_err)
 }
 
@@ -244,7 +446,7 @@ mod tests {
     #[test]
     fn an_order_is_built_from_wallet_boxes_with_the_app_fee_and_change() {
         let (pool, state) = state_for(&format!("[{ERG_POOL}]"), "erg").unwrap();
-        let q = Quote::new(pool, &state, "lend", 1_000_000_000, 100, 1_900_000).unwrap();
+        let q = Quote::new(pool, &state, "lend", 1_000_000_000, 100, 1_900_000, None).unwrap();
         let user = "0008cd0247997e4390471ab3fe271ad4ad1ad485570c50326ff671a57722ee88e1fa4582";
         let proxy = q.proxy_box(pool, user).unwrap();
         let utxo = Eip12InputBox {
@@ -273,5 +475,67 @@ mod tests {
         assert_eq!(tx.outputs[0].value, proxy.value.to_string());
         assert_eq!(q.json()["kind"], "lend");
         assert!(q.json()["min_lend_tokens"].as_i64().unwrap() > 0);
+    }
+
+    const FIX: &str = "../../vendor/protocols/duckpools/test/fixtures";
+
+    fn loan_boxes() -> String {
+        serde_json::json!({
+            "collateral": [serde_json::from_str::<serde_json::Value>(include_str!(concat!("../../vendor/protocols/duckpools/test/fixtures/", "collateral_sigusd.json"))).unwrap()],
+            "parents": [serde_json::from_str::<serde_json::Value>(include_str!(concat!("../../vendor/protocols/duckpools/test/fixtures/", "interest_parent_sigusd.json"))).unwrap()],
+            "children": serde_json::from_str::<serde_json::Value>(include_str!(concat!("../../vendor/protocols/duckpools/test/fixtures/", "interest_children_sigusd.json"))).unwrap(),
+            "dex": [serde_json::from_str::<serde_json::Value>(include_str!(concat!("../../vendor/protocols/duckpools/test/fixtures/", "dex_erg_sigusd.json"))).unwrap()],
+            "params": [serde_json::from_str::<serde_json::Value>(include_str!(concat!("../../vendor/protocols/duckpools/test/fixtures/", "pool_param_sigusd.json"))).unwrap()],
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn loans_json_lists_the_wallets_loan_and_every_readable_market() {
+        let _ = FIX;
+        let borrower = "0008cd02c2e577f9bb9cb6b39cb0e38ccba615937fc34a3dcc69f01d012f0d8ec4724c79".to_string();
+        let out = loans_json(&loan_boxes(), &[borrower.clone()], 1_866_418).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["positions"].as_array().unwrap().len(), 1);
+        assert_eq!(v["positions"][0]["owed"], 23_939);
+        assert_eq!(v["positions"][0]["ticker"], "SigUSD");
+        let markets = v["markets"].as_array().unwrap();
+        let sigusd = markets.iter().find(|m| m["pool"] == "sigusd").unwrap();
+        assert_eq!(sigusd["threshold"], 1400);
+        assert!(sigusd["erg_value"].as_i64().unwrap() > 0);
+        // Pools whose boxes were not given say so rather than vanish.
+        assert!(markets.iter().any(|m| m["pool"] == "quacks" && m["error"].is_string()));
+        let none = loans_json(&loan_boxes(), &["0008cd00".into()], 1).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&none).unwrap()["positions"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn loan_quotes_come_from_the_snapshot() {
+        let pool = duckpools::pool_by_key("sigusd").unwrap();
+        let state = PoolState::parse(
+            pool,
+            &serde_json::from_str(include_str!("../../vendor/protocols/duckpools/test/fixtures/pool_sigusd.json")).unwrap(),
+        )
+        .unwrap();
+        let root: serde_json::Value = serde_json::from_str(&loan_boxes()).unwrap();
+        let snap = LoanSnapshot::parse(pool, &root).unwrap();
+        let args = |id: &'static str, nano: i64| LoanArgs {
+            snapshot: &snap,
+            collateral_nano: nano,
+            collateral_box_id: id,
+            height: 1_866_418,
+        };
+        let b = Quote::new(pool, &state, "borrow", 500, 0, 1_900_000, Some(args("", 100_000_000_000))).unwrap();
+        assert_eq!(b.kind(), "borrow");
+        assert!(b.token_needed(pool).is_none());
+        assert_eq!(b.box_value(), 100_002_000_000);
+        let loan_id = "a532bba7bec01fe0ddbd02c13cdf6284b28dc7df9aa1d0d669e58cd1e2bad0d3";
+        let r = Quote::new(pool, &state, "repay", 0, 0, 1_900_000, Some(args(loan_id, 0))).unwrap();
+        assert_eq!(r.token_needed(pool).unwrap().0, pool.currency_id.unwrap());
+        assert!(r.json()["repayment"].as_i64().unwrap() > 23_939);
+        let p = Quote::new(pool, &state, "partial_repay", 5_000, 0, 1_900_000, Some(args(loan_id, 0))).unwrap();
+        assert_eq!(p.token_needed(pool).unwrap().1, 5_000);
+        assert!(Quote::new(pool, &state, "repay", 0, 0, 1_900_000, Some(args("ff", 0))).is_err());
+        assert!(Quote::new(pool, &state, "borrow", 1, 0, 1_900_000, None).is_err());
     }
 }

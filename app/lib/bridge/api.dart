@@ -914,10 +914,52 @@ String duckpoolsQuote({
   refundHeight: refundHeight,
 );
 
+/// The wallet's loans and the markets it can borrow in, from one JSON
+/// object of boxes: `collateral` (every box under the collateral scripts),
+/// `parents` and `children` (the interest boxes), `dex` (the Spectrum
+/// ERG pools that price collateral) and `params` (the pool parameter
+/// boxes). `wallet_addresses` are the wallet's addresses. Pure.
+String duckpoolsLoans({
+  required String loanBoxesJson,
+  required List<String> walletAddresses,
+  required PlatformInt64 height,
+}) => RustLib.instance.api.crateApiDuckpoolsLoans(
+  loanBoxesJson: loanBoxesJson,
+  walletAddresses: walletAddresses,
+  height: height,
+);
+
+/// A borrow, repay or partial-repay quote. Borrow: `amount` is the loan
+/// and `collateral_nano` the ERG put up. Repay: `collateral_box_id` names
+/// the loan. Partial repay: both `amount` (the repayment) and the box id.
+/// Pure.
+String duckpoolsLoanQuote({
+  required String poolBoxesJson,
+  required String loanBoxesJson,
+  required String poolKey,
+  required String kind,
+  required PlatformInt64 amount,
+  required PlatformInt64 collateralNano,
+  required String collateralBoxId,
+  required PlatformInt64 height,
+}) => RustLib.instance.api.crateApiDuckpoolsLoanQuote(
+  poolBoxesJson: poolBoxesJson,
+  loanBoxesJson: loanBoxesJson,
+  poolKey: poolKey,
+  kind: kind,
+  amount: amount,
+  collateralNano: collateralNano,
+  collateralBoxId: collateralBoxId,
+  height: height,
+);
+
 /// Prepare an order: the proxy box from the wallet's boxes, confirmed with
 /// `send_erg`. The proxy pays fills and refunds to `user_address`, which
 /// must be this wallet's. Returns the preparation, the quote, the proxy
-/// box id (known before signing) and the refund height.
+/// box id (known before signing) and the refund height. Loan-side kinds
+/// (`borrow`, `repay`, `partial_repay`) need `loan_boxes_json` as
+/// `duckpools_loans` takes it, plus `collateral_nano` for a borrow and
+/// `collateral_box_id` for a repayment.
 Future<String> duckpoolsPrepareOrder({
   required BigInt handleId,
   required String poolBoxesJson,
@@ -931,6 +973,9 @@ Future<String> duckpoolsPrepareOrder({
   required String changeAddress,
   String? nodeUrl,
   PlatformInt64? feeNano,
+  String? loanBoxesJson,
+  PlatformInt64? collateralNano,
+  String? collateralBoxId,
 }) => RustLib.instance.api.crateApiDuckpoolsPrepareOrder(
   handleId: handleId,
   poolBoxesJson: poolBoxesJson,
@@ -944,12 +989,17 @@ Future<String> duckpoolsPrepareOrder({
   changeAddress: changeAddress,
   nodeUrl: nodeUrl,
   feeNano: feeNano,
+  loanBoxesJson: loanBoxesJson,
+  collateralNano: collateralNano,
+  collateralBoxId: collateralBoxId,
 );
 
 /// Prepare the refund of an unfilled order after its refund height: the
 /// proxy box back to `user_address` less the contract's one fee. Confirm
-/// with `send_erg`. The proxy contract needs no signature for this; it
-/// checks the outputs.
+/// with `send_erg`. The proxy contracts need no signature for this; they
+/// check the outputs. A borrow order also accepts the borrower's own
+/// signature at any height, and the wallet signs, so it can be taken
+/// back early.
 Future<String> duckpoolsPrepareRefund({
   required BigInt handleId,
   required String proxyBoxJson,
@@ -965,9 +1015,11 @@ Future<String> duckpoolsPrepareRefund({
 /// What the transaction that spent a proxy box did with it: filled,
 /// refunded, or something else. Pure.
 String duckpoolsOrderOutcome({
+  required String kind,
   required String proxyBoxId,
   required String txJson,
 }) => RustLib.instance.api.crateApiDuckpoolsOrderOutcome(
+  kind: kind,
   proxyBoxId: proxyBoxId,
   txJson: txJson,
 );

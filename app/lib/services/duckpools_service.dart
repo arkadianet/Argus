@@ -21,6 +21,11 @@ class DuckPool {
     required this.currencyId,
     required this.ergoTree,
     required this.interestParamNft,
+    this.paramNft = '',
+    this.childNft = '',
+    this.parentNft = '',
+    this.collateralErgoTree = '',
+    this.ergDexNft,
   });
 
   final String key;
@@ -35,6 +40,23 @@ class DuckPool {
   final String ergoTree;
   final String interestParamNft;
 
+  /// The pool parameter box NFT (thresholds, penalties, price sources).
+  final String paramNft;
+
+  /// The interest history boxes' NFTs.
+  final String childNft;
+  final String parentNft;
+
+  /// The script every loan of this pool sits under.
+  final String collateralErgoTree;
+
+  /// The Spectrum pool that prices ERG collateral; null where the pool
+  /// takes none (the ERG pool).
+  final String? ergDexNft;
+
+  /// Whether Argus can borrow from this pool (ERG collateral).
+  bool get lends => ergDexNft != null && collateralErgoTree.isNotEmpty;
+
   static DuckPool fromJson(Map<String, dynamic> m) => DuckPool(
         key: m['key'] as String,
         ticker: m['ticker'] as String,
@@ -45,6 +67,116 @@ class DuckPool {
         currencyId: m['currency_id'] as String?,
         ergoTree: m['ergo_tree'] as String,
         interestParamNft: m['interest_param_nft'] as String? ?? '',
+        paramNft: m['param_nft'] as String? ?? '',
+        childNft: m['child_nft'] as String? ?? '',
+        parentNft: m['parent_nft'] as String? ?? '',
+        collateralErgoTree: m['collateral_ergo_tree'] as String? ?? '',
+        ergDexNft: m['erg_dex_nft'] as String?,
+      );
+}
+
+/// A loan this wallet holds: a collateral box under a pool's contract.
+class DuckLoan {
+  const DuckLoan({
+    required this.pool,
+    required this.ticker,
+    required this.decimals,
+    required this.boxId,
+    required this.collateralNano,
+    required this.loan,
+    required this.owed,
+    required this.collateralValue,
+    required this.threshold,
+    required this.penalty,
+    required this.healthBps,
+    required this.liquidationValue,
+    required this.liquidatable,
+    required this.forcedLiquidationHeight,
+  });
+
+  final String pool;
+  final String ticker;
+  final int decimals;
+  final String boxId;
+  final int collateralNano;
+
+  /// Principal, asset units.
+  final int loan;
+
+  /// What repaying now costs, asset units.
+  final int owed;
+
+  /// What the contract values the collateral at, asset units.
+  final int collateralValue;
+  final int threshold;
+  final int penalty;
+
+  /// 10 000 is the liquidation line; higher is safer.
+  final int healthBps;
+  final int liquidationValue;
+  final bool liquidatable;
+  final int forcedLiquidationHeight;
+
+  /// Collateral value over what is owed, as a percentage.
+  double get ratioPercent => owed == 0 ? double.infinity : collateralValue * 100 / owed;
+
+  static DuckLoan fromJson(Map<String, dynamic> m) => DuckLoan(
+        pool: m['pool'] as String,
+        ticker: m['ticker'] as String,
+        decimals: (m['decimals'] as num).toInt(),
+        boxId: m['box_id'] as String,
+        collateralNano: (m['collateral_nano'] as num).toInt(),
+        loan: (m['loan'] as num).toInt(),
+        owed: (m['owed'] as num).toInt(),
+        collateralValue: (m['collateral_value'] as num).toInt(),
+        threshold: (m['threshold'] as num).toInt(),
+        penalty: (m['penalty'] as num).toInt(),
+        healthBps: (m['health_bps'] as num).toInt(),
+        liquidationValue: (m['liquidation_value'] as num).toInt(),
+        liquidatable: m['liquidatable'] == true,
+        forcedLiquidationHeight: (m['forced_liquidation_height'] as num).toInt(),
+      );
+}
+
+/// A pool's borrowing terms right now, or why they could not be read.
+class DuckMarket {
+  const DuckMarket({
+    required this.pool,
+    required this.ticker,
+    required this.decimals,
+    this.threshold,
+    this.penalty,
+    this.ergValue,
+    this.loans,
+    this.error,
+  });
+
+  final String pool;
+  final String ticker;
+  final int decimals;
+
+  /// Collateral must be worth at least `threshold / 1000` of the debt.
+  final int? threshold;
+  final int? penalty;
+
+  /// What one ERG of collateral counts for, asset units.
+  final int? ergValue;
+
+  /// Loans open in the pool, anyone's.
+  final int? loans;
+  final String? error;
+
+  bool get ready => error == null && threshold != null && ergValue != null;
+
+  static DuckMarket fromJson(Map<String, dynamic> m) => DuckMarket(
+        pool: m['pool'] as String,
+        ticker: m['ticker'] as String,
+        decimals: (m['decimals'] as num).toInt(),
+        threshold: (m['threshold'] as num?)?.toInt(),
+        penalty: (m['penalty'] as num?)?.toInt(),
+        ergValue: (m['erg_value'] as num?)?.toInt(),
+        loans: (m['loans'] as num?)?.toInt(),
+        error: m['error'] as String?,
       );
 }
 
@@ -134,9 +266,11 @@ class DuckOrder {
     this.outcomeTxId,
     this.received,
     this.lastError,
+    this.collateralBoxId,
+    this.collateralNano,
   });
 
-  /// `lend` or `withdraw`.
+  /// `lend`, `withdraw`, `borrow`, `repay` or `partial_repay`.
   final String kind;
   final String pool;
   final String ticker;
@@ -144,10 +278,12 @@ class DuckOrder {
   final String proxyBoxId;
   final String txId;
 
-  /// Asset units in (lend) or lend tokens in (withdraw).
+  /// Asset units in (lend, repay, partial repay), lend tokens in
+  /// (withdraw), or the loan asked for (borrow).
   final int amount;
 
-  /// Lend tokens (lend) or asset units (withdraw) expected at the quote.
+  /// Lend tokens (lend), asset units (withdraw), the loan (borrow), the
+  /// collateral back (repay) or the principal left (partial repay).
   final int expected;
   final int minOut;
   final int refundHeight;
@@ -158,6 +294,12 @@ class DuckOrder {
   String? outcomeTxId;
   int? received;
   String? lastError;
+
+  /// The loan a repayment is for; the collateral a borrow puts up.
+  final String? collateralBoxId;
+  final int? collateralNano;
+
+  bool get isLoanSide => kind == 'borrow' || kind == 'repay' || kind == 'partial_repay';
 
   bool get open => status == 'pending' || status == 'refundable' || status == 'refund_sent';
 
@@ -177,6 +319,8 @@ class DuckOrder {
         if (outcomeTxId != null) 'outcome_tx_id': outcomeTxId,
         if (received != null) 'received': received,
         if (lastError != null) 'last_error': lastError,
+        if (collateralBoxId != null) 'collateral_box_id': collateralBoxId,
+        if (collateralNano != null) 'collateral_nano': collateralNano,
       };
 
   static DuckOrder fromJson(Map<String, dynamic> m) => DuckOrder(
@@ -195,6 +339,8 @@ class DuckOrder {
         outcomeTxId: m['outcome_tx_id'] as String?,
         received: (m['received'] as num?)?.toInt(),
         lastError: m['last_error'] as String?,
+        collateralBoxId: m['collateral_box_id'] as String?,
+        collateralNano: (m['collateral_nano'] as num?)?.toInt(),
       );
 }
 
@@ -208,6 +354,17 @@ abstract class DuckpoolsGateway {
   String pools();
   String state(String poolBoxesJson, String holdingsJson, String interestBoxesJson);
   String quote(String poolBoxesJson, String poolKey, String kind, int amount, int slippageBps, int refundHeight);
+  String loans(String loanBoxesJson, List<String> walletAddresses, int height);
+  String loanQuote({
+    required String poolBoxesJson,
+    required String loanBoxesJson,
+    required String poolKey,
+    required String kind,
+    required int amount,
+    required int collateralNano,
+    required String collateralBoxId,
+    required int height,
+  });
   Future<String> prepareOrder({
     required String poolBoxesJson,
     required String poolKey,
@@ -218,9 +375,12 @@ abstract class DuckpoolsGateway {
     required String userAddress,
     required List<String> spendAddresses,
     required String changeAddress,
+    String? loanBoxesJson,
+    int? collateralNano,
+    String? collateralBoxId,
   });
   Future<String> prepareRefund(String proxyBoxJson, String userAddress);
-  String orderOutcome(String proxyBoxId, String txJson);
+  String orderOutcome(String kind, String proxyBoxId, String txJson);
 }
 
 class LiveDuckpoolsGateway implements DuckpoolsGateway {
@@ -254,6 +414,30 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
         refundHeight: refundHeight,
       );
   @override
+  String loans(String loanBoxesJson, List<String> walletAddresses, int height) =>
+      bridge.duckpoolsLoans(loanBoxesJson: loanBoxesJson, walletAddresses: walletAddresses, height: height);
+  @override
+  String loanQuote({
+    required String poolBoxesJson,
+    required String loanBoxesJson,
+    required String poolKey,
+    required String kind,
+    required int amount,
+    required int collateralNano,
+    required String collateralBoxId,
+    required int height,
+  }) =>
+      bridge.duckpoolsLoanQuote(
+        poolBoxesJson: poolBoxesJson,
+        loanBoxesJson: loanBoxesJson,
+        poolKey: poolKey,
+        kind: kind,
+        amount: amount,
+        collateralNano: collateralNano,
+        collateralBoxId: collateralBoxId,
+        height: height,
+      );
+  @override
   Future<String> prepareOrder({
     required String poolBoxesJson,
     required String poolKey,
@@ -264,6 +448,9 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
     required String userAddress,
     required List<String> spendAddresses,
     required String changeAddress,
+    String? loanBoxesJson,
+    int? collateralNano,
+    String? collateralBoxId,
   }) =>
       walletService.duckpoolsPrepareOrder(
         poolBoxesJson: poolBoxesJson,
@@ -275,13 +462,16 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
         userAddress: userAddress,
         spendAddresses: spendAddresses,
         changeAddress: changeAddress,
+        loanBoxesJson: loanBoxesJson,
+        collateralNano: collateralNano,
+        collateralBoxId: collateralBoxId,
       );
   @override
   Future<String> prepareRefund(String proxyBoxJson, String userAddress) =>
       walletService.duckpoolsPrepareRefund(proxyBoxJson: proxyBoxJson, userAddress: userAddress);
   @override
-  String orderOutcome(String proxyBoxId, String txJson) =>
-      bridge.duckpoolsOrderOutcome(proxyBoxId: proxyBoxId, txJson: txJson);
+  String orderOutcome(String kind, String proxyBoxId, String txJson) =>
+      bridge.duckpoolsOrderOutcome(kind: kind, proxyBoxId: proxyBoxId, txJson: txJson);
 }
 
 typedef DuckHttpGet = Future<String> Function(Uri uri);
@@ -303,8 +493,8 @@ Future<String> _httpPost(Uri uri, String body) async {
   return res.body;
 }
 
-/// Reads the eight Duckpools pools and values the lend tokens this wallet
-/// holds. Read-only: no orders yet.
+/// Reads the eight Duckpools pools, values the lend tokens this wallet
+/// holds, tracks its orders, and reads its loans.
 class DuckpoolsService extends ChangeNotifier {
   DuckpoolsService({DuckpoolsGateway? gateway, DuckHttpGet? get, DuckHttpPost? post})
       : _gw = gateway ?? const LiveDuckpoolsGateway(),
@@ -336,6 +526,19 @@ class DuckpoolsService extends ChangeNotifier {
   /// without another round trip.
   String? lastPoolBoxesJson;
 
+  /// The wallet's loans and each pool's borrowing terms, from the last
+  /// [refreshLoans].
+  List<DuckLoan> loans = const [];
+  List<DuckMarket> markets = const [];
+  String? loansError;
+  DateTime? loansRefreshedAt;
+  bool _loansBusy = false;
+  bool get loansBusy => _loansBusy;
+
+  /// The loan boxes of the last read, for quoting and building loan
+  /// orders without another round trip.
+  String? lastLoanBoxesJson;
+
   /// Orders of the loaded wallet, newest first.
   List<DuckOrder> orders = const [];
   String? _walletId;
@@ -353,6 +556,20 @@ class DuckpoolsService extends ChangeNotifier {
     ];
     if (parts.isEmpty) return null;
     return 'You lend ${parts.take(2).join(' · ')}';
+  }
+
+  DuckMarket? marketFor(String poolKey) {
+    for (final m in markets) {
+      if (m.pool == poolKey) return m;
+    }
+    return null;
+  }
+
+  /// "You owe 239.39 SigUSD" or null.
+  String? loanLine(String Function(int amount, int decimals) fmt) {
+    if (loans.isEmpty) return null;
+    final parts = [for (final l in loans) '${fmt(l.owed, l.decimals)} ${l.ticker}'];
+    return 'You owe ${parts.take(2).join(' · ')}';
   }
 
   /// Load this wallet's orders.
@@ -376,6 +593,11 @@ class DuckpoolsService extends ChangeNotifier {
   void reset() {
     _walletId = null;
     orders = const [];
+    loans = const [];
+    markets = const [];
+    lastLoanBoxesJson = null;
+    loansError = null;
+    loansRefreshedAt = null;
     notifyListeners();
   }
 
@@ -434,12 +656,88 @@ class DuckpoolsService extends ChangeNotifier {
     }
   }
 
+  /// Read every borrowing pool's loan boxes: the collateral boxes under
+  /// its contract, its interest history, its price source and its
+  /// parameter box; then the wallet's loans among them. A pool whose
+  /// boxes cannot all be read is reported in its market, not thrown.
+  Future<void> refreshLoans(List<String> walletAddresses) async {
+    if (_loansBusy) return;
+    _loansBusy = true;
+    notifyListeners();
+    try {
+      final collateral = <dynamic>[];
+      final parents = <dynamic>[];
+      final children = <dynamic>[];
+      final dex = <dynamic>[];
+      final params = <dynamic>[];
+      Future<void> gather(List<dynamic> into, Future<List<dynamic>> Function() read) async {
+        try {
+          into.addAll(await read());
+        } catch (_) {
+          // The pool's market reports what is missing.
+        }
+      }
+
+      final reads = <Future<void>>[];
+      for (final p in pools.where((p) => p.lends)) {
+        reads.add(gather(collateral, () => _boxesUnderTree(p.collateralErgoTree, limit: 100)));
+        reads.add(gather(parents, () => _boxesByToken(p.parentNft)));
+        reads.add(gather(children, () => _boxesByToken(p.childNft, limit: 50)));
+        reads.add(gather(dex, () => _boxesByToken(p.ergDexNft!)));
+        reads.add(gather(params, () => _boxesByToken(p.paramNft)));
+      }
+      await Future.wait(reads);
+      final height = await _height() ?? 0;
+      lastLoanBoxesJson = jsonEncode({
+        'collateral': collateral,
+        'parents': parents,
+        'children': children,
+        'dex': dex,
+        'params': params,
+      });
+      final raw = (jsonDecode(_gw.loans(lastLoanBoxesJson!, walletAddresses, height)) as Map).cast<String, dynamic>();
+      loans = [for (final m in (raw['positions'] as List)) DuckLoan.fromJson((m as Map).cast())];
+      markets = [for (final m in (raw['markets'] as List)) DuckMarket.fromJson((m as Map).cast())];
+      loansError = null;
+      loansRefreshedAt = DateTime.now();
+    } catch (e) {
+      loansError = e.toString();
+    } finally {
+      _loansBusy = false;
+      notifyListeners();
+    }
+  }
+
+  /// A borrow, repay or partial-repay quote at the last read state.
+  Map<String, dynamic> loanQuote({
+    required String poolKey,
+    required String kind,
+    int amount = 0,
+    int collateralNano = 0,
+    String collateralBoxId = '',
+  }) {
+    final boxes = lastPoolBoxesJson;
+    final loanBoxes = lastLoanBoxesJson;
+    if (boxes == null || loanBoxes == null) throw StateError('Read the pools first');
+    return (jsonDecode(_gw.loanQuote(
+      poolBoxesJson: boxes,
+      loanBoxesJson: loanBoxes,
+      poolKey: poolKey,
+      kind: kind,
+      amount: amount,
+      collateralNano: collateralNano,
+      collateralBoxId: collateralBoxId,
+      height: _gw.chainHeight ?? 0,
+    )) as Map)
+        .cast<String, dynamic>();
+  }
+
   /// Unspent boxes carrying `tokenId`: node first, explorer second.
-  Future<List<dynamic>> _boxesByToken(String tokenId) async {
+  Future<List<dynamic>> _boxesByToken(String tokenId, {int limit = 10}) async {
     final node = _gw.nodeUrl?.replaceAll(RegExp(r'/+$'), '');
     if (node != null) {
       try {
-        final decoded = jsonDecode(await _get(Uri.parse('$node/blockchain/box/unspent/byTokenId/$tokenId?offset=0&limit=10')));
+        final decoded = jsonDecode(await _get(Uri.parse('$node/blockchain/box/unspent/byTokenId/$tokenId?offset=0&limit=$limit')));
         if (decoded is List) return decoded;
         if (decoded is Map && decoded['items'] is List) return decoded['items'] as List;
       } catch (_) {
@@ -447,7 +745,7 @@ class DuckpoolsService extends ChangeNotifier {
       }
     }
     final base = _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
-    final body = jsonDecode(await _get(Uri.parse('$base/api/v1/boxes/unspent/byTokenId/$tokenId?offset=0&limit=10')));
+    final body = jsonDecode(await _get(Uri.parse('$base/api/v1/boxes/unspent/byTokenId/$tokenId?offset=0&limit=$limit')));
     if (body is Map && body['items'] is List) return body['items'] as List;
     throw StateError('no box list');
   }
@@ -538,9 +836,13 @@ class DuckpoolsService extends ChangeNotifier {
     required String changeAddress,
     int slippageBps = 100,
     int refundAfterBlocks = 720,
+    int? collateralNano,
+    String? collateralBoxId,
   }) async {
     final boxes = lastPoolBoxesJson;
     if (boxes == null) throw StateError('Read the pools first');
+    final loanSide = kind == 'borrow' || kind == 'repay' || kind == 'partial_repay';
+    if (loanSide && lastLoanBoxesJson == null) throw StateError('Read the loans first');
     final raw = await _gw.prepareOrder(
       poolBoxesJson: boxes,
       poolKey: poolKey,
@@ -551,6 +853,9 @@ class DuckpoolsService extends ChangeNotifier {
       userAddress: userAddress,
       spendAddresses: spendAddresses,
       changeAddress: changeAddress,
+      loanBoxesJson: loanSide ? lastLoanBoxesJson : null,
+      collateralNano: collateralNano,
+      collateralBoxId: collateralBoxId,
     );
     return (jsonDecode(raw) as Map).cast<String, dynamic>();
   }
@@ -560,6 +865,15 @@ class DuckpoolsService extends ChangeNotifier {
     final q = (prepared['quote'] as Map).cast<String, dynamic>();
     final kind = q['kind'] as String;
     final pool = pools.firstWhere((p) => p.key == q['pool']);
+    int n(String key) => (q[key] as num).toInt();
+    final (amount, expected, minOut) = switch (kind) {
+      'lend' => (n('amount'), n('lend_tokens_expected'), n('min_lend_tokens')),
+      'withdraw' => (n('lend_tokens'), n('out'), n('min_out')),
+      'borrow' => (n('loan'), n('loan'), n('loan')),
+      'repay' => (n('repayment'), n('collateral_nano'), n('collateral_nano')),
+      'partial_repay' => (n('repayment'), n('final_borrow_tokens'), n('final_borrow_tokens')),
+      _ => throw StateError('unknown order kind $kind'),
+    };
     final order = DuckOrder(
       kind: kind,
       pool: pool.key,
@@ -567,11 +881,13 @@ class DuckpoolsService extends ChangeNotifier {
       decimals: pool.decimals,
       proxyBoxId: prepared['proxy_box_id'] as String,
       txId: txId,
-      amount: (kind == 'lend' ? q['amount'] : q['lend_tokens']) as int,
-      expected: (kind == 'lend' ? q['lend_tokens_expected'] : q['out']) as int,
-      minOut: (kind == 'lend' ? q['min_lend_tokens'] : q['min_out']) as int,
+      amount: amount,
+      expected: expected,
+      minOut: minOut,
       refundHeight: (prepared['refund_height'] as num).toInt(),
       createdAt: DateTime.now(),
+      collateralBoxId: q['collateral_box_id'] as String?,
+      collateralNano: (q['collateral_nano'] as num?)?.toInt(),
     );
     orders = [order, ...orders];
     await _persistOrders();
@@ -603,15 +919,21 @@ class DuckpoolsService extends ChangeNotifier {
         }
         final tx = await _txById(spentBy);
         if (tx == null) continue;
-        final outcome = (jsonDecode(_gw.orderOutcome(o.proxyBoxId, jsonEncode(tx))) as Map).cast<String, dynamic>();
+        final outcome = (jsonDecode(_gw.orderOutcome(o.kind, o.proxyBoxId, jsonEncode(tx))) as Map).cast<String, dynamic>();
         final kind = outcome['outcome'] as String? ?? 'unknown';
         if (kind == 'filled') {
           o.status = 'filled';
           o.outcomeTxId = spentBy;
           final assets = (outcome['assets'] as List? ?? const []).cast<Map>();
-          o.received = o.kind == 'lend'
-              ? int.tryParse(assets.firstWhere((a) => a['token_id'] == pools.firstWhere((p) => p.key == o.pool).lendToken, orElse: () => {'amount': '0'})['amount'].toString())
-              : (outcome['value'] as num?)?.toInt();
+          final pool = pools.firstWhere((p) => p.key == o.pool);
+          int tokenAmount(String? id) => int.tryParse(
+                  assets.firstWhere((a) => a['token_id'] == id, orElse: () => {'amount': '0'})['amount'].toString()) ??
+              0;
+          o.received = switch (o.kind) {
+            'lend' => tokenAmount(pool.lendToken),
+            'borrow' => tokenAmount(pool.currencyId),
+            _ => (outcome['value'] as num?)?.toInt(),
+          };
           changed = true;
         } else if (kind == 'refunded') {
           o.status = 'refunded';
@@ -654,13 +976,15 @@ class DuckpoolsService extends ChangeNotifier {
   /// Unspent boxes under the pool's script. A node that answers, even
   /// with an empty list, is believed; only a node that cannot answer
   /// sends the query to the explorer.
-  Future<List<dynamic>> _boxesUnderScript(DuckPool p) async {
+  Future<List<dynamic>> _boxesUnderScript(DuckPool p) => _boxesUnderTree(p.ergoTree, limit: 20);
+
+  Future<List<dynamic>> _boxesUnderTree(String ergoTree, {required int limit}) async {
     final node = _gw.nodeUrl?.replaceAll(RegExp(r'/+$'), '');
     if (node != null) {
       try {
         final decoded = jsonDecode(await _post(
-          Uri.parse('$node/blockchain/box/unspent/byErgoTree?offset=0&limit=20'),
-          jsonEncode(p.ergoTree),
+          Uri.parse('$node/blockchain/box/unspent/byErgoTree?offset=0&limit=$limit'),
+          jsonEncode(ergoTree),
         ));
         if (decoded is List) return decoded;
         if (decoded is Map && decoded['items'] is List) return decoded['items'] as List;
@@ -670,7 +994,7 @@ class DuckpoolsService extends ChangeNotifier {
     }
     final base = _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
     final body = jsonDecode(
-      await _get(Uri.parse('$base/api/v1/boxes/unspent/byErgoTree/${p.ergoTree}?offset=0&limit=20')),
+      await _get(Uri.parse('$base/api/v1/boxes/unspent/byErgoTree/$ergoTree?offset=0&limit=$limit')),
     );
     if (body is Map && body['items'] is List) return body['items'] as List;
     throw StateError('${Uri.parse(base).host} returned no box list');
