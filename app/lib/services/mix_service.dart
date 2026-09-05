@@ -813,14 +813,14 @@ class MixService extends ChangeNotifier {
     final node = _nodeBase;
     if (node != null) {
       try {
-        final tx = jsonDecode(await _get(Uri.parse('$node/blockchain/transaction/byId/$txId'))) as Map;
+        final tx = _txBody(await _get(Uri.parse('$node/blockchain/transaction/byId/$txId')), txId);
         return (tx['inclusionHeight'] as num?)?.toInt();
       } catch (_) {
         // Fall through.
       }
     }
     try {
-      final tx = jsonDecode(await _get(Uri.parse('$base/api/v1/transactions/$txId'))) as Map;
+      final tx = _txBody(await _get(Uri.parse('$base/api/v1/transactions/$txId')), txId);
       return (tx['inclusionHeight'] as num?)?.toInt();
     } catch (_) {
       return null;
@@ -844,17 +844,39 @@ class MixService extends ChangeNotifier {
     }
   }
 
+  /// A body that is the box asked for, or an error. Some explorers answer
+  /// an unknown id with HTTP 200 and an error object; only a body whose
+  /// `boxId` is the one requested counts.
+  static Map<String, dynamic> _boxBody(String body, String id) {
+    final decoded = jsonDecode(body);
+    if (decoded is Map && decoded['boxId'] == id) return decoded.cast<String, dynamic>();
+    throw StateError('not a box: ${decoded is Map ? decoded.keys.join(',') : decoded.runtimeType}');
+  }
+
+  /// A body that is the transaction asked for, or an error.
+  static Map<String, dynamic> _txBody(String body, String txId) {
+    final decoded = jsonDecode(body);
+    if (decoded is Map &&
+        decoded['outputs'] is List &&
+        (decoded['id'] == null || decoded['id'] == txId)) {
+      return decoded.cast<String, dynamic>();
+    }
+    throw StateError('not a transaction: ${decoded is Map ? decoded.keys.join(',') : decoded.runtimeType}');
+  }
+
   /// One box by id, with its `spentTransactionId`: node first, then explorer.
+  /// Throws when neither knows it, which for a box this app just created
+  /// means it is not in a block yet.
   Future<Map<String, dynamic>> _boxById(String base, String id) async {
     final node = _nodeBase;
     if (node != null) {
       try {
-        return (jsonDecode(await _get(Uri.parse('$node/blockchain/box/byId/$id'))) as Map).cast();
+        return _boxBody(await _get(Uri.parse('$node/blockchain/box/byId/$id')), id);
       } catch (_) {
         // Fall through.
       }
     }
-    return (jsonDecode(await _get(Uri.parse('$base/api/v1/boxes/$id'))) as Map).cast();
+    return _boxBody(await _get(Uri.parse('$base/api/v1/boxes/$id')), id);
   }
 
   /// The outputs of one transaction: node first, then explorer.
@@ -862,14 +884,12 @@ class MixService extends ChangeNotifier {
     final node = _nodeBase;
     if (node != null) {
       try {
-        final tx = jsonDecode(await _get(Uri.parse('$node/blockchain/transaction/byId/$txId'))) as Map;
-        return tx['outputs'] as List? ?? const [];
+        return _txBody(await _get(Uri.parse('$node/blockchain/transaction/byId/$txId')), txId)['outputs'] as List;
       } catch (_) {
         // Fall through.
       }
     }
-    final tx = jsonDecode(await _get(Uri.parse('$base/api/v1/transactions/$txId'))) as Map;
-    return tx['outputs'] as List? ?? const [];
+    return _txBody(await _get(Uri.parse('$base/api/v1/transactions/$txId')), txId)['outputs'] as List;
   }
 
   /// Everything the engine needs: the waiting half boxes, the operator's
