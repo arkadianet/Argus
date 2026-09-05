@@ -76,8 +76,11 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
               ConfirmTxRow('You receive', amt(q['out'] as num), bold: true),
               ConfirmTxRow('At least', amt(q['min_out'] as num)),
             ];
+      // What the proxy box carries beyond the deposit itself: the bot's
+      // fee and the fill's fee, as the Rust side sized them.
+      final carried = (q['box_value'] as num).toInt() - (kind == 'lend' && s.pool == 'erg' ? (q['amount'] as num).toInt() : 0);
       rows.addAll([
-        ConfirmTxRow('Bot fee + fill fee', formatErg(2000000)),
+        ConfirmTxRow('Bot fee + fill fee', formatErg(carried)),
         ConfirmTxRow('Argus fee', formatErg((prepared['app_fee_nano'] as num?)?.toInt() ?? 0)),
         ConfirmTxRow('Miner fee', formatErg((prepared['miner_fee'] as num).toInt())),
         ConfirmTxRow('Refundable after block', '${prepared['refund_height']}'),
@@ -422,6 +425,12 @@ class _OrderSheetState extends State<_OrderSheet> {
   Map<String, dynamic>? _quote;
   String? _error;
 
+  @override
+  void dispose() {
+    _ctl.dispose();
+    super.dispose();
+  }
+
   int? get _units {
     final text = _ctl.text.trim().replaceAll(',', '');
     if (text.isEmpty) return null;
@@ -495,7 +504,8 @@ class _OrderSheetState extends State<_OrderSheet> {
               style: TextStyle(color: muted, fontSize: 12.5),
             ),
             const SizedBox(height: 4),
-            Text('Plus 0.002 ERG for the bot and the fill, the Argus fee and the miner fee. '
+            Text('Plus ${formatErg((q['box_value'] as num).toInt() - (lend && s.pool == 'erg' ? (q['amount'] as num).toInt() : 0))} '
+                'for the bot and the fill, the Argus fee and the miner fee. '
                 'The order accepts up to 1% less than quoted if the pool moves.',
                 style: TextStyle(color: muted, fontSize: 12)),
           ],

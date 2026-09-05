@@ -11,7 +11,7 @@ use ergopay_core::reduce_transaction_with_context;
 use once_cell::sync::Lazy;
 use rand::RngCore;
 use wallet_core::seed::MnemonicPhrase;
-use wallet_core::spend::{select_exact, select_for_send, select_preferring_one_pocket};
+use wallet_core::spend::{select_exact, select_preferring_one_pocket};
 use wallet_core::wallet::WalletHandle;
 use wallet_core::PinWrappedKey;
 use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
