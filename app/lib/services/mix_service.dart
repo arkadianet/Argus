@@ -15,7 +15,16 @@ import 'wallet_service.dart';
 /// truth, plus what only the app knows (the last error, when it last
 /// looked). No secret is ever here; see the zerojoin crate's `mix` module.
 class MixRecord {
-  MixRecord({required this.state, this.lastError, this.lastCheckedAt, this.fundingNano});
+  MixRecord({
+    required this.state,
+    this.lastError,
+    this.lastCheckedAt,
+    this.fundingNano,
+    this.fundingTxId,
+    this.fundingBoxIds = const [],
+    this.entryAttempt,
+    this.entryTxId,
+  });
 
   Map<String, dynamic> state;
   String? lastError;
@@ -24,6 +33,17 @@ class MixRecord {
   /// What the funding box was made to hold, so a pending mix can find it
   /// again even if the operator's price has moved since.
   int? fundingNano;
+
+  /// The funding self-send, once broadcast, and the ids of its outputs:
+  /// the funding box is one of them, found by id rather than by guessing
+  /// from its size.
+  String? fundingTxId;
+  List<String> fundingBoxIds;
+
+  /// The state an entry will produce, persisted before the entry is
+  /// broadcast. Still here after a crash means the entry may be on chain.
+  Map<String, dynamic>? entryAttempt;
+  String? entryTxId;
 
   int get mixId => (state['mix_id'] as num).toInt();
   Map<String, dynamic> get phase => (state['phase'] as Map).cast<String, dynamic>();
@@ -59,12 +79,20 @@ class MixRecord {
         if (lastError != null) 'last_error': lastError,
         if (lastCheckedAt != null) 'last_checked_at': lastCheckedAt!.millisecondsSinceEpoch,
         if (fundingNano != null) 'funding_nano': fundingNano,
+        if (fundingTxId != null) 'funding_tx_id': fundingTxId,
+        if (fundingBoxIds.isNotEmpty) 'funding_box_ids': fundingBoxIds,
+        if (entryAttempt != null) 'entry_attempt': entryAttempt,
+        if (entryTxId != null) 'entry_tx_id': entryTxId,
       };
 
   static MixRecord fromJson(Map<String, dynamic> m) => MixRecord(
         state: (m['state'] as Map).cast<String, dynamic>(),
         lastError: m['last_error'] as String?,
         fundingNano: (m['funding_nano'] as num?)?.toInt(),
+        fundingTxId: m['funding_tx_id'] as String?,
+        fundingBoxIds: (m['funding_box_ids'] as List?)?.cast<String>() ?? const [],
+        entryAttempt: (m['entry_attempt'] as Map?)?.cast<String, dynamic>(),
+        entryTxId: m['entry_tx_id'] as String?,
         lastCheckedAt: (m['last_checked_at'] as num?) == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch((m['last_checked_at'] as num).toInt()),
@@ -603,14 +631,34 @@ class MixService extends ChangeNotifier {
     return (jsonDecode(raw) as Map).cast<String, dynamic>();
   }
 
-  /// Record that a prepared entry was broadcast as `txId`.
+  /// Record that the funding self-send went out.
+  Future<void> recordFunding(
+    MixRecord record, {
+    required String txId,
+    required List<String> outputBoxIds,
+  }) async {
+    record.fundingTxId = txId;
+    record.fundingBoxIds = List.unmodifiable(outputBoxIds);
+    await _persist();
+  }
+
+  /// Persist what an entry will produce, before it is broadcast.
+  Future<void> stageEntry(MixRecord record, Map<String, dynamic> nextState) async {
+    record.entryAttempt = nextState;
+    await _persist();
+  }
+
+  /// Record that a prepared entry was broadcast as `txId` (empty when the
+  /// id was lost with a crash; the next check reads the box from chain).
   Future<void> commitEntry(MixRecord record, Map<String, dynamic> nextState, String txId) async {
     final events = (nextState['events'] as List?)?.cast<Map>() ?? const [];
-    if (events.isNotEmpty) {
+    if (events.isNotEmpty && txId.isNotEmpty) {
       // The engine could not know the id before broadcast.
       events.last['tx_id'] = txId;
     }
     record.state = nextState;
+    record.entryAttempt = null;
+    record.entryTxId = txId.isEmpty ? null : txId;
     record.lastError = null;
     record.lastCheckedAt = _clock();
     await _persist();
@@ -733,9 +781,29 @@ class MixService extends ChangeNotifier {
       final found = (jsonDecode(await _gw.recover(snap.json, _now)) as List)
           .map((m) => MixRecord(state: (m as Map).cast<String, dynamic>()))
           .toList();
-      final known = {for (final r in records) r.mixId};
-      final fresh = found.where((r) => !known.contains(r.mixId)).toList();
-      if (fresh.isEmpty) return 0;
+      final known = {for (final r in records) r.mixId: r};
+      final fresh = <MixRecord>[];
+      var reconciled = 0;
+      for (final f in found) {
+        final have = known[f.mixId];
+        if (have == null) {
+          fresh.add(f);
+        } else if (have.pending) {
+          // The chain knows more than we do: the entry went out and the
+          // record never heard. Take the chain's phase, keep what only we
+          // know (destination, rounds wanted).
+          have.state = {
+            ...f.state,
+            'destination_ergo_tree': have.destinationErgoTree,
+            'rounds_target': have.roundsTarget,
+            'level': have.state['level'] ?? f.state['level'],
+          };
+          have.entryAttempt = null;
+          have.lastError = null;
+          reconciled++;
+        }
+      }
+      if (fresh.isEmpty && reconciled == 0) return 0;
       records = [...fresh, ...records];
       // A recovered index is taken: nothing new may derive on it.
       final prefs = await SharedPreferences.getInstance();
@@ -744,7 +812,7 @@ class MixService extends ChangeNotifier {
       }
       await prefs.setInt(_nextIdKey(_walletId!), _nextId);
       await _persist();
-      return fresh.length;
+      return fresh.length + reconciled;
     });
   }
 }

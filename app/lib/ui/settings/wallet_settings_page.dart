@@ -172,7 +172,7 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
               SettingsRow(
                 icon: Icons.blender_outlined,
                 title: 'Mix',
-                subtitle: 'Move ERG through the ErgoMixer pool so it cannot be traced back.',
+                subtitle: 'Move ERG through the ErgoMixer pool to weaken the link to where it came from.',
                 onTap: unlocked ? () => Navigator.pushNamed(context, '/mix') : null,
               ),
             ],

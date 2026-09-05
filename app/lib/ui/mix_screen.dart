@@ -104,13 +104,20 @@ class _MixScreenState extends State<MixScreen> {
               ),
           };
         },
-        broadcast: (id) => walletService.sendErg(preparationId: id),
-        findFundingBox: (needed) async {
+        broadcast: (id) async {
+          final r = await walletService.sendErgDetailed(preparationId: id);
+          return MixBroadcast(
+            txId: r['tx_id'] as String? ?? '',
+            outputBoxIds: (r['output_box_ids'] as List?)?.cast<String>() ?? const [],
+          );
+        },
+        findFundingBox: (needed, candidates) async {
           final boxes = await walletService.listUnspentBoxes(
             [args.receiveAddress],
             nodeUrl: networkController.activeUrl,
           );
           for (final b in boxes) {
+            if (candidates.isNotEmpty && !candidates.contains(b.boxId)) continue;
             if (b.valueNanoErg == BigInt.from(needed) && b.assets.isEmpty) return b.boxId;
           }
           return null;
@@ -387,6 +394,20 @@ class _ErrorLine extends StatelessWidget {
   }
 }
 
+/// One line under a ring: who is waiting, and what entering costs. Above
+/// five percent the fee is called out, because a flat batch price makes a
+/// small mix expensive and a large one cheap.
+String ringSubtitle({required int value, required int waiting, required int? operatorFee}) {
+  final who = waiting == 0
+      ? 'Nobody waiting: you would post the first box'
+      : '$waiting waiting: you could join at once';
+  if (operatorFee == null || value <= 0) return who;
+  final pct = operatorFee * 100 / value;
+  final pctText = pct >= 10 ? pct.toStringAsFixed(0) : pct.toStringAsFixed(1);
+  final cost = 'fees ${formatErg(operatorFee, maxFrac: 3)} ($pctText%)';
+  return pct >= 5 ? '$who · $cost, expensive for this amount' : '$who · $cost';
+}
+
 /// What a mix is doing, in words the user can act on.
 String mixPhaseText(MixRecord r) {
   switch (r.phaseKind) {
@@ -517,6 +538,7 @@ class _StartMixSheet extends StatefulWidget {
 class _StartMixSheetState extends State<_StartMixSheet> {
   late List<({int value, int waiting})> _rings;
   late List<({int level, int price})> _levels;
+  late int _rate;
   int? _denomination;
   int? _level;
   int _rounds = 3;
@@ -540,10 +562,21 @@ class _StartMixSheetState extends State<_StartMixSheet> {
       for (final l in (widget.pool['token_levels'] as List? ?? const []))
         (level: ((l as Map)['level'] as num).toInt(), price: (l['price_nano_erg'] as num).toInt()),
     ];
+    _rate = (widget.pool['token_rate'] as num?)?.toInt() ?? 0;
     // Prefer a ring with someone waiting, and the cheapest token batch.
     final waiting = _rings.where((r) => r.waiting > 0).toList();
     _denomination = (waiting.isNotEmpty ? waiting.first : _rings.first).value;
     _level = _levels.isEmpty ? null : _levels.first.level;
+  }
+
+  /// What entering `value` costs the user in operator fees at the chosen
+  /// batch: the batch price plus the pool's cut of the amount.
+  int? _operatorFee(int value) {
+    final level = _level;
+    if (level == null || _rate <= 0) return null;
+    final batch = _levels.where((l) => l.level == level).firstOrNull;
+    if (batch == null) return null;
+    return batch.price + value ~/ _rate;
   }
 
   @override
@@ -576,10 +609,11 @@ class _StartMixSheetState extends State<_StartMixSheet> {
                   onTap: () => setState(() => _denomination = r.value),
                   title: Text(formatErg(r.value)),
                   subtitle: Text(
-                    r.waiting == 0
-                        ? 'Nobody waiting: you would post the first box'
-                        : '${r.waiting} waiting: you could join at once',
-                    style: TextStyle(color: muted, fontSize: 12),
+                    ringSubtitle(value: r.value, waiting: r.waiting, operatorFee: _operatorFee(r.value)),
+                    style: TextStyle(
+                      color: (_operatorFee(r.value) ?? 0) * 20 >= r.value ? theme.colorScheme.error : muted,
+                      fontSize: 12,
+                    ),
                   ),
                 ),
               const SizedBox(height: 12),
@@ -600,7 +634,8 @@ class _StartMixSheetState extends State<_StartMixSheet> {
                   onChanged: (v) => setState(() => _level = v),
                 ),
               Text(
-                'Each round burns one or two tokens. Buy at least twice the rounds you want.',
+                'Each round burns one or two tokens; the smallest batch covers more '
+                'rounds than you can choose here. Tokens left when the mix ends are lost.',
                 style: TextStyle(color: muted, fontSize: 12),
               ),
               const SizedBox(height: 12),

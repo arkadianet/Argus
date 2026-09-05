@@ -39,6 +39,13 @@ class MixPrepared {
   final int appFeeNano;
 }
 
+/// What a broadcast produced: the transaction and the ids of its outputs.
+class MixBroadcast {
+  const MixBroadcast({required this.txId, this.outputBoxIds = const []});
+  final String txId;
+  final List<String> outputBoxIds;
+}
+
 /// Which of the two confirmations is being asked for.
 enum MixStartStep { funding, entry }
 
@@ -48,21 +55,27 @@ typedef PrepareFunding = Future<MixPrepared> Function(int neededNano);
 /// Ask the user. False means stop where we are.
 typedef ConfirmStep = Future<bool> Function(MixStartStep step, MixPrepared prepared, MixRecord? record);
 
-/// Sign and broadcast a preparation; returns the transaction id.
-typedef Broadcast = Future<String> Function(int preparationId);
+/// Sign and broadcast a preparation.
+typedef Broadcast = Future<MixBroadcast> Function(int preparationId);
 
-/// The id of an unspent, asset-free box holding exactly `neededNano` at the
-/// funding address, or null while there is none yet.
-typedef FindFundingBox = Future<String?> Function(int neededNano);
+/// The id of the funding box, or null while it is not there.
+///
+/// When `candidates` is not empty it names the outputs of the funding
+/// transaction, and only one of those, unspent, asset-free and holding
+/// `neededNano`, qualifies: an unrelated box of the same size must not be
+/// taken while the real one is still pending. With no candidates (a record
+/// from before the ids were kept) the amount is all there is to go on.
+typedef FindFundingBox = Future<String?> Function(int neededNano, List<String> candidates);
 
 /// Putting money into the pool takes two confirmed transactions: a plain
 /// self-send that makes a box of exactly the right size, and the entry
 /// that spends it. This runs those steps in order, over injected calls, so
 /// the order and the failure handling can be tested without a wallet.
 ///
-/// The mix record is created as soon as the funding transaction is out,
-/// so a crash or a timeout while waiting for the box leaves a pending mix
-/// the user can continue from the list instead of money in limbo.
+/// Every broadcast is preceded by a persisted record of what is about to
+/// happen, and followed by a record of what did. So a crash at any point
+/// leaves a pending mix the user can continue, and continuing reconciles
+/// with the chain instead of sending again.
 class MixStartFlow {
   MixStartFlow({
     required this.service,
@@ -93,9 +106,9 @@ class MixStartFlow {
     onStatus?.call('Preparing the funding transaction');
     final funding = await prepareFunding(plan.neededNano);
     if (!await confirm(MixStartStep.funding, funding, null)) return null;
-    final fundingTx = await broadcast(funding.preparationId);
-    onStatus?.call('Funding sent: $fundingTx');
 
+    // The record exists before the money moves, so nothing sent is ever
+    // unaccounted for.
     final record = await service.createMix(
       denomination: plan.denomination,
       level: plan.level,
@@ -103,6 +116,9 @@ class MixStartFlow {
       destinationAddress: plan.destinationAddress,
       fundingNano: plan.neededNano,
     );
+    final sent = await broadcast(funding.preparationId);
+    await service.recordFunding(record, txId: sent.txId, outputBoxIds: sent.outputBoxIds);
+    onStatus?.call('Funding sent: ${sent.txId}');
     return enter(record, fundingAddress: fundingAddress, neededNano: plan.neededNano);
   }
 
@@ -116,8 +132,24 @@ class MixStartFlow {
     required int neededNano,
   }) async {
     if (!record.pending) throw StateError('This mix has already entered the pool');
+    final needed = record.fundingNano ?? neededNano;
+
+    // An entry was staged and may have been broadcast before the app
+    // stopped. If the funding box is gone, it was: adopt the staged state
+    // and let the next check confirm it on chain. If the box is still
+    // there, the entry never went out and is built again.
+    final staged = record.entryAttempt;
+    if (staged != null) {
+      final still = await findFundingBox(needed, record.fundingBoxIds);
+      if (still == null) {
+        await service.commitEntry(record, staged, record.entryTxId ?? '');
+        onStatus?.call('Entry already sent; the next check confirms it');
+        return record;
+      }
+    }
+
     onStatus?.call('Waiting for the funding box to confirm');
-    final boxId = await _waitForBox(record.fundingNano ?? neededNano);
+    final boxId = await _waitForBox(needed, record.fundingBoxIds);
     if (boxId == null) {
       throw StateError(
         'The funding box has not confirmed yet. The mix is saved; '
@@ -138,20 +170,25 @@ class MixStartFlow {
       appFeeNano: (summary['operator_fee_nano'] as num?)?.toInt() ?? 0,
     );
     if (!await confirm(MixStartStep.entry, prepared, record)) return record;
-    final txId = await broadcast(prepared.preparationId);
-    await service.commitEntry(record, (entry['next_state'] as Map).cast<String, dynamic>(), txId);
-    onStatus?.call('Entered the pool: $txId');
+
+    final nextState = (entry['next_state'] as Map).cast<String, dynamic>();
+    await service.stageEntry(record, nextState);
+    final sent = await broadcast(prepared.preparationId);
+    await service.commitEntry(record, nextState, sent.txId);
+    onStatus?.call('Entered the pool: ${sent.txId}');
     return record;
   }
 
-  Future<String?> _waitForBox(int neededNano) async {
+  Future<String?> _waitForBox(int neededNano, List<String> candidates) async {
     var waited = Duration.zero;
     while (true) {
-      final id = await findFundingBox(neededNano);
+      final id = await findFundingBox(neededNano, candidates);
       if (id != null) return id;
       if (waited >= maxWait) return null;
-      await _delay(pollInterval);
-      waited += pollInterval;
+      final remaining = maxWait - waited;
+      final wait = pollInterval < remaining ? pollInterval : remaining;
+      await _delay(wait);
+      waited += wait;
     }
   }
 }
