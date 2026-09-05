@@ -479,6 +479,16 @@ abstract class DuckpoolsGateway {
   });
   Future<String> prepareRefund(String proxyBoxJson, String userAddress);
   String orderOutcome(String kind, String proxyBoxId, String txJson);
+  String adjustQuote(String loanBoxesJson, String poolKey, String collateralBoxId, int newAmount, int height);
+  Future<String> prepareAdjust({
+    required String loanBoxesJson,
+    required String poolKey,
+    required String collateralBoxId,
+    required int newAmount,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+  });
 }
 
 class LiveDuckpoolsGateway implements DuckpoolsGateway {
@@ -574,6 +584,34 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
   @override
   String orderOutcome(String kind, String proxyBoxId, String txJson) =>
       bridge.duckpoolsOrderOutcome(kind: kind, proxyBoxId: proxyBoxId, txJson: txJson);
+  @override
+  String adjustQuote(String loanBoxesJson, String poolKey, String collateralBoxId, int newAmount, int height) =>
+      bridge.duckpoolsAdjustQuote(
+        loanBoxesJson: loanBoxesJson,
+        poolKey: poolKey,
+        collateralBoxId: collateralBoxId,
+        newAmount: newAmount,
+        height: height,
+      );
+  @override
+  Future<String> prepareAdjust({
+    required String loanBoxesJson,
+    required String poolKey,
+    required String collateralBoxId,
+    required int newAmount,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+  }) =>
+      walletService.duckpoolsPrepareAdjust(
+        loanBoxesJson: loanBoxesJson,
+        poolKey: poolKey,
+        collateralBoxId: collateralBoxId,
+        newAmount: newAmount,
+        userAddress: userAddress,
+        spendAddresses: spendAddresses,
+        changeAddress: changeAddress,
+      );
 }
 
 typedef DuckHttpGet = Future<String> Function(Uri uri);
@@ -836,6 +874,40 @@ class DuckpoolsService extends ChangeNotifier {
       height: _gw.chainHeight ?? 0,
     )) as Map)
         .cast<String, dynamic>();
+  }
+
+  /// Quote a change of a loan's collateral to `newAmount` (nanoERG, or
+  /// the token's units for an ERG pool loan).
+  Map<String, dynamic> adjustQuote({required String poolKey, required String collateralBoxId, required int newAmount}) {
+    final loanBoxes = lastLoanBoxesJson;
+    if (loanBoxes == null) throw StateError('Read the loans first');
+    return (jsonDecode(_gw.adjustQuote(loanBoxes, poolKey, collateralBoxId, newAmount, _gw.chainHeight ?? 0)) as Map)
+        .cast<String, dynamic>();
+  }
+
+  /// Prepare the borrower's own re-creation of the collateral box. No
+  /// order is recorded: the change is final once the transaction
+  /// confirms, and the next loan read shows it.
+  Future<Map<String, dynamic>> prepareAdjust({
+    required String poolKey,
+    required String collateralBoxId,
+    required int newAmount,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+  }) async {
+    final loanBoxes = lastLoanBoxesJson;
+    if (loanBoxes == null) throw StateError('Read the loans first');
+    final raw = await _gw.prepareAdjust(
+      loanBoxesJson: loanBoxes,
+      poolKey: poolKey,
+      collateralBoxId: collateralBoxId,
+      newAmount: newAmount,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
+      changeAddress: changeAddress,
+    );
+    return (jsonDecode(raw) as Map).cast<String, dynamic>();
   }
 
   /// Unspent boxes carrying `tokenId`: node first, explorer second.

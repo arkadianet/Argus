@@ -1256,6 +1256,34 @@ class WalletService {
     );
   }
 
+  /// Prepare a collateral adjustment on a Duckpools loan; confirm with
+  /// [sendErg].
+  Future<String> duckpoolsPrepareAdjust({
+    required String loanBoxesJson,
+    required String poolKey,
+    required String collateralBoxId,
+    required int newAmount,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiDuckpoolsPrepareAdjust(
+      handleId: _handleId!,
+      loanBoxesJson: loanBoxesJson,
+      poolKey: poolKey,
+      collateralBoxId: collateralBoxId,
+      newAmount: newAmount,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+  }
+
   /// Prepare the refund of an unfilled order; confirm with [sendErg].
   Future<String> duckpoolsPrepareRefund({
     required String proxyBoxJson,

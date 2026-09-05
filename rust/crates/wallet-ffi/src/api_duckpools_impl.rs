@@ -3,9 +3,9 @@
 //! one). Fills are the bots' business.
 
 use duckpools::{
-    build_order_tx, classify_loan_spend, BorrowQuote, DexPrice, InterestHistory, InterestParams,
-    LendQuote, LoanParams, LoanPosition, OrderKind, PartialRepayQuote, PoolState, RepayQuote,
-    WithdrawQuote, POOLS,
+    build_order_tx, classify_loan_spend, AdjustDataInputs, AdjustQuote, BorrowQuote, DexPrice,
+    InterestHistory, InterestParams, LendQuote, LoanParams, LoanPosition, OrderKind,
+    PartialRepayQuote, PoolState, RepayQuote, WithdrawQuote, POOLS,
 };
 use ergo_tx::Eip12InputBox;
 
@@ -241,6 +241,79 @@ impl LoanSnapshot {
             .find(|d| d.nft.eq_ignore_ascii_case(&c.dex_nft))
             .ok_or_else(|| err("the price box for that loan's collateral could not be read"))?;
         LoanPosition::value(self.pool, &c, &self.history, dex, height).map_err(err)
+    }
+}
+
+/// A JSON box (explorer or node shape) as a transaction input.
+fn input_box(v: &serde_json::Value) -> Result<Eip12InputBox, String> {
+    zerojoin::parse_explorer_boxes(&serde_json::json!([v]).to_string())
+        .map_err(ser_err)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| ser_err("box could not be read"))
+}
+
+impl LoanSnapshot {
+    /// The collateral box of a loan as an input, with its registers.
+    pub fn collateral_input(&self, collateral_box_id: &str) -> Result<Eip12InputBox, String> {
+        let v = self
+            .collateral
+            .iter()
+            .find(|b| b.get("boxId").and_then(|x| x.as_str()) == Some(collateral_box_id))
+            .ok_or_else(|| err("that loan is not in the snapshot; refresh and try again"))?;
+        input_box(v)
+    }
+
+    /// The four data inputs an adjustment of `position` needs, from the
+    /// boxes the app read.
+    pub fn adjust_data_inputs(
+        &self,
+        root: &serde_json::Value,
+        position: &LoanPosition,
+    ) -> Result<AdjustDataInputs, String> {
+        let children: Vec<(i32, Eip12InputBox)> = list(root, "children")
+            .into_iter()
+            .filter(|b| carries(b, self.pool.child_nft))
+            .filter_map(|b| {
+                let index = b
+                    .get("additionalRegisters")
+                    .and_then(|r| r.get("R6"))
+                    .and_then(|r| r.as_str().or_else(|| r.get("serializedValue").and_then(|s| s.as_str())))
+                    .and_then(|h| hex::decode(h).ok())
+                    .and_then(|bytes| {
+                        use ergo_lib::ergotree_ir::mir::constant::{Constant, TryExtractInto};
+                        use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
+                        Constant::sigma_parse_bytes(&bytes).ok()?.try_extract_into::<i32>().ok()
+                    })?;
+                Some((index, input_box(b).ok()?))
+            })
+            .collect();
+        let parent = list(root, "parents")
+            .into_iter()
+            .find(|b| carries(b, self.pool.parent_nft))
+            .ok_or_else(|| err("the interest box is missing"))
+            .and_then(input_box)?;
+        let dexes: Vec<Eip12InputBox> = list(root, "dex")
+            .into_iter()
+            .filter_map(|b| input_box(b).ok())
+            .collect();
+        AdjustDataInputs::select(position, &self.history, &children, parent, &dexes).map_err(err)
+    }
+
+    pub fn adjust_quote(
+        &self,
+        collateral_box_id: &str,
+        new_amount: i64,
+        height: i64,
+    ) -> Result<(LoanPosition, AdjustQuote), String> {
+        let position = self.position(collateral_box_id, height)?;
+        let dex = self
+            .dexes
+            .iter()
+            .find(|d| d.nft.eq_ignore_ascii_case(&position.dex_nft))
+            .ok_or_else(|| err("the price box for that loan's collateral could not be read"))?;
+        let quote = AdjustQuote::new(self.pool, &position, dex, new_amount).map_err(err)?;
+        Ok((position, quote))
     }
 }
 
@@ -608,6 +681,25 @@ mod tests {
         assert_eq!(p.token_needed(pool).unwrap().1, 5_000);
         assert!(Quote::new(pool, &state, "repay", 0, 0, 1_900_000, Some(args("ff", 0))).is_err());
         assert!(Quote::new(pool, &state, "borrow", 1, 0, 1_900_000, None).is_err());
+    }
+
+    #[test]
+    fn an_adjustment_is_quoted_and_its_data_inputs_picked_from_the_snapshot() {
+        let pool = duckpools::pool_by_key("sigusd").unwrap();
+        let root: serde_json::Value = serde_json::from_str(&loan_boxes()).unwrap();
+        let snap = LoanSnapshot::parse(pool, &root).unwrap();
+        let loan_id = "a532bba7bec01fe0ddbd02c13cdf6284b28dc7df9aa1d0d669e58cd1e2bad0d3";
+        let (position, quote) = snap.adjust_quote(loan_id, 1_500_000_000_000, 1_866_418).unwrap();
+        assert_eq!(quote.delta, -1_000_000_000_000);
+        let data = snap.adjust_data_inputs(&root, &position).unwrap();
+        // The loan began at parent index 14, which is also the head.
+        assert_eq!(data.base_child.box_id, data.head_child.box_id);
+        assert_eq!(data.dex.assets[0].token_id, position.dex_nft);
+        let collateral = snap.collateral_input(loan_id).unwrap();
+        assert_eq!(collateral.additional_registers.len(), 6);
+        let tx = duckpools::build_adjust_tx(&quote, &collateral, &[], &data, "0008cd00", 1_100_000, 1).unwrap();
+        assert_eq!(tx.data_inputs.len(), 4);
+        assert!(snap.adjust_quote(loan_id, 1_000_000_000_000, 1).is_err(), "below the line");
     }
 
     #[test]

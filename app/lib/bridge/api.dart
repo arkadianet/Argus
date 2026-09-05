@@ -1018,6 +1018,52 @@ Future<String> duckpoolsPrepareRefund({
   nodeUrl: nodeUrl,
 );
 
+/// Quote a collateral adjustment: `new_amount` is the collateral the loan
+/// should hold afterwards (nanoERG, or the token's units for an ERG pool
+/// loan). Pure.
+String duckpoolsAdjustQuote({
+  required String loanBoxesJson,
+  required String poolKey,
+  required String collateralBoxId,
+  required PlatformInt64 newAmount,
+  required PlatformInt64 height,
+}) => RustLib.instance.api.crateApiDuckpoolsAdjustQuote(
+  loanBoxesJson: loanBoxesJson,
+  poolKey: poolKey,
+  collateralBoxId: collateralBoxId,
+  newAmount: newAmount,
+  height: height,
+);
+
+/// Prepare a collateral adjustment: the borrower's own spend of the
+/// collateral box, with the interest and price boxes as data inputs and
+/// the wallet's boxes for whatever is added and the fee. Confirm with
+/// `send_erg`; the wallet's key for the loan signs it. No bot is
+/// involved and nothing waits for a fill.
+Future<String> duckpoolsPrepareAdjust({
+  required BigInt handleId,
+  required String loanBoxesJson,
+  required String poolKey,
+  required String collateralBoxId,
+  required PlatformInt64 newAmount,
+  required String userAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiDuckpoolsPrepareAdjust(
+  handleId: handleId,
+  loanBoxesJson: loanBoxesJson,
+  poolKey: poolKey,
+  collateralBoxId: collateralBoxId,
+  newAmount: newAmount,
+  userAddress: userAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+);
+
 /// What the transaction that spent a proxy box did with it: filled,
 /// refunded, or something else. Pure.
 String duckpoolsOrderOutcome({
