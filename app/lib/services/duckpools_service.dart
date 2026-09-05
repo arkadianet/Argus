@@ -288,8 +288,12 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
 /// at most `decimals` fractional digits. Null for anything else, so a
 /// figure the asset cannot represent is refused rather than rounded.
 int? parseDuckAmount(String text, int decimals) {
-  final t = text.trim().replaceAll(',', '');
-  if (t.isEmpty || !RegExp(r'^\d*\.?\d*$').hasMatch(t) || t == '.') return null;
+  final raw = text.trim();
+  // Commas only as thousands grouping of the whole part: "1,000.25", not
+  // "1,2" or "1.2,3".
+  if (!RegExp(r'^(\d{1,3}(,\d{3})+|\d*)(\.\d*)?$').hasMatch(raw)) return null;
+  final t = raw.replaceAll(',', '');
+  if (t.isEmpty || t == '.') return null;
   final parts = t.split('.');
   final whole = parts[0].isEmpty ? '0' : parts[0];
   final frac = parts.length > 1 ? parts[1] : '';
@@ -298,6 +302,8 @@ int? parseDuckAmount(String text, int decimals) {
   if (units == null || units <= 0) return null;
   return units;
 }
+
+String shortTx(String id) => id.length > 12 ? '${id.substring(0, 8)}…' : id;
 
 typedef DuckHttpGet = Future<String> Function(Uri uri);
 typedef DuckHttpPost = Future<String> Function(Uri uri, String jsonBody);
@@ -579,6 +585,7 @@ class DuckpoolsService extends ChangeNotifier {
   }) async {
     final boxes = lastPoolBoxesJson;
     if (boxes == null) throw StateError('Read the pools first');
+    final walletId = _gw.walletId;
     final raw = await _gw.prepareOrder(
       poolBoxesJson: boxes,
       poolKey: poolKey,
@@ -590,11 +597,24 @@ class DuckpoolsService extends ChangeNotifier {
       spendAddresses: spendAddresses,
       changeAddress: changeAddress,
     );
-    return (jsonDecode(raw) as Map).cast<String, dynamic>();
+    // The order belongs to the wallet it was prepared for; the commit
+    // checks this so a wallet switch in between cannot file it elsewhere.
+    return (jsonDecode(raw) as Map).cast<String, dynamic>()..['wallet_id'] = walletId;
   }
 
-  /// Record a broadcast order.
+  /// Whether `prepared` can still be broadcast and recorded: the wallet
+  /// it was prepared for is the one loaded and active. Check before
+  /// sending, since the record follows the send.
+  bool canCommit(Map<String, dynamic> prepared) {
+    final id = prepared['wallet_id'] as String?;
+    return id != null && id == _walletId && id == _gw.walletId;
+  }
+
+  /// Record a broadcast order under the wallet it was prepared for.
   Future<DuckOrder> commitOrder(Map<String, dynamic> prepared, String txId) async {
+    if (!canCommit(prepared)) {
+      throw StateError('The wallet changed since this order was prepared; the order ${shortTx(txId)} is not recorded here');
+    }
     final q = (prepared['quote'] as Map).cast<String, dynamic>();
     final kind = q['kind'] as String;
     final pool = pools.firstWhere((p) => p.key == q['pool']);
