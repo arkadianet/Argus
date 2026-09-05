@@ -842,4 +842,74 @@ void main() {
     expect((saved[1] as Map)['state']['rounds_done'], 2, reason: 'the concurrent change survived');
     expect(prefs.getString('argus_mix_lease'), isNull);
   });
+
+  test('a broadcast earns no height; the snapshot that sees the box does', () async {
+    final gw = FakeGateway()
+      ..script['observe'] = ['same']
+      ..script['plan'] = [
+        {'action': 'wait', 'reason': 'box_not_seen'},
+        {'action': 'remix_as_alice'},
+        {'action': 'wait', 'reason': 'counterpart_needed'},
+      ]
+      ..script['advance'] = [
+        {
+          'state': state(kind: 'half_posted', boxId: 'h2', done: 1, target: 3, round: 1)
+            ..['events'] = [
+              // The engine keeps earlier events, including the height the
+              // previous snapshot stamped on the entry.
+              {'at': 5, 'action': 'entered_as_bob', 'round': 0, 'tx_id': 'txe', 'height': 4000},
+              {'at': 9, 'action': 'remixed_as_alice', 'round': 1, 'tx_id': 'txr'},
+            ],
+          'action': 'remix_alice',
+          'tx_id': 'txr',
+        },
+      ];
+    final ex = FakeExplorer()
+      ..height = 4000
+      ..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null}
+      ..boxes['h2'] = {'boxId': 'h2', 'spentTransactionId': null};
+    final entered = state(done: 1, target: 3)
+      ..['events'] = [
+        {'at': 5, 'action': 'entered_as_bob', 'round': 0, 'tx_id': 'txe'},
+      ];
+    final svc = await loaded(gw, ex, [entered]);
+    final r = svc.records.single;
+
+    // First tick: the snapshot does not hold our box yet.
+    await svc.tick();
+    expect(r.events.last['height'], isNull, reason: 'not seen, not confirmed');
+
+    // Second tick: seen, so the entry is stamped; then a remix is broadcast
+    // and its event stays unstamped.
+    await svc.tick();
+    expect(r.events.first['height'], 4000, reason: 'the entry is on chain');
+    expect(r.events.last['action'], 'remixed_as_alice');
+    expect(r.events.last['height'], isNull, reason: 'a broadcast is not an inclusion');
+
+    // Third tick: the new half box is seen.
+    ex.height = 4010;
+    await svc.tick();
+    expect(r.events.last['height'], 4010);
+    expect(svc.mixActivityRows().first['confirmed'], isTrue);
+  });
+
+  test('a finished mix learns its last height by looking the transaction up', () async {
+    final gw = FakeGateway()
+      ..script['observe'] = ['same']
+      ..script['plan'] = [
+        {'action': 'wait', 'reason': 'counterpart_needed'},
+      ];
+    final ex = FakeExplorer()
+      ..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null}
+      ..txs['txw'] = {'inclusionHeight': 4242, 'outputs': []};
+    final done = state(mixId: 1, kind: 'withdrawn', done: 3)
+      ..['events'] = [
+        {'at': 5, 'action': 'withdrawn', 'round': 2, 'tx_id': 'txw'},
+      ];
+    final svc = await loaded(gw, ex, [state(kind: 'half_posted', done: 0), done]);
+    await svc.tick();
+    final w = svc.records.firstWhere((r) => r.mixId == 1);
+    expect(w.events.last['height'], 4242);
+    expect(svc.mixActivityRows().firstWhere((r) => r['tx_id'] == 'txw')['confirmed'], isTrue);
+  });
 }

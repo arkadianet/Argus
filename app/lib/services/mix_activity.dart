@@ -39,7 +39,9 @@ List<Map<String, dynamic>> mixActivityRowsFor(List<MixRecord> records) {
         'token_ids': const <String>[],
         'tokens_received': const [],
         'tokens_sent': const [],
-        'confirmed': true,
+        // A broadcast is not an inclusion: a row is confirmed only once a
+        // snapshot has seen its box, or the transaction was looked up.
+        'confirmed': ((e['height'] as num?)?.toInt() ?? 0) > 0,
         'mix': true,
         'mix_id': r.mixId,
         'mix_label': mixEventLabel(action, denomination: r.denomination, round: round),
@@ -50,15 +52,20 @@ List<Map<String, dynamic>> mixActivityRowsFor(List<MixRecord> records) {
   return rows;
 }
 
-/// Newest first: by height when both rows have one, else by timestamp.
+/// Newest first, as one total order: rows not yet in a block (height 0)
+/// come first, then by height descending, and rows on the same height (or
+/// all pending) by timestamp descending.
 int compareActivityRows(Map<String, dynamic> a, Map<String, dynamic> b) {
-  final ha = (a['height'] as num?)?.toInt() ?? 0;
-  final hb = (b['height'] as num?)?.toInt() ?? 0;
-  if (ha > 0 && hb > 0 && ha != hb) return hb.compareTo(ha);
+  int rank(Map<String, dynamic> r) {
+    final h = (r['height'] as num?)?.toInt() ?? 0;
+    return h > 0 ? h : 0x7fffffff;
+  }
+
+  final byHeight = rank(b).compareTo(rank(a));
+  if (byHeight != 0) return byHeight;
   final ta = (a['timestamp'] as num?)?.toInt() ?? 0;
   final tb = (b['timestamp'] as num?)?.toInt() ?? 0;
-  if (ta != tb) return tb.compareTo(ta);
-  return hb.compareTo(ha);
+  return tb.compareTo(ta);
 }
 
 /// Mix rows take precedence over the address history's view of the same

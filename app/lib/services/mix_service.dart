@@ -676,12 +676,13 @@ class MixService extends ChangeNotifier {
     }
   }
 
-  Future<void> _persist() async {
+  Future<bool> _persist() async {
     final id = _walletId;
-    if (id == null) return;
+    if (id == null) return false;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_recordsKey(id), jsonEncode([for (final r in records) r.toJson()]));
+    final ok = await prefs.setString(_recordsKey(id), jsonEncode([for (final r in records) r.toJson()]));
     notifyListeners();
+    return ok;
   }
 
   Map<String, String> get _trees {
@@ -776,7 +777,9 @@ class MixService extends ChangeNotifier {
   /// activity list can place them among ordinary transactions.
   int _lastHeight = 0;
 
-  /// Give the newest event the height of the snapshot that produced it.
+  /// Give the newest event the height of the snapshot that saw its box on
+  /// chain. Never called for a transaction this app has only broadcast: a
+  /// broadcast is not an inclusion.
   void _stampHeight(MixRecord r) {
     final events = (r.state['events'] as List?);
     if (events == null || events.isEmpty || _lastHeight <= 0) return;
@@ -784,15 +787,61 @@ class MixService extends ChangeNotifier {
     if (last is Map && last['height'] == null) last['height'] = _lastHeight;
   }
 
+  /// A plan that is not "box not seen" means the snapshot holds the box
+  /// the newest event created, so that event is on chain.
+  void _stampIfSeen(MixRecord r, Map<String, dynamic> plan) {
+    final action = plan['action'] as String? ?? 'wait';
+    if (action == 'wait' && plan['reason'] == 'box_not_seen') return;
+    _stampHeight(r);
+  }
+
+  /// A finished mix has nothing left to observe, so its last transaction
+  /// is looked up once to learn its inclusion height.
+  Future<void> _confirmFinished(String base, MixRecord r) async {
+    final events = (r.state['events'] as List?);
+    if (events == null || events.isEmpty) return;
+    final last = events.last;
+    if (last is! Map || last['height'] != null) return;
+    final txId = last['tx_id']?.toString() ?? '';
+    if (txId.isEmpty) return;
+    final h = await _txInclusionHeight(base, txId);
+    if (h != null && h > 0) last['height'] = h;
+  }
+
+  /// Inclusion height of a transaction, or null while it is not in a block.
+  Future<int?> _txInclusionHeight(String base, String txId) async {
+    final node = _nodeBase;
+    if (node != null) {
+      try {
+        final tx = jsonDecode(await _get(Uri.parse('$node/blockchain/transaction/byId/$txId'))) as Map;
+        return (tx['inclusionHeight'] as num?)?.toInt();
+      } catch (_) {
+        // Fall through.
+      }
+    }
+    try {
+      final tx = jsonDecode(await _get(Uri.parse('$base/api/v1/transactions/$txId'))) as Map;
+      return (tx['inclusionHeight'] as num?)?.toInt();
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Rows for the activity list, newest first. Rounds never touch the
   /// wallet's addresses, so the address history cannot show them.
   List<Map<String, dynamic>> mixActivityRows() => mixActivityRowsFor(records);
 
-  /// The user has seen that [r] finished.
+  /// The user has seen that [r] finished. Stays dismissed only if the
+  /// write succeeded; otherwise the strip shows it again rather than
+  /// forgetting it on the next restart.
   Future<void> acknowledge(MixRecord r) async {
     if (r.acknowledged) return;
     r.acknowledged = true;
-    await _persist();
+    if (!await _persist()) {
+      r.acknowledged = false;
+      notifyListeners();
+      throw StateError('Could not save the dismissal');
+    }
   }
 
   /// One box by id, with its `spentTransactionId`: node first, then explorer.
@@ -1035,7 +1084,6 @@ class MixService extends ChangeNotifier {
       events.last['tx_id'] = txId;
     }
     record.state = nextState;
-    _stampHeight(record);
     record.entryAttempt = null;
     record.entryTxId = txId.isEmpty ? null : txId;
     record.lastError = null;
@@ -1079,6 +1127,11 @@ class MixService extends ChangeNotifier {
         await _step(r, snap);
         if (gen != _generation) return;
       }
+      final base = _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
+      for (final r in records) {
+        if (r.finished) await _confirmFinished(base, r);
+        if (gen != _generation) return;
+      }
       lastTickAt = _clock();
       await _persist();
       for (final r in records) {
@@ -1102,13 +1155,13 @@ class MixService extends ChangeNotifier {
     try {
       final observed = await _gw.observe(jsonEncode(r.state), snap.json, _now);
       r.state = (jsonDecode(observed) as Map).cast<String, dynamic>();
-      if (r.roundsDone > before) {
-        _stampHeight(r);
-        await _announceRound(r);
-      }
+      if (r.roundsDone > before) await _announceRound(r);
 
       final plan = (jsonDecode(await _gw.plan(jsonEncode(r.state), snap.json, ownHalfBoxIds)) as Map)
           .cast<String, dynamic>();
+      // Whatever the newest event created is in this snapshot, or it is
+      // not: only the former earns a height.
+      _stampIfSeen(r, plan);
       final action = plan['action'] as String? ?? 'wait';
       if (action == 'wait') {
         r.lastError = null;
@@ -1126,7 +1179,6 @@ class MixService extends ChangeNotifier {
         return;
       }
       r.state = (result['state'] as Map).cast<String, dynamic>();
-      _stampHeight(r);
       r.lastError = null;
       if (r.finished) {
         await _gw.notify(
@@ -1161,7 +1213,6 @@ class MixService extends ChangeNotifier {
           await _gw.leave(jsonEncode(r.state), snap.json, destinationAddress, _gw.nodeUrl, _now);
       final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
       r.state = (result['state'] as Map).cast<String, dynamic>();
-      _stampHeight(r);
       r.lastError = null;
       r.lastCheckedAt = _clock();
       await _persist();
@@ -1226,6 +1277,7 @@ class MixService extends ChangeNotifier {
           if (r.roundsDone > before) await _announceRound(r);
           final plan = (jsonDecode(await _gw.plan(jsonEncode(r.state), snap.json, own)) as Map)
               .cast<String, dynamic>();
+          _stampIfSeen(r, plan);
           final action = plan['action'] as String? ?? 'wait';
           if (action != 'wait' && !(action == 'withdraw' && r.destinationErgoTree.isEmpty)) {
             final raw = await _gw.advanceWithKey(
@@ -1239,7 +1291,6 @@ class MixService extends ChangeNotifier {
             final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
             if (result['action'] != 'wait') {
               r.state = (result['state'] as Map).cast<String, dynamic>();
-              _stampHeight(r);
               if (r.finished) {
                 await _gw.notify(
                   title: 'Mix finished',

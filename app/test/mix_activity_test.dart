@@ -47,6 +47,22 @@ void main() {
     expect(rows[1]['mix_label'], 'Mix round 2');
     expect(rows.last['mix_label'], 'Entered a mix with 1 ERG');
     expect(rows.every((r) => r['mix'] == true), isTrue);
+    expect(rows.map((r) => r['confirmed']), [false, true, true],
+        reason: 'only an event with a seen height is confirmed');
+  });
+
+  test('ordering is total: pending rows first, then height, then time', () {
+    final rows = [
+      {'tx_id': 'a', 'height': 10, 'timestamp': 100},
+      {'tx_id': 'b', 'height': 5, 'timestamp': 300},
+      {'tx_id': 'c', 'height': 0, 'timestamp': 200},
+      {'tx_id': 'd', 'height': 0, 'timestamp': 250},
+      {'tx_id': 'e', 'height': 10, 'timestamp': 150},
+    ];
+    for (final perm in [rows, rows.reversed.toList(), [rows[2], rows[0], rows[4], rows[1], rows[3]]]) {
+      final sorted = [...perm]..sort(compareActivityRows);
+      expect(sorted.map((r) => r['tx_id']), ['d', 'c', 'e', 'a', 'b'], reason: 'same answer from any order');
+    }
   });
 
   test('mix rows replace the history\'s view of the same transaction and sort in', () {

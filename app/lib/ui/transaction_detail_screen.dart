@@ -32,6 +32,8 @@ class TransactionDetailScreen extends StatelessWidget {
         const <({String id, BigInt amount})>[];
     final confirmed = height != null && height > 0;
     final outgoing = nano != null && nano < 0;
+    // A mix round moves nothing in or out; it is a step, not a receipt.
+    final neutral = tx['mix'] == true && (nano ?? 0) == 0;
     final fee = (tx['fee_nano_erg'] as num?)?.toInt();
     final counterparty = tx['counterparty']?.toString();
     final sent = (tx['tokens_sent'] as List?)
@@ -58,25 +60,31 @@ class TransactionDetailScreen extends StatelessWidget {
                 width: 40,
                 height: 40,
                 decoration: BoxDecoration(
-                  color: (outgoing ? rust : moss).withValues(alpha: 0.14),
+                  color: (neutral ? accentOf(context) : outgoing ? rust : moss).withValues(alpha: 0.14),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
-                  outgoing ? Icons.arrow_upward : Icons.arrow_downward,
+                  neutral
+                      ? Icons.blender_outlined
+                      : outgoing
+                          ? Icons.arrow_upward
+                          : Icons.arrow_downward,
                   size: 20,
-                  color: outgoing ? rust : moss,
+                  color: neutral ? accentOf(context) : outgoing ? rust : moss,
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(
-                  '${outgoing ? 'Sent' : 'Received'} ${formatErg(nano?.abs())}',
+                  neutral
+                      ? (tx['mix_label']?.toString() ?? 'Mix round')
+                      : '${outgoing ? 'Sent' : 'Received'} ${formatErg(nano?.abs())}',
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
               ),
             ],
           ),
-          if (networkController.fiatText(nano?.abs()) != null) ...[
+          if (!neutral && networkController.fiatText(nano?.abs()) != null) ...[
             const SizedBox(height: 4),
             Text(
               networkController.fiatText(nano?.abs())!,

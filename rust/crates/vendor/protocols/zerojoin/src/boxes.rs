@@ -339,7 +339,7 @@ pub fn parse_explorer_boxes(json: &str) -> Result<Vec<Eip12InputBox>, ZeroJoinEr
     let items = items.as_array().ok_or_else(|| {
         ZeroJoinError::Serialization(format!(
             "expected an array of boxes, got {}",
-            json_shape(&root)
+            json_shape(items)
         ))
     })?;
     items
@@ -593,6 +593,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("object{error,reason}"), "{err}");
+        let err = parse_explorer_boxes(r#"{"items":"not an array"}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("got string"), "{err}");
     }
 
     #[test]
