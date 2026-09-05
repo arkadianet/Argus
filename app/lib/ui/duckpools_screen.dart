@@ -187,7 +187,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
   /// of the collateral box, no bot.
   Future<void> _adjust(DuckLoan l) async {
     if (_working) return;
-    final args = WalletRouteArgs.of(context);
+    final walletBefore = duckpoolsService.activeWalletId;
+    var args = WalletRouteArgs.of(context);
     final pool = duckpoolsService.pools.firstWhere((p) => p.key == l.pool);
     final (cTicker, cDecimals) = pool.collateralUnit(l.collateralAsset);
     final held = l.collateralAsset == null
@@ -201,6 +202,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       builder: (_) => _AdjustSheet(loan: l, ticker: cTicker, decimals: cDecimals, held: held),
     );
     if (newAmount == null || !mounted) return;
+    if (!_sameWallet(walletBefore)) return;
+    args = WalletRouteArgs.of(context);
     setState(() => _working = true);
     try {
       final prepared = await duckpoolsService.prepareAdjust(
