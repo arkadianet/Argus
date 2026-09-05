@@ -158,6 +158,33 @@ class FakeGateway implements DuckpoolsGateway {
   @override
   String orderOutcome(String kind, String proxyBoxId, String txJson) =>
       jsonEncode(outcomes[proxyBoxId] ?? {'outcome': 'unknown'});
+  String? lastAdjustLoanBoxes;
+  @override
+  String adjustQuote(String loanBoxesJson, String poolKey, String collateralBoxId, int newAmount, int height) {
+    if (newAmount < 1338000000000) throw StateError('that leaves the loan at or below its liquidation line');
+    return jsonEncode({
+      'pool': poolKey, 'collateral_box_id': collateralBoxId, 'current_amount': 2500000000000, 'new_amount': newAmount,
+      'delta': newAmount - 2500000000000, 'owed': 23939, 'collateral_value_after': newAmount ~/ 40000000,
+      'liquidation_value': 33514, 'health_after_bps': newAmount ~/ 40000000 * 10000 ~/ 33514, 'min_amount': 1338000000000,
+    });
+  }
+  @override
+  Future<String> prepareAdjust({
+    required String loanBoxesJson,
+    required String poolKey,
+    required String collateralBoxId,
+    required int newAmount,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+  }) async {
+    lastAdjustLoanBoxes = loanBoxesJson;
+    return jsonEncode({
+      'preparation_id': 11,
+      'quote': jsonDecode(adjustQuote(loanBoxesJson, poolKey, collateralBoxId, newAmount, 1)),
+      'height': 1000, 'miner_fee': 1100000,
+    });
+  }
 
   @override
   String pools() => jsonEncode([
@@ -512,6 +539,18 @@ void main() {
     expect(repay.expected, 2500000000000);
     final quote = svc.loanQuote(poolKey: 'sigusd', kind: 'partial_repay', amount: 5000, collateralBoxId: 'loan-1');
     expect(quote['owed_after'], 18939);
+
+    // A collateral adjustment quotes against the same snapshot and needs no order.
+    final adj = svc.adjustQuote(poolKey: 'sigusd', collateralBoxId: 'loan-1', newAmount: 1500000000000);
+    expect(adj['delta'], -1000000000000);
+    expect(() => svc.adjustQuote(poolKey: 'sigusd', collateralBoxId: 'loan-1', newAmount: 1000000000000), throwsStateError);
+    final preparedAdj = await svc.prepareAdjust(
+      poolKey: 'sigusd', collateralBoxId: 'loan-1', newAmount: 2600000000000,
+      userAddress: '9me', spendAddresses: const [], changeAddress: '9me',
+    );
+    expect(preparedAdj['preparation_id'], 11);
+    expect(gw.lastAdjustLoanBoxes, gw.lastLoanBoxes);
+    expect(svc.orders.where((o) => o.kind == 'adjust'), isEmpty);
 
     // A pool whose parameter box cannot be read says so and offers no borrowing.
     withParams = false;

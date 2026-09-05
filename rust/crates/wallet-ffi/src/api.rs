@@ -4333,6 +4333,140 @@ pub async fn duckpools_prepare_refund(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+/// Quote a collateral adjustment: `new_amount` is the collateral the loan
+/// should hold afterwards (nanoERG, or the token's units for an ERG pool
+/// loan). Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn duckpools_adjust_quote(
+    loan_boxes_json: String,
+    pool_key: String,
+    collateral_box_id: String,
+    new_amount: i64,
+    height: i64,
+) -> Result<String, String> {
+    let pool = duckpools::pool_by_key(&pool_key)
+        .ok_or_else(|| ArgusError::TxBuildFailed(format!("unknown pool {pool_key}")).to_json_string())?;
+    let root: serde_json::Value = serde_json::from_str(&loan_boxes_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let snapshot = crate::api_duckpools_impl::LoanSnapshot::parse(pool, &root)?;
+    let (_, quote) = snapshot.adjust_quote(&collateral_box_id, new_amount, height)?;
+    serde_json::to_string(&quote)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Prepare a collateral adjustment: the borrower's own spend of the
+/// collateral box, with the interest and price boxes as data inputs and
+/// the wallet's boxes for whatever is added and the fee. Confirm with
+/// `send_erg`; the wallet's key for the loan signs it. No bot is
+/// involved and nothing waits for a fill.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn duckpools_prepare_adjust(
+    handle_id: u64,
+    loan_boxes_json: String,
+    pool_key: String,
+    collateral_box_id: String,
+    new_amount: i64,
+    user_address: String,
+    spend_addresses: Vec<String>,
+    change_address: String,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+) -> Result<String, String> {
+    let pool = duckpools::pool_by_key(&pool_key)
+        .ok_or_else(|| ArgusError::TxBuildFailed(format!("unknown pool {pool_key}")).to_json_string())?;
+    let root: serde_json::Value = serde_json::from_str(&loan_boxes_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let snapshot = crate::api_duckpools_impl::LoanSnapshot::parse(pool, &root)?;
+    let miner_fee = mix_miner_fee(fee_nano)?;
+    let change_tree = with_handle(handle_id, "duckpools_prepare_adjust", |h| {
+        for a in [&user_address, &change_address] {
+            if !h.owns_address(a).map_err(err_str)? {
+                return Err(ArgusError::InvalidAddress(
+                    "adjustment addresses must belong to this wallet".into(),
+                )
+                .to_json_string());
+            }
+        }
+        address_to_ergo_tree(&change_address)
+            .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())
+    })?;
+    let client = node_client(node_url.clone()).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    let (position, quote) = snapshot.adjust_quote(&collateral_box_id, new_amount, height as i64)?;
+    let data = snapshot.adjust_data_inputs(&root, &position)?;
+    let collateral = snapshot.collateral_input(&collateral_box_id)?;
+    let spend: Vec<String> = if spend_addresses.is_empty() {
+        vec![user_address.clone()]
+    } else {
+        spend_addresses
+    };
+    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (erg_needed, token) = quote.wallet_needs();
+    let mut built = None;
+    for extra in [0i64, duckpools::MIN_BOX_VALUE] {
+        let selected = wallet_core::spend::select_for_send(
+            &utxos,
+            (erg_needed + miner_fee + extra) as u64,
+            token.as_ref().map(|(id, n)| (id.as_str(), *n as u64)),
+        )
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        match duckpools::build_adjust_tx(
+            &quote,
+            &collateral,
+            &selected.boxes,
+            &data,
+            &change_tree,
+            miner_fee,
+            height as i32,
+        ) {
+            Ok(tx) => {
+                built = Some((tx, selected.boxes));
+                break;
+            }
+            Err(e) if extra == 0 && e.to_string().contains("change") => continue,
+            Err(e) => return Err(ArgusError::TxBuildFailed(e.to_string()).to_json_string()),
+        }
+    }
+    let (unsigned_tx, used) = built.ok_or_else(|| {
+        ArgusError::TxBuildFailed("could not select inputs that leave a valid change box".into())
+            .to_json_string()
+    })?;
+    let mut ergo_boxes = vec![crate::api_mix_impl::to_ergo_box(&collateral)?];
+    for b in &used {
+        ergo_boxes.push(crate::api_mix_impl::to_ergo_box(b)?);
+    }
+    let data_input_boxes = [&data.base_child, &data.parent, &data.head_child, &data.dex]
+        .into_iter()
+        .map(crate::api_mix_impl::to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let change_erg = user_change_erg(&unsigned_tx, &change_tree);
+    let input_boxes = input_boxes_json(&used);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes,
+        data_input_boxes,
+        unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: 0,
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "quote": quote,
+        "height": height,
+        "miner_fee": miner_fee,
+        "input_boxes": input_boxes,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 /// What the transaction that spent a proxy box did with it: filled,
 /// refunded, or something else. Pure.
 #[flutter_rust_bridge::frb(sync)]

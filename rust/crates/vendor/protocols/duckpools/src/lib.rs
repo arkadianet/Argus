@@ -13,11 +13,14 @@
 //!
 //! - [`loans`]: collateral boxes valued as the contract values them, and
 //!   the borrow, repay and partial-repay orders.
+//! - [`adjust`]: a borrower adding or releasing collateral by re-creating
+//!   their own collateral box, no bot involved.
 //!
 //! No user action spends a pool box directly. The wallet posts an *order*
 //! (a proxy box) and an off-chain bot fills it against the pool; if none
 //! does, the order is refundable after the height the wallet chose.
 
+pub mod adjust;
 pub mod encode;
 pub mod fees;
 pub mod interest;
@@ -26,6 +29,7 @@ pub mod orders;
 pub mod pools;
 pub mod state;
 
+pub use adjust::{build_adjust_tx, AdjustDataInputs, AdjustQuote};
 pub use interest::{InterestParams, Rates};
 pub use loans::{
     classify_loan_spend, positions, BorrowQuote, CollateralBox, DexPrice, InterestHistory,

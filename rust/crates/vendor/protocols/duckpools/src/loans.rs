@@ -490,6 +490,8 @@ pub struct LoanPosition {
     pub forced_liquidation_height: i64,
     pub parent_index: i32,
     pub child_index: i32,
+    /// The price source the loan is valued through.
+    pub dex_nft: String,
 }
 
 impl LoanPosition {
@@ -536,6 +538,7 @@ impl LoanPosition {
             forced_liquidation_height: c.forced_liquidation_height,
             parent_index: c.parent_index,
             child_index: c.child_index,
+            dex_nft: c.dex_nft.clone(),
         })
     }
 }
