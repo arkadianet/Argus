@@ -316,6 +316,10 @@ void main() {
     expect(parseDuckAmount('.5', 2), 50);
     expect(parseDuckAmount('7', 0), 7);
     expect(parseDuckAmount('1.0000000005', 9), isNull, reason: 'ten decimals on a nine-decimal asset');
+    expect(parseDuckAmount('1,2', 2), isNull, reason: 'a comma is only a thousands separator');
+    expect(parseDuckAmount('1.2,3', 2), isNull);
+    expect(parseDuckAmount('1,000,000', 2), 100000000);
+    expect(parseDuckAmount('1,0000', 2), isNull);
     expect(parseDuckAmount('0.001', 2), isNull);
     expect(parseDuckAmount('0', 2), isNull);
     expect(parseDuckAmount('abc', 2), isNull);
@@ -363,6 +367,9 @@ void main() {
       changeAddress: '9me',
       refundAfterBlocks: 100,
     );
+    expect(svc.canCommit(prepared), isTrue);
+    expect(svc.canCommit({...prepared, 'wallet_id': 'w2'}), isFalse, reason: 'prepared for another wallet');
+    await expectLater(svc.commitOrder({...prepared, 'wallet_id': 'w2'}, 'tx-x'), throwsStateError);
     final order = await svc.commitOrder(prepared, 'tx-order');
     expect(order.status, 'pending');
     expect(order.refundHeight, 1100);
