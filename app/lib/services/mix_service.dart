@@ -278,10 +278,27 @@ class LiveMixGateway implements MixGateway {
 /// against canned pages.
 typedef MixHttpGet = Future<String> Function(Uri uri);
 
+/// One HTTP POST with a JSON body, for the node's indexed queries.
+typedef MixHttpPost = Future<String> Function(Uri uri, String jsonBody);
+
+/// Explorers answer a by-script query in ten to thirty seconds; the node's
+/// index answers in a few. The timeout covers the slow one.
+const mixHttpTimeout = Duration(seconds: 60);
+
 Future<String> _httpGet(Uri uri) async {
-  final res = await http.get(uri).timeout(const Duration(seconds: 20));
+  final res = await http.get(uri).timeout(mixHttpTimeout);
   if (res.statusCode != 200) {
-    throw StateError('explorer returned HTTP ${res.statusCode} for ${uri.path}');
+    throw StateError('${uri.host} returned HTTP ${res.statusCode} for ${uri.path}');
+  }
+  return res.body;
+}
+
+Future<String> _httpPost(Uri uri, String jsonBody) async {
+  final res = await http
+      .post(uri, headers: const {'Content-Type': 'application/json'}, body: jsonBody)
+      .timeout(mixHttpTimeout);
+  if (res.statusCode != 200) {
+    throw StateError('${uri.host} returned HTTP ${res.statusCode} for ${uri.path}');
   }
   return res.body;
 }
@@ -314,9 +331,14 @@ class MixSnapshot {
 /// [tick] without asking, since it spends nothing the user has not already
 /// committed to the mix.
 class MixService extends ChangeNotifier {
-  MixService({MixGateway? gateway, MixHttpGet? get, DateTime Function()? clock})
-      : _gw = gateway ?? const LiveMixGateway(),
+  MixService({
+    MixGateway? gateway,
+    MixHttpGet? get,
+    MixHttpPost? post,
+    DateTime Function()? clock,
+  })  : _gw = gateway ?? const LiveMixGateway(),
         _get = get ?? _httpGet,
+        _post = post ?? _httpPost,
         _clock = clock ?? DateTime.now;
 
   static const _enabledKey = 'argus_mixing_enabled';
@@ -334,6 +356,7 @@ class MixService extends ChangeNotifier {
 
   final MixGateway _gw;
   final MixHttpGet _get;
+  final MixHttpPost _post;
   final DateTime Function() _clock;
 
   /// Off until the user turns mixing on in Settings → Privacy.
@@ -475,11 +498,51 @@ class MixService extends ChangeNotifier {
     return m.map((k, v) => MapEntry(k.toString(), v.toString()));
   }
 
-  Future<List<dynamic>> _pageAll(String base, String tree, {int cap = mixListCap}) async {
+  String? get _nodeBase => _gw.nodeUrl?.replaceAll(RegExp(r'/+$'), '');
+
+  /// Unspent boxes under one script, from the node's index when the wallet
+  /// has a node, else from the explorer. The node answers in seconds; an
+  /// explorer can take half a minute per page.
+  Future<List<dynamic>> _listByTree(String base, String tree, {int cap = mixListCap}) async {
+    final node = _nodeBase;
+    if (node != null) {
+      try {
+        return await _pageNode(node, tree, cap: cap);
+      } catch (_) {
+        // A node without the extra index, or unreachable: the explorer has
+        // the same data.
+      }
+    }
+    return _pageExplorer(base, tree, cap: cap);
+  }
+
+  Future<List<dynamic>> _pageNode(String node, String tree, {required int cap}) async {
     final items = <dynamic>[];
     final seen = <String>{};
     var offset = 0;
-    var truncated = false;
+    while (true) {
+      final uri = Uri.parse(
+        '$node/blockchain/box/unspent/byErgoTree?offset=$offset&limit=$mixPageLimit',
+      );
+      final page = jsonDecode(await _post(uri, jsonEncode(tree))) as List;
+      for (final b in page) {
+        final id = (b as Map)['boxId']?.toString() ?? '';
+        if (id.isNotEmpty && seen.add(id)) items.add(b);
+      }
+      offset += page.length;
+      if (page.length < mixPageLimit) break;
+      if (items.length >= cap) {
+        _lastListTruncated = true;
+        break;
+      }
+    }
+    return items;
+  }
+
+  Future<List<dynamic>> _pageExplorer(String base, String tree, {required int cap}) async {
+    final items = <dynamic>[];
+    final seen = <String>{};
+    var offset = 0;
     while (true) {
       final uri = Uri.parse(
         '$base/api/v1/boxes/unspent/byErgoTree/$tree?offset=$offset&limit=$mixPageLimit',
@@ -494,19 +557,46 @@ class MixService extends ChangeNotifier {
       offset += page.length;
       if (page.length < mixPageLimit || (total != null && offset >= total)) break;
       if (items.length >= cap) {
-        truncated = true;
+        _lastListTruncated = true;
         break;
       }
     }
-    _lastListTruncated = _lastListTruncated || truncated;
     return items;
   }
 
   bool _lastListTruncated = false;
 
-  /// Everything the engine needs, from the explorer: the waiting half
-  /// boxes, the operator's boxes, and the current state of each of our own
-  /// boxes (unspent, or the outputs of whatever spent it).
+  /// One box by id, with its `spentTransactionId`: node first, then explorer.
+  Future<Map<String, dynamic>> _boxById(String base, String id) async {
+    final node = _nodeBase;
+    if (node != null) {
+      try {
+        return (jsonDecode(await _get(Uri.parse('$node/blockchain/box/byId/$id'))) as Map).cast();
+      } catch (_) {
+        // Fall through.
+      }
+    }
+    return (jsonDecode(await _get(Uri.parse('$base/api/v1/boxes/$id'))) as Map).cast();
+  }
+
+  /// The outputs of one transaction: node first, then explorer.
+  Future<List<dynamic>> _txOutputs(String base, String txId) async {
+    final node = _nodeBase;
+    if (node != null) {
+      try {
+        final tx = jsonDecode(await _get(Uri.parse('$node/blockchain/transaction/byId/$txId'))) as Map;
+        return tx['outputs'] as List? ?? const [];
+      } catch (_) {
+        // Fall through.
+      }
+    }
+    final tx = jsonDecode(await _get(Uri.parse('$base/api/v1/transactions/$txId'))) as Map;
+    return tx['outputs'] as List? ?? const [];
+  }
+
+  /// Everything the engine needs: the waiting half boxes, the operator's
+  /// boxes, and the current state of each of our own boxes (unspent, or
+  /// the outputs of whatever spent it). The lists are fetched together.
   ///
   /// With [allFullBoxes] every unspent full-mix box is included too, which
   /// recovery needs and a routine tick does not.
@@ -514,35 +604,31 @@ class MixService extends ChangeNotifier {
     final base = _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
     final trees = _trees;
     _lastListTruncated = false;
-    final half = await _pageAll(base, trees['half']!);
-    final fee = await _pageAll(base, trees['fee']!, cap: 100);
-    final token = await _pageAll(base, trees['token']!, cap: 100);
-    final full = allFullBoxes ? await _pageAll(base, trees['full']!) : <dynamic>[];
-    for (final id in ownBoxIds) {
-      Map<String, dynamic> box;
-      try {
-        box = (jsonDecode(await _get(Uri.parse('$base/api/v1/boxes/$id'))) as Map).cast();
-      } catch (_) {
-        // Not found or unreachable: the engine sees the box as "not seen"
-        // and waits, which is the safe answer.
-        continue;
+    final lists = await Future.wait<List<dynamic>>([
+      _listByTree(base, trees['half']!),
+      // One fee box and one token box are enough; the fullest of the first
+      // page will do, and the operator keeps only a handful live.
+      _listByTree(base, trees['fee']!, cap: 100),
+      _listByTree(base, trees['token']!, cap: 100),
+      if (allFullBoxes) _listByTree(base, trees['full']!),
+    ]);
+    final half = lists[0];
+    final fee = lists[1];
+    final token = lists[2];
+    final full = allFullBoxes ? lists[3] : <dynamic>[];
+
+    final own = await Future.wait<_OwnBox>([
+      for (final id in ownBoxIds) _resolveOwnBox(base, id),
+    ]);
+    for (final o in own) {
+      // An unspent own box goes under both lists; the engine files it by
+      // script and ignores duplicates. Outputs of its spender are full
+      // boxes, or nothing of ours.
+      if (o.unspent != null) {
+        half.add(o.unspent);
+        full.add(o.unspent);
       }
-      final spentBy = box['spentTransactionId']?.toString();
-      if (spentBy == null || spentBy.isEmpty) {
-        // Unspent: hand it over under both lists; the engine files it by
-        // script and ignores duplicates.
-        half.add(box);
-        full.add(box);
-        continue;
-      }
-      try {
-        final tx = (jsonDecode(await _get(Uri.parse('$base/api/v1/transactions/$spentBy'))) as Map);
-        for (final o in (tx['outputs'] as List? ?? const [])) {
-          full.add(o);
-        }
-      } catch (_) {
-        // The engine will report the box as not seen and wait.
-      }
+      full.addAll(o.spenderOutputs);
     }
     final height = await _height(base);
     return MixSnapshot(
@@ -558,12 +644,41 @@ class MixService extends ChangeNotifier {
     );
   }
 
+  /// Our box if unspent, else the outputs of the transaction that spent
+  /// it, else nothing: the engine then reports the box as not seen and
+  /// waits, which is the safe answer.
+  Future<_OwnBox> _resolveOwnBox(String base, String id) async {
+    Map<String, dynamic> box;
+    try {
+      box = await _boxById(base, id);
+    } catch (_) {
+      return const _OwnBox();
+    }
+    final spentBy = box['spentTransactionId']?.toString();
+    if (spentBy == null || spentBy.isEmpty) return _OwnBox(unspent: box);
+    try {
+      return _OwnBox(spenderOutputs: await _txOutputs(base, spentBy));
+    } catch (_) {
+      return const _OwnBox();
+    }
+  }
+
   /// The current height: from the node the wallet is already talking to,
   /// else from the explorer. Not every explorer serves `networkState`, so
   /// the newest block is the second try.
   Future<int> _height(String base) async {
     final known = _gw.chainHeight;
     if (known != null && known > 0) return known;
+    final node = _nodeBase;
+    if (node != null) {
+      try {
+        final info = jsonDecode(await _get(Uri.parse('$node/info'))) as Map;
+        final h = (info['fullHeight'] as num?)?.toInt();
+        if (h != null && h > 0) return h;
+      } catch (_) {
+        // Fall through to the explorer.
+      }
+    }
     try {
       final state = jsonDecode(await _get(Uri.parse('$base/api/v1/networkState'))) as Map;
       final h = (state['height'] as num?)?.toInt();
@@ -844,3 +959,10 @@ class MixService extends ChangeNotifier {
 }
 
 final mixService = MixService();
+
+/// What the chain says about one of our boxes.
+class _OwnBox {
+  const _OwnBox({this.unspent, this.spenderOutputs = const []});
+  final Map<String, dynamic>? unspent;
+  final List<dynamic> spenderOutputs;
+}
