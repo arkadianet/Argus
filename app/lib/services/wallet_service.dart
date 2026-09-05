@@ -1070,13 +1070,19 @@ class WalletService {
   }
 
   Future<String> sendErg({required int preparationId}) async {
+    final map = await sendErgDetailed(preparationId: preparationId);
+    return map['tx_id'] as String? ?? '';
+  }
+
+  /// Like [sendErg], returning the whole result: `tx_id`, fees, and
+  /// `output_box_ids`, the ids of the transaction's outputs.
+  Future<Map<String, dynamic>> sendErgDetailed({required int preparationId}) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiSendErg(
       handleId: _handleId!,
       preparationId: BigInt.from(preparationId),
     );
-    final map = jsonDecode(raw) as Map<String, dynamic>;
-    return map['tx_id'] as String? ?? raw;
+    return jsonDecode(raw) as Map<String, dynamic>;
   }
 
   // ── Stealth addresses ───────────────────────────────────────────────

@@ -1771,6 +1771,13 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
         .submit_transaction(&tx_json)
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    // The outputs' ids, so a caller that needs one specific box of this
+    // transaction (a mix's funding box) can find it by id rather than by
+    // guessing from its value. Ids cover no proofs, so they match the
+    // broadcast transaction; best effort, never a reason to fail a send.
+    let output_box_ids: Vec<String> = ergo_tx::chain::derive_output_boxes(&prep.unsigned_tx)
+        .map(|(_, outs)| outs.into_iter().map(|b| b.box_id).collect())
+        .unwrap_or_default();
 
     serde_json::to_string(&serde_json::json!({
         "tx_id": tx_id,
@@ -1778,6 +1785,7 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
         "miner_fee": prep.miner_fee,
         "change_nano_erg": prep.change_erg,
         "amount_nano_erg": prep.recipient_erg,
+        "output_box_ids": output_box_ids,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
