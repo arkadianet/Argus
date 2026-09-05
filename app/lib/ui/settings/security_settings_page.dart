@@ -5,6 +5,7 @@ import '../../bridge/argus_error.dart';
 import '../../services/privacy_service.dart';
 import '../../services/secure_storage.dart';
 import '../../services/session_lock.dart';
+import '../../services/mix_service.dart';
 import '../../services/stealth_service.dart';
 import '../../services/wallet_service.dart';
 import '../pin_fields.dart';
@@ -371,6 +372,39 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
           'The scan fetches the public list of stealth boxes from the '
           'explorer and tests it on your phone. The explorer learns that '
           'someone asked for the list, never which boxes are yours.',
+        ),
+        ListenableBuilder(
+          listenable: mixService,
+          builder: (context, _) => SettingsGroup(
+            title: 'Mixing',
+            scope: 'App-wide',
+            children: [
+              SettingsRow(
+                icon: Icons.blender_outlined,
+                title: 'Enable mixing',
+                subtitle: mixService.enabled
+                    ? 'Mixes advance on their own while Argus is open and unlocked'
+                    : 'Off: no mix is started or advanced',
+                trailing: Switch(
+                  key: const Key('mixing-switch'),
+                  value: mixService.enabled,
+                  onChanged: (v) async {
+                    try {
+                      await mixService.setEnabled(v);
+                    } catch (_) {
+                      _snack('Could not save the mixing setting');
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SettingsNote(
+          'Mixing uses the public ErgoMixer pool and its contracts. Entering '
+          'costs an operator fee; each round needs a stranger to pair with, '
+          'so a mix can take hours or days. Not every app store allows a '
+          'wallet with a built-in mixer; it stays off until you turn it on.',
         ),
       ],
     );

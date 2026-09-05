@@ -1,7 +1,7 @@
 # ZeroJoin mixer, stage 2: engine, wallet and screen
 
 Date: 2026-09-05
-Status: batch A merged (#64); batch B in review; batch C next. Follows `2026-09-05-zerojoin-mixer-design.md`
+Status: batches A (#64) and B (#65) merged; batch C in review. Follows `2026-09-05-zerojoin-mixer-design.md`
 (stage 1, merged as #63), which built the contracts, secrets and the six
 transaction builders and verified them against live pool boxes.
 
@@ -81,8 +81,8 @@ that is a build flag decision for the release, not for this stage.
 | Batch | Contents | Done when |
 |---|---|---|
 | A (#64) | `zerojoin::mix`: `MixState`, `ChainView`, `observe`, `plan`, `recover`, transitions. Wallet-core `mix_secret`. FFI: `mix_rings`, `mix_funding_requirement`, `mix_prepare_entry` (through the prepare/confirm cache, secrets re-derived at sign time), `mix_advance` (build, reduce, sign, broadcast one move), `mix_recover`, `mix_plan`. | Unit tests for every transition; a live ignored test that enters, remixes and withdraws a 1 ERG mix reduces every input to true. |
-| B (this PR) | Dart `MixService`: persisted mix list per wallet, snapshot fetcher, advancement on sync and in the background window, notifications on round completion. Pockets: `inMix` and `mixed` fed from mix states. | A mix survives app restart and a seed restore; balances show in the pockets. |
-| C | Mix screen: start (ring, level, rounds, destination), progress, reclaim, withdraw now. Settings switch. Release notes. | Device-tested 1 ERG mix end to end. |
+| B (#65) | Dart `MixService`: persisted mix list per wallet, snapshot fetcher, advancement on sync and in the background window, notifications on round completion. Pockets: `inMix` and `mixed` fed from mix states. | A mix survives app restart and a seed restore; balances show in the pockets. |
+| C (this PR) | Mix screen: start (ring, level, rounds, destination), progress, reclaim, withdraw now. Settings switch. Release notes. | Device-tested 1 ERG mix end to end. |
 
 ## Not in stage 2
 

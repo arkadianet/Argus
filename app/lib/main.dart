@@ -26,6 +26,7 @@ import 'ui/settings_screen.dart';
 import 'ui/swap_hub_screen.dart';
 import 'ui/transaction_detail_screen.dart';
 import 'ui/transactions_screen.dart';
+import 'ui/mix_screen.dart';
 import 'ui/utxo_management_screen.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -126,6 +127,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/contacts' => const ContactsScreen(),
               '/tx' => const TransactionDetailScreen(),
               '/utxos' => const UtxoManagementScreen(),
+              '/mix' => const MixScreen(),
               '/dexy' => const DexyScreen(),
               '/ageusd' => const AgeUsdScreen(),
               '/swap' => const SwapHubScreen(),

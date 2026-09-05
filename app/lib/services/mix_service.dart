@@ -15,11 +15,15 @@ import 'wallet_service.dart';
 /// truth, plus what only the app knows (the last error, when it last
 /// looked). No secret is ever here; see the zerojoin crate's `mix` module.
 class MixRecord {
-  MixRecord({required this.state, this.lastError, this.lastCheckedAt});
+  MixRecord({required this.state, this.lastError, this.lastCheckedAt, this.fundingNano});
 
   Map<String, dynamic> state;
   String? lastError;
   DateTime? lastCheckedAt;
+
+  /// What the funding box was made to hold, so a pending mix can find it
+  /// again even if the operator's price has moved since.
+  int? fundingNano;
 
   int get mixId => (state['mix_id'] as num).toInt();
   Map<String, dynamic> get phase => (state['phase'] as Map).cast<String, dynamic>();
@@ -54,11 +58,13 @@ class MixRecord {
         'state': state,
         if (lastError != null) 'last_error': lastError,
         if (lastCheckedAt != null) 'last_checked_at': lastCheckedAt!.millisecondsSinceEpoch,
+        if (fundingNano != null) 'funding_nano': fundingNano,
       };
 
   static MixRecord fromJson(Map<String, dynamic> m) => MixRecord(
         state: (m['state'] as Map).cast<String, dynamic>(),
         lastError: m['last_error'] as String?,
+        fundingNano: (m['funding_nano'] as num?)?.toInt(),
         lastCheckedAt: (m['last_checked_at'] as num?) == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch((m['last_checked_at'] as num).toInt()),
@@ -546,6 +552,7 @@ class MixService extends ChangeNotifier {
     required int level,
     required int rounds,
     required String destinationAddress,
+    int? fundingNano,
   }) async {
     final id = _walletId;
     if (id == null) throw StateError('No wallet is loaded');
@@ -565,7 +572,10 @@ class MixService extends ChangeNotifier {
       destinationAddress: destinationAddress,
       nowUnix: _now,
     );
-    final record = MixRecord(state: (jsonDecode(raw) as Map).cast<String, dynamic>());
+    final record = MixRecord(
+      state: (jsonDecode(raw) as Map).cast<String, dynamic>(),
+      fundingNano: fundingNano,
+    );
     records = [record, ...records];
     await _persist();
     return record;

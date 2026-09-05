@@ -169,6 +169,12 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
                 subtitle: 'Consolidate, split and restructure boxes.',
                 onTap: unlocked ? () => Navigator.pushNamed(context, '/utxos') : null,
               ),
+              SettingsRow(
+                icon: Icons.blender_outlined,
+                title: 'Mix',
+                subtitle: 'Move ERG through the ErgoMixer pool so it cannot be traced back.',
+                onTap: unlocked ? () => Navigator.pushNamed(context, '/mix') : null,
+              ),
             ],
           ),
           const SectionLabel('Backup'),
