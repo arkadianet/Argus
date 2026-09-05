@@ -557,8 +557,9 @@ class DuckpoolsService extends ChangeNotifier {
   bool get loansBusy => _loansBusy;
 
   /// The loan boxes of the last read, for quoting and building loan
-  /// orders without another round trip.
+  /// orders without another round trip, and the height they were read at.
   String? lastLoanBoxesJson;
+  int? _loansHeight;
 
   /// Orders of the loaded wallet, newest first.
   List<DuckOrder> orders = const [];
@@ -620,6 +621,7 @@ class DuckpoolsService extends ChangeNotifier {
     loans = const [];
     markets = const [];
     lastLoanBoxesJson = null;
+    _loansHeight = null;
     loansError = null;
     loansRefreshedAt = null;
     notifyListeners();
@@ -704,48 +706,73 @@ class DuckpoolsService extends ChangeNotifier {
   /// its contract, its interest history, its price source and its
   /// parameter box; then the wallet's loans among them. A pool whose
   /// boxes cannot all be read is reported in its market, not thrown.
-  Future<void> refreshLoans(List<String> walletAddresses) async {
+  Future<void> refreshLoans(List<String> walletAddresses, {String? walletId}) async {
     if (_loansBusy) return;
     _loansBusy = true;
     notifyListeners();
+    // The wallet this read is for; a switch while it is in flight means
+    // the result is not shown.
+    final forWallet = walletId ?? _gw.walletId;
+    bool stale() => walletId == null && _gw.walletId != forWallet;
     try {
       final collateral = <dynamic>[];
       final parents = <dynamic>[];
       final children = <dynamic>[];
       final dex = <dynamic>[];
       final params = <dynamic>[];
-      Future<void> gather(List<dynamic> into, Future<List<dynamic>> Function() read) async {
+      // Pools whose collateral boxes could not be read: their loans are
+      // unknown, and the market must say so rather than look fine.
+      final collateralFailures = <String, String>{};
+      Future<void> gather(List<dynamic> into, Future<List<dynamic>> Function() read, {String? collateralOf}) async {
         try {
           into.addAll(await read());
-        } catch (_) {
-          // The pool's market reports what is missing.
+        } catch (e) {
+          if (collateralOf != null) collateralFailures[collateralOf] = e.toString();
+          // Otherwise the pool's market reports what is missing.
         }
       }
 
       final reads = <Future<void>>[];
       for (final p in pools.where((p) => p.lends)) {
-        reads.add(gather(collateral, () => _allBoxesUnderTree(p.collateralErgoTree)));
+        reads.add(gather(collateral, () => _allBoxesUnderTree(p.collateralErgoTree), collateralOf: p.key));
         reads.add(gather(parents, () => _boxesByToken(p.parentNft)));
         reads.add(gather(children, () => _boxesByToken(p.childNft, limit: 50)));
         reads.add(gather(dex, () => _boxesByToken(p.ergDexNft!)));
         reads.add(gather(params, () => _boxesByToken(p.paramNft)));
       }
       await Future.wait(reads);
-      final height = await _height() ?? 0;
-      lastLoanBoxesJson = jsonEncode({
+      // Interest and liquidation are functions of the height: without one
+      // the figures would be wrong, not merely stale.
+      final height = await _height();
+      if (height == null || height <= 0) throw StateError('The chain height could not be read; loans need it');
+      final boxesJson = jsonEncode({
         'collateral': collateral,
         'parents': parents,
         'children': children,
         'dex': dex,
         'params': params,
       });
-      final raw = (jsonDecode(await _gw.loans(lastLoanBoxesJson!, walletAddresses, height)) as Map).cast<String, dynamic>();
+      final raw = (jsonDecode(await _gw.loans(boxesJson, walletAddresses, height)) as Map).cast<String, dynamic>();
+      if (stale()) return;
+      lastLoanBoxesJson = boxesJson;
+      _loansHeight = height;
       loans = [for (final m in (raw['positions'] as List)) DuckLoan.fromJson((m as Map).cast())];
-      markets = [for (final m in (raw['markets'] as List)) DuckMarket.fromJson((m as Map).cast())];
+      markets = [
+        for (final m in (raw['markets'] as List))
+          if (collateralFailures[(m as Map)['pool']] case final failure?)
+            DuckMarket(
+              pool: m['pool'] as String,
+              ticker: m['ticker'] as String,
+              decimals: (m['decimals'] as num).toInt(),
+              error: 'collateral boxes could not be read: $failure',
+            )
+          else
+            DuckMarket.fromJson(m.cast()),
+      ];
       loansError = null;
       loansRefreshedAt = DateTime.now();
     } catch (e) {
-      loansError = e.toString();
+      if (!stale()) loansError = e.toString();
     } finally {
       _loansBusy = false;
       notifyListeners();
@@ -763,6 +790,8 @@ class DuckpoolsService extends ChangeNotifier {
     final boxes = lastPoolBoxesJson;
     final loanBoxes = lastLoanBoxesJson;
     if (boxes == null || loanBoxes == null) throw StateError('Read the pools first');
+    final height = _gw.chainHeight ?? _loansHeight;
+    if (height == null || height <= 0) throw StateError('The chain height could not be read; loans need it');
     return (jsonDecode(_gw.loanQuote(
       poolBoxesJson: boxes,
       loanBoxesJson: loanBoxes,
@@ -771,7 +800,7 @@ class DuckpoolsService extends ChangeNotifier {
       amount: amount,
       collateralNano: collateralNano,
       collateralBoxId: collateralBoxId,
-      height: _gw.chainHeight ?? 0,
+      height: height,
     )) as Map)
         .cast<String, dynamic>();
   }

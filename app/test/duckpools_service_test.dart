@@ -472,6 +472,44 @@ void main() {
     final quote = svc.loanQuote(poolKey: 'sigusd', kind: 'partial_repay', amount: 5000, collateralBoxId: 'loan-1');
     expect(quote['owed_after'], 18939);
 
+    // A pool whose collateral boxes cannot be read says so on its market
+    // rather than looking fine with the loans silently missing.
+    var collateralDown = true;
+    final svcDown = DuckpoolsService(
+      gateway: gw,
+      get: (uri) async {
+        final p = uri.path;
+        if (p.contains('byTokenId/')) return jsonEncode([{'boxId': p.split('/').last}]);
+        throw StateError('unexpected $uri');
+      },
+      post: (uri, body) async {
+        if (body == '"cc"' && collateralDown) throw StateError('timeout');
+        return jsonEncode([]);
+      },
+    );
+    await svcDown.load();
+    await svcDown.refreshLoans(const ['9me']);
+    expect(svcDown.loansError, isNull);
+    expect(svcDown.marketFor('sigusd')!.ready, isFalse);
+    expect(svcDown.marketFor('sigusd')!.error, contains('collateral boxes could not be read'));
+    collateralDown = false;
+
+    // Without a chain height the figures would be wrong, so the read fails.
+    gw.height = null;
+    await svcDown.refreshLoans(const ['9me']);
+    expect(svcDown.loansError, contains('height'));
+    expect(() => svc.loanQuote(poolKey: 'sigusd', kind: 'repay', collateralBoxId: 'loan-1'), returnsNormally,
+        reason: 'the quote falls back to the height of the last read');
+    gw.height = 1866418;
+
+    // A wallet switch while the read is in flight drops the result.
+    gw.wallet = 'w2';
+    final pending = svc.refreshLoans(const ['9me']);
+    gw.wallet = 'w1';
+    await pending;
+    expect(svc.loans.single.boxId, 'loan-1', reason: 'the w1 read stays');
+    expect(svc.loansError, isNull);
+
     // A pool whose parameter box cannot be read says so and offers no borrowing.
     withParams = false;
     await svc.refreshLoans(const ['9me']);
