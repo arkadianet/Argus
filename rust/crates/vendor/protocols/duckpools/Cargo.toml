@@ -2,9 +2,12 @@
 name = "duckpools"
 version = "0.1.0"
 edition = "2021"
-description = "Duckpools lending pools on Ergo: identities, pool state and position arithmetic"
+description = "Duckpools lending pools on Ergo: identities, pool state, quotes, orders and refunds"
 
 [dependencies]
+ergo-lib = { workspace = true }
+ergo-tx = { workspace = true, features = ["ergo-lib"] }
+hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
