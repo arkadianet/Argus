@@ -6,6 +6,7 @@ pub mod box_selector;
 pub mod burn;
 pub mod dev_fee;
 pub mod eip12;
+pub mod mint;
 pub mod multi_send;
 pub mod send;
 pub mod sigma;
@@ -40,6 +41,7 @@ pub use dev_fee::{
     DEFAULT_DEV_FEE_ERGO_TREE,
 };
 pub use eip12::*;
+pub use mint::{build_mint_tx, issuance_registers, MintBuildResult, MintError, MintSpec, MintSummary, NftDetails, NftKind};
 pub use multi_send::{
     build_multi_send_tx_with_fee, MultiSendBuildResult, MultiSendError, MultiSendSummary,
     RecipientSpec,
