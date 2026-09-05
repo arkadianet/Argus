@@ -1905,6 +1905,10 @@ class _DashboardScreenState extends State<DashboardScreen>
         Expanded(
           child: _actionButton(icon: Icons.swap_horiz, label: 'Swap', onTap: () => _goHub(SwapVenue.spectrum)),
         ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _actionButton(icon: Icons.blender_outlined, label: 'Mix', onTap: () => _go('/mix')),
+        ),
       ],
     );
   }

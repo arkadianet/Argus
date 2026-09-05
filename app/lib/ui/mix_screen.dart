@@ -241,6 +241,27 @@ class _MixScreenState extends State<MixScreen> {
     return s;
   }
 
+  Future<void> _enable() => _guard('Could not turn on mixing', () async {
+        final ok = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Turn on mixing?'),
+            content: const Text(
+              'Argus will use the public ErgoMixer pool and its contracts. The '
+              'operator charges a fee on every entry, shown before you confirm. '
+              'Some app stores do not allow a wallet with a built-in mixer, so '
+              'this stays off unless you choose it. You can turn it off again '
+              'in Settings → Security.',
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Not now')),
+              FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Turn on')),
+            ],
+          ),
+        );
+        if (ok == true) await mixService.setEnabled(true);
+      });
+
   Future<void> _recover() => _guard('Could not scan for mixes', () async {
         final n = await mixService.recover();
         _snack(n == 0 ? 'No unknown mixes found' : 'Found $n ${n == 1 ? 'mix' : 'mixes'}');
@@ -272,11 +293,16 @@ class _MixScreenState extends State<MixScreen> {
         listenable: mixService,
         builder: (context, _) {
           if (!mixService.enabled) {
-            return const EmptyState(
+            return EmptyState(
               icon: Icons.blender_outlined,
               title: 'Mixing is off',
-              body: 'Turn it on in Settings → Security to start a mix. Mixing uses '
-                  'the public ErgoMixer pool and costs an operator fee per entry.',
+              body: 'Mixing moves a fixed amount of ERG through rounds with strangers '
+                  'in the public ErgoMixer pool, so nothing on chain ties what comes '
+                  'out to what went in. Entering costs an operator fee, each round '
+                  'needs a counterpart, and a mix can take hours or days. It only '
+                  'moves while Argus is open and unlocked.',
+              actionLabel: 'Turn on mixing',
+              onAction: _working ? null : _enable,
             );
           }
           final records = mixService.records;

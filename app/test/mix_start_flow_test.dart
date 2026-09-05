@@ -20,6 +20,9 @@ class ScriptedGateway implements MixGateway {
   @override
   String get explorerBase => 'https://x/';
   @override
+  int? get chainHeight => nodeHeight;
+  int? nodeHeight;
+  @override
   String contractTrees() => '{"half":"aa","full":"bb","fee":"cc","token":"dd"}';
 
   @override
