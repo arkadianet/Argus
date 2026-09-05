@@ -354,7 +354,7 @@ abstract class DuckpoolsGateway {
   String pools();
   String state(String poolBoxesJson, String holdingsJson, String interestBoxesJson);
   String quote(String poolBoxesJson, String poolKey, String kind, int amount, int slippageBps, int refundHeight);
-  String loans(String loanBoxesJson, List<String> walletAddresses, int height);
+  Future<String> loans(String loanBoxesJson, List<String> walletAddresses, int height);
   String loanQuote({
     required String poolBoxesJson,
     required String loanBoxesJson,
@@ -414,7 +414,7 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
         refundHeight: refundHeight,
       );
   @override
-  String loans(String loanBoxesJson, List<String> walletAddresses, int height) =>
+  Future<String> loans(String loanBoxesJson, List<String> walletAddresses, int height) =>
       bridge.duckpoolsLoans(loanBoxesJson: loanBoxesJson, walletAddresses: walletAddresses, height: height);
   @override
   String loanQuote({
@@ -724,7 +724,7 @@ class DuckpoolsService extends ChangeNotifier {
 
       final reads = <Future<void>>[];
       for (final p in pools.where((p) => p.lends)) {
-        reads.add(gather(collateral, () => _boxesUnderTree(p.collateralErgoTree, limit: 100)));
+        reads.add(gather(collateral, () => _allBoxesUnderTree(p.collateralErgoTree)));
         reads.add(gather(parents, () => _boxesByToken(p.parentNft)));
         reads.add(gather(children, () => _boxesByToken(p.childNft, limit: 50)));
         reads.add(gather(dex, () => _boxesByToken(p.ergDexNft!)));
@@ -739,7 +739,7 @@ class DuckpoolsService extends ChangeNotifier {
         'dex': dex,
         'params': params,
       });
-      final raw = (jsonDecode(_gw.loans(lastLoanBoxesJson!, walletAddresses, height)) as Map).cast<String, dynamic>();
+      final raw = (jsonDecode(await _gw.loans(lastLoanBoxesJson!, walletAddresses, height)) as Map).cast<String, dynamic>();
       loans = [for (final m in (raw['positions'] as List)) DuckLoan.fromJson((m as Map).cast())];
       markets = [for (final m in (raw['markets'] as List)) DuckMarket.fromJson((m as Map).cast())];
       loansError = null;
@@ -1051,12 +1051,23 @@ class DuckpoolsService extends ChangeNotifier {
   /// sends the query to the explorer.
   Future<List<dynamic>> _boxesUnderScript(DuckPool p) => _boxesUnderTree(p.ergoTree, limit: 20);
 
-  Future<List<dynamic>> _boxesUnderTree(String ergoTree, {required int limit}) async {
+  /// Every unspent box under a script, page by page: a pool's collateral
+  /// boxes are not bounded by a page.
+  Future<List<dynamic>> _allBoxesUnderTree(String ergoTree, {int page = 100}) async {
+    final all = <dynamic>[];
+    for (var offset = 0;; offset += page) {
+      final batch = await _boxesUnderTree(ergoTree, limit: page, offset: offset);
+      all.addAll(batch);
+      if (batch.length < page) return all;
+    }
+  }
+
+  Future<List<dynamic>> _boxesUnderTree(String ergoTree, {required int limit, int offset = 0}) async {
     final node = _gw.nodeUrl?.replaceAll(RegExp(r'/+$'), '');
     if (node != null) {
       try {
         final decoded = jsonDecode(await _post(
-          Uri.parse('$node/blockchain/box/unspent/byErgoTree?offset=0&limit=$limit'),
+          Uri.parse('$node/blockchain/box/unspent/byErgoTree?offset=$offset&limit=$limit'),
           jsonEncode(ergoTree),
         ));
         if (decoded is List) return decoded;
@@ -1067,7 +1078,7 @@ class DuckpoolsService extends ChangeNotifier {
     }
     final base = _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
     final body = jsonDecode(
-      await _get(Uri.parse('$base/api/v1/boxes/unspent/byErgoTree/$ergoTree?offset=0&limit=$limit')),
+      await _get(Uri.parse('$base/api/v1/boxes/unspent/byErgoTree/$ergoTree?offset=$offset&limit=$limit')),
     );
     if (body is Map && body['items'] is List) return body['items'] as List;
     throw StateError('${Uri.parse(base).host} returned no box list');

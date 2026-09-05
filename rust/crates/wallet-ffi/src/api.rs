@@ -4079,9 +4079,10 @@ pub fn duckpools_quote(
 /// object of boxes: `collateral` (every box under the collateral scripts),
 /// `parents` and `children` (the interest boxes), `dex` (the Spectrum
 /// ERG pools that price collateral) and `params` (the pool parameter
-/// boxes). `wallet_addresses` are the wallet's addresses. Pure.
-#[flutter_rust_bridge::frb(sync)]
-pub fn duckpools_loans(
+/// boxes). `wallet_addresses` are the wallet's addresses. Pure, but the
+/// collateral list is unbounded, so it runs off the UI isolate.
+#[flutter_rust_bridge::frb]
+pub async fn duckpools_loans(
     loan_boxes_json: String,
     wallet_addresses: Vec<String>,
     height: i64,

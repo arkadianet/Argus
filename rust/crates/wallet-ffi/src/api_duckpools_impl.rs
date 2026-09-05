@@ -222,7 +222,20 @@ pub fn loans_json(loan_boxes_json: &str, wallet_trees: &[String], height: i64) -
         }
         match LoanSnapshot::parse(pool, &root) {
             Ok(snap) => {
-                let (threshold, penalty) = snap.params.for_erg(pool).map_err(err)?;
+                // A parameter box without ERG terms is this pool's problem,
+                // not every pool's.
+                let (threshold, penalty) = match snap.params.for_erg(pool) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        markets.push(serde_json::json!({
+                            "pool": pool.key,
+                            "ticker": pool.ticker,
+                            "decimals": pool.decimals,
+                            "error": err(e),
+                        }));
+                        continue;
+                    }
+                };
                 markets.push(serde_json::json!({
                     "pool": pool.key,
                     "ticker": pool.ticker,
@@ -505,6 +518,13 @@ mod tests {
         assert!(sigusd["erg_value"].as_i64().unwrap() > 0);
         // Pools whose boxes were not given say so rather than vanish.
         assert!(markets.iter().any(|m| m["pool"] == "quacks" && m["error"].is_string()));
+        // A parameter box that lists no ERG terms is that pool's error only.
+        let mut root: serde_json::Value = serde_json::from_str(&loan_boxes()).unwrap();
+        root["params"][0]["additionalRegisters"]["R6"] = serde_json::json!({"serializedValue": "1a00"});
+        let out = loans_json(&root.to_string(), &[borrower], 1).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let sigusd = v["markets"].as_array().unwrap().iter().find(|m| m["pool"] == "sigusd").unwrap();
+        assert!(sigusd["error"].as_str().unwrap().contains("ERG"), "{sigusd}");
         let none = loans_json(&loan_boxes(), &["0008cd00".into()], 1).unwrap();
         assert!(serde_json::from_str::<serde_json::Value>(&none).unwrap()["positions"].as_array().unwrap().is_empty());
     }
