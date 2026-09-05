@@ -22,8 +22,10 @@ class FakeGateway implements DuckpoolsGateway {
   String? get nodeUrl => node;
   @override
   String get explorerBase => 'https://explorer/';
+  /// Mutable, so a test can switch wallets under an in-flight order.
+  String? wallet = 'w1';
   @override
-  String? get walletId => 'w1';
+  String? get walletId => wallet;
   @override
   bool get isUnlocked => true;
   @override
@@ -367,9 +369,17 @@ void main() {
       changeAddress: '9me',
       refundAfterBlocks: 100,
     );
+    expect(prepared['wallet_id'], 'w1');
     expect(svc.canCommit(prepared), isTrue);
-    expect(svc.canCommit({...prepared, 'wallet_id': 'w2'}), isFalse, reason: 'prepared for another wallet');
-    await expectLater(svc.commitOrder({...prepared, 'wallet_id': 'w2'}, 'tx-x'), throwsStateError);
+    expect(svc.activeWalletId, 'w1');
+    // The wallet switches while the order is in flight: it must not be
+    // sent or recorded here.
+    gw.wallet = 'w2';
+    expect(svc.activeWalletId, 'w2');
+    expect(svc.canCommit(prepared), isFalse, reason: 'prepared under w1, w2 active');
+    await expectLater(svc.commitOrder(prepared, 'tx-x'), throwsStateError);
+    gw.wallet = 'w1';
+    expect(svc.canCommit(prepared), isTrue);
     final order = await svc.commitOrder(prepared, 'tx-order');
     expect(order.status, 'pending');
     expect(order.refundHeight, 1100);
