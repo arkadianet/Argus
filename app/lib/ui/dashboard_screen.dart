@@ -45,6 +45,7 @@ import 'wallets_overview_screen.dart';
 import 'widgets/activity_tile.dart';
 import 'widgets/asset_tile.dart';
 import 'widgets/discover_sheet.dart';
+import 'widgets/action_row.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/soft_card.dart';
 import 'widgets/token_detail_sheet.dart';
@@ -1903,23 +1904,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Widget _actionsRow() {
-    return Row(
-      children: [
-        Expanded(
-          child: _actionButton(icon: Icons.north_east, label: 'Send', onTap: () => _go('/send')),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _actionButton(icon: Icons.south_west, label: 'Receive', onTap: () => _go('/receive')),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _actionButton(icon: Icons.swap_horiz, label: 'Swap', onTap: () => _goHub(SwapVenue.spectrum)),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: _actionButton(icon: Icons.blender_outlined, label: 'Mix', onTap: () => _go('/mix')),
-        ),
+    return HomeActionRow(
+      actions: [
+        HomeAction(icon: Icons.north_east, label: 'Send', onTap: () => _go('/send')),
+        HomeAction(icon: Icons.south_west, label: 'Receive', onTap: () => _go('/receive')),
+        HomeAction(icon: Icons.swap_horiz, label: 'Swap', onTap: () => _goHub(SwapVenue.spectrum)),
+        HomeAction(icon: Icons.blender_outlined, label: 'Mix', onTap: () => _go('/mix')),
       ],
     );
   }
@@ -1945,26 +1935,6 @@ class _DashboardScreenState extends State<DashboardScreen>
         child: Icon(icon,
             size: 19,
             color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7)),
-      ),
-    );
-  }
-
-  Widget _actionButton(
-      {required IconData icon,
-      required String label,
-      required VoidCallback onTap}) {
-    return FilledButton.icon(
-      onPressed: onTap,
-      icon: Icon(icon, size: 17),
-      label: Text(label),
-      style: FilledButton.styleFrom(
-        minimumSize: const Size(0, 50),
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        textStyle: const TextStyle(
-          fontFamily: 'Karla',
-          fontWeight: FontWeight.w500,
-          fontSize: 14.5,
-        ),
       ),
     );
   }
