@@ -174,7 +174,10 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                         result.error("INVALID_ARGS", "Missing walletId or mixId", null)
                         return
                     }
-                    getPrefs().edit().remove(mixKey(walletId, mixId)).commit()
+                    if (!getPrefs().edit().remove(mixKey(walletId, mixId)).commit()) {
+                        result.error("STORAGE_ERROR", "Failed to delete mix key", null)
+                        return
+                    }
                     result.success(true)
                 }
                 "listMixKeys" -> {
@@ -233,6 +236,11 @@ class SecureStorageHandler(private val context: Context) : MethodChannel.MethodC
                         .remove(seedKey(wid))
                         .remove(wrapKey(wid))
                         .remove(pinWrapKey(wid))
+                    // A deleted wallet's mix keys could still spend its pool
+                    // boxes; they go with it.
+                    getPrefs().all.keys
+                        .filter { it.startsWith("mix_key_$wid:") }
+                        .forEach { editor.remove(it) }
                     val ids = getWalletIds().toMutableSet()
                     ids.remove(wid)
                     editor.putStringSet(WALLET_REGISTRY_KEY, ids)

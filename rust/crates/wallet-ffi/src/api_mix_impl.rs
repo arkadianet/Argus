@@ -197,10 +197,12 @@ pub fn key_secrets<'a>(
 
 /// Parse a hex mix key exported by `mix_export_key`.
 pub fn parse_key(hex_key: &str, mix_id: u32) -> Result<zerojoin::MixKey, String> {
-    let bytes = hex::decode(hex_key.trim()).map_err(|e| ser_err(format!("mix key: {e}")))?;
-    let key = zerojoin::MixKey::from_bytes(&bytes, mix_id).map_err(ser_err);
-    // The decoded copy is dropped here; the caller's string is theirs.
-    key
+    // The decoded secret is wiped when this scope ends; the caller's hex
+    // string is theirs to clear.
+    let bytes = zeroize::Zeroizing::new(
+        hex::decode(hex_key.trim()).map_err(|e| ser_err(format!("mix key: {e}")))?,
+    );
+    zerojoin::MixKey::from_bytes(&bytes, mix_id).map_err(ser_err)
 }
 
 /// One built move, with everything the caller needs to reduce and sign it.

@@ -93,8 +93,8 @@ class _MixScreenState extends State<MixScreen> {
                 context,
                 title: 'Enter the mix',
                 detail: 'The operator fee buys the mixing tokens that pay for each '
-                    'round. From here on the rounds run on their own while Argus '
-                    'is open and unlocked.',
+                    'round. From here on the rounds run on their own '
+                    '${mixService.backgroundEnabled ? 'about every fifteen minutes, with Argus closed too' : 'while Argus is open and unlocked'}.',
                 rows: [
                   ConfirmTxRow('Mixing', formatErg(prepared.amountNano), bold: true),
                   ConfirmTxRow('Rounds', '${record?.roundsTarget ?? ''}'),

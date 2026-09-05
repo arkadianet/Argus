@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:workmanager/workmanager.dart';
 
@@ -17,7 +15,7 @@ import 'wallet_service.dart';
 class MixBackground {
   static const taskName = 'argus-mix-advance';
 
-  static bool get supported => !kIsWeb && Platform.isAndroid;
+  static bool get supported => !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
 
   /// Call once at start-up, before the first [schedule].
   static Future<void> init() async {
@@ -66,6 +64,9 @@ void mixBackgroundDispatcher() {
       await mixService.tickHeadless();
     } catch (e) {
       debugPrint('argus: background mix tick failed: $e');
+      // Failure, so WorkManager retries on its backoff instead of waiting
+      // for the next period.
+      return false;
     }
     return true;
   });

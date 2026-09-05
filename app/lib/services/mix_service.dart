@@ -432,6 +432,16 @@ class MixService extends ChangeNotifier {
   /// keystore. Off until the user opts in; see [setBackgroundEnabled].
   bool backgroundEnabled = false;
 
+  /// Whether the app is in front. While it is, the foreground tick owns
+  /// the mixes and the background job is cancelled; while it is not, the
+  /// job owns them and the foreground tick stands down. One driver at a
+  /// time, so two isolates can never spend the same pool box or overwrite
+  /// each other's records.
+  bool foreground = true;
+
+  static const _leaseKey = 'argus_mix_lease';
+  static const _leaseTtl = Duration(minutes: 3);
+
   /// Every mix of the loaded wallet, newest first.
   List<MixRecord> records = const [];
 
@@ -490,6 +500,8 @@ class MixService extends ChangeNotifier {
     if (id == null) {
       records = const [];
     } else {
+      // The background job may have written since this isolate last read.
+      await prefs.reload();
       final raw = prefs.getString(_recordsKey(id));
       final decoded = _decode(raw);
       if (decoded == null) {
@@ -504,8 +516,31 @@ class MixService extends ChangeNotifier {
       for (final r in records) {
         if (r.mixId + 1 > _nextId) _nextId = r.mixId + 1;
       }
+      // A key that could not be exported earlier (the wallet was locked
+      // when the switch flipped, or when a mix entered) is exported now.
+      if (backgroundEnabled && _gw.isUnlocked) {
+        for (final r in active) {
+          if (await _gw.loadKey(walletId: id, mixId: r.mixId) == null) {
+            await _exportKey(r);
+          }
+        }
+      }
     }
+    _reschedule();
     notifyListeners();
+  }
+
+  /// Called by the app on lifecycle changes. Coming to the front re-reads
+  /// the records the background job may have advanced and cancels the job;
+  /// going to the back hands the mixes to the job.
+  Future<void> setForeground(bool value) async {
+    if (value == foreground) return;
+    foreground = value;
+    if (value && _walletId != null) {
+      await load();
+      return;
+    }
+    _reschedule();
   }
 
   Future<void> setEnabled(bool value) async {
@@ -526,6 +561,11 @@ class MixService extends ChangeNotifier {
   /// its key exported to the keystore. Off: every stored key is deleted,
   /// for this wallet and any other.
   Future<void> setBackgroundEnabled(bool value) async {
+    if (value && !_gw.isUnlocked) {
+      // Keys come from the unlocked wallet; a switch that flipped without
+      // them would promise background mixing and deliver none.
+      throw StateError('Unlock the wallet to turn on background mixing');
+    }
     final prefs = await SharedPreferences.getInstance();
     if (!await prefs.setBool(_backgroundKey, value)) {
       throw StateError('Failed to persist the background mixing setting');
@@ -544,7 +584,29 @@ class MixService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _reschedule() => _schedule?.call(enabled && backgroundEnabled && active.isNotEmpty);
+  void _reschedule() =>
+      _schedule?.call(enabled && backgroundEnabled && active.isNotEmpty && !foreground);
+
+  /// Take the cross-isolate lease, or return false if the other driver
+  /// holds an unexpired one. Preferences are process-wide on Android, so
+  /// a reload sees the other isolate's write.
+  Future<bool> _acquireLease(SharedPreferences prefs, String owner) async {
+    await prefs.reload();
+    final raw = prefs.getString(_leaseKey);
+    final now = _clock().millisecondsSinceEpoch;
+    if (raw != null) {
+      final i = raw.lastIndexOf(':');
+      final holder = i < 0 ? raw : raw.substring(0, i);
+      final until = i < 0 ? 0 : int.tryParse(raw.substring(i + 1)) ?? 0;
+      if (holder != owner && until > now) return false;
+    }
+    return prefs.setString(_leaseKey, '$owner:${now + _leaseTtl.inMilliseconds}');
+  }
+
+  Future<void> _releaseLease(SharedPreferences prefs, String owner) async {
+    final raw = prefs.getString(_leaseKey);
+    if (raw != null && raw.startsWith('$owner:')) await prefs.remove(_leaseKey);
+  }
 
   Future<void> _exportKey(MixRecord r) async {
     final id = _walletId;
@@ -952,6 +1014,10 @@ class MixService extends ChangeNotifier {
     if (_ticking || !enabled || !_gw.isUnlocked) return;
     if (_walletId == null || _walletId != _gw.walletId) return;
     if (active.isEmpty) return;
+    // In the back with background mixing on, the job is the driver.
+    if (backgroundEnabled && !foreground) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (!await _acquireLease(prefs, 'ui')) return;
     _ticking = true;
     final gen = _generation;
     try {
@@ -974,6 +1040,7 @@ class MixService extends ChangeNotifier {
       notifyListeners();
     } finally {
       _ticking = false;
+      await _releaseLease(prefs, 'ui');
     }
   }
 
@@ -1053,11 +1120,24 @@ class MixService extends ChangeNotifier {
   /// advanced with its key; a finished mix loses its key. Never throws.
   Future<void> tickHeadless() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
     if (!(prefs.getBool(_enabledKey) ?? false) || !(prefs.getBool(_backgroundKey) ?? false)) {
       return;
     }
     final keys = await _gw.listKeys();
     if (keys.isEmpty) return;
+    if (!await _acquireLease(prefs, 'bg')) return;
+    try {
+      await _tickHeadlessLocked(prefs, keys);
+    } finally {
+      await _releaseLease(prefs, 'bg');
+    }
+  }
+
+  Future<void> _tickHeadlessLocked(
+    SharedPreferences prefs,
+    List<({String walletId, int mixId})> keys,
+  ) async {
     final byWallet = <String, List<int>>{};
     for (final k in keys) {
       byWallet.putIfAbsent(k.walletId, () => []).add(k.mixId);
@@ -1122,7 +1202,16 @@ class MixService extends ChangeNotifier {
         changed = true;
       }
       if (changed) {
-        await prefs.setString(_recordsKey(walletId), jsonEncode([for (final r in records) r.toJson()]));
+        // Merge by mix id into whatever is stored now, so a record the
+        // other isolate changed meanwhile is not overwritten wholesale.
+        await prefs.reload();
+        final stored = _decode(prefs.getString(_recordsKey(walletId))) ?? records;
+        final touched = {for (final r in targets) r.mixId: r};
+        final merged = [for (final r in stored) touched[r.mixId] ?? r];
+        for (final r in targets) {
+          if (!stored.any((s) => s.mixId == r.mixId)) merged.insert(0, r);
+        }
+        await prefs.setString(_recordsKey(walletId), jsonEncode([for (final r in merged) r.toJson()]));
       }
     }
   }

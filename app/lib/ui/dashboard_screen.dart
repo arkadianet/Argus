@@ -256,8 +256,10 @@ class _DashboardScreenState extends State<DashboardScreen>
         state == AppLifecycleState.paused || state == AppLifecycleState.hidden;
     if (backgrounded && !_pollBackgrounded) _backgroundedAt = DateTime.now();
     _pollBackgrounded = backgrounded;
+    if (backgrounded) unawaited(mixService.setForeground(false));
     if (state != AppLifecycleState.resumed) return;
     _backgroundedAt = null;
+    unawaited(mixService.setForeground(true));
     // Re-prompt biometrics when the session lock fired while backgrounded.
     // If the user returned within the grace window the wallet is still
     // unlocked and this is a no-op.
