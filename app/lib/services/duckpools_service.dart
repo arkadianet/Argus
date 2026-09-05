@@ -583,6 +583,9 @@ class DuckpoolsService extends ChangeNotifier {
     }
     final prefs = await SharedPreferences.getInstance();
     await prefs.reload();
+    // The wallet may have locked or changed while this was in flight; a
+    // stale load must not restore another wallet's orders.
+    if (_gw.walletId != id || _walletId != id) return;
     final raw = prefs.getString(_ordersKey(id));
     orders = raw == null
         ? const []
@@ -911,10 +914,22 @@ class DuckpoolsService extends ChangeNotifier {
     return order;
   }
 
+  bool _ticking = false;
+
   /// Look at every open order once: still unspent (and refundable once
-  /// past its height), filled, or refunded. Never throws.
+  /// past its height), filled, or refunded. Never throws; a tick that
+  /// arrives while one is running is dropped.
   Future<void> tickOrders() async {
-    if (openOrders.isEmpty || _walletId == null) return;
+    if (_ticking || openOrders.isEmpty || _walletId == null) return;
+    _ticking = true;
+    try {
+      await _tickOrders();
+    } finally {
+      _ticking = false;
+    }
+  }
+
+  Future<void> _tickOrders() async {
     final height = await _height();
     var changed = false;
     for (final o in openOrders) {

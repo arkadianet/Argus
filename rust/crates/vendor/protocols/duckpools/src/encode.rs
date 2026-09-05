@@ -27,6 +27,12 @@ pub fn coll_byte(bytes: &[u8]) -> Result<String, PoolsError> {
 /// outputs carry it.
 pub fn box_id_register(box_id_hex: &str) -> Result<String, PoolsError> {
     let bytes = hex::decode(box_id_hex).map_err(|e| PoolsError::Serialization(e.to_string()))?;
+    if bytes.len() != 32 {
+        return Err(PoolsError::Serialization(format!(
+            "box id must be 32 bytes, got {}",
+            bytes.len()
+        )));
+    }
     coll_byte(&bytes)
 }
 
@@ -77,5 +83,7 @@ mod tests {
             box_id_register(&"ab".repeat(32)).unwrap(),
             format!("0e20{}", "ab".repeat(32))
         );
+        assert!(box_id_register("ab").is_err(), "a short id is not a box id");
+        assert!(box_id_register(&"ab".repeat(33)).is_err());
     }
 }
