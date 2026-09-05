@@ -305,7 +305,8 @@ impl ChainView {
         let list = |key: &str| -> Result<Vec<ergo_tx::Eip12InputBox>, ZeroJoinError> {
             match v.get(key) {
                 None | Some(serde_json::Value::Null) => Ok(Vec::new()),
-                Some(items) => parse_explorer_boxes(&items.to_string()),
+                Some(items) => parse_explorer_boxes(&items.to_string())
+                    .map_err(|e| ZeroJoinError::Serialization(format!("{key}: {e}"))),
             }
         };
         let mut view = ChainView {

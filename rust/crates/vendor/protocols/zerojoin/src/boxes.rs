@@ -336,10 +336,45 @@ pub fn parse_explorer_boxes(json: &str) -> Result<Vec<Eip12InputBox>, ZeroJoinEr
         Some(v) => v,
         None => &root,
     };
-    let items = items
-        .as_array()
-        .ok_or_else(|| ZeroJoinError::Serialization("expected an array of boxes".into()))?;
-    items.iter().map(explorer_box).collect()
+    let items = items.as_array().ok_or_else(|| {
+        ZeroJoinError::Serialization(format!(
+            "expected an array of boxes, got {}",
+            json_shape(&root)
+        ))
+    })?;
+    items
+        .iter()
+        .enumerate()
+        .map(|(i, it)| {
+            explorer_box(it).map_err(|e| {
+                // Say which item and what it looked like, never its whole
+                // content: enough to see a wrong shape from a bug report.
+                ZeroJoinError::Serialization(format!("item {i}: {e}; shape {}", json_shape(it)))
+            })
+        })
+        .collect()
+}
+
+/// A one-line description of a JSON value's shape for error messages:
+/// `object{boxId,value,…}`, `array[3]`, `string`, and so on.
+fn json_shape(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Object(m) => {
+            let mut keys: Vec<&str> = m.keys().map(String::as_str).collect();
+            keys.sort_unstable();
+            let shown: Vec<&str> = keys.iter().take(8).copied().collect();
+            format!(
+                "object{{{}{}}}",
+                shown.join(","),
+                if keys.len() > 8 { ",…" } else { "" }
+            )
+        }
+        serde_json::Value::Array(a) => format!("array[{}]", a.len()),
+        serde_json::Value::String(_) => "string".into(),
+        serde_json::Value::Number(_) => "number".into(),
+        serde_json::Value::Bool(_) => "bool".into(),
+        serde_json::Value::Null => "null".into(),
+    }
 }
 
 fn explorer_box(v: &serde_json::Value) -> Result<Eip12InputBox, ZeroJoinError> {
@@ -539,6 +574,25 @@ mod tests {
         let mut m = good.clone();
         m.as_object_mut().unwrap().remove("index");
         assert!(explorer_box(&m).is_err(), "no index");
+    }
+
+    #[test]
+    fn a_bad_item_is_reported_with_its_position_and_shape() {
+        let json = r#"[{"boxId":"a","value":1,"ergoTree":"00","assets":[],"transactionId":"0000000000000000000000000000000000000000000000000000000000000000","index":0,"creationHeight":1}, "not a box"]"#;
+        let err = parse_explorer_boxes(json).unwrap_err().to_string();
+        assert!(err.contains("item 1"), "{err}");
+        assert!(err.contains("shape string"), "{err}");
+        let err = parse_explorer_boxes(r#"[{"boxId":"a","assets":[]}]"#)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("missing value") && err.contains("object{assets,boxId}"),
+            "{err}"
+        );
+        let err = parse_explorer_boxes(r#"{"error":404,"reason":"no index"}"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("object{error,reason}"), "{err}");
     }
 
     #[test]
