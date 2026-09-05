@@ -4033,6 +4033,8 @@ pub fn duckpools_pools() -> String {
             "partial_repay_proxy_address": p.partial_repay_proxy_address,
             "collateral_ergo_tree": address_to_ergo_tree(p.collateral_address).unwrap_or_default(),
             "erg_dex_nft": p.erg_dex_nft,
+            "dex_nfts": p.dex_nfts(),
+            "token_collaterals": p.token_collaterals,
         }))
         .collect::<Vec<_>>())
     .to_string()
@@ -4094,8 +4096,9 @@ pub fn duckpools_loans(
     crate::api_duckpools_impl::loans_json(&loan_boxes_json, &trees, height)
 }
 
-/// A borrow, repay or partial-repay quote. Borrow: `amount` is the loan
-/// and `collateral_nano` the ERG put up. Repay: `collateral_box_id` names
+/// A borrow, repay or partial-repay quote. Borrow: `amount` is the loan,
+/// `collateral_amount` what is put up (nanoERG for a token pool; units of
+/// `collateral_asset` for the ERG pool). Repay: `collateral_box_id` names
 /// the loan. Partial repay: both `amount` (the repayment) and the box id.
 /// Pure.
 #[flutter_rust_bridge::frb(sync)]
@@ -4106,7 +4109,8 @@ pub fn duckpools_loan_quote(
     pool_key: String,
     kind: String,
     amount: i64,
-    collateral_nano: i64,
+    collateral_asset: String,
+    collateral_amount: i64,
     collateral_box_id: String,
     height: i64,
 ) -> Result<String, String> {
@@ -4123,7 +4127,8 @@ pub fn duckpools_loan_quote(
         0,
         Some(crate::api_duckpools_impl::LoanArgs {
             snapshot: &snapshot,
-            collateral_nano,
+            collateral_asset: &collateral_asset,
+            collateral_amount,
             collateral_box_id: &collateral_box_id,
             height,
         }),
@@ -4136,8 +4141,9 @@ pub fn duckpools_loan_quote(
 /// must be this wallet's. Returns the preparation, the quote, the proxy
 /// box id (known before signing) and the refund height. Loan-side kinds
 /// (`borrow`, `repay`, `partial_repay`) need `loan_boxes_json` as
-/// `duckpools_loans` takes it, plus `collateral_nano` for a borrow and
-/// `collateral_box_id` for a repayment.
+/// `duckpools_loans` takes it, plus `collateral_amount` (and, for the ERG
+/// pool, `collateral_asset`) for a borrow and `collateral_box_id` for a
+/// repayment.
 #[flutter_rust_bridge::frb]
 #[allow(clippy::too_many_arguments)]
 pub async fn duckpools_prepare_order(
@@ -4154,7 +4160,8 @@ pub async fn duckpools_prepare_order(
     node_url: Option<String>,
     fee_nano: Option<i64>,
     loan_boxes_json: Option<String>,
-    collateral_nano: Option<i64>,
+    collateral_asset: Option<String>,
+    collateral_amount: Option<i64>,
     collateral_box_id: Option<String>,
 ) -> Result<String, String> {
     let (pool, state) = crate::api_duckpools_impl::state_for(&pool_boxes_json, &pool_key)?;
@@ -4196,6 +4203,7 @@ pub async fn duckpools_prepare_order(
     }
     let refund_height = height as i64 + refund_after_blocks;
     let collateral_box_id = collateral_box_id.unwrap_or_default();
+    let collateral_asset = collateral_asset.unwrap_or_default();
     let quote = crate::api_duckpools_impl::Quote::new(
         pool,
         &state,
@@ -4205,7 +4213,8 @@ pub async fn duckpools_prepare_order(
         refund_height,
         snapshot.as_ref().map(|snapshot| crate::api_duckpools_impl::LoanArgs {
             snapshot,
-            collateral_nano: collateral_nano.unwrap_or(0),
+            collateral_asset: &collateral_asset,
+            collateral_amount: collateral_amount.unwrap_or(0),
             collateral_box_id: &collateral_box_id,
             height: height as i64,
         }),

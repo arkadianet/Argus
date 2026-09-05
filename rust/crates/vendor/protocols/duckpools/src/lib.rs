@@ -35,7 +35,7 @@ pub use orders::{
     build_order_tx, build_refund_tx, classify_spend, LendQuote, OrderOutcome, ProxyBox,
     WithdrawQuote,
 };
-pub use pools::{pool_by_key, pool_by_lend_token, pool_by_nft, Pool, POOLS};
+pub use pools::{pool_by_key, pool_by_lend_token, pool_by_nft, CollateralAsset, Pool, POOLS};
 pub use state::{parse_pool_boxes, PoolState, PoolsError};
 
 /// `MaxLendTokens` in the ERG pool contract: one million above the true

@@ -212,7 +212,8 @@ abstract class RustLibApi extends BaseApi {
     required String poolKey,
     required String kind,
     required PlatformInt64 amount,
-    required PlatformInt64 collateralNano,
+    required String collateralAsset,
+    required PlatformInt64 collateralAmount,
     required String collateralBoxId,
     required PlatformInt64 height,
   });
@@ -245,7 +246,8 @@ abstract class RustLibApi extends BaseApi {
     String? nodeUrl,
     PlatformInt64? feeNano,
     String? loanBoxesJson,
-    PlatformInt64? collateralNano,
+    String? collateralAsset,
+    PlatformInt64? collateralAmount,
     String? collateralBoxId,
   });
 
@@ -1398,7 +1400,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required String poolKey,
     required String kind,
     required PlatformInt64 amount,
-    required PlatformInt64 collateralNano,
+    required String collateralAsset,
+    required PlatformInt64 collateralAmount,
     required String collateralBoxId,
     required PlatformInt64 height,
   }) {
@@ -1411,7 +1414,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_String(poolKey, serializer);
           sse_encode_String(kind, serializer);
           sse_encode_i_64(amount, serializer);
-          sse_encode_i_64(collateralNano, serializer);
+          sse_encode_String(collateralAsset, serializer);
+          sse_encode_i_64(collateralAmount, serializer);
           sse_encode_String(collateralBoxId, serializer);
           sse_encode_i_64(height, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 19)!;
@@ -1427,7 +1431,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           poolKey,
           kind,
           amount,
-          collateralNano,
+          collateralAsset,
+          collateralAmount,
           collateralBoxId,
           height,
         ],
@@ -1444,7 +1449,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "poolKey",
       "kind",
       "amount",
-      "collateralNano",
+      "collateralAsset",
+      "collateralAmount",
       "collateralBoxId",
       "height",
     ],
@@ -1550,7 +1556,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     String? nodeUrl,
     PlatformInt64? feeNano,
     String? loanBoxesJson,
-    PlatformInt64? collateralNano,
+    String? collateralAsset,
+    PlatformInt64? collateralAmount,
     String? collateralBoxId,
   }) {
     return handler.executeNormal(
@@ -1570,7 +1577,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_opt_String(nodeUrl, serializer);
           sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
           sse_encode_opt_String(loanBoxesJson, serializer);
-          sse_encode_opt_box_autoadd_i_64(collateralNano, serializer);
+          sse_encode_opt_String(collateralAsset, serializer);
+          sse_encode_opt_box_autoadd_i_64(collateralAmount, serializer);
           sse_encode_opt_String(collateralBoxId, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
@@ -1598,7 +1606,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           nodeUrl,
           feeNano,
           loanBoxesJson,
-          collateralNano,
+          collateralAsset,
+          collateralAmount,
           collateralBoxId,
         ],
         apiImpl: this,
@@ -1623,7 +1632,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "nodeUrl",
           "feeNano",
           "loanBoxesJson",
-          "collateralNano",
+          "collateralAsset",
+          "collateralAmount",
           "collateralBoxId",
         ],
       );

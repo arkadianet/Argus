@@ -865,7 +865,8 @@ fn wire__crate__api__duckpools_loan_quote_impl(
             let api_pool_key = <String>::sse_decode(&mut deserializer);
             let api_kind = <String>::sse_decode(&mut deserializer);
             let api_amount = <i64>::sse_decode(&mut deserializer);
-            let api_collateral_nano = <i64>::sse_decode(&mut deserializer);
+            let api_collateral_asset = <String>::sse_decode(&mut deserializer);
+            let api_collateral_amount = <i64>::sse_decode(&mut deserializer);
             let api_collateral_box_id = <String>::sse_decode(&mut deserializer);
             let api_height = <i64>::sse_decode(&mut deserializer);
             deserializer.end();
@@ -876,7 +877,8 @@ fn wire__crate__api__duckpools_loan_quote_impl(
                     api_pool_key,
                     api_kind,
                     api_amount,
-                    api_collateral_nano,
+                    api_collateral_asset,
+                    api_collateral_amount,
                     api_collateral_box_id,
                     api_height,
                 )?;
@@ -1018,7 +1020,8 @@ fn wire__crate__api__duckpools_prepare_order_impl(
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
             let api_loan_boxes_json = <Option<String>>::sse_decode(&mut deserializer);
-            let api_collateral_nano = <Option<i64>>::sse_decode(&mut deserializer);
+            let api_collateral_asset = <Option<String>>::sse_decode(&mut deserializer);
+            let api_collateral_amount = <Option<i64>>::sse_decode(&mut deserializer);
             let api_collateral_box_id = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
@@ -1038,7 +1041,8 @@ fn wire__crate__api__duckpools_prepare_order_impl(
                             api_node_url,
                             api_fee_nano,
                             api_loan_boxes_json,
-                            api_collateral_nano,
+                            api_collateral_asset,
+                            api_collateral_amount,
                             api_collateral_box_id,
                         )
                         .await?;

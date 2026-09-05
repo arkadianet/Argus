@@ -35,6 +35,12 @@ pub fn int(v: i32) -> Result<String, PoolsError> {
     hex_of(Constant::from(v))
 }
 
+/// An `(Int, Int)` pair: where in the interest history a loan began.
+pub fn int_pair(a: i32, b: i32) -> Result<String, PoolsError> {
+    let c: Constant = (a, b).into();
+    hex_of(c)
+}
+
 /// A `(Long, Long)` pair, as the collateral registers carry thresholds and
 /// heights.
 pub fn long_pair(a: i64, b: i64) -> Result<String, PoolsError> {

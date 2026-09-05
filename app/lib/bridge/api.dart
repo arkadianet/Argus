@@ -929,8 +929,9 @@ String duckpoolsLoans({
   height: height,
 );
 
-/// A borrow, repay or partial-repay quote. Borrow: `amount` is the loan
-/// and `collateral_nano` the ERG put up. Repay: `collateral_box_id` names
+/// A borrow, repay or partial-repay quote. Borrow: `amount` is the loan,
+/// `collateral_amount` what is put up (nanoERG for a token pool; units of
+/// `collateral_asset` for the ERG pool). Repay: `collateral_box_id` names
 /// the loan. Partial repay: both `amount` (the repayment) and the box id.
 /// Pure.
 String duckpoolsLoanQuote({
@@ -939,7 +940,8 @@ String duckpoolsLoanQuote({
   required String poolKey,
   required String kind,
   required PlatformInt64 amount,
-  required PlatformInt64 collateralNano,
+  required String collateralAsset,
+  required PlatformInt64 collateralAmount,
   required String collateralBoxId,
   required PlatformInt64 height,
 }) => RustLib.instance.api.crateApiDuckpoolsLoanQuote(
@@ -948,7 +950,8 @@ String duckpoolsLoanQuote({
   poolKey: poolKey,
   kind: kind,
   amount: amount,
-  collateralNano: collateralNano,
+  collateralAsset: collateralAsset,
+  collateralAmount: collateralAmount,
   collateralBoxId: collateralBoxId,
   height: height,
 );
@@ -958,8 +961,9 @@ String duckpoolsLoanQuote({
 /// must be this wallet's. Returns the preparation, the quote, the proxy
 /// box id (known before signing) and the refund height. Loan-side kinds
 /// (`borrow`, `repay`, `partial_repay`) need `loan_boxes_json` as
-/// `duckpools_loans` takes it, plus `collateral_nano` for a borrow and
-/// `collateral_box_id` for a repayment.
+/// `duckpools_loans` takes it, plus `collateral_amount` (and, for the ERG
+/// pool, `collateral_asset`) for a borrow and `collateral_box_id` for a
+/// repayment.
 Future<String> duckpoolsPrepareOrder({
   required BigInt handleId,
   required String poolBoxesJson,
@@ -974,7 +978,8 @@ Future<String> duckpoolsPrepareOrder({
   String? nodeUrl,
   PlatformInt64? feeNano,
   String? loanBoxesJson,
-  PlatformInt64? collateralNano,
+  String? collateralAsset,
+  PlatformInt64? collateralAmount,
   String? collateralBoxId,
 }) => RustLib.instance.api.crateApiDuckpoolsPrepareOrder(
   handleId: handleId,
@@ -990,7 +995,8 @@ Future<String> duckpoolsPrepareOrder({
   nodeUrl: nodeUrl,
   feeNano: feeNano,
   loanBoxesJson: loanBoxesJson,
-  collateralNano: collateralNano,
+  collateralAsset: collateralAsset,
+  collateralAmount: collateralAmount,
   collateralBoxId: collateralBoxId,
 );
 
