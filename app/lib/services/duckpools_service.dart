@@ -1087,6 +1087,9 @@ class DuckpoolsService extends ChangeNotifier {
     return (jsonDecode(raw) as Map).cast<String, dynamic>()..['wallet_id'] = walletId;
   }
 
+  /// The wallet orders are prepared and recorded for right now.
+  String? get activeWalletId => _gw.walletId;
+
   /// Whether `prepared` can still be broadcast and recorded: the wallet
   /// it was prepared for is the one loaded and active. Check before
   /// sending, since the record follows the send.
