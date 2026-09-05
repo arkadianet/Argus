@@ -32,7 +32,8 @@ class FakeGateway implements MixGateway {
   @override
   String? get walletId => wallet;
   @override
-  String? get nodeUrl => 'http://node';
+  String? get nodeUrl => node;
+  String? node;
   @override
   String get explorerBase => 'https://explorer/';
   @override
@@ -134,9 +135,37 @@ class FakeExplorer {
   int height = 1500000;
   bool networkState = true;
 
+  /// Node-side lists, keyed by tree; null means "no extra index".
+  Map<String, List<Object>>? nodeLists;
+
+  /// Answer node list queries as `{"items": [...], "total": n}` instead of
+  /// a bare array, as some node versions do.
+  bool nodeEnvelope = false;
+  Map<String, Object> nodeBoxes = {};
+  Map<String, Object> nodeTxs = {};
+
+  Future<String> post(Uri uri, String body) async {
+    requests.add('POST ${uri.toString()}');
+    final lists = nodeLists;
+    if (lists == null || !uri.path.contains('/blockchain/box/unspent/byErgoTree')) {
+      throw StateError('node returned HTTP 404');
+    }
+    final tree = jsonDecode(body) as String;
+    final all = lists[tree] ?? const [];
+    final offset = int.parse(uri.queryParameters['offset'] ?? '0');
+    final limit = int.parse(uri.queryParameters['limit'] ?? '500');
+    final page = all.skip(offset).take(limit).toList();
+    return jsonEncode(nodeEnvelope ? {'items': page, 'total': all.length} : page);
+  }
+
   Future<String> get(Uri uri) async {
     requests.add(uri.toString());
     final p = uri.path;
+    if (p.endsWith('/info')) return jsonEncode({'fullHeight': 4242});
+    final nb = RegExp(r'/blockchain/box/byId/([0-9a-zA-Z]+)$').firstMatch(p)?.group(1);
+    if (nb != null) return jsonEncode(nodeBoxes[nb] ?? (throw StateError('404')));
+    final nt = RegExp(r'/blockchain/transaction/byId/([0-9a-zA-Z]+)$').firstMatch(p)?.group(1);
+    if (nt != null) return jsonEncode(nodeTxs[nt] ?? (throw StateError('404')));
     if (p.endsWith('/networkState')) {
       if (!networkState) throw StateError('explorer returned HTTP 404 for $p');
       return jsonEncode({'height': height});
@@ -175,7 +204,7 @@ Future<MixService> loaded(FakeGateway gw, FakeExplorer ex, List<Map<String, dyna
       for (final s in states) {'state': s},
     ]),
   });
-  final svc = MixService(gateway: gw, get: ex.get, clock: () => DateTime.fromMillisecondsSinceEpoch(5000));
+  final svc = MixService(gateway: gw, get: ex.get, post: ex.post, clock: () => DateTime.fromMillisecondsSinceEpoch(5000));
   await svc.load();
   return svc;
 }
@@ -515,5 +544,47 @@ void main() {
     final svc2 = await loaded(gw, noState, []);
     expect((await svc2.snapshot()).height, 777);
     expect(noState.requests.last, contains('/api/v1/blocks?limit=1'));
+  });
+
+  test('the snapshot asks the node first and falls back to the explorer per call', () async {
+    final gw = FakeGateway()..node = 'http://node/';
+    final ex = FakeExplorer()
+      ..nodeLists = {
+        'aa': [{'boxId': 'nh1'}],
+        'cc': [{'boxId': 'nfee'}],
+        'dd': [{'boxId': 'ntok'}],
+      }
+      ..nodeBoxes['mine'] = {'boxId': 'mine', 'spentTransactionId': 'sp'}
+      ..nodeTxs['sp'] = {
+        'outputs': [
+          {'boxId': 'nout'},
+        ],
+      }
+      // The explorer has different answers, which must not be used.
+      ..lists['aa'] = [{'boxId': 'eh1'}]
+      ..boxes['mine'] = {'boxId': 'mine', 'spentTransactionId': null};
+    final svc = await loaded(gw, ex, []);
+    final snap = await svc.snapshot(ownBoxIds: ['mine']);
+    final json = jsonDecode(snap.json) as Map;
+    expect((json['half_boxes'] as List).map((b) => b['boxId']), ['nh1']);
+    expect((json['full_boxes'] as List).map((b) => b['boxId']), ['nout']);
+    expect((json['fee_boxes'] as List).map((b) => b['boxId']), ['nfee']);
+    expect(json['height'], 4242, reason: 'node /info');
+    expect(ex.requests.where((r) => r.contains('api/v1')), isEmpty, reason: 'explorer never asked');
+
+    // A node that wraps its answer in an envelope is read the same way.
+    ex.nodeEnvelope = true;
+    ex.requests.clear();
+    final wrapped = await svc.snapshot();
+    expect((jsonDecode(wrapped.json) as Map)['half_boxes'].map((b) => b['boxId']), ['nh1']);
+    expect(ex.requests.where((r) => r.contains('api/v1')), isEmpty);
+
+    // A node without the extra index: every list comes from the explorer.
+    ex.nodeEnvelope = false;
+    ex.nodeLists = null;
+    ex.requests.clear();
+    final snap2 = await svc.snapshot();
+    expect((jsonDecode(snap2.json) as Map)['half_boxes'].map((b) => b['boxId']), ['eh1']);
+    expect(ex.requests.where((r) => r.startsWith('POST')).length, 3, reason: 'tried the node once per list');
   });
 }
