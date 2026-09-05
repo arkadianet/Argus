@@ -704,7 +704,16 @@ class MixService extends ChangeNotifier {
       // Node versions differ on the envelope: a bare array, or
       // `{"items": [...], "total": n}` like the explorer.
       final decoded = jsonDecode(await _post(uri, jsonEncode(tree)));
-      final page = decoded is Map ? (decoded['items'] as List? ?? const []) : decoded as List;
+      final List page;
+      if (decoded is List) {
+        page = decoded;
+      } else if (decoded is Map && decoded['items'] is List) {
+        page = decoded['items'] as List;
+      } else {
+        // A node without the index answers with an error object under
+        // HTTP 200; that is a reason to fall back, not an empty pool.
+        throw StateError('node returned ${decoded is Map ? decoded.keys.join(',') : decoded.runtimeType} for byErgoTree');
+      }
       for (final b in page) {
         final id = (b as Map)['boxId']?.toString() ?? '';
         if (id.isNotEmpty && seen.add(id)) items.add(b);
@@ -728,7 +737,10 @@ class MixService extends ChangeNotifier {
         '$base/api/v1/boxes/unspent/byErgoTree/$tree?offset=$offset&limit=$mixPageLimit',
       );
       final body = jsonDecode(await _get(uri)) as Map;
-      final page = (body['items'] as List? ?? const []);
+      final page = body['items'] as List?;
+      if (page == null) {
+        throw StateError('${uri.host} returned ${body.keys.join(',')} instead of a box list');
+      }
       for (final b in page) {
         final id = (b as Map)['boxId']?.toString() ?? '';
         if (id.isNotEmpty && seen.add(id)) items.add(b);

@@ -181,11 +181,16 @@ class FakeExplorer {
   /// Answer node list queries as `{"items": [...], "total": n}` instead of
   /// a bare array, as some node versions do.
   bool nodeEnvelope = false;
+
+  /// Answer node list queries with an error object under HTTP 200, as a
+  /// node without the extra index does.
+  bool nodeErrorBody = false;
   Map<String, Object> nodeBoxes = {};
   Map<String, Object> nodeTxs = {};
 
   Future<String> post(Uri uri, String body) async {
     requests.add('POST ${uri.toString()}');
+    if (nodeErrorBody) return jsonEncode({'error': 404, 'reason': 'not found', 'detail': 'no index'});
     final lists = nodeLists;
     if (lists == null || !uri.path.contains('/blockchain/box/unspent/byErgoTree')) {
       throw StateError('node returned HTTP 404');
@@ -619,8 +624,16 @@ void main() {
     expect((jsonDecode(wrapped.json) as Map)['half_boxes'].map((b) => b['boxId']), ['nh1']);
     expect(ex.requests.where((r) => r.contains('api/v1')), isEmpty);
 
-    // A node without the extra index: every list comes from the explorer.
+    // A node that answers with an error object under HTTP 200 is treated
+    // the same as one that refuses: the explorer supplies the lists.
     ex.nodeEnvelope = false;
+    ex.nodeErrorBody = true;
+    ex.requests.clear();
+    final viaExplorer = await svc.snapshot();
+    expect((jsonDecode(viaExplorer.json) as Map)['half_boxes'].map((b) => b['boxId']), ['eh1']);
+    ex.nodeErrorBody = false;
+
+    // A node without the extra index: every list comes from the explorer.
     ex.nodeLists = null;
     ex.requests.clear();
     final snap2 = await svc.snapshot();
