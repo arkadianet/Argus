@@ -185,6 +185,9 @@ class FakeExplorer {
   /// Answer node list queries with an error object under HTTP 200, as a
   /// node without the extra index does.
   bool nodeErrorBody = false;
+
+  /// Explorer answers an unknown box with HTTP 200 and an error object.
+  bool softNotFound = false;
   Map<String, Object> nodeBoxes = {};
   Map<String, Object> nodeTxs = {};
 
@@ -233,7 +236,13 @@ class FakeExplorer {
     final box = RegExp(r'/boxes/([0-9a-zA-Z]+)$').firstMatch(p)?.group(1);
     if (box != null) {
       final b = boxes[box];
-      if (b == null) throw StateError('404');
+      if (b == null) {
+        // Some explorers answer an unknown box with HTTP 200 and this.
+        if (softNotFound) {
+          return jsonEncode({'\$schema': 'x', 'status': 404, 'reason': 'Not found Output with id: $box'});
+        }
+        throw StateError('404');
+      }
       return jsonEncode(b);
     }
     final tx = RegExp(r'/transactions/([0-9a-zA-Z]+)$').firstMatch(p)?.group(1);
@@ -911,5 +920,23 @@ void main() {
     final w = svc.records.firstWhere((r) => r.mixId == 1);
     expect(w.events.last['height'], 4242);
     expect(svc.mixActivityRows().firstWhere((r) => r['tx_id'] == 'txw')['confirmed'], isTrue);
+  });
+
+  test('an explorer "not found" body for our own box is not a box', () async {
+    // The box is unconfirmed: the node has no such box, the explorer
+    // answers 200 with an error object. The engine must see "not seen".
+    final gw = FakeGateway()
+      ..script['observe'] = ['same']
+      ..script['plan'] = [
+        {'action': 'wait', 'reason': 'box_not_seen'},
+      ];
+    final ex = FakeExplorer()..softNotFound = true;
+    final svc = await loaded(gw, ex, [state(kind: 'half_posted', boxId: 'fresh', done: 1)]);
+    final snap = await svc.snapshot(ownBoxIds: ['fresh']);
+    final json = jsonDecode(snap.json) as Map;
+    expect(json['half_boxes'], isEmpty, reason: 'the error body is not filed as a box');
+    expect(json['full_boxes'], isEmpty);
+    await svc.tick();
+    expect(svc.records.single.lastError, isNull);
   });
 }
