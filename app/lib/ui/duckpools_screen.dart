@@ -671,24 +671,17 @@ class _OrderSheetState extends State<_OrderSheet> {
     super.dispose();
   }
 
-  int? get _units {
-    final text = _ctl.text.trim().replaceAll(',', '');
-    if (text.isEmpty) return null;
-    final v = double.tryParse(text);
-    if (v == null || v <= 0) return null;
-    var scaled = v;
-    for (var i = 0; i < widget.state.decimals; i++) {
-      scaled *= 10;
-    }
-    return scaled.round();
-  }
+  int? get _units => parseDuckAmount(_ctl.text, widget.state.decimals);
 
   void _requote() {
     final units = _units;
     setState(() {
       _quote = null;
       _error = null;
-      if (units == null) return;
+      if (units == null) {
+        if (_ctl.text.trim().isNotEmpty) _error = 'Use at most ${widget.state.decimals} decimal places.';
+        return;
+      }
       try {
         _quote = duckpoolsService.quote(poolKey: widget.state.pool, kind: widget.kind, amount: units);
       } catch (e) {
@@ -887,17 +880,7 @@ class _BorrowSheetState extends State<_BorrowSheet> {
     }
   }
 
-  int? _parse(TextEditingController c, int decimals) {
-    final text = c.text.trim().replaceAll(',', '');
-    if (text.isEmpty) return null;
-    final v = double.tryParse(text);
-    if (v == null || v <= 0) return null;
-    var scaled = v;
-    for (var i = 0; i < decimals; i++) {
-      scaled *= 10;
-    }
-    return scaled.round();
-  }
+  int? _parse(TextEditingController c, int decimals) => parseDuckAmount(c.text, decimals);
 
   int get _collateralDecimals => _asset?.decimals ?? 9;
   String get _collateralTicker => _asset?.ticker ?? 'ERG';
@@ -1046,17 +1029,7 @@ class _PartialRepaySheetState extends State<_PartialRepaySheet> {
   Map<String, dynamic>? _quote;
   String? _error;
 
-  int? get _units {
-    final text = _ctl.text.trim().replaceAll(',', '');
-    if (text.isEmpty) return null;
-    final v = double.tryParse(text);
-    if (v == null || v <= 0) return null;
-    var scaled = v;
-    for (var i = 0; i < widget.loan.decimals; i++) {
-      scaled *= 10;
-    }
-    return scaled.round();
-  }
+  int? get _units => parseDuckAmount(_ctl.text, widget.loan.decimals);
 
   void _requote() {
     final units = _units;
@@ -1147,17 +1120,7 @@ class _AdjustSheetState extends State<_AdjustSheet> {
     _ctl = TextEditingController(text: formatTokenAmount(widget.loan.collateralAmount, widget.decimals));
   }
 
-  int? get _units {
-    final text = _ctl.text.trim().replaceAll(',', '');
-    if (text.isEmpty) return null;
-    final v = double.tryParse(text);
-    if (v == null || v <= 0) return null;
-    var scaled = v;
-    for (var i = 0; i < widget.decimals; i++) {
-      scaled *= 10;
-    }
-    return scaled.round();
-  }
+  int? get _units => parseDuckAmount(_ctl.text, widget.decimals);
 
   void _requote() {
     final units = _units;
