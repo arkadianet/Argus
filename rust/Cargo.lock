@@ -731,6 +731,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "duckpools"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "ecdsa"
 version = "0.16.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3062,6 +3073,7 @@ dependencies = [
  "amm",
  "citadel-core",
  "dexy",
+ "duckpools",
  "ergo-lib",
  "ergo-node-client",
  "ergo-tx",

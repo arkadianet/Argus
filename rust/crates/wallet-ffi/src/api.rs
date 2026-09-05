@@ -3359,6 +3359,24 @@ mod tests {
     }
 
     #[test]
+    fn duckpools_state_values_holdings_from_the_captured_pool() {
+        let boxes = format!(
+            "[{}]",
+            include_str!("../../vendor/protocols/duckpools/test/fixtures/pool_erg.json")
+        );
+        let lend = duckpools::POOLS[0].lend_token;
+        let out = duckpools_state(boxes, format!(r#"{{"{lend}": 482880000}}"#)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let erg = &v[0];
+        assert_eq!(erg["pool"], "erg");
+        assert_eq!(erg["wallet_lend_tokens"], 482880000);
+        let value = erg["wallet_value"].as_i64().unwrap();
+        assert!((999_000_000..=1_000_100_000).contains(&value), "{value}");
+        assert!(duckpools_pools().contains(lend));
+        assert!(duckpools_state("[]".into(), "nope".into()).is_err());
+    }
+
+    #[test]
     fn preparation_details_reads_without_consuming() {
         // Unknown id, or another wallet's, is refused.
         assert!(preparation_details(1, 424242).is_err());
@@ -3980,4 +3998,71 @@ pub async fn mix_leave(
     let summary = built.tx.summary.clone();
     let tx_id = broadcast_mix_move(handle_id, built, &client, "mix_leave").await?;
     mix_move_result(state, applied, summary, &tx_id, now)
+}
+
+// ---------------------------------------------------------------------------
+// Duckpools lending: read-only pool state and positions
+// ---------------------------------------------------------------------------
+
+/// The eight mainnet pools: key, ticker, decimals, ids and the pool script
+/// the app queries the chain by. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn duckpools_pools() -> String {
+    serde_json::json!(duckpools::POOLS
+        .iter()
+        .map(|p| serde_json::json!({
+            "key": p.key,
+            "ticker": p.ticker,
+            "decimals": p.decimals,
+            "pool_nft": p.pool_nft,
+            "lend_token": p.lend_token,
+            "borrow_token": p.borrow_token,
+            "currency_id": p.currency_id,
+            "ergo_tree": p.ergo_tree,
+        }))
+        .collect::<Vec<_>>())
+    .to_string()
+}
+
+/// Pool state from a list of pool boxes (explorer or node shape), with the
+/// wallet's position in each. `holdings_json` maps token id to the amount
+/// the wallet holds, as a number or a string. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn duckpools_state(pool_boxes_json: String, holdings_json: String) -> Result<String, String> {
+    let states = duckpools::parse_pool_boxes(&pool_boxes_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let holdings: serde_json::Value = serde_json::from_str(&holdings_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let held = |id: &str| -> i64 {
+        holdings
+            .get(id)
+            .and_then(|v| {
+                v.as_i64()
+                    .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+            })
+            .unwrap_or(0)
+    };
+    let out: Vec<serde_json::Value> = states
+        .iter()
+        .map(|s| {
+            let tokens = held(s.lend_token);
+            serde_json::json!({
+                "pool": s.pool,
+                "ticker": s.ticker,
+                "decimals": s.decimals,
+                "pool_nft": s.pool_nft,
+                "lend_token": s.lend_token,
+                "box_id": s.box_id,
+                "creation_height": s.creation_height,
+                "pooled": s.pooled,
+                "borrowed": s.borrowed,
+                "lend_circulating": s.lend_circulating,
+                "utilisation_bps": s.utilisation_bps(),
+                "lend_token_price": s.lend_token_price(),
+                "wallet_lend_tokens": tokens,
+                "wallet_value": s.position_value(tokens),
+            })
+        })
+        .collect();
+    Ok(serde_json::json!(out).to_string())
 }

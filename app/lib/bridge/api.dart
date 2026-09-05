@@ -877,3 +877,18 @@ Future<String> mixLeave({
   feeNano: feeNano,
   nowUnix: nowUnix,
 );
+
+/// The eight mainnet pools: key, ticker, decimals, ids and the pool script
+/// the app queries the chain by. Pure.
+String duckpoolsPools() => RustLib.instance.api.crateApiDuckpoolsPools();
+
+/// Pool state from a list of pool boxes (explorer or node shape), with the
+/// wallet's position in each. `holdings_json` maps token id to the amount
+/// the wallet holds, as a number or a string. Pure.
+String duckpoolsState({
+  required String poolBoxesJson,
+  required String holdingsJson,
+}) => RustLib.instance.api.crateApiDuckpoolsState(
+  poolBoxesJson: poolBoxesJson,
+  holdingsJson: holdingsJson,
+);
