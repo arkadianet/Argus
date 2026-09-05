@@ -44,8 +44,9 @@ transaction, never on the fill, whose outputs the contract pins.
 | Batch | Contents | Done when |
 |---|---|---|
 | 1 (#74) | `duckpools` crate: identities, `PoolBox::parse`, `lend_token_value`, `position_value`, fixtures, live test. FFI `duckpools_pools` (identities) and `duckpools_state(pool_boxes_json, holdings_json)` (per pool: pooled, borrowed, utilisation, lend-token value, the wallet's lend tokens and their value). Dart `DuckpoolsService` (fetch the eight pool boxes by script through node then explorer, compute state), a Duckpools screen listing pools and the wallet's positions, a Discover card with a position line, lend tokens named in the verified list. | Positions and pool state render from live boxes; unit tests on the arithmetic against the fixtures. |
-| 2 (this PR) | Lend and withdraw orders: proxy-box builders in Rust proven against the pool box (fixtures, live reduction), an order record with refund height, an order tracker on the poll tick (filled, refunded, refundable), the refund transaction, confirm sheets with the fee tiers, interest boxes read for the rate. | A lend order fills against the live ERG pool and a withdraw returns the asset; a deliberately unfilled order is refunded by Argus. |
-| 3 | Borrow, repay, partial repay, collateral top-up, liquidation risk display. Only once a pool shows real borrowing to quote against and the v2 interest and logic contracts have settled. | Device-tested against SigUSD, the pool with borrowing today. |
+| 2 (#77) | Lend and withdraw orders: proxy-box builders in Rust proven against the pool box (fixtures, live reduction), an order record with refund height, an order tracker on the poll tick (filled, refunded, refundable), the refund transaction, confirm sheets with the fee tiers, interest boxes read for the rate. | A lend order fills against the live ERG pool and a withdraw returns the asset; a deliberately unfilled order is refunded by Argus. |
+| 3 (this PR) | Borrow against ERG from the token pools, full and partial repayment, the wallet's loans read from the collateral boxes with what they owe (interest compounded as the contract does), what the collateral counts for (priced through the Spectrum pool as the contract does), health against the pool's liquidation line and the forced-liquidation height. Refunds for every order kind. | Device-tested against SigUSD, the pool with borrowing today. |
+| later | Collateral top-up and withdrawal (the collateral contract's recreation path), borrowing from the ERG pool against tokens, liquidating other people's loans. | — |
 
 ## Found while building batch 2
 
@@ -68,6 +69,58 @@ transaction uses that fee, not the wallet's default.
 coefficients; the rate per 120-block period is a polynomial in
 utilisation. Today's curve gives 1.07% a year at zero utilisation, and
 lenders earn that times utilisation.
+
+## Found while building batch 3
+
+**Where a loan lives.** A collateral box carries the ERG, the pool's
+borrow tokens (the principal), the borrower's script in R4, where in the
+interest history the loan began in R5 as `(parent index, child index)`,
+the pool's `(threshold, penalty)` in R6, the price source NFT in R7, the
+borrower's key in R8 and `(forced liquidation height, buffer)` in R9.
+The wallet finds its loans by reading every box under a pool's
+collateral script and keeping those whose R4 is one of its own trees.
+
+**Interest is a history, not a rate.** Every 120 blocks a bot appends
+the period's rate to the head *child* interest box; when a child fills
+up its product goes into the *parent* box and a new child starts, so
+there are as many live child boxes as parent entries plus one (the
+SigUSD pool has fourteen, all unspent). What a loan owes is `1 + loan ×
+compounded / 1e8` where `compounded` folds the base child's rates from
+the loan's child index, then the head child, then the parent entries
+after the loan's parent index, in that order and with the contract's
+integer rounding. The crate reproduces it and pins a live loan: 238.99
+SigUSD borrowed, 239.39 owed at height 1 866 418.
+
+**Collateral is priced pessimistically.** The contract values ERG
+collateral as what it would buy from the Spectrum ERG/asset pool after
+taking off 0.005 ERG, adding two percent slippage to the ERG reserve
+and paying the DEX fee. On 2026-09-05 that made 2,500 ERG count for
+623.16 SigUSD. Liquidation opens when that value falls to `owed ×
+threshold / 1000` (SigUSD and QUACKS: 140%), or after the forced
+height, about 65,520 blocks (91 days) from the borrow.
+
+**The parameter box is the source of the terms.** Threshold, penalty
+and price source per collateral come from the pool's parameter box (R4,
+R7, R6), and a borrow order must repeat the pair the box holds or the
+pool contract rejects the fill. The live SigUSD box lists two
+thresholds but one price source; the contract indexes by price source.
+
+**Borrow orders can be taken back at once.** The borrow proxy is
+`operation || proveDlog(userPk)`, so the borrower's signature alone
+spends it; the wallet's ordinary refund builder works before the refund
+height, where lend, withdraw and repay proxies wait for it.
+
+**Repay overpayment is not returned.** The fill puts everything the
+repay proxy carries into the repayment box, so the order carries what is
+owed plus two more periods of interest at the latest rate plus one unit,
+and no more. A partial repayment names the borrow tokens that must
+remain: `loan − repayment × 1e8 / compounded`.
+
+**Fill markers differ by kind.** Lend and withdraw fills mark the user's
+box in R7; borrow and repay fills mark it in R4, as refunds do, so the
+outcome reader tells them apart by whether the marked box carries tokens
+(borrow: a fill does, a refund does not; repay: the reverse). A partial
+repay marks nothing and is read from the shape of the transaction.
 
 ## Live map used by batch 1
 

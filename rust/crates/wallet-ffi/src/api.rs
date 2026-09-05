@@ -4024,6 +4024,15 @@ pub fn duckpools_pools() -> String {
             "lend_proxy_address": p.lend_proxy_address,
             "withdraw_proxy_address": p.withdraw_proxy_address,
             "fee_thresholds": [p.fee_thresholds.0, p.fee_thresholds.1],
+            "param_nft": p.param_nft,
+            "child_nft": p.child_nft,
+            "parent_nft": p.parent_nft,
+            "collateral_address": p.collateral_address,
+            "borrow_proxy_address": p.borrow_proxy_address,
+            "repay_proxy_address": p.repay_proxy_address,
+            "partial_repay_proxy_address": p.partial_repay_proxy_address,
+            "collateral_ergo_tree": address_to_ergo_tree(p.collateral_address).unwrap_or_default(),
+            "erg_dex_nft": p.erg_dex_nft,
         }))
         .collect::<Vec<_>>())
     .to_string()
@@ -4061,6 +4070,64 @@ pub fn duckpools_quote(
         amount,
         slippage_bps,
         refund_height,
+        None,
+    )?;
+    Ok(q.json().to_string())
+}
+
+/// The wallet's loans and the markets it can borrow in, from one JSON
+/// object of boxes: `collateral` (every box under the collateral scripts),
+/// `parents` and `children` (the interest boxes), `dex` (the Spectrum
+/// ERG pools that price collateral) and `params` (the pool parameter
+/// boxes). `wallet_addresses` are the wallet's addresses. Pure, but the
+/// collateral list is unbounded, so it runs off the UI isolate.
+#[flutter_rust_bridge::frb]
+pub async fn duckpools_loans(
+    loan_boxes_json: String,
+    wallet_addresses: Vec<String>,
+    height: i64,
+) -> Result<String, String> {
+    let trees = wallet_addresses
+        .iter()
+        .map(|a| address_to_ergo_tree(a))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    crate::api_duckpools_impl::loans_json(&loan_boxes_json, &trees, height)
+}
+
+/// A borrow, repay or partial-repay quote. Borrow: `amount` is the loan
+/// and `collateral_nano` the ERG put up. Repay: `collateral_box_id` names
+/// the loan. Partial repay: both `amount` (the repayment) and the box id.
+/// Pure.
+#[flutter_rust_bridge::frb(sync)]
+#[allow(clippy::too_many_arguments)]
+pub fn duckpools_loan_quote(
+    pool_boxes_json: String,
+    loan_boxes_json: String,
+    pool_key: String,
+    kind: String,
+    amount: i64,
+    collateral_nano: i64,
+    collateral_box_id: String,
+    height: i64,
+) -> Result<String, String> {
+    let (pool, state) = crate::api_duckpools_impl::state_for(&pool_boxes_json, &pool_key)?;
+    let root: serde_json::Value = serde_json::from_str(&loan_boxes_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let snapshot = crate::api_duckpools_impl::LoanSnapshot::parse(pool, &root)?;
+    let q = crate::api_duckpools_impl::Quote::new(
+        pool,
+        &state,
+        &kind,
+        amount,
+        0,
+        0,
+        Some(crate::api_duckpools_impl::LoanArgs {
+            snapshot: &snapshot,
+            collateral_nano,
+            collateral_box_id: &collateral_box_id,
+            height,
+        }),
     )?;
     Ok(q.json().to_string())
 }
@@ -4068,7 +4135,10 @@ pub fn duckpools_quote(
 /// Prepare an order: the proxy box from the wallet's boxes, confirmed with
 /// `send_erg`. The proxy pays fills and refunds to `user_address`, which
 /// must be this wallet's. Returns the preparation, the quote, the proxy
-/// box id (known before signing) and the refund height.
+/// box id (known before signing) and the refund height. Loan-side kinds
+/// (`borrow`, `repay`, `partial_repay`) need `loan_boxes_json` as
+/// `duckpools_loans` takes it, plus `collateral_nano` for a borrow and
+/// `collateral_box_id` for a repayment.
 #[flutter_rust_bridge::frb]
 #[allow(clippy::too_many_arguments)]
 pub async fn duckpools_prepare_order(
@@ -4084,8 +4154,19 @@ pub async fn duckpools_prepare_order(
     change_address: String,
     node_url: Option<String>,
     fee_nano: Option<i64>,
+    loan_boxes_json: Option<String>,
+    collateral_nano: Option<i64>,
+    collateral_box_id: Option<String>,
 ) -> Result<String, String> {
     let (pool, state) = crate::api_duckpools_impl::state_for(&pool_boxes_json, &pool_key)?;
+    let snapshot = match loan_boxes_json.as_deref().filter(|s| !s.trim().is_empty()) {
+        Some(json) => {
+            let root: serde_json::Value = serde_json::from_str(json)
+                .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+            Some(crate::api_duckpools_impl::LoanSnapshot::parse(pool, &root)?)
+        }
+        None => None,
+    };
     let miner_fee = mix_miner_fee(fee_nano)?;
     let (user_tree, change_tree) = with_handle(handle_id, "duckpools_prepare_order", |h| {
         for a in [&user_address, &change_address] {
@@ -4115,6 +4196,7 @@ pub async fn duckpools_prepare_order(
         .to_json_string());
     }
     let refund_height = height as i64 + refund_after_blocks;
+    let collateral_box_id = collateral_box_id.unwrap_or_default();
     let quote = crate::api_duckpools_impl::Quote::new(
         pool,
         &state,
@@ -4122,6 +4204,12 @@ pub async fn duckpools_prepare_order(
         amount,
         slippage_bps,
         refund_height,
+        snapshot.as_ref().map(|snapshot| crate::api_duckpools_impl::LoanArgs {
+            snapshot,
+            collateral_nano: collateral_nano.unwrap_or(0),
+            collateral_box_id: &collateral_box_id,
+            height: height as i64,
+        }),
     )?;
     let proxy = quote.proxy_box(pool, &user_tree)?;
     let spend: Vec<String> = if spend_addresses.is_empty() {
@@ -4181,8 +4269,10 @@ pub async fn duckpools_prepare_order(
 
 /// Prepare the refund of an unfilled order after its refund height: the
 /// proxy box back to `user_address` less the contract's one fee. Confirm
-/// with `send_erg`. The proxy contract needs no signature for this; it
-/// checks the outputs.
+/// with `send_erg`. The proxy contracts need no signature for this; they
+/// check the outputs. A borrow order also accepts the borrower's own
+/// signature at any height, and the wallet signs, so it can be taken
+/// back early.
 #[flutter_rust_bridge::frb]
 pub async fn duckpools_prepare_refund(
     handle_id: u64,
@@ -4190,10 +4280,6 @@ pub async fn duckpools_prepare_refund(
     user_address: String,
     node_url: Option<String>,
 ) -> Result<String, String> {
-    let boxes = duckpools::parse_pool_boxes(&format!("[{proxy_box_json}]"))
-        .map(|_| ())
-        .ok();
-    let _ = boxes;
     let proxy = zerojoin::parse_explorer_boxes(&format!("[{proxy_box_json}]"))
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?
         .into_iter()
@@ -4241,6 +4327,10 @@ pub async fn duckpools_prepare_refund(
 /// What the transaction that spent a proxy box did with it: filled,
 /// refunded, or something else. Pure.
 #[flutter_rust_bridge::frb(sync)]
-pub fn duckpools_order_outcome(proxy_box_id: String, tx_json: String) -> Result<String, String> {
-    crate::api_duckpools_impl::outcome_json(&proxy_box_id, &tx_json)
+pub fn duckpools_order_outcome(
+    kind: String,
+    proxy_box_id: String,
+    tx_json: String,
+) -> Result<String, String> {
+    crate::api_duckpools_impl::outcome_json(&kind, &proxy_box_id, &tx_json)
 }

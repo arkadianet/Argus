@@ -4,6 +4,7 @@
 use ergo_lib::ergotree_ir::mir::constant::Constant;
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
 
+
 use crate::state::PoolsError;
 
 fn hex_of(c: Constant) -> Result<String, PoolsError> {
@@ -33,6 +34,37 @@ pub fn box_id_register(box_id_hex: &str) -> Result<String, PoolsError> {
         )));
     }
     coll_byte(&bytes)
+}
+
+/// An `Int` constant.
+pub fn int(v: i32) -> Result<String, PoolsError> {
+    hex_of(Constant::from(v))
+}
+
+/// A `(Long, Long)` pair, as the collateral registers carry thresholds and
+/// heights.
+pub fn long_pair(a: i64, b: i64) -> Result<String, PoolsError> {
+    let c: Constant = (a, b).into();
+    hex_of(c)
+}
+
+/// A `GroupElement`: the borrower's public key, so the borrower can take a
+/// borrow order back at any time with their own signature.
+pub fn group_element(pk_hex: &str) -> Result<String, PoolsError> {
+    let bytes = hex::decode(pk_hex).map_err(|e| PoolsError::Serialization(e.to_string()))?;
+    let point = ergo_lib::ergo_chain_types::EcPoint::sigma_parse_bytes(&bytes)
+        .map_err(|e| PoolsError::Serialization(format!("public key: {e}")))?;
+    hex_of(Constant::from(point))
+}
+
+/// The 33-byte public key inside a P2PK ErgoTree (`0008cd` + key), or none.
+pub fn p2pk_key(tree_hex: &str) -> Option<String> {
+    let t = tree_hex.to_ascii_lowercase();
+    if t.len() == 72 && t.starts_with("0008cd") {
+        Some(t[6..].to_string())
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
