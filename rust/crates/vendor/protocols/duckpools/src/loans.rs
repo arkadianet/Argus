@@ -563,11 +563,14 @@ pub fn positions(
         {
             continue;
         }
-        let dex = dexes
-            .iter()
-            .find(|d| d.nft.eq_ignore_ascii_case(&c.dex_nft))
-            .ok_or_else(|| err(format!("no price box for loan {}", c.box_id)))?;
-        out.push(LoanPosition::value(pool, &c, history, dex, height)?);
+        // A loan this snapshot cannot price (another collateral type, or a
+        // price box that could not be read) must not hide the loans it can.
+        let Some(dex) = dexes.iter().find(|d| d.nft.eq_ignore_ascii_case(&c.dex_nft)) else {
+            continue;
+        };
+        if let Ok(p) = LoanPosition::value(pool, &c, history, dex, height) {
+            out.push(p);
+        }
     }
     Ok(out)
 }
@@ -1000,7 +1003,9 @@ pub fn classify_loan_spend(
                 let (value, a) = eip12(o);
                 OrderOutcome::Filled { value, assets: a }
             }
-            _ if !fill_shaped => match outputs.first() {
+            // A refund may or may not carry the marker; when it does, that
+            // is the user's box.
+            _ if !fill_shaped => match marked.or_else(|| outputs.first()) {
                 Some(o) => {
                     let (value, a) = eip12(o);
                     OrderOutcome::Refunded { value, assets: a }
@@ -1111,8 +1116,11 @@ mod tests {
         let dex = DexPrice::parse(&fixture("dex")).unwrap();
         let mine = positions(sigusd(), &boxes, &history(), &[dex.clone()], &[BORROWER.into()], 1).unwrap();
         assert_eq!(mine.len(), 1);
-        let none = positions(sigusd(), &boxes, &history(), &[dex], &["0008cd00".into()], 1).unwrap();
+        let none = positions(sigusd(), &boxes, &history(), &[dex.clone()], &["0008cd00".into()], 1).unwrap();
         assert!(none.is_empty());
+        // A loan priced through another market is skipped, not fatal.
+        let other_dex = DexPrice { nft: "ff".repeat(32), ..dex.clone() };
+        assert!(positions(sigusd(), &boxes, &history(), &[other_dex], &[BORROWER.into()], 1).unwrap().is_empty());
     }
 
     #[test]
@@ -1192,6 +1200,15 @@ mod tests {
         assert!(filled(classify_loan_spend(OrderKind::Repay, &id, &fill).unwrap()));
         let refund = tx(vec![out(2, 1, None), out(1, 0, None)]);
         assert!(refunded(classify_loan_spend(OrderKind::Repay, &id, &refund).unwrap()));
+        // A marked refund reports the marked box, wherever it sits.
+        let marked_refund = tx(vec![out(1, 0, None), out(7, 1, Some(&marker))]);
+        match classify_loan_spend(OrderKind::Repay, &id, &marked_refund).unwrap() {
+            OrderOutcome::Refunded { value, assets } => {
+                assert_eq!(value, 7);
+                assert_eq!(assets.len(), 1);
+            }
+            other => panic!("{other:?}"),
+        }
         // Partial: a fill rebuilds the collateral box first.
         let fill = tx(vec![out(9, 1, None), out(2, 2, None), out(1, 0, None)]);
         assert!(filled(classify_loan_spend(OrderKind::PartialRepay, &id, &fill).unwrap()));

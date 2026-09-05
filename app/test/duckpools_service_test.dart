@@ -51,7 +51,7 @@ class FakeGateway implements DuckpoolsGateway {
   String? lastPrepareLoanBoxes;
 
   @override
-  String loans(String loanBoxesJson, List<String> walletAddresses, int height) {
+  Future<String> loans(String loanBoxesJson, List<String> walletAddresses, int height) async {
     lastLoanBoxes = loanBoxesJson;
     lastLoanAddresses = walletAddresses;
     final root = (jsonDecode(loanBoxesJson) as Map).cast<String, dynamic>();
@@ -445,17 +445,22 @@ void main() {
         throw StateError('unexpected $uri');
       },
       post: (uri, body) async {
-        posted.add(body);
-        return jsonEncode(body == '"cc"' ? [myLoan, theirs] : []);
+        posted.add('${uri.query} $body');
+        // A first full page of strangers' loans, then the page with ours.
+        final offset = int.parse(uri.queryParameters['offset']!);
+        if (body != '"cc"') return jsonEncode([]);
+        if (offset == 0) return jsonEncode([for (var i = 0; i < 100; i++) {...theirs, 'boxId': 'loan-x$i'}]);
+        return jsonEncode([myLoan, theirs]);
       },
     );
     await svc.load();
     await svc.refreshLoans(const ['9me', '9me-2']);
     expect(svc.loansError, isNull);
-    expect(posted, contains('"cc"'), reason: 'collateral boxes come from the node by script');
+    expect(posted.where((p) => p.endsWith('"cc"')).length, 2, reason: 'a full page asks for the next');
+    expect((jsonDecode(gw.lastLoanBoxes!) as Map)['collateral'], hasLength(102));
     expect(gw.lastLoanAddresses, ['9me', '9me-2']);
     final sent = (jsonDecode(gw.lastLoanBoxes!) as Map).cast<String, dynamic>();
-    expect((sent['collateral'] as List).length, 2, reason: 'Rust picks the wallet\'s among all loans');
+    expect((sent['collateral'] as List).length, 102, reason: 'Rust picks the wallet\'s among all loans');
     expect((sent['children'] as List).map((b) => b['boxId']).toSet(), {'child-sigusd', 'child-erg'});
     expect(svc.loans.single.boxId, 'loan-1');
     expect(svc.loans.single.owed, 23939);

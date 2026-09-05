@@ -286,8 +286,22 @@ pub fn loans_json(loan_boxes_json: &str, wallet_trees: &[String], height: i64) -
                         .collect();
                     market["collaterals"] = serde_json::json!(collaterals);
                 } else {
-                    let (threshold, penalty) = snap.params.for_erg(pool).map_err(err)?;
-                    let dex = snap.dex_for(None)?;
+                    // A parameter box without ERG terms, or a price box that
+                    // could not be read, is this pool's problem, not every
+                    // pool's.
+                    let terms = snap.params.for_erg(pool).map_err(err).and_then(|t| Ok((t, snap.dex_for(None)?)));
+                    let ((threshold, penalty), dex) = match terms {
+                        Ok(v) => v,
+                        Err(e) => {
+                            markets.push(serde_json::json!({
+                                "pool": pool.key,
+                                "ticker": pool.ticker,
+                                "decimals": pool.decimals,
+                                "error": e,
+                            }));
+                            continue;
+                        }
+                    };
                     market["threshold"] = serde_json::json!(threshold);
                     market["penalty"] = serde_json::json!(penalty);
                     // What one ERG of collateral counts for, after the
@@ -575,6 +589,13 @@ mod tests {
         assert!(sigusd["erg_value"].as_i64().unwrap() > 0);
         // Pools whose boxes were not given say so rather than vanish.
         assert!(markets.iter().any(|m| m["pool"] == "quacks" && m["error"].is_string()));
+        // A parameter box that lists no ERG terms is that pool's error only.
+        let mut root: serde_json::Value = serde_json::from_str(&loan_boxes()).unwrap();
+        root["params"][0]["additionalRegisters"]["R6"] = serde_json::json!({"serializedValue": "1a00"});
+        let out = loans_json(&root.to_string(), &[borrower], 1).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let sigusd = v["markets"].as_array().unwrap().iter().find(|m| m["pool"] == "sigusd").unwrap();
+        assert!(sigusd["error"].as_str().unwrap().contains("ERG"), "{sigusd}");
         let none = loans_json(&loan_boxes(), &["0008cd00".into()], 1).unwrap();
         assert!(serde_json::from_str::<serde_json::Value>(&none).unwrap()["positions"].as_array().unwrap().is_empty());
     }

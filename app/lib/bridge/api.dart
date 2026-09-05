@@ -918,8 +918,9 @@ String duckpoolsQuote({
 /// object of boxes: `collateral` (every box under the collateral scripts),
 /// `parents` and `children` (the interest boxes), `dex` (the Spectrum
 /// ERG pools that price collateral) and `params` (the pool parameter
-/// boxes). `wallet_addresses` are the wallet's addresses. Pure.
-String duckpoolsLoans({
+/// boxes). `wallet_addresses` are the wallet's addresses. Pure, but the
+/// collateral list is unbounded, so it runs off the UI isolate.
+Future<String> duckpoolsLoans({
   required String loanBoxesJson,
   required List<String> walletAddresses,
   required PlatformInt64 height,
