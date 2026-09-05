@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:workmanager/workmanager.dart';
 
+import 'duckpools_service.dart';
 import 'mix_service.dart';
 import 'network_controller.dart';
 import 'notification_service.dart';
@@ -50,7 +51,35 @@ class MixBackground {
   }
 }
 
-/// Entry point WorkManager calls in its own isolate.
+/// The periodic job that watches Duckpools loans with the app closed:
+/// hourly, while a wallet has a loan, it reads the loans by address and
+/// announces any that crossed a line.
+class DuckpoolsBackground {
+  static const taskName = 'argus-duck-health';
+
+  static Future<void> schedule(bool wanted) async {
+    if (!MixBackground.supported) return;
+    try {
+      if (wanted) {
+        await Workmanager().registerPeriodicTask(
+          taskName,
+          taskName,
+          frequency: const Duration(hours: 1),
+          existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
+          constraints: Constraints(networkType: NetworkType.connected),
+          backoffPolicy: BackoffPolicy.linear,
+          backoffPolicyDelay: const Duration(minutes: 15),
+        );
+      } else {
+        await Workmanager().cancelByUniqueName(taskName);
+      }
+    } catch (e) {
+      debugPrint('argus: could not ${wanted ? 'schedule' : 'cancel'} the loan health check: $e');
+    }
+  }
+}
+
+/// Entry point WorkManager calls in its own isolate, for every Argus job.
 @pragma('vm:entry-point')
 void mixBackgroundDispatcher() {
   Workmanager().executeTask((task, inputData) async {
@@ -61,9 +90,13 @@ void mixBackgroundDispatcher() {
       await walletService.init();
       await networkController.load();
       await notificationService.init();
-      await mixService.tickHeadless();
+      if (task == DuckpoolsBackground.taskName) {
+        await duckpoolsService.tickHeadless();
+      } else {
+        await mixService.tickHeadless();
+      }
     } catch (e) {
-      debugPrint('argus: background mix tick failed: $e');
+      debugPrint('argus: background $task failed: $e');
       // Failure, so WorkManager retries on its backoff instead of waiting
       // for the next period.
       return false;
