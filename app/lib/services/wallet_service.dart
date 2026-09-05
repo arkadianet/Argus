@@ -1248,6 +1248,38 @@ class WalletService {
     );
   }
 
+  /// Prepare a Rosen bridge transfer out of Ergo; confirm with [sendErg].
+  Future<Map<String, dynamic>> rosenPrepareLock({
+    required String senderAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    required String tokenId,
+    required int amount,
+    required String toChain,
+    required String toAddress,
+    required int bridgeFee,
+    required int networkFee,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiRosenPrepareLock(
+      handleId: _handleId!,
+      senderAddress: senderAddress,
+      spendAddresses: spendAddresses,
+      changeAddress: changeAddress,
+      tokenId: tokenId,
+      amount: amount,
+      toChain: toChain,
+      toAddress: toAddress,
+      bridgeFee: bridgeFee,
+      networkFee: networkFee,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
   /// Prepare the refund of an unfilled order; confirm with [sendErg].
   Future<String> duckpoolsPrepareRefund({
     required String proxyBoxJson,
