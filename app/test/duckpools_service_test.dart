@@ -50,6 +50,11 @@ class FakeGateway implements DuckpoolsGateway {
   List<String>? lastLoanAddresses;
   String? lastPrepareLoanBoxes;
 
+  /// Health the fake reports for the wallet's loan, and whether it is
+  /// liquidatable; the forced height stays at 1 920 515.
+  int healthBps = 18594;
+  bool liquidatable = false;
+
   @override
   Future<String> loans(String loanBoxesJson, List<String> walletAddresses, int height) async {
     lastLoanBoxes = loanBoxesJson;
@@ -65,8 +70,8 @@ class FakeGateway implements DuckpoolsGateway {
             {
               'pool': 'sigusd', 'ticker': 'SigUSD', 'decimals': 2, 'box_id': c['boxId'],
               'collateral_nano': c['value'], 'loan': 23899, 'owed': 23939, 'collateral_value': 62316,
-              'threshold': 1400, 'penalty': 400, 'health_bps': 18594, 'liquidation_value': 33514,
-              'liquidatable': false, 'forced_liquidation_height': 1920515,
+              'threshold': 1400, 'penalty': 400, 'health_bps': healthBps, 'liquidation_value': 33514,
+              'liquidatable': liquidatable, 'forced_liquidation_height': 1920515,
             },
       ],
       'markets': [
@@ -559,6 +564,88 @@ void main() {
     expect(svc.marketFor('sigusd')!.ready, isFalse);
     expect(svc.marketFor('sigusd')!.error, contains('parameter box'));
     expect(svc.loans.single.boxId, 'loan-1', reason: 'positions still read from the collateral boxes');
+  });
+
+  test('loan alert levels follow the health and the deadline', () {
+    DuckLoan loan(int health, {bool liq = false, int forced = 2000000}) => DuckLoan(
+          pool: 'sigusd', ticker: 'SigUSD', decimals: 2, boxId: 'b', collateralNano: 1, loan: 1, owed: 1,
+          collateralValue: 1, threshold: 1400, penalty: 400, healthBps: health, liquidationValue: 1,
+          liquidatable: liq, forcedLiquidationHeight: forced,
+        );
+    expect(duckAlertLevel(loan(18594)), isNull);
+    expect(duckAlertLevel(loan(13000)), isNull, reason: 'the line itself is fine');
+    expect(duckAlertLevel(loan(12999)), DuckAlertLevel.watch);
+    expect(duckAlertLevel(loan(11499)), DuckAlertLevel.danger);
+    expect(duckAlertLevel(loan(20000, liq: true)), DuckAlertLevel.liquidatable);
+    expect(duckDeadlineNear(loan(1, forced: 1002160), 1000000), isTrue);
+    expect(duckDeadlineNear(loan(1, forced: 1002161), 1000000), isFalse);
+    expect(duckDeadlineNear(loan(1, forced: 1002160), null), isFalse, reason: 'no height, no claim');
+  });
+
+  test('a loan crossing a line is announced once per level, and the watch record feeds the background job', () async {
+    SharedPreferences.setMockInitialValues({});
+    final gw = FakeGateway(node: 'http://node')..height = 1866418;
+    final notified = <String>[];
+    final scheduled = <bool>[];
+    final myLoan = {'boxId': 'loan-1', 'value': 2500000000000, 'ergoTree': 'cc', 'borrower': '9me'};
+    final svc = DuckpoolsService(
+      gateway: gw,
+      get: (uri) async {
+        final p = uri.path;
+        if (p.contains('byTokenId/')) return jsonEncode([{'boxId': p.split('/').last}]);
+        throw StateError('unexpected $uri');
+      },
+      post: (uri, body) async => jsonEncode(body == '"cc"' ? [myLoan] : []),
+      notify: ({required loanId, required title, required body}) async => notified.add('$loanId $title'),
+      schedule: (wanted) async => scheduled.add(wanted),
+    );
+    await svc.load();
+    await svc.refreshLoans(const ['9me']);
+    expect(notified, isEmpty, reason: 'healthy');
+    expect(scheduled, [true], reason: 'a loan exists, so the background check is on');
+
+    gw.healthBps = 12500;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified, ['loan-1 Loan health falling']);
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.length, 1, reason: 'the same level is not repeated');
+
+    gw.healthBps = 11000;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.last, 'loan-1 Loan close to liquidation');
+    gw.healthBps = 12500;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.length, 2, reason: 'a milder level after a worse one says nothing');
+
+    // Recovery resets, so the next fall speaks again.
+    gw.healthBps = 20000;
+    await svc.refreshLoans(const ['9me']);
+    gw.healthBps = 12500;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.length, 3);
+
+    // The deadline, once.
+    gw.height = 1920515 - 2000;
+    await svc.refreshLoans(const ['9me']);
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.where((n) => n.contains('deadline')).length, 1);
+
+    // The record the background job reads.
+    final prefs = await SharedPreferences.getInstance();
+    final record = jsonDecode(prefs.getString('argus_duck_watch_v1_w1')!) as Map;
+    expect(record['addresses'], ['9me']);
+    expect((record['alerted'] as Map)['loan-1:health'], DuckAlertLevel.watch.index);
+
+    // The headless pass reads by the recorded addresses, wallet locked.
+    gw.liquidatable = true;
+    await svc.tickHeadless();
+    expect(notified.last, 'loan-1 Loan can be liquidated');
+    expect(gw.lastLoanAddresses, ['9me']);
+
+    // Once the loan is gone the job is cancelled.
+    myLoan['borrower'] = '9someone';
+    await svc.tickHeadless();
+    expect(scheduled.last, isFalse);
   });
 
   test('a refund is prepared only for an unspent order box', () async {

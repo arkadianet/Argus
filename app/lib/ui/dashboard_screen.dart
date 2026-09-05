@@ -146,6 +146,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (last != null && DateTime.now().difference(last) < const Duration(minutes: 5)) return;
     final holdings = {for (final t in _sync.tokens) t.id: t.amount};
     unawaited(duckpoolsService.refresh(holdings));
+    // Loans are read less often: a borrowing pool is five requests, and
+    // the read also announces any loan that crossed a line.
+    unawaited(duckpoolsService.refreshLoansIfDue(_sync.historyAddresses));
   }
 
   /// Announces payments that appeared since the last refresh. Only fires
