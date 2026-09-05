@@ -710,10 +710,14 @@ class DuckpoolsService extends ChangeNotifier {
     if (_loansBusy) return;
     _loansBusy = true;
     notifyListeners();
-    // The wallet this read is for; a switch while it is in flight means
-    // the result is not shown.
+    // The wallet this read is for; another wallet active by the time it
+    // finishes means the result is not shown. A locked wallet (no active
+    // id) claims nothing, so a read made by id on its behalf still lands.
     final forWallet = walletId ?? _gw.walletId;
-    bool stale() => walletId == null && _gw.walletId != forWallet;
+    bool stale() {
+      final active = _gw.walletId;
+      return active != null && active != forWallet;
+    }
     try {
       final collateral = <dynamic>[];
       final parents = <dynamic>[];
