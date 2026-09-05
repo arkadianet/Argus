@@ -49,6 +49,9 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       preparationId: (prepared['preparation_id'] as num).toInt(),
     );
     if (!ok || !mounted) return;
+    if (!duckpoolsService.canCommit(prepared)) {
+      throw StateError('The wallet changed while the order was being prepared; nothing was sent');
+    }
     final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
     await duckpoolsService.commitOrder(prepared, txId);
     if (mounted) {
@@ -288,6 +291,7 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
       if (!ok || !mounted) return;
+      if (!svc.canCommit(prepared)) throw StateError('The wallet changed while the order was being prepared; nothing was sent');
       final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
       await svc.commitOrder(prepared, txId);
       if (mounted) {
