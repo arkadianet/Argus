@@ -777,17 +777,7 @@ class _BorrowSheetState extends State<_BorrowSheet> {
   Map<String, dynamic>? _quote;
   String? _error;
 
-  int? _parse(TextEditingController c, int decimals) {
-    final text = c.text.trim().replaceAll(',', '');
-    if (text.isEmpty) return null;
-    final v = double.tryParse(text);
-    if (v == null || v <= 0) return null;
-    var scaled = v;
-    for (var i = 0; i < decimals; i++) {
-      scaled *= 10;
-    }
-    return scaled.round();
-  }
+  int? _parse(TextEditingController c, int decimals) => parseDuckAmount(c.text, decimals);
 
   int? get _collateralNano => _parse(_collateral, 9);
   int? get _loanUnits => _parse(_loan, widget.state.decimals);
@@ -893,17 +883,7 @@ class _PartialRepaySheetState extends State<_PartialRepaySheet> {
   Map<String, dynamic>? _quote;
   String? _error;
 
-  int? get _units {
-    final text = _ctl.text.trim().replaceAll(',', '');
-    if (text.isEmpty) return null;
-    final v = double.tryParse(text);
-    if (v == null || v <= 0) return null;
-    var scaled = v;
-    for (var i = 0; i < widget.loan.decimals; i++) {
-      scaled *= 10;
-    }
-    return scaled.round();
-  }
+  int? get _units => parseDuckAmount(_ctl.text, widget.loan.decimals);
 
   void _requote() {
     final units = _units;
