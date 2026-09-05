@@ -164,8 +164,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
   /// broadcast, record.
   Future<void> _order(DuckPoolState s, String kind) async {
     if (_working) return;
-    final args = WalletRouteArgs.of(context);
     final svc = duckpoolsService;
+    final walletBefore = svc.activeWalletId;
     final holdingTokens = s.walletLendTokens;
     final amount = await showModalBottomSheet<int>(
       context: context,
@@ -175,6 +175,14 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       builder: (_) => _OrderSheet(state: s, kind: kind, maxLendTokens: holdingTokens),
     );
     if (amount == null || !mounted) return;
+    // The addresses and the wallet id must come from the same wallet: read
+    // the route again after the sheet, and stop if the wallet changed
+    // while it was open.
+    if (svc.activeWalletId != walletBefore) {
+      showErrorSheet(context, title: 'Could not post the order', message: 'The wallet changed while the sheet was open.');
+      return;
+    }
+    final args = WalletRouteArgs.of(context);
     setState(() => _working = true);
     try {
       final prepared = await svc.prepareOrder(
