@@ -59,11 +59,20 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
     }
   }
 
+  /// Whether the wallet is still the one a sheet was opened for; says so
+  /// and returns false otherwise.
+  bool _sameWallet(String? before) {
+    if (duckpoolsService.activeWalletId == before) return true;
+    showErrorSheet(context, title: 'Could not post the order', message: 'The wallet changed while the sheet was open.');
+    return false;
+  }
+
   /// Borrow from a token pool against ERG: collateral and loan sheet,
   /// quote, confirm, broadcast, record.
   Future<void> _borrow(DuckPoolState s) async {
     if (_working) return;
-    final args = WalletRouteArgs.of(context);
+    final walletBefore = duckpoolsService.activeWalletId;
+    var args = WalletRouteArgs.of(context);
     final market = duckpoolsService.marketFor(s.pool);
     if (market == null || !market.ready) return;
     final pool = duckpoolsService.pools.firstWhere((p) => p.key == s.pool);
@@ -76,6 +85,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       builder: (_) => _BorrowSheet(state: s, market: market, spendableNano: args.spendableNano ?? 0, held: held),
     );
     if (picked == null || !mounted) return;
+    if (!_sameWallet(walletBefore)) return;
+    args = WalletRouteArgs.of(context);
     final (asset, collateralAmount, loan) = picked;
     setState(() => _working = true);
     try {
@@ -112,7 +123,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
   /// Repay a loan in full, or part of it.
   Future<void> _repay(DuckLoan l, {required bool partial}) async {
     if (_working) return;
-    final args = WalletRouteArgs.of(context);
+    final walletBefore = duckpoolsService.activeWalletId;
+    var args = WalletRouteArgs.of(context);
     final held = args.tokens
         .where((t) => t.id == duckpoolsService.pools.firstWhere((p) => p.key == l.pool).currencyId)
         .fold<int>(0, (a, t) => a + t.amount);
@@ -126,6 +138,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
         builder: (_) => _PartialRepaySheet(loan: l, held: held),
       );
       if (amount == null || !mounted) return;
+      if (!_sameWallet(walletBefore)) return;
+      args = WalletRouteArgs.of(context);
     }
     setState(() => _working = true);
     try {
@@ -173,7 +187,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
   /// of the collateral box, no bot.
   Future<void> _adjust(DuckLoan l) async {
     if (_working) return;
-    final args = WalletRouteArgs.of(context);
+    final walletBefore = duckpoolsService.activeWalletId;
+    var args = WalletRouteArgs.of(context);
     final pool = duckpoolsService.pools.firstWhere((p) => p.key == l.pool);
     final (cTicker, cDecimals) = pool.collateralUnit(l.collateralAsset);
     final held = l.collateralAsset == null
@@ -187,6 +202,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       builder: (_) => _AdjustSheet(loan: l, ticker: cTicker, decimals: cDecimals, held: held),
     );
     if (newAmount == null || !mounted) return;
+    if (!_sameWallet(walletBefore)) return;
+    args = WalletRouteArgs.of(context);
     setState(() => _working = true);
     try {
       final prepared = await duckpoolsService.prepareAdjust(
@@ -234,8 +251,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
   /// broadcast, record.
   Future<void> _order(DuckPoolState s, String kind) async {
     if (_working) return;
-    final args = WalletRouteArgs.of(context);
     final svc = duckpoolsService;
+    final walletBefore = svc.activeWalletId;
     final holdingTokens = s.walletLendTokens;
     final amount = await showModalBottomSheet<int>(
       context: context,
@@ -245,6 +262,11 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       builder: (_) => _OrderSheet(state: s, kind: kind, maxLendTokens: holdingTokens),
     );
     if (amount == null || !mounted) return;
+    // The addresses and the wallet id must come from the same wallet: read
+    // the route again after the sheet, and stop if the wallet changed
+    // while it was open.
+    if (!_sameWallet(walletBefore)) return;
+    final args = WalletRouteArgs.of(context);
     setState(() => _working = true);
     try {
       final prepared = await svc.prepareOrder(
