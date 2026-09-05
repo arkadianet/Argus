@@ -639,7 +639,10 @@ class MixService extends ChangeNotifier {
       final uri = Uri.parse(
         '$node/blockchain/box/unspent/byErgoTree?offset=$offset&limit=$mixPageLimit',
       );
-      final page = jsonDecode(await _post(uri, jsonEncode(tree))) as List;
+      // Node versions differ on the envelope: a bare array, or
+      // `{"items": [...], "total": n}` like the explorer.
+      final decoded = jsonDecode(await _post(uri, jsonEncode(tree)));
+      final page = decoded is Map ? (decoded['items'] as List? ?? const []) : decoded as List;
       for (final b in page) {
         final id = (b as Map)['boxId']?.toString() ?? '';
         if (id.isNotEmpty && seen.add(id)) items.add(b);
@@ -719,7 +722,9 @@ class MixService extends ChangeNotifier {
     final base = _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
     final trees = _trees;
     _lastListTruncated = false;
-    final lists = await Future.wait<List<dynamic>>([
+    // Everything independent starts at once: a slow explorer fallback on
+    // one list must not hold up the own-box lookups or the height.
+    final listsFuture = Future.wait<List<dynamic>>([
       _listByTree(base, trees['half']!),
       // One fee box and one token box are enough; the fullest of the first
       // page will do, and the operator keeps only a handful live.
@@ -727,14 +732,20 @@ class MixService extends ChangeNotifier {
       _listByTree(base, trees['token']!, cap: 100),
       if (allFullBoxes) _listByTree(base, trees['full']!),
     ]);
+    final ownFuture = Future.wait<_OwnBox>([
+      for (final id in ownBoxIds) _resolveOwnBox(base, id),
+    ]);
+    final heightFuture = _height(base);
+    // One wait for all three, so a failure in one cannot leave another
+    // rejecting with nobody listening.
+    final results = await Future.wait<Object>([listsFuture, ownFuture, heightFuture]);
+    final lists = results[0] as List<List<dynamic>>;
+    final own = results[1] as List<_OwnBox>;
+    final height = results[2] as int;
     final half = lists[0];
     final fee = lists[1];
     final token = lists[2];
     final full = allFullBoxes ? lists[3] : <dynamic>[];
-
-    final own = await Future.wait<_OwnBox>([
-      for (final id in ownBoxIds) _resolveOwnBox(base, id),
-    ]);
     for (final o in own) {
       // An unspent own box goes under both lists; the engine files it by
       // script and ignores duplicates. Outputs of its spender are full
@@ -745,7 +756,6 @@ class MixService extends ChangeNotifier {
       }
       full.addAll(o.spenderOutputs);
     }
-    final height = await _height(base);
     return MixSnapshot(
       json: jsonEncode({
         'half_boxes': half,

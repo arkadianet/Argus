@@ -172,6 +172,10 @@ class FakeExplorer {
 
   /// Node-side lists, keyed by tree; null means "no extra index".
   Map<String, List<Object>>? nodeLists;
+
+  /// Answer node list queries as `{"items": [...], "total": n}` instead of
+  /// a bare array, as some node versions do.
+  bool nodeEnvelope = false;
   Map<String, Object> nodeBoxes = {};
   Map<String, Object> nodeTxs = {};
 
@@ -185,7 +189,8 @@ class FakeExplorer {
     final all = lists[tree] ?? const [];
     final offset = int.parse(uri.queryParameters['offset'] ?? '0');
     final limit = int.parse(uri.queryParameters['limit'] ?? '500');
-    return jsonEncode(all.skip(offset).take(limit).toList());
+    final page = all.skip(offset).take(limit).toList();
+    return jsonEncode(nodeEnvelope ? {'items': page, 'total': all.length} : page);
   }
 
   Future<String> get(Uri uri) async {
@@ -602,7 +607,15 @@ void main() {
     expect(json['height'], 4242, reason: 'node /info');
     expect(ex.requests.where((r) => r.contains('api/v1')), isEmpty, reason: 'explorer never asked');
 
+    // A node that wraps its answer in an envelope is read the same way.
+    ex.nodeEnvelope = true;
+    ex.requests.clear();
+    final wrapped = await svc.snapshot();
+    expect((jsonDecode(wrapped.json) as Map)['half_boxes'].map((b) => b['boxId']), ['nh1']);
+    expect(ex.requests.where((r) => r.contains('api/v1')), isEmpty);
+
     // A node without the extra index: every list comes from the explorer.
+    ex.nodeEnvelope = false;
     ex.nodeLists = null;
     ex.requests.clear();
     final snap2 = await svc.snapshot();
