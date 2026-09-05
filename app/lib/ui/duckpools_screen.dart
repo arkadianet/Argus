@@ -59,11 +59,20 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
     }
   }
 
+  /// Whether the wallet is still the one a sheet was opened for; says so
+  /// and returns false otherwise.
+  bool _sameWallet(String? before) {
+    if (duckpoolsService.activeWalletId == before) return true;
+    showErrorSheet(context, title: 'Could not post the order', message: 'The wallet changed while the sheet was open.');
+    return false;
+  }
+
   /// Borrow from a token pool against ERG: collateral and loan sheet,
   /// quote, confirm, broadcast, record.
   Future<void> _borrow(DuckPoolState s) async {
     if (_working) return;
-    final args = WalletRouteArgs.of(context);
+    final walletBefore = duckpoolsService.activeWalletId;
+    var args = WalletRouteArgs.of(context);
     final market = duckpoolsService.marketFor(s.pool);
     if (market == null || !market.ready) return;
     final picked = await showModalBottomSheet<(int, int)>(
@@ -74,6 +83,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       builder: (_) => _BorrowSheet(state: s, market: market, spendableNano: args.spendableNano ?? 0),
     );
     if (picked == null || !mounted) return;
+    if (!_sameWallet(walletBefore)) return;
+    args = WalletRouteArgs.of(context);
     final (collateralNano, loan) = picked;
     setState(() => _working = true);
     try {
@@ -108,7 +119,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
   /// Repay a loan in full, or part of it.
   Future<void> _repay(DuckLoan l, {required bool partial}) async {
     if (_working) return;
-    final args = WalletRouteArgs.of(context);
+    final walletBefore = duckpoolsService.activeWalletId;
+    var args = WalletRouteArgs.of(context);
     final held = args.tokens
         .where((t) => t.id == duckpoolsService.pools.firstWhere((p) => p.key == l.pool).currencyId)
         .fold<int>(0, (a, t) => a + t.amount);
@@ -122,6 +134,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
         builder: (_) => _PartialRepaySheet(loan: l, held: held),
       );
       if (amount == null || !mounted) return;
+      if (!_sameWallet(walletBefore)) return;
+      args = WalletRouteArgs.of(context);
     }
     setState(() => _working = true);
     try {
@@ -178,10 +192,7 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
     // The addresses and the wallet id must come from the same wallet: read
     // the route again after the sheet, and stop if the wallet changed
     // while it was open.
-    if (svc.activeWalletId != walletBefore) {
-      showErrorSheet(context, title: 'Could not post the order', message: 'The wallet changed while the sheet was open.');
-      return;
-    }
+    if (!_sameWallet(walletBefore)) return;
     final args = WalletRouteArgs.of(context);
     setState(() => _working = true);
     try {
