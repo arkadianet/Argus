@@ -65,57 +65,59 @@ fn kind_name(kind: OrderKind) -> &'static str {
     }
 }
 
-fn register_bytes(v: &serde_json::Value, name: &str) -> Option<String> {
+/// A VLQ from `bytes`: the value and the bytes it took. None when it
+/// does not terminate, is longer than a u64 allows, or is not canonical
+/// (a continuation byte followed by a zero byte encodes nothing).
+fn vlq(bytes: &[u8]) -> Option<(u64, usize)> {
+    let mut result: u64 = 0;
+    let mut shift = 0u32;
+    for (i, &b) in bytes.iter().enumerate() {
+        if shift > 63 || (shift == 63 && (b & 0x7f) > 1) {
+            return None;
+        }
+        result |= ((b & 0x7f) as u64) << shift;
+        if b & 0x80 == 0 {
+            if i > 0 && b == 0 {
+                return None;
+            }
+            return Some((result, i + 1));
+        }
+        shift += 7;
+    }
+    None
+}
+
+fn register_hex<'a>(v: &'a serde_json::Value, name: &str) -> Option<&'a str> {
     let raw = v.get("additionalRegisters")?.get(name)?;
-    let hex_str = match raw {
-        serde_json::Value::String(s) => s.as_str(),
-        serde_json::Value::Object(m) => m.get("serializedValue")?.as_str()?,
-        _ => return None,
-    };
-    // Coll[Byte]: `0e` + VLQ length + bytes; trees are short enough for one
-    // or two length bytes.
-    let bytes = hex::decode(hex_str).ok()?;
+    match raw {
+        serde_json::Value::String(s) => Some(s.as_str()),
+        serde_json::Value::Object(m) => m.get("serializedValue")?.as_str(),
+        _ => None,
+    }
+}
+
+/// A `Coll[Byte]` register (`0e` + VLQ length + bytes), as hex. The length
+/// must account for exactly the rest of the value.
+fn register_bytes(v: &serde_json::Value, name: &str) -> Option<String> {
+    let bytes = hex::decode(register_hex(v, name)?).ok()?;
     if bytes.first() != Some(&0x0e) {
         return None;
     }
-    let mut i = 1;
-    let mut len: usize = 0;
-    let mut shift = 0;
-    while i < bytes.len() {
-        let b = bytes[i];
-        len |= ((b & 0x7f) as usize) << shift;
-        i += 1;
-        if b & 0x80 == 0 {
-            break;
-        }
-        shift += 7;
-    }
-    (bytes.len() == i + len).then(|| hex::encode(&bytes[i..]))
+    let (len, used) = vlq(&bytes[1..])?;
+    let start = 1 + used;
+    let end = start.checked_add(usize::try_from(len).ok()?)?;
+    (bytes.len() == end).then(|| hex::encode(&bytes[start..end]))
 }
 
+/// An `Int` (`04`) or `Long` (`05`) register: zigzag VLQ, nothing after it.
 fn register_number(v: &serde_json::Value, name: &str) -> Option<i64> {
-    let raw = v.get("additionalRegisters")?.get(name)?;
-    let hex_str = match raw {
-        serde_json::Value::String(s) => s.as_str(),
-        serde_json::Value::Object(m) => m.get("serializedValue")?.as_str()?,
-        _ => return None,
-    };
-    let bytes = hex::decode(hex_str).ok()?;
-    // `04` Int or `05` Long, zigzag VLQ.
+    let bytes = hex::decode(register_hex(v, name)?).ok()?;
     if !matches!(bytes.first(), Some(0x04) | Some(0x05)) {
         return None;
     }
-    let mut result: u64 = 0;
-    let mut shift = 0;
-    for &b in &bytes[1..] {
-        result |= ((b & 0x7f) as u64) << shift;
-        if b & 0x80 == 0 {
-            break;
-        }
-        shift += 7;
-        if shift > 63 {
-            return None;
-        }
+    let (result, used) = vlq(&bytes[1..])?;
+    if 1 + used != bytes.len() {
+        return None;
     }
     Some(if result & 1 == 0 { (result >> 1) as i64 } else { -((result >> 1) as i64) - 1 })
 }
@@ -145,8 +147,9 @@ pub fn discover_orders(boxes: &[serde_json::Value], wallet_trees: &[String]) -> 
             OrderKind::PartialRepay => "R7",
             _ => "R6",
         };
-        let refund_height = register_number(b, refund_reg).ok_or_else(|| err("proxy box without a refund height"))?;
-        let value = b.get("value").and_then(|v| v.as_i64()).ok_or_else(|| err("box without a value"))?;
+        // A malformed box is skipped, not a reason to lose the others.
+        let Some(refund_height) = register_number(b, refund_reg) else { continue };
+        let Some(value) = b.get("value").and_then(|v| v.as_i64()) else { continue };
         let first_token = b
             .get("assets")
             .and_then(|a| a.as_array())
@@ -221,5 +224,43 @@ mod tests {
         assert_eq!((found[1].kind, found[1].amount, found[1].refund_height), ("lend", 5_000_000_000, 1_900_720));
         assert_eq!((found[2].kind, found[2].amount, found[2].refund_height), ("partial_repay", 50, 1_900_800));
         assert!(discover_orders(&boxes, &[OTHER.to_uppercase()]).unwrap().len() == 1, "case does not matter");
+    }
+
+    #[test]
+    fn malformed_registers_are_rejected_not_misread() {
+        let reg = |hex: &str| serde_json::json!({"additionalRegisters": {"R4": hex}});
+        // Unterminated length, non-canonical length, length past the end, trailing bytes.
+        assert_eq!(register_bytes(&reg("0e81"), "R4"), None);
+        assert_eq!(register_bytes(&reg("0e8000"), "R4"), None);
+        assert_eq!(register_bytes(&reg("0e05aabb"), "R4"), None);
+        assert_eq!(register_bytes(&reg("0e01aabb"), "R4"), None);
+        assert_eq!(register_bytes(&reg("0e02aabb"), "R4"), Some("aabb".into()));
+        // A number needs at least one byte, must terminate, and must end the value.
+        assert_eq!(register_number(&reg("04"), "R4"), None);
+        assert_eq!(register_number(&reg("0480"), "R4"), None);
+        assert_eq!(register_number(&reg("048000"), "R4"), None);
+        assert_eq!(register_number(&reg("040201"), "R4"), None);
+        assert_eq!(register_number(&reg("04ffffffffffffffffffff01"), "R4"), None, "eleven bytes overflow");
+        assert_eq!(register_number(&reg("0402"), "R4"), Some(1));
+        assert_eq!(register_number(&reg("0403"), "R4"), Some(-2));
+        assert_eq!(register_number(&reg("05ac02"), "R4"), Some(150));
+    }
+
+    #[test]
+    fn a_malformed_proxy_box_is_skipped_and_the_rest_kept() {
+        let trees = proxy_trees();
+        let (borrow_tree, _, _) = trees.iter().find(|(_, p, k)| p.key == "sigusd" && *k == OrderKind::Borrow).unwrap();
+        let user_bytes = hex::decode(USER).unwrap();
+        let mut bad = proxy(borrow_tree, &[("R4", encode::coll_byte(&user_bytes).unwrap()), ("R5", encode::long(7).unwrap()), ("R6", "0480".to_string())], 1, &[]);
+        bad["boxId"] = serde_json::json!("ff".repeat(32));
+        let no_value = {
+            let mut b = proxy(borrow_tree, &[("R4", encode::coll_byte(&user_bytes).unwrap()), ("R6", encode::int(5).unwrap())], 1, &[]);
+            b.as_object_mut().unwrap().remove("value");
+            b
+        };
+        let good = proxy(borrow_tree, &[("R4", encode::coll_byte(&user_bytes).unwrap()), ("R5", encode::long(100).unwrap()), ("R6", encode::int(1_900_000).unwrap())], 1, &[]);
+        let found = discover_orders(&[bad, no_value, good], &[USER.to_string()]).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].amount, 100);
     }
 }

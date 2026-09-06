@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -527,7 +528,8 @@ void main() {
     expect(svc.orders.map((o) => o.proxyBoxId), ['pb2', 'pb1']);
     expect(svc.orders.last.kind, 'borrow');
     expect(svc.orders.last.refundHeight, 900);
-    expect(svc.orders.first.ticker, 'ERG lend tokens');
+    expect(svc.orders.first.ticker, 'ERG', reason: 'the pool metadata, as a posted order gets');
+    expect(svc.orders.first.decimals, 9);
     // Found again: nothing new, nothing duplicated.
     expect(await svc.discoverOrders(['9me']), 0);
     expect(svc.orders, hasLength(2));
@@ -539,6 +541,39 @@ void main() {
     ];
     await svc.discoverOrdersIfUnknown(['9me']);
     expect(svc.orders, hasLength(2));
+  });
+
+  test('a scan that outlives a wallet switch does not touch the new wallet', () async {
+    SharedPreferences.setMockInitialValues({
+      'argus_duck_orders_v1_w2': jsonEncode([
+        {'kind': 'lend', 'pool': 'erg', 'ticker': 'ERG', 'decimals': 9, 'proxy_box_id': 'theirs', 'tx_id': 't', 'amount': 1, 'expected': 1, 'min_out': 1, 'refund_height': 1, 'created_at': 0},
+      ]),
+    });
+    final gw = FakeGateway(node: 'http://node')
+      ..height = 1000
+      ..found = [
+        {'pool': 'sigusd', 'kind': 'borrow', 'box_id': 'pb1', 'tx_id': 'tx1', 'amount': 100, 'value': 1, 'refund_height': 900},
+      ];
+    final gate = Completer<void>();
+    final svc = DuckpoolsService(
+      gateway: gw,
+      get: (u) async => throw StateError('unexpected $u'),
+      post: (u, body) async {
+        await gate.future;
+        return jsonEncode([{'boxId': 'x', 'ergoTree': jsonDecode(body)}]);
+      },
+    );
+    await svc.load();
+    final scan = svc.discoverOrders(['9me']);
+    gw.wallet = 'w2';
+    await svc.load();
+    expect(svc.orders.map((o) => o.proxyBoxId), ['theirs']);
+    gate.complete();
+    expect(await scan, 0);
+    expect(svc.orders.map((o) => o.proxyBoxId), ['theirs'], reason: 'the first wallet\'s find is dropped');
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('argus_duck_orders_v1_w1'), isNull);
+    expect(jsonDecode(prefs.getString('argus_duck_orders_v1_w2')!), hasLength(1));
   });
 
   test('loans are read from the collateral, interest, price and parameter boxes', () async {

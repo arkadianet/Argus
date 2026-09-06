@@ -833,11 +833,21 @@ class DuckpoolsService extends ChangeNotifier {
   }
 
   /// Load this wallet's orders.
+  /// The wallet whose records [orders] holds, set once a load completed.
+  /// Mutations wait for this to match the wallet they were started for,
+  /// so a scan racing a wallet switch cannot mix two wallets' records.
+  String? _loadedWalletId;
+
   Future<void> load() async {
+    final previous = _walletId;
     _walletId = _gw.walletId;
     final id = _walletId;
-    if (id == null) {
+    if (id != previous) {
+      // Another wallet's records must not linger while this one's load.
+      _loadedWalletId = null;
       orders = const [];
+    }
+    if (id == null) {
       notifyListeners();
       return;
     }
@@ -850,11 +860,13 @@ class DuckpoolsService extends ChangeNotifier {
     orders = raw == null
         ? const []
         : [for (final m in (jsonDecode(raw) as List)) DuckOrder.fromJson((m as Map).cast())];
+    _loadedWalletId = id;
     notifyListeners();
   }
 
   void reset() {
     _walletId = null;
+    _loadedWalletId = null;
     orders = const [];
     loans = const [];
     markets = const [];
@@ -865,15 +877,21 @@ class DuckpoolsService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _persistOrders() async {
+  /// Writes go out in the order they were asked for: a snapshot taken
+  /// earlier can never land after a later one and undo it.
+  Future<void> _persistChain = Future.value();
+
+  Future<void> _persistOrders() {
     final id = _walletId;
-    if (id == null) return;
+    if (id == null) return Future.value();
     // Serialise before the await, so a reset or load in between cannot
     // change what is written under this wallet's key.
     final snapshot = jsonEncode([for (final o in orders) o.toJson()]);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_ordersKey(id), snapshot);
-    notifyListeners();
+    return _persistChain = _persistChain.then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_ordersKey(id), snapshot);
+      notifyListeners();
+    });
   }
 
   /// Read every pool's boxes, node first (by script), explorer when the
@@ -1467,7 +1485,11 @@ class DuckpoolsService extends ChangeNotifier {
       ]);
       if (boxes.isEmpty && failures.isNotEmpty) throw StateError('No proxy script could be read: ${failures.first}');
       final found = (jsonDecode(_gw.discoverOrders(jsonEncode(boxes), addresses)) as List).cast<Map>();
+      // The records are kept per wallet; add to them only once this
+      // wallet's own are loaded, so a switch mid-scan cannot mix wallets.
       if (_gw.walletId != walletId) return 0;
+      if (_loadedWalletId != walletId) await load();
+      if (_gw.walletId != walletId || _loadedWalletId != walletId) return 0;
       final known = {for (final o in orders) o.proxyBoxId};
       var added = 0;
       for (final f in found) {
@@ -1476,13 +1498,12 @@ class DuckpoolsService extends ChangeNotifier {
         if (known.contains(id)) continue;
         final pool = pools.firstWhere((p) => p.key == m['pool']);
         final kind = m['kind'] as String;
-        final isLendTokens = kind == 'withdraw';
         orders = [
           DuckOrder(
             kind: kind,
             pool: pool.key,
-            ticker: isLendTokens ? '${pool.ticker} lend tokens' : pool.ticker,
-            decimals: isLendTokens ? 0 : pool.decimals,
+            ticker: pool.ticker,
+            decimals: pool.decimals,
             proxyBoxId: id,
             txId: m['tx_id'] as String,
             amount: (m['amount'] as num).toInt(),
@@ -1498,9 +1519,6 @@ class DuckpoolsService extends ChangeNotifier {
       _scanned.add(walletId);
       scannedAt = DateTime.now();
       if (failures.isNotEmpty) scanError = 'Some proxy scripts could not be read: ${failures.first}';
-      // The records are kept per wallet; a scan before any refresh has
-      // not bound the service to one yet.
-      _walletId ??= walletId;
       if (added > 0) await _persistOrders();
       return added;
     } catch (e) {
