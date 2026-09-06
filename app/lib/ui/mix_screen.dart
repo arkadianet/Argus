@@ -9,6 +9,7 @@ import '../services/stealth_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
+import 'widgets/battery_note.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/error_sheet.dart';
 import 'widgets/soft_card.dart';
@@ -326,6 +327,10 @@ class _MixScreenState extends State<MixScreen> {
                         'can keep them moving in the background.',
                 style: TextStyle(color: ArgusColors.of(context).muted, fontSize: 12),
               ),
+              if (mixService.backgroundEnabled) ...[
+                const SizedBox(height: 6),
+                const BatteryNote(),
+              ],
               const SizedBox(height: 16),
               if (_working) ...[
                 SoftCard(
