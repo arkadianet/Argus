@@ -1425,7 +1425,7 @@ class _BorrowFigures extends StatelessWidget {
         row('Liquidation penalty', '${(penalty / 10).toStringAsFixed(0)}%, as Duckpools states it'),
         if (apr != null) ...[
           row('Interest at today\'s rate', '${(apr / 100).toStringAsFixed(2)}% a year'),
-          row('About', '${amt(interestOver(owed: loan, aprBps: apr, days: 30))} a month · ${amt(interestOver(owed: loan, aprBps: apr, days: 365))} a year'),
+          row('About', '${_smallAmount(interestOver(owed: loan, aprBps: apr, days: 30), s.decimals, s.ticker)} a month · ${_smallAmount(interestOver(owed: loan, aprBps: apr, days: 365), s.decimals, s.ticker)} a year'),
         ],
         row('Called whatever the price', 'about ${formatCalendarDate(blockDate(forcedLiquidationBlocks, DateTime.now()))}'),
         const SizedBox(height: 4),
