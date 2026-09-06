@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../bridge/api.dart' as bridge;
-import '../format.dart';
 import 'network_controller.dart';
 import 'mix_activity.dart';
 import 'mix_background.dart';
@@ -174,7 +173,9 @@ abstract class MixGateway {
     String? nodeUrl,
     required int nowUnix,
   });
-  Future<void> notify({required String title, required String body});
+  /// `mixId` makes the notification's identity: two mixes at the same
+  /// step must not replace each other.
+  Future<void> notify({required String title, required String body, int? mixId});
 
   // Background mixing: a per-mix key in the app's keystore, and the same
   // engine calls driven by it instead of the unlocked wallet.
@@ -313,8 +314,8 @@ class LiveMixGateway implements MixGateway {
       );
 
   @override
-  Future<void> notify({required String title, required String body}) =>
-      notificationService.mixProgress(title: title, body: body);
+  Future<void> notify({required String title, required String body, int? mixId}) =>
+      notificationService.mixProgress(title: title, body: body, mixId: mixId);
 
   @override
   Future<String> exportKey(int mixId) => walletService.mixExportKey(mixId);
@@ -1372,11 +1373,7 @@ class MixService extends ChangeNotifier {
       r.state = (result['state'] as Map).cast<String, dynamic>();
       r.lastError = null;
       if (r.finished) {
-        await _gw.notify(
-          title: 'Mix finished',
-          body: '${formatErg(r.denomination, maxFrac: 4)} delivered after ${r.roundsDone} '
-              '${r.roundsDone == 1 ? 'round' : 'rounds'}',
-        );
+        await _announceFinished(r);
       } else if (r.roundsDone > before) {
         await _announceRound(r);
       }
@@ -1385,9 +1382,21 @@ class MixService extends ChangeNotifier {
     }
   }
 
+  // No amounts in notifications: the lock screen is not the place for
+  // them, and the app has the figures.
   Future<void> _announceRound(MixRecord r) => _gw.notify(
-        title: 'Mix round ${r.roundsDone} of ${r.roundsTarget} done',
-        body: '${formatErg(r.denomination, maxFrac: 4)} is still mixing',
+        title: 'A mix round completed',
+        body: 'Round ${r.roundsDone} of ${r.roundsTarget} done.',
+        mixId: r.mixId,
+      );
+
+  /// A withdrawal delivered the money; a reclaim only took it back.
+  Future<void> _announceFinished(MixRecord r) => _gw.notify(
+        title: 'A mix finished',
+        body: r.phaseKind == 'withdrawn'
+            ? 'Delivered after ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'}.'
+            : 'Taken back from the pool; nobody joined it.',
+        mixId: r.mixId,
       );
 
   /// Withdraw or reclaim now. Broadcasts and records the result.
@@ -1485,11 +1494,7 @@ class MixService extends ChangeNotifier {
             if (result['action'] != 'wait') {
               r.state = (result['state'] as Map).cast<String, dynamic>();
               if (r.finished) {
-                await _gw.notify(
-                  title: 'Mix finished',
-                  body: '${formatErg(r.denomination, maxFrac: 4)} delivered after ${r.roundsDone} '
-                      '${r.roundsDone == 1 ? 'round' : 'rounds'}',
-                );
+                await _announceFinished(r);
                 await _gw.deleteKey(walletId: walletId, mixId: r.mixId);
               } else if (r.roundsDone > before) {
                 await _announceRound(r);
