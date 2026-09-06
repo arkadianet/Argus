@@ -45,11 +45,65 @@ pub struct Pool {
     pub partial_repay_proxy_address: &'static str,
     /// The Spectrum pool that prices ERG in this pool's asset, for ERG
     /// collateral; `None` where the pool takes no ERG collateral (the ERG
-    /// pool lends ERG against tokens, which is not built here).
+    /// pool lends ERG against tokens).
     pub erg_dex_nft: Option<&'static str>,
+    /// The tokens this pool takes as collateral, each with the Spectrum
+    /// pool that prices it in ERG. Only the ERG pool has any.
+    pub token_collaterals: &'static [CollateralAsset],
 }
 
+/// A token the ERG pool lends against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct CollateralAsset {
+    pub id: &'static str,
+    pub ticker: &'static str,
+    pub decimals: u8,
+    pub dex_nft: &'static str,
+}
+
+/// The ERG pool's collaterals as its parameter box listed them on
+/// 2026-09-05 (R5 asset ids, R6 price sources); the box is re-read at
+/// run time and decides.
+pub const ERG_POOL_COLLATERALS: &[CollateralAsset] = &[
+    CollateralAsset {
+        id: "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04",
+        ticker: "SigUSD",
+        decimals: 2,
+        dex_nft: "9916d75132593c8b07fe18bd8d583bda1652eed7565cf41a4738ddd90fc992ec",
+    },
+    CollateralAsset {
+        id: "003bd19d0187117f130b62e1bcab0939929ff5c7709f843c5c4dd158949285d0",
+        ticker: "SigRSV",
+        decimals: 0,
+        dex_nft: "1d5afc59838920bb5ef2a8f9d63825a55b1d48e269d7cecee335d637c3ff5f3f",
+    },
+    CollateralAsset {
+        id: "8b08cdd5449a9592a9e79711d7d79249d7a03c535d17efaee83e216e80a44c4b",
+        ticker: "RSN",
+        decimals: 3,
+        dex_nft: "1b694b15467c62f0cd4525e368dbdea2329c713aa200b73df4a622e950551b40",
+    },
+    CollateralAsset {
+        id: "e023c5f382b6e96fbd878f6811aac73345489032157ad5affb84aefd4956c297",
+        ticker: "rsADA",
+        decimals: 6,
+        dex_nft: "ae97c5eccd59a065cd973a8d6afb8bb79f9cc70368a7dcdf73aaeab1cedf6f6b",
+    },
+];
+
 impl Pool {
+    /// Every Spectrum pool NFT that prices this pool's collateral.
+    pub fn dex_nfts(&self) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = self.erg_dex_nft.into_iter().collect();
+        out.extend(self.token_collaterals.iter().map(|c| c.dex_nft));
+        out
+    }
+
+    /// Whether this pool takes any collateral Argus can price.
+    pub fn lends(&self) -> bool {
+        self.erg_dex_nft.is_some() || !self.token_collaterals.is_empty()
+    }
+
     pub fn is_erg(&self) -> bool {
         self.currency_id.is_none()
     }
@@ -101,6 +155,7 @@ pub const POOLS: &[Pool] = &[
         repay_proxy_address: "Fgu7JeiUT7BUFAkE22qXoQ1hNsmG6hNaMeRnEcmk1NedkQXTzR4xEfHgS83wkub2jrMSytnfyp5vk1MtitLL2obQH2TKQ8DZvto1B7yr3ypabKK1NsGS92svkuLa8DdKffSVCC67G5oBf7aAQqW7HA4wxsdVGmeZQpQhEDc983ojyYHHwDpLypke8a6AYAYapr7TDxoe",
         partial_repay_proxy_address: "21oVVJWKo1R7NvYL5pSTkLpKR89QHizFoXzgrA87ecoVtRBXJWhf8ZKfUrQHU4NQ97fY6W17yifLGPWCwLhQ85vmwiwGDx2njfspUDmRt1RvBRAiKHYXYbu6mBaNUEUSPzL7ZsyYNLv2aV1NfeWympbEf3jDmZUDs1Dg8A9s31LCmV2aJxJb2P5P3FS8d7sSBcQUNbtZ1Ch3aYihL6HDX1Xc6HhFFrjyzxCUQ6d2ZfecvWQCbKHQ1zasA2TuPnHchmcEgJBvP4n7xC3kby3o4xxw8bPfNaLEaqWZFbJ8DS513dsU8udpKEStXM3ze6p68ktx9PpYKZREmt4M3MFKvxVkzQKmQbuxPsKsT6D6kxbuL1yeEb",
         erg_dex_nft: None,
+        token_collaterals: ERG_POOL_COLLATERALS,
     },
     Pool {
         key: "sigusd",
@@ -123,6 +178,7 @@ pub const POOLS: &[Pool] = &[
         repay_proxy_address: "2iHikbZ2nWVxpM6aQRXUBes3P7HZ2iZxqMMjVpsEZWSdRpnEbfPbq4ibzYkNDjyjVoh6wiusnLXApLog3dCdHuzgsys3EMcFD15zanqq1hiemHYEEVDwJMtkYyuNGseYb2ZyeogLT7ohtdfxmASYMc",
         partial_repay_proxy_address: "3X8eZkShyZ9u5h9Mid1Voz2RKgEQnWWgMtRJkqwjcWvGY5mBkwqUxQoPYzbFCSV5UhQTU3HnnwfjjUTfbaPQxUBt5yaRSzer9qHrFpYGn4M5XrwUkUuYaBd5i1LKwBd2teDz2j5iGS8myhd2MivCVzGBFcHkC4n4ry3VfxEnsqA4wtZEHecXmy9D6DPnK5yKaQkGSkUrgiFk5hL9HnW9Ae4NR29iKM4SgiSvxTYYi1oh6JUp5S5gBeR1LYNBL9VoxakABL9Pa9JHYBFzXW9YW16wWdLbh3t7a3KmtKGALgePWU6LszCPrZrXCgWZ9qMz4FB1arngGELjQ3jex",
         erg_dex_nft: Some("9916d75132593c8b07fe18bd8d583bda1652eed7565cf41a4738ddd90fc992ec"),
+        token_collaterals: &[],
     },
     Pool {
         key: "quacks",
@@ -145,6 +201,7 @@ pub const POOLS: &[Pool] = &[
         repay_proxy_address: "2iHikbZ2nWVxpM6aQRXUBes3P7HZ2iZxqMMjVpsEZWSdRpnEbfPbq4ibzYkNDjyjVoh6wiusnLXApLog3dCdHuzgsys3EMcFD15zanqq1hiemHYEEVDwJMtkYyuNGseYb2ZyeogLT7ohtdfxmASYMc",
         partial_repay_proxy_address: "3X8eZkShyZ9u5h9Mid1Voz2RKgEQnWWgMtRJkqwjcWvGY5mBkwqUxQoPYzbFCSV5UhQTU3HnnwfjjUTfbaPQxUBt5yaRSzer9qHrFpYGn4M5XrwUkUuYaBd5i1LKwBd2teDz2j5iGS8myhd2MivCVzGBFcHkC4n4ry3VfxEnsqA4wtZEHecXmy9D6DPnK5yKaQkGSkUrgiFk5hL9HnW9Ae4NR29iKM4SgiSvxTYYi1oh6JUp5S5gBeR1LYNBL9VoxakABL9Pa9JHYBFzXW9YW16wWdLbh3t7a3KmtKGALgePWU6LszCPrZrXCgWZ9qMz4FB1arngGELjQ3jex",
         erg_dex_nft: Some("46463b61bae37a3f2f0963798d57279167d82e17f78ccd0ccedec7e49cbdbbd1"),
+        token_collaterals: &[],
     },
     Pool {
         key: "sigrsv",
@@ -167,6 +224,7 @@ pub const POOLS: &[Pool] = &[
         repay_proxy_address: "2iHikbZ2nWVxpM6aQRXUBes3P7HZ2iZxqMMjVpsEZWSdRpnEbfPbq4ibzYkNDjyjVoh6wiusnLXApLog3dCdHuzgsys3EMcFD15zanqq1hiemHYEEVDwJMtkYyuNGseYb2ZyeogLT7ohtdfxmASYMc",
         partial_repay_proxy_address: "3X8eZkShyZ9u5h9Mid1Voz2RKgEQnWWgMtRJkqwjcWvGY5mBkwqUxQoPYzbFCSV5UhQTU3HnnwfjjUTfbaPQxUBt5yaRSzer9qHrFpYGn4M5XrwUkUuYaBd5i1LKwBd2teDz2j5iGS8myhd2MivCVzGBFcHkC4n4ry3VfxEnsqA4wtZEHecXmy9D6DPnK5yKaQkGSkUrgiFk5hL9HnW9Ae4NR29iKM4SgiSvxTYYi1oh6JUp5S5gBeR1LYNBL9VoxakABL9Pa9JHYBFzXW9YW16wWdLbh3t7a3KmtKGALgePWU6LszCPrZrXCgWZ9qMz4FB1arngGELjQ3jex",
         erg_dex_nft: Some("1d5afc59838920bb5ef2a8f9d63825a55b1d48e269d7cecee335d637c3ff5f3f"),
+        token_collaterals: &[],
     },
     Pool {
         key: "rsn",
@@ -189,6 +247,7 @@ pub const POOLS: &[Pool] = &[
         repay_proxy_address: "2iHikbZ2nWVxpM6aQRXUBes3P7HZ2iZxqMMjVpsEZWSdRpnEbfPbq4ibzYkNDjyjVoh6wiusnLXApLog3dCdHuzgsys3EMcFD15zanqq1hiemHYEEVDwJMtkYyuNGseYb2ZyeogLT7ohtdfxmASYMc",
         partial_repay_proxy_address: "3X8eZkShyZ9u5h9Mid1Voz2RKgEQnWWgMtRJkqwjcWvGY5mBkwqUxQoPYzbFCSV5UhQTU3HnnwfjjUTfbaPQxUBt5yaRSzer9qHrFpYGn4M5XrwUkUuYaBd5i1LKwBd2teDz2j5iGS8myhd2MivCVzGBFcHkC4n4ry3VfxEnsqA4wtZEHecXmy9D6DPnK5yKaQkGSkUrgiFk5hL9HnW9Ae4NR29iKM4SgiSvxTYYi1oh6JUp5S5gBeR1LYNBL9VoxakABL9Pa9JHYBFzXW9YW16wWdLbh3t7a3KmtKGALgePWU6LszCPrZrXCgWZ9qMz4FB1arngGELjQ3jex",
         erg_dex_nft: Some("1b694b15467c62f0cd4525e368dbdea2329c713aa200b73df4a622e950551b40"),
+        token_collaterals: &[],
     },
     Pool {
         key: "rsada",
@@ -211,6 +270,7 @@ pub const POOLS: &[Pool] = &[
         repay_proxy_address: "2iHikbZ2nWVxpM6aQRXUBes3P7HZ2iZxqMMjVpsEZWSdRpnEbfPbq4ibzYkNDjyjVoh6wiusnLXApLog3dCdHuzgsys3EMcFD15zanqq1hiemHYEEVDwJMtkYyuNGseYb2ZyeogLT7ohtdfxmASYMc",
         partial_repay_proxy_address: "3X8eZkShyZ9u5h9Mid1Voz2RKgEQnWWgMtRJkqwjcWvGY5mBkwqUxQoPYzbFCSV5UhQTU3HnnwfjjUTfbaPQxUBt5yaRSzer9qHrFpYGn4M5XrwUkUuYaBd5i1LKwBd2teDz2j5iGS8myhd2MivCVzGBFcHkC4n4ry3VfxEnsqA4wtZEHecXmy9D6DPnK5yKaQkGSkUrgiFk5hL9HnW9Ae4NR29iKM4SgiSvxTYYi1oh6JUp5S5gBeR1LYNBL9VoxakABL9Pa9JHYBFzXW9YW16wWdLbh3t7a3KmtKGALgePWU6LszCPrZrXCgWZ9qMz4FB1arngGELjQ3jex",
         erg_dex_nft: Some("ae97c5eccd59a065cd973a8d6afb8bb79f9cc70368a7dcdf73aaeab1cedf6f6b"),
+        token_collaterals: &[],
     },
     Pool {
         key: "spf",
@@ -233,6 +293,7 @@ pub const POOLS: &[Pool] = &[
         repay_proxy_address: "2iHikbZ2nWVxpM6aQRXUBes3P7HZ2iZxqMMjVpsEZWSdRpnEbfPbq4ibzYkNDjyjVoh6wiusnLXApLog3dCdHuzgsys3EMcFD15zanqq1hiemHYEEVDwJMtkYyuNGseYb2ZyeogLT7ohtdfxmASYMc",
         partial_repay_proxy_address: "3X8eZkShyZ9u5h9Mid1Voz2RKgEQnWWgMtRJkqwjcWvGY5mBkwqUxQoPYzbFCSV5UhQTU3HnnwfjjUTfbaPQxUBt5yaRSzer9qHrFpYGn4M5XrwUkUuYaBd5i1LKwBd2teDz2j5iGS8myhd2MivCVzGBFcHkC4n4ry3VfxEnsqA4wtZEHecXmy9D6DPnK5yKaQkGSkUrgiFk5hL9HnW9Ae4NR29iKM4SgiSvxTYYi1oh6JUp5S5gBeR1LYNBL9VoxakABL9Pa9JHYBFzXW9YW16wWdLbh3t7a3KmtKGALgePWU6LszCPrZrXCgWZ9qMz4FB1arngGELjQ3jex",
         erg_dex_nft: Some("f40afb6f877c40a30c8637dd5362227285738174151ce66d6684bc1b727ab6cf"),
+        token_collaterals: &[],
     },
     Pool {
         key: "rsbtc",
@@ -255,6 +316,7 @@ pub const POOLS: &[Pool] = &[
         repay_proxy_address: "2iHikbZ2nWVxpM6aQRXUBes3P7HZ2iZxqMMjVpsEZWSdRpnEbfPbq4ibzYkNDjyjVoh6wiusnLXApLog3dCdHuzgsys3EMcFD15zanqq1hiemHYEEVDwJMtkYyuNGseYb2ZyeogLT7ohtdfxmASYMc",
         partial_repay_proxy_address: "3X8eZkShyZ9u5h9Mid1Voz2RKgEQnWWgMtRJkqwjcWvGY5mBkwqUxQoPYzbFCSV5UhQTU3HnnwfjjUTfbaPQxUBt5yaRSzer9qHrFpYGn4M5XrwUkUuYaBd5i1LKwBd2teDz2j5iGS8myhd2MivCVzGBFcHkC4n4ry3VfxEnsqA4wtZEHecXmy9D6DPnK5yKaQkGSkUrgiFk5hL9HnW9Ae4NR29iKM4SgiSvxTYYi1oh6JUp5S5gBeR1LYNBL9VoxakABL9Pa9JHYBFzXW9YW16wWdLbh3t7a3KmtKGALgePWU6LszCPrZrXCgWZ9qMz4FB1arngGELjQ3jex",
         erg_dex_nft: Some("47a811c68e49f6bfa6629602037ee65f8d175ddbc7b64bdb65ad40599b812fd0"),
+        token_collaterals: &[],
     },
 ];
 
