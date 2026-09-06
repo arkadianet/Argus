@@ -6029,3 +6029,26 @@ pub async fn dapp_utxos(
         .collect();
     Ok(serde_json::Value::Array(list).to_string())
 }
+
+/// Every Duckpools proxy script, hex, for the app to read boxes under
+/// when it looks for orders it has no record of. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn duckpools_proxy_trees() -> String {
+    let trees: Vec<String> = duckpools::proxy_trees().into_iter().map(|(t, _, _)| t).collect();
+    serde_json::Value::Array(trees.into_iter().map(serde_json::Value::String).collect()).to_string()
+}
+
+/// The wallet's orders among boxes read under the proxy scripts: those
+/// whose user register names one of `addresses`. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn duckpools_discover_orders(boxes_json: String, addresses: Vec<String>) -> Result<String, String> {
+    let boxes: Vec<serde_json::Value> = serde_json::from_str(&boxes_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let mut trees = Vec::with_capacity(addresses.len());
+    for a in &addresses {
+        trees.push(address_to_ergo_tree(a).map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?);
+    }
+    let found = duckpools::discover_orders(&boxes, &trees)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    serde_json::to_string(&found).map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}

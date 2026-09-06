@@ -509,6 +509,11 @@ abstract class DuckpoolsGateway {
     required List<String> spendAddresses,
     required String changeAddress,
   });
+
+  /// Every proxy script to read boxes under, and the wallet's orders
+  /// among such boxes.
+  String proxyTrees();
+  String discoverOrders(String boxesJson, List<String> addresses);
 }
 
 class LiveDuckpoolsGateway implements DuckpoolsGateway {
@@ -632,6 +637,11 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
         spendAddresses: spendAddresses,
         changeAddress: changeAddress,
       );
+  @override
+  String proxyTrees() => bridge.duckpoolsProxyTrees();
+  @override
+  String discoverOrders(String boxesJson, List<String> addresses) =>
+      bridge.duckpoolsDiscoverOrders(boxesJson: boxesJson, addresses: addresses);
 }
 
 /// How close a loan is to trouble, worst last.
@@ -667,8 +677,11 @@ typedef DuckNotify = Future<void> Function({required String loanId, required Str
 /// the ERG pool, whose loan is the marked box's value), else the box's ERG.
 int? receivedFromFill(String kind, DuckPool pool, Map<String, dynamic> outcome) {
   final assets = (outcome['assets'] as List? ?? const []).cast<Map>();
+  // The Rust side serialises its EIP-12 assets as `tokenId`; older records
+  // and the service's own JSON use `token_id`. A fill was shown as "0
+  // received" on a phone because only the latter was read.
   int tokenAmount(String? id) =>
-      int.tryParse(assets.firstWhere((a) => a['token_id'] == id, orElse: () => {'amount': '0'})['amount'].toString()) ?? 0;
+      int.tryParse(assets.firstWhere((a) => (a['tokenId'] ?? a['token_id']) == id, orElse: () => {'amount': '0'})['amount'].toString()) ?? 0;
   return switch (kind) {
     'lend' => tokenAmount(pool.lendToken),
     'borrow' => pool.currencyId == null ? (outcome['value'] as num?)?.toInt() : tokenAmount(pool.currencyId),
@@ -823,11 +836,21 @@ class DuckpoolsService extends ChangeNotifier {
   }
 
   /// Load this wallet's orders.
+  /// The wallet whose records [orders] holds, set once a load completed.
+  /// Mutations wait for this to match the wallet they were started for,
+  /// so a scan racing a wallet switch cannot mix two wallets' records.
+  String? _loadedWalletId;
+
   Future<void> load() async {
+    final previous = _walletId;
     _walletId = _gw.walletId;
     final id = _walletId;
-    if (id == null) {
+    if (id != previous) {
+      // Another wallet's records must not linger while this one's load.
+      _loadedWalletId = null;
       orders = const [];
+    }
+    if (id == null) {
       notifyListeners();
       return;
     }
@@ -840,11 +863,13 @@ class DuckpoolsService extends ChangeNotifier {
     orders = raw == null
         ? const []
         : [for (final m in (jsonDecode(raw) as List)) DuckOrder.fromJson((m as Map).cast())];
+    _loadedWalletId = id;
     notifyListeners();
   }
 
   void reset() {
     _walletId = null;
+    _loadedWalletId = null;
     orders = const [];
     loans = const [];
     markets = const [];
@@ -855,15 +880,23 @@ class DuckpoolsService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _persistOrders() async {
+  /// Writes go out in the order they were asked for: a snapshot taken
+  /// earlier can never land after a later one and undo it.
+  Future<void> _persistChain = Future.value();
+
+  Future<void> _persistOrders() {
     final id = _walletId;
-    if (id == null) return;
+    if (id == null) return Future.value();
     // Serialise before the await, so a reset or load in between cannot
     // change what is written under this wallet's key.
     final snapshot = jsonEncode([for (final o in orders) o.toJson()]);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_ordersKey(id), snapshot);
-    notifyListeners();
+    // A failed write is the caller's to report; it must not stop every
+    // later write, so the chain is recovered before the next is queued.
+    return _persistChain = _persistChain.catchError((_) {}).then((_) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_ordersKey(id), snapshot);
+      notifyListeners();
+    });
   }
 
   /// Read every pool's boxes, node first (by script), explorer when the
@@ -1426,6 +1459,89 @@ class DuckpoolsService extends ChangeNotifier {
       }
     }
     if (changed) await _persistOrders();
+  }
+
+  /// Wallets that already looked for orders on chain this session.
+  final _scanned = <String>{};
+  bool _scanning = false;
+  bool get scanning => _scanning;
+  String? scanError;
+  DateTime? scannedAt;
+
+  /// Find the wallet's orders on chain: every proxy box under a Duckpools
+  /// proxy script whose user register names one of `addresses`. A
+  /// reinstall or a second device has no record of an order it posted;
+  /// the box is still there and refundable after its height. Returns how
+  /// many were new to the records.
+  Future<int> discoverOrders(List<String> addresses) async {
+    if (_scanning || addresses.isEmpty) return 0;
+    final walletId = _gw.walletId;
+    if (walletId == null) return 0;
+    _scanning = true;
+    scanError = null;
+    notifyListeners();
+    try {
+      final trees = [for (final t in (jsonDecode(_gw.proxyTrees()) as List)) t as String];
+      final boxes = <dynamic>[];
+      final failures = <String>[];
+      await Future.wait([
+        for (final t in trees)
+          _allBoxesUnderTree(t).then(boxes.addAll, onError: (Object e) => failures.add(e.toString())),
+      ]);
+      if (boxes.isEmpty && failures.isNotEmpty) throw StateError('No proxy script could be read: ${failures.first}');
+      final found = (jsonDecode(_gw.discoverOrders(jsonEncode(boxes), addresses)) as List).cast<Map>();
+      // The records are kept per wallet; add to them only once this
+      // wallet's own are loaded, so a switch mid-scan cannot mix wallets.
+      if (_gw.walletId != walletId) return 0;
+      if (_loadedWalletId != walletId) await load();
+      if (_gw.walletId != walletId || _loadedWalletId != walletId) return 0;
+      final known = {for (final o in orders) o.proxyBoxId};
+      var added = 0;
+      for (final f in found) {
+        final m = f.cast<String, dynamic>();
+        final id = m['box_id'] as String;
+        if (known.contains(id)) continue;
+        final pool = pools.firstWhere((p) => p.key == m['pool']);
+        final kind = m['kind'] as String;
+        orders = [
+          DuckOrder(
+            kind: kind,
+            pool: pool.key,
+            ticker: pool.ticker,
+            decimals: pool.decimals,
+            proxyBoxId: id,
+            txId: m['tx_id'] as String,
+            amount: (m['amount'] as num).toInt(),
+            expected: 0,
+            minOut: 0,
+            refundHeight: (m['refund_height'] as num).toInt(),
+            createdAt: DateTime.now(),
+          ),
+          ...orders,
+        ];
+        added++;
+      }
+      _scanned.add(walletId);
+      scannedAt = DateTime.now();
+      if (failures.isNotEmpty) scanError = 'Some proxy scripts could not be read: ${failures.first}';
+      if (added > 0) await _persistOrders();
+      return added;
+    } catch (e) {
+      scanError = e.toString();
+      return 0;
+    } finally {
+      _scanning = false;
+      notifyListeners();
+    }
+  }
+
+  /// Look for orders once per wallet and session when the records hold
+  /// none, so a reinstalled wallet sees what it left on chain.
+  Future<void> discoverOrdersIfUnknown(List<String> addresses) async {
+    final id = _gw.walletId;
+    if (id == null || _scanned.contains(id) || orders.isNotEmpty) return;
+    await discoverOrders(addresses);
+    if (orders.isNotEmpty) await tickOrders();
   }
 
   /// Prepare the refund of a refundable order. The proxy box is read
