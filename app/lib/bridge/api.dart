@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `broadcast_mix_move_with`, `broadcast_mix_move`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `broadcast_mix_move_with`, `broadcast_mix_move`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 
 /// The app fee as the UI should display it.
@@ -687,6 +687,112 @@ Future<String> ammPools({
   nodeUrl: nodeUrl,
   forceRefresh: forceRefresh,
   knownTokensJson: knownTokensJson,
+);
+
+/// Add liquidity to a Spectrum pool directly (no bot): `x_amount` is
+/// nanoERG for an ERG pool or the X token's units for a token pair,
+/// `y_amount` the Y token's units; the LP tokens come back to
+/// `recipient_address`. Confirm with `send_erg`.
+Future<String> ammBuildLpDeposit({
+  required BigInt handleId,
+  required String poolId,
+  required PlatformInt64 xAmount,
+  required PlatformInt64 yAmount,
+  required String recipientAddress,
+  required String changeAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmBuildLpDeposit(
+  handleId: handleId,
+  poolId: poolId,
+  xAmount: xAmount,
+  yAmount: yAmount,
+  recipientAddress: recipientAddress,
+  changeAddress: changeAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
+
+/// Remove liquidity: hand `lp_amount` LP tokens back to the pool for the
+/// matching share of both reserves, paid to `recipient_address`. Confirm
+/// with `send_erg`.
+Future<String> ammBuildLpRedeem({
+  required BigInt handleId,
+  required String poolId,
+  required PlatformInt64 lpAmount,
+  required String recipientAddress,
+  required String changeAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmBuildLpRedeem(
+  handleId: handleId,
+  poolId: poolId,
+  lpAmount: lpAmount,
+  recipientAddress: recipientAddress,
+  changeAddress: changeAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
+
+/// First of a pool's two transactions: mint the LP supply into a
+/// *bootstrap* box of this wallet holding the initial reserves. The LP
+/// token id is known before signing; the pool's NFT will be the bootstrap
+/// box's id once it exists. Confirm with `send_erg`, then call
+/// `amm_build_pool_create` with the bootstrap box id once it confirms.
+Future<String> ammBuildPoolBootstrap({
+  required BigInt handleId,
+  required String poolType,
+  String? xTokenId,
+  required PlatformInt64 xAmount,
+  required String yTokenId,
+  required PlatformInt64 yAmount,
+  required int feeNum,
+  required String userAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmBuildPoolBootstrap(
+  handleId: handleId,
+  poolType: poolType,
+  xTokenId: xTokenId,
+  xAmount: xAmount,
+  yTokenId: yTokenId,
+  yAmount: yAmount,
+  feeNum: feeNum,
+  userAddress: userAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
+
+/// Second of a pool's two transactions: spend the confirmed bootstrap box
+/// into the pool box (its NFT minted here) and the user's LP share. The
+/// parameters must be the ones the bootstrap was built with. Confirm with
+/// `send_erg`.
+Future<String> ammBuildPoolCreate({
+  required BigInt handleId,
+  required String bootstrapBoxId,
+  required String poolType,
+  String? xTokenId,
+  required PlatformInt64 xAmount,
+  required String yTokenId,
+  required PlatformInt64 yAmount,
+  required int feeNum,
+  required String lpTokenId,
+  required PlatformInt64 userLpShare,
+  required String userAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmBuildPoolCreate(
+  handleId: handleId,
+  bootstrapBoxId: bootstrapBoxId,
+  poolType: poolType,
+  xTokenId: xTokenId,
+  xAmount: xAmount,
+  yTokenId: yTokenId,
+  yAmount: yAmount,
+  feeNum: feeNum,
+  lpTokenId: lpTokenId,
+  userLpShare: userLpShare,
+  userAddress: userAddress,
+  nodeUrl: nodeUrl,
 );
 
 /// Quote a single-hop swap. `from_token`/`to_token` are `None` for ERG,
