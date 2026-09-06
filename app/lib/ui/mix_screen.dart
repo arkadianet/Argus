@@ -256,6 +256,8 @@ class _MixScreenState extends State<MixScreen> {
               'A mix is only as private as the node Argus talks to: that node '
               'sees which pool boxes are yours and where the money ends up, so '
               'use your own node for mixing if you can (Settings → Network). '
+              'The mix records on this phone (boxes, rounds, destination) are '
+              'stored unencrypted for now; the seed and the keys are not. '
               'Some app stores do not allow a wallet with a built-in mixer, so '
               'this stays off unless you choose it. You can turn it off again '
               'in Settings → Security.',
@@ -461,7 +463,17 @@ String mixPhaseText(MixRecord r) {
     case 'pending':
       return 'Funded but not in the pool yet. Continue to enter.';
     case 'half_posted':
-      return 'Waiting for someone to join. Round ${r.roundsDone + 1} of ${r.roundsTarget}.';
+      final since = r.events.isEmpty ? null : DateTime.fromMillisecondsSinceEpoch(((r.events.last['at'] as num?)?.toInt() ?? 0) * 1000);
+      final waited = since == null ? null : DateTime.now().difference(since);
+      final how = waited == null
+          ? ''
+          : waited.inDays >= 1
+              ? ' Waiting ${waited.inDays} ${waited.inDays == 1 ? 'day' : 'days'}.'
+              : waited.inHours >= 1
+                  ? ' Waiting ${waited.inHours} ${waited.inHours == 1 ? 'hour' : 'hours'}.'
+                  : '';
+      final nudge = waited != null && waited.inDays >= 2 ? ' The pool is thin; Reclaim takes it back, minus the mixing tokens.' : '';
+      return 'Waiting for someone to join. Round ${r.roundsDone + 1} of ${r.roundsTarget}.$how$nudge';
     case 'full_owned':
       if (r.needsDestination) return 'Recovered from your seed. Choose where it should go.';
       if (r.readyToWithdraw) return 'Rounds done. Withdrawing on the next check.';

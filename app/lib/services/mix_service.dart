@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../bridge/api.dart' as bridge;
-import '../format.dart';
 import 'network_controller.dart';
 import 'mix_activity.dart';
 import 'mix_background.dart';
@@ -1312,11 +1311,7 @@ class MixService extends ChangeNotifier {
       r.state = (result['state'] as Map).cast<String, dynamic>();
       r.lastError = null;
       if (r.finished) {
-        await _gw.notify(
-          title: 'Mix finished',
-          body: '${formatErg(r.denomination, maxFrac: 4)} delivered after ${r.roundsDone} '
-              '${r.roundsDone == 1 ? 'round' : 'rounds'}',
-        );
+        await _gw.notify(title: 'A mix finished', body: 'Delivered after ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'}.');
       } else if (r.roundsDone > before) {
         await _announceRound(r);
       }
@@ -1325,9 +1320,11 @@ class MixService extends ChangeNotifier {
     }
   }
 
+  // No amounts in notifications: the lock screen is not the place for
+  // them, and the app has the figures.
   Future<void> _announceRound(MixRecord r) => _gw.notify(
-        title: 'Mix round ${r.roundsDone} of ${r.roundsTarget} done',
-        body: '${formatErg(r.denomination, maxFrac: 4)} is still mixing',
+        title: 'A mix round completed',
+        body: 'Round ${r.roundsDone} of ${r.roundsTarget} done.',
       );
 
   /// Withdraw or reclaim now. Broadcasts and records the result.
@@ -1425,11 +1422,7 @@ class MixService extends ChangeNotifier {
             if (result['action'] != 'wait') {
               r.state = (result['state'] as Map).cast<String, dynamic>();
               if (r.finished) {
-                await _gw.notify(
-                  title: 'Mix finished',
-                  body: '${formatErg(r.denomination, maxFrac: 4)} delivered after ${r.roundsDone} '
-                      '${r.roundsDone == 1 ? 'round' : 'rounds'}',
-                );
+                await _gw.notify(title: 'A mix finished', body: 'Delivered after ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'}.');
                 await _gw.deleteKey(walletId: walletId, mixId: r.mixId);
               } else if (r.roundsDone > before) {
                 await _announceRound(r);

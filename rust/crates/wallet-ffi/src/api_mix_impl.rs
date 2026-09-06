@@ -121,24 +121,32 @@ pub fn to_ergo_box(b: &Eip12InputBox) -> Result<ErgoBox, String> {
     Ok(parsed)
 }
 
+/// Refuse an operator fee no honest emission box would ask: above 5% of
+/// the denomination plus 1 ERG. A box under the emission script with
+/// absurd prices is a nuisance anyone can post; the confirm sheet would
+/// show it, but the Start sheet must not offer it either.
+pub fn check_operator_fee(fee: i64, denomination: i64) -> Result<(), String> {
+    let cap = denomination / 20 + 1_000_000_000;
+    if fee > cap {
+        return Err(err(format!(
+            "the operator's price for this mix ({fee} nanoERG) is above the sanity limit \
+             ({cap} nanoERG); the token emission box on chain looks wrong, try later"
+        )));
+    }
+    Ok(())
+}
+
 /// What the pool offers right now: rings with waiting counts, the token
 /// levels for sale, and whether the operator's boxes are there.
 pub fn rings_json(view: &ChainView) -> serde_json::Value {
     let inputs: Vec<Eip12InputBox> = view.half.iter().map(|h| h.input.clone()).collect();
     let rings = discover_rings(&inputs);
     let token = view.token_box();
-    let levels: Vec<serde_json::Value> = token
-        .map(|t| {
-            t.levels()
-                .into_iter()
-                .filter_map(|l| {
-                    t.batch_price(l)
-                        .ok()
-                        .map(|p| serde_json::json!({ "level": l, "price_nano_erg": p }))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let levels: Vec<serde_json::Value> = view
+        .token_levels()
+        .into_iter()
+        .map(|(l, p)| serde_json::json!({ "level": l, "price_nano_erg": p }))
+        .collect();
     serde_json::json!({
         "rings": rings,
         "token_levels": levels,
@@ -160,9 +168,10 @@ pub fn funding_requirement(
     miner_fee: i64,
 ) -> Result<serde_json::Value, String> {
     let token = view
-        .token_box()
-        .ok_or_else(|| err("no token emission box: the mixer operator has none for sale"))?;
+        .token_box_for(level)
+        .ok_or_else(|| err("no token emission box sells that many mixing tokens right now"))?;
     let fee = operator_fee(token, denomination, level).map_err(err)?;
+    check_operator_fee(fee.total(), denomination)?;
     let needed = denomination
         .checked_add(fee.total())
         .and_then(|v| v.checked_add(miner_fee))
@@ -266,8 +275,12 @@ pub fn build_entry(
         return Err(err("this mix has already entered the pool"));
     }
     let token_box = view
-        .token_box()
-        .ok_or_else(|| err("no token emission box: the mixer operator has none for sale"))?;
+        .token_box_for(state.level)
+        .ok_or_else(|| err("no token emission box sells that many mixing tokens right now"))?;
+    check_operator_fee(
+        operator_fee(token_box, state.ring.value, state.level).map_err(err)?.total(),
+        state.ring.value,
+    )?;
     let secret = secret_for(state.round)?;
     match plan(state, view, own_half_ids) {
         Plan::EnterAsAlice => {

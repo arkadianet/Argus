@@ -339,8 +339,9 @@ void main() {
     expect(r.boxId, 'box2');
     expect(r.lastError, isNull);
     expect(gw.notifications, [
-      'Mix round 2 of 3 done | 1 ERG is still mixing',
-      'Mix round 3 of 3 done | 1 ERG is still mixing',
+      'A mix round completed | Round 2 of 3 done.',
+      'A mix round completed | Round 3 of 3 done.',
+      // No amounts: the lock screen is not the place for them.
     ]);
     expect(svc.mixedNano, 1000000000);
 
@@ -383,7 +384,7 @@ void main() {
     expect(first.lastError, contains('node refused'));
     expect(first.phaseKind, 'full_owned', reason: 'state untouched by a failed move');
     expect(second.finished, isTrue);
-    expect(gw.notifications.last, startsWith('Mix finished'));
+    expect(gw.notifications.last, 'A mix finished | Delivered after 3 rounds.');
     expect(svc.lastTickError, isNull);
   });
 
@@ -781,7 +782,7 @@ void main() {
     expect(gw.calls.where((c) => c.startsWith('advanceWithKey')), ['advanceWithKey:key-0', 'advanceWithKey:key-5']);
     expect(gw.calls.where((c) => c == 'observe' || c == 'advance'), isEmpty, reason: 'never the wallet path');
     expect(gw.keys.keys, ['w2:5'], reason: 'the finished mix lost its key');
-    expect(gw.notifications.first, startsWith('Mix finished'));
+    expect(gw.notifications.first, startsWith('A mix finished'));
 
     final prefs = await SharedPreferences.getInstance();
     final w1 = jsonDecode(prefs.getString('argus_mixes_v1_w1')!) as List;

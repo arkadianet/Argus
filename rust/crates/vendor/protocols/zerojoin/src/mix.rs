@@ -433,6 +433,34 @@ impl ChainView {
         self.token.iter().max_by_key(|t| t.tokens_available)
     }
 
+    /// The token emission box to buy `level` tokens from: the cheapest
+    /// batch at that level among boxes with enough tokens, the fullest
+    /// on a tie. Anyone may post a box under the emission script with
+    /// absurd prices; it is simply never the cheapest.
+    pub fn token_box_for(&self, level: i32) -> Option<&TokenEmissionBox> {
+        self.token
+            .iter()
+            .filter(|t| t.tokens_available >= level as i64)
+            .filter_map(|t| t.batch_price(level).ok().map(|p| (p, t)))
+            .min_by_key(|(p, t)| (*p, -t.tokens_available))
+            .map(|(_, t)| t)
+    }
+
+    /// Every level for sale with its lowest price across the boxes.
+    pub fn token_levels(&self) -> Vec<(i32, i64)> {
+        let mut best: std::collections::BTreeMap<i32, i64> = Default::default();
+        for t in &self.token {
+            for (l, p) in &t.batches {
+                if t.tokens_available >= *l as i64 {
+                    best.entry(*l).and_modify(|b| *b = (*b).min(*p)).or_insert(*p);
+                }
+            }
+        }
+        let mut out: Vec<(i32, i64)> = best.into_iter().collect();
+        out.sort_by_key(|(l, p)| (*p, *l));
+        out
+    }
+
     pub fn half_by_id(&self, id: &str) -> Option<&HalfMixBox> {
         self.half.iter().find(|h| h.input.box_id == id)
     }
@@ -915,6 +943,28 @@ mod tests {
         m.remove("previous");
         let s: MixState = serde_json::from_value(serde_json::Value::Object(m)).unwrap();
         assert_eq!(s.previous, None);
+    }
+
+    #[test]
+    fn the_cheapest_token_box_with_enough_tokens_is_offered() {
+        let mut dear = fixture_token_box();
+        dear.batches = vec![(20, 1_000_000_000_000), (40, 2_000_000_000_000)];
+        dear.tokens_available = 1_000_000;
+        let mut fair = fixture_token_box();
+        fair.batches = vec![(20, 30_000_000), (40, 50_000_000)];
+        fair.tokens_available = 30;
+        let mut empty = fixture_token_box();
+        empty.batches = vec![(20, 1)];
+        empty.tokens_available = 5;
+        let view = ChainView {
+            token: vec![dear.clone(), fair.clone(), empty],
+            ..view_with(vec![], vec![])
+        };
+        assert_eq!(view.token_box_for(20).map(|t| t.tokens_available), Some(30), "cheapest with enough");
+        assert_eq!(view.token_box_for(40).map(|t| t.tokens_available), Some(1_000_000), "only the dear box has 40");
+        assert!(view.token_box_for(60).is_none(), "no box sells a batch of 60");
+        assert_eq!(view.token_levels(), vec![(20, 30_000_000), (40, 2_000_000_000_000)]);
+        assert_eq!(view.token_box().map(|t| t.tokens_available), Some(1_000_000), "existence still counts any box");
     }
 
     #[test]
