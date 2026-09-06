@@ -591,7 +591,7 @@ class _PoolCard extends StatelessWidget {
           if (market != null && market!.ready && market!.ergValue != null) ...[
             row('1 ERG collateral counts as', '${amt(market!.ergValue!)} ${s.ticker}'),
             row('Liquidation threshold', '${(market!.threshold! / 10).toStringAsFixed(0)}% collateral ratio'),
-            row('Liquidation penalty', '${(market!.penalty! / 10).toStringAsFixed(1)}% of the collateral'),
+            row('Liquidation penalty', '${(market!.penalty! / 10).toStringAsFixed(0)}%, as Duckpools states it'),
             row('Borrow up to', '${maxLoanToValuePercent(market!.threshold!).toStringAsFixed(0)}% of the collateral\'s value'),
           ],
           if (market != null)
@@ -920,7 +920,7 @@ class _LoanCardState extends State<_LoanCard> {
           row('Borrowed', amt(l.loan), note: interest > 0 ? '+ ${amt(interest)} interest so far' : null),
           if (apr != null)
             row('Costing', '${(apr / 100).toStringAsFixed(2)}% a year',
-                note: 'about ${amt(interestOver(owed: l.owed, aprBps: apr, days: 30))} a month at today\'s rate'),
+                note: 'about ${_smallAmount(interestOver(owed: l.owed, aprBps: apr, days: 30), l.decimals, l.ticker)} a month at today\'s rate'),
           row('Collateral', _collateralText(l.pool, l.collateralAsset, l.collateralAmount),
               note: 'counts as ${amt(l.collateralValue)} · 1 $collateralTicker = ${price(priceNow)}'),
           row(
@@ -929,8 +929,8 @@ class _LoanCardState extends State<_LoanCard> {
             color: healthColor,
             note: l.liquidatable ? 'the price is below the line now' : 'a ${drop.toStringAsFixed(0)}% fall in $collateralTicker',
           ),
-          row('Liquidation penalty', '${(l.penalty / 10).toStringAsFixed(1)}% of the collateral',
-              note: 'what a liquidator keeps on top of the debt'),
+          row('Liquidation penalty', '${(l.penalty / 10).toStringAsFixed(0)}%',
+              note: 'the liquidator\'s bonus on the debt, as Duckpools states it'),
           if (blocksLeft != null)
             row(
               'Called whatever the price',
@@ -1048,6 +1048,14 @@ class RatioBar extends StatelessWidget {
       },
     );
   }
+}
+
+/// An amount that may round to nothing: "under 0.01 SigUSD" rather than
+/// "0 SigUSD" for a small monthly interest.
+String _smallAmount(int units, int decimals, String ticker) {
+  if (units > 0) return '${formatTokenAmountGrouped(units, decimals)} $ticker';
+  final unit = decimals == 0 ? '1' : '0.${'0' * (decimals - 1)}1';
+  return 'under $unit $ticker';
 }
 
 /// "6 Dec" or "6 Dec 2027" for a date in another year.
@@ -1246,7 +1254,7 @@ class _BorrowSheetState extends State<_BorrowSheet> {
             const SizedBox(height: 4),
             Text(
               'Liquidation opens when the collateral is worth less than ${thresholdPct?.toStringAsFixed(0) ?? '?'}% of the debt · '
-              'penalty ${((_asset?.penalty ?? m.penalty ?? 0) / 10).toStringAsFixed(1)}% · $priceText',
+              'penalty ${((_asset?.penalty ?? m.penalty ?? 0) / 10).toStringAsFixed(0)}% · $priceText',
               style: TextStyle(color: muted, fontSize: 12),
             ),
             const SizedBox(height: 12),
@@ -1414,7 +1422,7 @@ class _BorrowFigures extends StatelessWidget {
         row('1 $collateralTicker now', amt(priceNow.round())),
         row('Liquidation price', amt(liqPrice.round()), valueColor: color),
         row('Room before liquidation', 'a ${drop.toStringAsFixed(0)}% fall in $collateralTicker', valueColor: color),
-        row('Liquidation penalty', '${(penalty / 10).toStringAsFixed(1)}% of the collateral'),
+        row('Liquidation penalty', '${(penalty / 10).toStringAsFixed(0)}%, as Duckpools states it'),
         if (apr != null) ...[
           row('Interest at today\'s rate', '${(apr / 100).toStringAsFixed(2)}% a year'),
           row('About', '${amt(interestOver(owed: loan, aprBps: apr, days: 30))} a month · ${amt(interestOver(owed: loan, aprBps: apr, days: 365))} a year'),

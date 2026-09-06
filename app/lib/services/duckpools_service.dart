@@ -667,8 +667,11 @@ typedef DuckNotify = Future<void> Function({required String loanId, required Str
 /// the ERG pool, whose loan is the marked box's value), else the box's ERG.
 int? receivedFromFill(String kind, DuckPool pool, Map<String, dynamic> outcome) {
   final assets = (outcome['assets'] as List? ?? const []).cast<Map>();
+  // The Rust side serialises its EIP-12 assets as `tokenId`; older records
+  // and the service's own JSON use `token_id`. A fill was shown as "0
+  // received" on a phone because only the latter was read.
   int tokenAmount(String? id) =>
-      int.tryParse(assets.firstWhere((a) => a['token_id'] == id, orElse: () => {'amount': '0'})['amount'].toString()) ?? 0;
+      int.tryParse(assets.firstWhere((a) => (a['tokenId'] ?? a['token_id']) == id, orElse: () => {'amount': '0'})['amount'].toString()) ?? 0;
   return switch (kind) {
     'lend' => tokenAmount(pool.lendToken),
     'borrow' => pool.currencyId == null ? (outcome['value'] as num?)?.toInt() : tokenAmount(pool.currencyId),
