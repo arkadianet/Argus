@@ -197,15 +197,43 @@ fn with_handle<T>(
     f(handle)
 }
 
+/// Connected clients by preferred URL, kept for a minute. Every call used
+/// to reconnect and probe `/info` first; a refresh is a dozen calls, so the
+/// probes alone cost seconds on a public node. A node that dies inside
+/// the minute fails its calls until the entry expires, which the sync
+/// reports as stale rather than hiding.
+static NODE_CLIENTS: Mutex<Option<HashMap<String, (std::time::Instant, ErgoNodeClient)>>> =
+    Mutex::new(None);
+const NODE_CLIENT_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn clear_node_clients() {
+    if let Some(map) = recover(NODE_CLIENTS.lock()).as_mut() {
+        map.clear();
+    }
+}
+
 async fn node_client(node_url: Option<String>) -> Result<ErgoNodeClient, String> {
-    ErgoNodeClient::connect(node_url)
+    let key = node_url.clone().unwrap_or_default();
+    if let Some(map) = recover(NODE_CLIENTS.lock()).as_ref() {
+        if let Some((at, client)) = map.get(&key) {
+            if at.elapsed() < NODE_CLIENT_TTL {
+                return Ok(client.clone());
+            }
+        }
+    }
+    let client = ErgoNodeClient::connect(node_url)
         .await
-        .map_err(|e| ArgusError::NodeUnreachable(e).to_json_string())
+        .map_err(|e| ArgusError::NodeUnreachable(e).to_json_string())?;
+    recover(NODE_CLIENTS.lock())
+        .get_or_insert_with(HashMap::new)
+        .insert(key, (std::time::Instant::now(), client.clone()));
+    Ok(client)
 }
 
 #[flutter_rust_bridge::frb]
 pub fn set_network(node_urls: Vec<String>, explorer_url: Option<String>) {
     wallet_net::client::set_network(node_urls, explorer_url);
+    clear_node_clients();
 }
 
 #[flutter_rust_bridge::frb]
@@ -615,10 +643,27 @@ pub fn validate_ergo_address(address: String) -> bool {
 #[flutter_rust_bridge::frb]
 pub async fn get_balance(address: String, node_url: Option<String>) -> Result<String, String> {
     let client = node_client(node_url).await?;
-    let (nano, mut tokens) = client
-        .get_address_balances(&address)
+    // One listing serves both the confirmed figure and the mempool netting.
+    let (boxes, _) = client
+        .get_unspent(&address)
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    let nano: u64 = boxes
+        .iter()
+        .fold(0u64, |acc, b| acc.saturating_add(*b.value.as_u64()));
+    let mut tokens: Vec<(String, u64)> = {
+        let mut by_id: HashMap<String, u64> = HashMap::new();
+        for b in &boxes {
+            if let Some(held) = b.tokens.as_ref() {
+                for t in held.iter() {
+                    let id: String = t.token_id.clone().into();
+                    let entry = by_id.entry(id).or_insert(0);
+                    *entry = entry.saturating_add(*t.amount.as_u64());
+                }
+            }
+        }
+        by_id.into_iter().collect()
+    };
 
     // Mempool delta: unconfirmed sends drop the balance before they confirm.
     // Any mempool failure degrades to the confirmed figure — never fail here.
@@ -626,7 +671,7 @@ pub async fn get_balance(address: String, node_url: Option<String>) -> Result<St
     if let Ok(tree) = address_to_ergo_tree(&address) {
         if let Ok(txs) = client.mempool_txs_for(&tree).await {
             if !txs.is_empty() {
-                if let Ok((boxes, _)) = client.get_unspent(&address).await {
+                {
                     let mut confirmed_values: std::collections::HashMap<String, i64> =
                         std::collections::HashMap::new();
                     let mut confirmed_tokens: std::collections::HashMap<
@@ -762,6 +807,20 @@ pub async fn get_pending_transactions(
             }
         });
     }
+    // The confirmed listings run alongside the mempool reads instead of
+    // one after another once those are in.
+    let mut unspent_set = tokio::task::JoinSet::new();
+    for addr in &addrs {
+        let client_c = client.clone();
+        let addr = addr.clone();
+        unspent_set.spawn(async move {
+            client_c
+                .get_unspent(&addr)
+                .await
+                .map(|(boxes, _)| boxes)
+                .unwrap_or_default()
+        });
+    }
 
     // Collect uniquely by ID first: a transaction touching several wallet
     // addresses surfaces once, regardless of which fetch completes first.
@@ -790,10 +849,10 @@ pub async fn get_pending_transactions(
         if let Ok(tree) = address_to_ergo_tree(addr) {
             trees.insert(tree);
         }
-        if let Ok((boxes, _)) = client.get_unspent(addr).await {
-            for b in boxes {
-                confirmed_values.insert(b.box_id().to_string(), b.value.as_i64());
-            }
+    }
+    while let Some(res) = unspent_set.join_next().await {
+        for b in res.unwrap_or_default() {
+            confirmed_values.insert(b.box_id().to_string(), b.value.as_i64());
         }
     }
 
@@ -2385,6 +2444,18 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
         .map(|(_, outs)| outs.into_iter().map(|b| b.box_id).collect())
         .unwrap_or_default();
 
+    // What the wallet's balance moves by once the mempool shows this
+    // transaction: outputs back to us minus the inputs we spent. The app
+    // shows the row and the figure at once instead of waiting for a poll.
+    // Only for an ordinary spend: a stealth sweep or a mix move spends
+    // boxes outside the public balance, so no figure is offered and the
+    // node's view is waited for.
+    let wallet_delta = if prep.stealth_trees.is_empty() && prep.mix_proofs.is_empty() {
+        Some(wallet_delta_nano_erg(handle_id, &prep.unsigned_tx, &prep.ergo_boxes))
+    } else {
+        None
+    };
+
     serde_json::to_string(&serde_json::json!({
         "tx_id": tx_id,
         "preparation_id": preparation_id,
@@ -2392,8 +2463,36 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
         "change_nano_erg": prep.change_erg,
         "amount_nano_erg": prep.recipient_erg,
         "output_box_ids": output_box_ids,
+        "wallet_delta_nano_erg": wallet_delta,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Net nanoERG change for the wallet: its outputs minus the inputs, all of
+/// which a preparation spends from the wallet. Unknown ownership counts an
+/// output as foreign, so the figure errs towards a larger spend.
+fn wallet_delta_nano_erg(
+    handle_id: u64,
+    unsigned: &ergo_tx::Eip12UnsignedTx,
+    inputs: &[ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox],
+) -> i64 {
+    let spent: i64 = inputs.iter().map(|b| b.value.as_i64()).sum();
+    let mut back: i64 = 0;
+    for out in &unsigned.outputs {
+        let owned = ergo_tx::address::ergo_tree_to_address(&out.ergo_tree)
+            .ok()
+            .map(|addr| {
+                with_handle(handle_id, "wallet_delta", |h| {
+                    h.owns_address(&addr).map_err(err_str)
+                })
+                .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if owned {
+            back += out.value.parse::<i64>().unwrap_or(0);
+        }
+    }
+    back - spent
 }
 
 /// The transaction behind a preparation, summarised for a confirm sheet's

@@ -35,10 +35,56 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   bool _hasMore = true;
   int _loadGeneration = 0;
 
+  /// The ids and heights the home sync last showed, stealth rows
+  /// included, so the list reloads when a transaction arrives or a
+  /// Pending row confirms, and not on every notification.
+  String _syncSignature = '';
+
+  /// A change that arrived while a load was running; replayed after it.
+  bool _reloadWanted = false;
+  bool _reloading = false;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    _syncSignature = _currentSignature();
+    walletSyncController.addListener(_onSyncChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
+  }
+
+  @override
+  void dispose() {
+    walletSyncController.removeListener(_onSyncChanged);
+    super.dispose();
+  }
+
+  String _currentSignature() => activitySignature([
+        ...walletSyncController.recentTxs,
+        ...walletSyncController.stealthRows,
+      ]);
+
+  void _onSyncChanged() {
+    final next = _currentSignature();
+    if (next == _syncSignature) return;
+    _syncSignature = next;
+    if (_loading || _loadingMore || _reloading) {
+      _reloadWanted = true;
+      return;
+    }
+    _reload();
+  }
+
+  /// One reload at a time; a change that lands meanwhile runs one more.
+  Future<void> _reload() async {
+    _reloading = true;
+    try {
+      do {
+        _reloadWanted = false;
+        await _load();
+      } while (_reloadWanted && mounted);
+    } finally {
+      _reloading = false;
+    }
   }
 
   WalletRouteArgs get _args => widget.args ?? WalletRouteArgs.of(context);
@@ -133,6 +179,8 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         });
       }
     }
+    // A change that arrived during the page load runs now.
+    if (_reloadWanted && !_reloading && mounted) _reload();
   }
 
   void _open(Map<String, dynamic> tx) {
@@ -251,7 +299,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   onAction: _load,
                 )
               : RefreshIndicator(
-                  onRefresh: _load,
+                  onRefresh: _reload,
                   child: ListView.builder(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
                     itemCount: _txs.length + (_loadingMore || _hasMore ? 1 : 0),
@@ -291,3 +339,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                 );
   }
 }
+
+/// Ids and heights of the rows, in order: what changes when a transaction
+/// arrives, confirms, or drops from the mempool.
+String activitySignature(List<Map<String, dynamic>> txs) => [
+      for (final tx in txs) '${tx['tx_id']}@${tx['height'] ?? 0}',
+    ].join(',');

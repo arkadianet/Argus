@@ -71,6 +71,9 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     walletService.unlocked.addListener(_onUnlockChanged);
+    // A broadcast shows on the home screen at once, not at the next poll.
+    walletService.onBroadcast = (txId, delta) =>
+        walletSyncController.noteBroadcast(txId, valueNano: delta);
     DeepLinkChannel.start();
     notificationService.init();
   }

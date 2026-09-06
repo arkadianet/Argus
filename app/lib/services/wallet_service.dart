@@ -1139,8 +1139,18 @@ class WalletService {
       handleId: _handleId!,
       preparationId: BigInt.from(preparationId),
     );
-    return jsonDecode(raw) as Map<String, dynamic>;
+    final map = jsonDecode(raw) as Map<String, dynamic>;
+    onBroadcast?.call(
+      map['tx_id']?.toString() ?? '',
+      (map['wallet_delta_nano_erg'] as num?)?.toInt(),
+    );
+    return map;
   }
+
+  /// Told of every transaction this app broadcasts: its id and, when the
+  /// preparation knew it, the wallet's balance change. The sync controller
+  /// hooks this so the row and the figure show without waiting for a poll.
+  void Function(String txId, int? walletDeltaNano)? onBroadcast;
 
   // ── Stealth addresses ───────────────────────────────────────────────
 
@@ -1579,11 +1589,13 @@ class WalletService {
   }
 
   /// Broadcasts signed transaction JSON and returns the tx id.
-  Future<String> submitSignedTransaction(String txJson, {String? nodeUrl}) {
-    return RustLib.instance.api.crateApiSubmitSignedTransaction(
+  Future<String> submitSignedTransaction(String txJson, {String? nodeUrl}) async {
+    final txId = await RustLib.instance.api.crateApiSubmitSignedTransaction(
       txJson: txJson,
       nodeUrl: nodeUrl,
     );
+    onBroadcast?.call(txId, null);
+    return txId;
   }
 
   Future<bool> ownsAddress(String address) {
@@ -1648,6 +1660,13 @@ class WalletService {
   }) async {
     var ok = 0;
     var failed = 0;
+    // Unconfirmed transactions ride ahead of confirmed history and are read
+    // alongside it. A mempool failure must never break the activity list,
+    // so it degrades to confirmed only.
+    final pendingFuture = RustLib.instance.api
+        .crateApiGetPendingTransactions(addresses: addresses)
+        .then((raw) => jsonDecode(raw) as List)
+        .catchError((_) => const <dynamic>[]);
     final results = await Future.wait(
       addresses.map((address) async {
         try {
@@ -1690,16 +1709,7 @@ class WalletService {
       final ta = (a['timestamp'] as num?)?.toInt() ?? 0;
       return tb.compareTo(ta);
     });
-    // Unconfirmed transactions ride ahead of confirmed history. A mempool
-    // failure must never break the activity list, so it degrades to confirmed.
-    var pending = const <dynamic>[];
-    try {
-      final raw = await RustLib.instance.api
-          .crateApiGetPendingTransactions(addresses: addresses);
-      pending = jsonDecode(raw) as List;
-    } catch (_) {}
-
-    return mergePending(pending, all);
+    return mergePending(await pendingFuture, all);
   }
 
   Future<TokenBalance> tokenMeta(String id, int amount) async {

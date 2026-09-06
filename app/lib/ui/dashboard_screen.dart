@@ -104,8 +104,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   Timer? _probeTimer;
   bool _pollBackgrounded = false;
 
+  /// The timer ticks every [_fastPollInterval]; a tick polls when something
+  /// is unconfirmed, or when [_pollInterval] has passed since the last poll.
   static const _pollInterval = Duration(seconds: 20);
+  static const _fastPollInterval = Duration(seconds: 5);
   static const _probeInterval = Duration(minutes: 2);
+  DateTime _lastPollAt = DateTime.now();
 
   /// Polling keeps going this long after the app leaves the foreground so an
   /// incoming payment can still be announced; Android may stop it sooner.
@@ -126,7 +130,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     // hear about a loan posted or repaid the way the Duckpools card does.
     sigmafiService.addListener(_onDuckpoolsChanged);
     deepLinkController.addListener(_onDeepLink);
-    _pollTimer = Timer.periodic(_pollInterval, (_) => _pollTick());
+    _pollTimer = Timer.periodic(_fastPollInterval, (_) => _pollTick());
     _probeTimer = Timer.periodic(_probeInterval, (_) => _probeTick());
     _init();
   }
@@ -244,6 +248,17 @@ class _DashboardScreenState extends State<DashboardScreen>
         return;
       }
     }
+    final now = DateTime.now();
+    if (!shouldPoll(
+      now: now,
+      lastPollAt: _lastPollAt,
+      hasPending: _sync.hasPending,
+      pollInterval: _pollInterval,
+      fastPollInterval: _fastPollInterval,
+    )) {
+      return;
+    }
+    _lastPollAt = now;
     // Routine poll: refresh without flipping the strip to "Syncing…".
     _sync.refresh(discover: false, quiet: true);
     // Mixes move on the same cadence; the service drops a tick that
@@ -288,6 +303,11 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (state != AppLifecycleState.resumed) return;
     _backgroundedAt = null;
     unawaited(mixService.setForeground(true));
+    // Whatever happened while away shows now, not at the next tick.
+    if (_walletUnlocked && !_sync.busy) {
+      _lastPollAt = DateTime.now();
+      unawaited(_sync.refresh(discover: false, quiet: true));
+    }
     // Re-prompt biometrics when the session lock fired while backgrounded.
     // If the user returned within the grace window the wallet is still
     // unlocked and this is a no-op.
@@ -930,6 +950,9 @@ class _DashboardScreenState extends State<DashboardScreen>
       // unlocked: take it as the home wallet without a second unlock.
       if (walletService.isUnlocked && walletService.activeWalletId == switchedTo) {
         _walletId = switchedTo;
+        // Nothing of the previous wallet may carry over: its rows, its
+        // figures, or a broadcast it made moments ago.
+        _sync.reset();
         await sessionLock.run(() async {
           await _refreshUnlockMethods();
           await _afterUnlock();
@@ -2155,4 +2178,19 @@ class _DashboardScreenState extends State<DashboardScreen>
 
 extension _IfEmpty on String {
   String ifEmpty(String fallback) => isEmpty ? fallback : this;
+}
+
+/// Whether a poll tick should refresh: always once [pollInterval] has
+/// passed, and every [fastPollInterval] while a transaction is unconfirmed,
+/// so a Pending row flips to Confirmed within seconds of the block.
+bool shouldPoll({
+  required DateTime now,
+  required DateTime lastPollAt,
+  required bool hasPending,
+  Duration pollInterval = const Duration(seconds: 20),
+  Duration fastPollInterval = const Duration(seconds: 5),
+}) {
+  final since = now.difference(lastPollAt);
+  if (since >= pollInterval) return true;
+  return hasPending && since >= fastPollInterval;
 }
