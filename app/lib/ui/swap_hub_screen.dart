@@ -77,6 +77,19 @@ class _SwapHubScreenState extends State<SwapHubScreen> {
                 },
               ),
             ),
+            if (_tab == SwapVenue.spectrum)
+              Align(
+                alignment: Alignment.centerRight,
+                child: Padding(
+                  padding: const EdgeInsets.only(right: 12),
+                  child: TextButton.icon(
+                    key: const Key('swap-liquidity'),
+                    onPressed: () => Navigator.pushNamed(context, '/liquidity'),
+                    icon: const Icon(Icons.water_drop, size: 18),
+                    label: const Text('Liquidity'),
+                  ),
+                ),
+              ),
             Expanded(
               child: IndexedStack(
                 index: _tab.index,

@@ -28,6 +28,7 @@ import 'ui/transaction_detail_screen.dart';
 import 'ui/transactions_screen.dart';
 import 'services/mix_background.dart';
 import 'ui/duckpools_screen.dart';
+import 'ui/liquidity_screen.dart';
 import 'ui/rosen_screen.dart';
 import 'ui/mix_screen.dart';
 import 'ui/utxo_management_screen.dart';
@@ -133,6 +134,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/utxos' => const UtxoManagementScreen(),
               '/mix' => const MixScreen(),
               '/duckpools' => const DuckpoolsScreen(),
+              '/liquidity' => const LiquidityScreen(),
               '/rosen' => const RosenScreen(),
               '/dexy' => const DexyScreen(),
               '/ageusd' => const AgeUsdScreen(),
