@@ -480,6 +480,21 @@ void main() {
     expect(receivedFromFill('repay', erg, {'outcome': 'filled', 'value': 5}), 5);
   });
 
+  test('a market that cannot quote says which box is missing', () {
+    const base = DuckMarket(pool: 'sigusd', ticker: 'SigUSD', decimals: 2);
+    expect(base.ready, isFalse);
+    expect(base.unavailableReason, contains('parameter box'));
+    expect(const DuckMarket(pool: 'sigusd', ticker: 'SigUSD', decimals: 2, threshold: 1400).unavailableReason, contains('price box'));
+    expect(const DuckMarket(pool: 'sigusd', ticker: 'SigUSD', decimals: 2, error: 'collateral boxes could not be read: timeout').unavailableReason, contains('timeout'));
+    const ready = DuckMarket(pool: 'sigusd', ticker: 'SigUSD', decimals: 2, threshold: 1400, penalty: 300, ergValue: 100);
+    expect(ready.ready, isTrue);
+    expect(ready.unavailableReason, isNull);
+    const erg = DuckMarket(pool: 'erg', ticker: 'ERG', decimals: 9, collaterals: [
+      DuckMarketCollateral(asset: 'a', ticker: 'SigUSD', decimals: 2, ready: false),
+    ]);
+    expect(erg.unavailableReason, contains('token collaterals'));
+  });
+
   test('loans are read from the collateral, interest, price and parameter boxes', () async {
     SharedPreferences.setMockInitialValues({});
     final gw = FakeGateway(node: 'http://node')..height = 1866418;

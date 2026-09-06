@@ -456,6 +456,13 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
                   ),
                   const SizedBox(height: 12),
                 ],
+                if (svc.loans.isEmpty && svc.loansRefreshedAt != null && svc.loansError == null) ...[
+                  Text(
+                    'No loans on this wallet\'s addresses. Borrow from a pool above to open one.',
+                    style: TextStyle(color: muted, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 if (svc.loans.isNotEmpty) ...[
                   const SectionLabel('Your loans'),
                   const SizedBox(height: 8),
@@ -499,6 +506,8 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
                       state: s,
                       position: false,
                       market: svc.marketFor(s.pool),
+                      lends: svc.pools.any((p) => p.key == s.pool && p.lends),
+                      loansBusy: svc.loansBusy,
                       onLend: _working ? null : () => _order(s, 'lend'),
                       onWithdraw: s.hasPosition && !_working ? () => _order(s, 'withdraw') : null,
                       onBorrow: (svc.marketFor(s.pool)?.ready ?? false) && !_working ? () => _borrow(s) : null,
@@ -518,9 +527,15 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
 String utilisationText(int bps) => '${(bps / 100).toStringAsFixed(bps % 100 == 0 ? 0 : 1)}%';
 
 class _PoolCard extends StatelessWidget {
-  const _PoolCard({required this.state, required this.position, this.market, this.onLend, this.onWithdraw, this.onBorrow});
+  const _PoolCard({
+    this.lends = false,
+    this.loansBusy = false,required this.state, required this.position, this.market, this.onLend, this.onWithdraw, this.onBorrow});
 
   final DuckPoolState state;
+
+  /// Whether the pool lends at all, and whether its terms are being read.
+  final bool lends;
+  final bool loansBusy;
   final bool position;
   final DuckMarket? market;
   final VoidCallback? onLend;
@@ -578,6 +593,19 @@ class _PoolCard extends StatelessWidget {
           if (market != null)
             for (final c in market!.collaterals.where((c) => c.ready))
               row('1 ${c.ticker} collateral', '${formatErg(c.unitValueNano!)} · line ${(c.threshold! / 10).toStringAsFixed(0)}%'),
+          if (market != null && !market!.ready) ...[
+            const SizedBox(height: 6),
+            SelectableText(
+              'Borrowing unavailable: ${market!.unavailableReason}. Refresh to try again.',
+              style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12),
+            ),
+          ] else if (market == null && lends) ...[
+            const SizedBox(height: 6),
+            Text(
+              loansBusy ? 'Reading the borrowing terms…' : 'The borrowing terms have not been read yet. Refresh to read them.',
+              style: TextStyle(color: muted, fontSize: 11.5),
+            ),
+          ],
           if (market != null && market!.unpriced > 0) ...[
             const SizedBox(height: 6),
             SelectableText(

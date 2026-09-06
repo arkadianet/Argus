@@ -231,6 +231,18 @@ class DuckMarket {
   /// least one token collateral with a price for the ERG pool.
   bool get ready => error == null && ((threshold != null && ergValue != null) || collaterals.any((c) => c.ready));
 
+  /// Why a borrow cannot be quoted here right now, or null when it can.
+  /// Every box the terms need is named, so a read that failed is not a
+  /// pool that quietly has no borrowing.
+  String? get unavailableReason {
+    if (ready) return null;
+    if (error != null) return error;
+    if (collaterals.isNotEmpty) return 'none of the token collaterals has a readable price box right now';
+    if (threshold == null) return 'the pool\'s parameter box could not be read';
+    if (ergValue == null) return 'the collateral\'s price box could not be read';
+    return 'the borrowing terms could not be read';
+  }
+
   static DuckMarket fromJson(Map<String, dynamic> m) => DuckMarket(
         pool: m['pool'] as String,
         ticker: m['ticker'] as String,
@@ -690,8 +702,14 @@ typedef DuckHttpPost = Future<String> Function(Uri uri, String jsonBody);
 
 const _timeout = Duration(seconds: 45);
 
+/// A node that does not answer quickly is not going to; the explorer is
+/// tried next, and both must fit inside one refresh.
+const _nodeTimeout = Duration(seconds: 12);
+
+bool _isNodeUri(Uri uri) => uri.path.startsWith('/blockchain/') || uri.path.startsWith('/utxo/') || uri.path == '/info';
+
 Future<String> _httpGet(Uri uri) async {
-  final res = await http.get(uri).timeout(_timeout);
+  final res = await http.get(uri).timeout(_isNodeUri(uri) ? _nodeTimeout : _timeout);
   if (res.statusCode != 200) throw StateError('${uri.host} returned HTTP ${res.statusCode}');
   return res.body;
 }
@@ -699,7 +717,7 @@ Future<String> _httpGet(Uri uri) async {
 Future<String> _httpPost(Uri uri, String body) async {
   final res = await http
       .post(uri, headers: const {'Content-Type': 'application/json'}, body: body)
-      .timeout(_timeout);
+      .timeout(_isNodeUri(uri) ? _nodeTimeout : _timeout);
   if (res.statusCode != 200) throw StateError('${uri.host} returned HTTP ${res.statusCode}');
   return res.body;
 }
@@ -1433,7 +1451,20 @@ class DuckpoolsService extends ChangeNotifier {
   /// Unspent boxes under the pool's script. A node that answers, even
   /// with an empty list, is believed; only a node that cannot answer
   /// sends the query to the explorer.
-  Future<List<dynamic>> _boxesUnderScript(DuckPool p) => _boxesUnderTree(p.ergoTree, limit: 20);
+  /// The pool box, by the NFT only it carries: one small query wherever
+  /// it goes. Reading the pool's script instead asks the explorer to walk
+  /// the script's whole history, which took the ERG pool past the timeout
+  /// on a device. The script is the fallback when the NFT read fails.
+  Future<List<dynamic>> _boxesUnderScript(DuckPool p) async {
+    try {
+      final byNft = await _boxesByToken(p.poolNft, limit: 5);
+      final pool = [for (final b in byNft) if (b is Map && b['ergoTree'] == p.ergoTree) b];
+      if (pool.isNotEmpty) return pool;
+    } catch (_) {
+      // Fall through to the script.
+    }
+    return _boxesUnderTree(p.ergoTree, limit: 20);
+  }
 
   /// Every unspent box under a script, page by page: a pool's collateral
   /// boxes are not bounded by a page.
