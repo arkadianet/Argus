@@ -172,12 +172,26 @@ impl FeeConfig {
                 if bridge_fee == -1 {
                     return Err(FeesError::NoTarget(to_chain.into()));
                 }
+                // A row shorter than the chain list is a fee box we cannot
+                // read, not a reason to bring the app down: index by `get`
+                // and say so instead.
+                let rsn = self
+                    .rsn_ratios
+                    .get(i)
+                    .and_then(|r| r.get(to))
+                    .ok_or_else(|| FeesError::NoTarget(to_chain.into()))?;
                 return Ok(ChainFee {
                     bridge_fee,
-                    network_fee: self.network_fees[i][to],
-                    fee_ratio: self.fee_ratios[i][to],
-                    rsn_ratio: self.rsn_ratios[i][to].first().copied().unwrap_or(0),
-                    rsn_ratio_divisor: self.rsn_ratios[i][to].get(1).copied().unwrap_or(1),
+                    network_fee: self.network_fees[i]
+                        .get(to)
+                        .copied()
+                        .ok_or_else(|| FeesError::NoTarget(to_chain.into()))?,
+                    fee_ratio: self.fee_ratios[i]
+                        .get(to)
+                        .copied()
+                        .ok_or_else(|| FeesError::NoTarget(to_chain.into()))?,
+                    rsn_ratio: rsn.first().copied().unwrap_or(0),
+                    rsn_ratio_divisor: rsn.get(1).copied().unwrap_or(1),
                 });
             }
         }
@@ -263,6 +277,29 @@ mod tests {
         // A height before every configuration has no terms.
         assert!(matches!(cfg.from_ergo(1, "cardano"), Err(FeesError::NoHeight(_))));
         assert!(matches!(cfg.from_ergo(1_866_700, "mars"), Err(FeesError::NoChain(_))));
+    }
+
+    #[test]
+    fn a_row_shorter_than_the_chain_list_is_an_error_not_a_panic() {
+        let mut cfg = FeeConfig::parse(&fixture("sigusd"), SIGUSD).unwrap();
+        let to = cfg.chains.iter().position(|c| c == "cardano").unwrap();
+        // The bridge could publish a configuration whose rows do not all
+        // reach every chain; reading one must not bring the app down.
+        for row in &mut cfg.network_fees {
+            row.truncate(to);
+        }
+        assert!(matches!(
+            cfg.from_ergo(1_866_700, "cardano"),
+            Err(FeesError::NoTarget(_))
+        ));
+        let mut cfg = FeeConfig::parse(&fixture("sigusd"), SIGUSD).unwrap();
+        for row in &mut cfg.rsn_ratios {
+            row.truncate(to);
+        }
+        assert!(matches!(
+            cfg.from_ergo(1_866_700, "cardano"),
+            Err(FeesError::NoTarget(_))
+        ));
     }
 
     #[test]
