@@ -231,6 +231,18 @@ class DuckMarket {
   /// least one token collateral with a price for the ERG pool.
   bool get ready => error == null && ((threshold != null && ergValue != null) || collaterals.any((c) => c.ready));
 
+  /// Why a borrow cannot be quoted here right now, or null when it can.
+  /// Every box the terms need is named, so a read that failed is not a
+  /// pool that quietly has no borrowing.
+  String? get unavailableReason {
+    if (ready) return null;
+    if (error != null) return error;
+    if (collaterals.isNotEmpty) return 'none of the token collaterals has a readable price box right now';
+    if (threshold == null) return 'the pool\'s parameter box could not be read';
+    if (ergValue == null) return 'the collateral\'s price box could not be read';
+    return 'the borrowing terms could not be read';
+  }
+
   static DuckMarket fromJson(Map<String, dynamic> m) => DuckMarket(
         pool: m['pool'] as String,
         ticker: m['ticker'] as String,
