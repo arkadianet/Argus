@@ -122,6 +122,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     _sync.addListener(_onSyncChanged);
     mixService.addListener(_onSyncChanged);
     duckpoolsService.addListener(_onDuckpoolsChanged);
+    // The SigmaFi card reads its subtitle from the service, so it has to
+    // hear about a loan posted or repaid the way the Duckpools card does.
+    sigmafiService.addListener(_onDuckpoolsChanged);
     deepLinkController.addListener(_onDeepLink);
     _pollTimer = Timer.periodic(_pollInterval, (_) => _pollTick());
     _probeTimer = Timer.periodic(_probeInterval, (_) => _probeTick());
@@ -264,6 +267,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     _sync.removeListener(_onSyncChanged);
     mixService.removeListener(_onSyncChanged);
     duckpoolsService.removeListener(_onDuckpoolsChanged);
+    sigmafiService.removeListener(_onDuckpoolsChanged);
     deepLinkController.removeListener(_onDeepLink);
     _pinCtrl.dispose();
     super.dispose();
