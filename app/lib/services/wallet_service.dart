@@ -14,6 +14,18 @@ import 'secure_storage.dart';
 import 'wallet_database_service.dart';
 
 /// Metadata for a stored wallet.
+/// [wallets] in the order of [order] (wallet ids); any not listed keep
+/// their place after the listed ones.
+List<WalletInfo> orderWallets(List<WalletInfo> wallets, List<String> order) {
+  if (order.isEmpty) return wallets;
+  final rank = {for (final (i, id) in order.indexed) id: i};
+  final out = List<WalletInfo>.of(wallets);
+  final base = order.length;
+  int key(WalletInfo w) => rank[w.walletId] ?? base + wallets.indexOf(w);
+  out.sort((a, b) => key(a).compareTo(key(b)));
+  return out;
+}
+
 class WalletInfo {
   final String walletId;
   final String name;
@@ -760,6 +772,21 @@ class WalletService {
   }
 
   /// Returns metadata for all stored wallets.
+  /// The order the user put their wallets in, as wallet ids; wallets not
+  /// listed follow in storage order.
+  static const _orderKey = 'argus_wallet_order_v1';
+
+  Future<List<String>> walletOrder() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_orderKey) ?? const [];
+  }
+
+  Future<void> setWalletOrder(List<String> ids) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_orderKey, ids);
+  }
+
+  /// Wallets as the user ordered them, in every list that shows them.
   Future<List<WalletInfo>> listWallets() async {
     final ids = await SecureStorageService.listWalletIds();
     final all = await _loadAllWalletMeta();
@@ -775,7 +802,7 @@ class WalletService {
             );
       infos.add(info.copyWith(isUnlocked: _handles.containsKey(id)));
     }
-    return infos;
+    return orderWallets(infos, await walletOrder());
   }
 
   /// Returns the pinned address index for [walletId] (defaults to the active
