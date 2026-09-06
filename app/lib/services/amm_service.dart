@@ -284,6 +284,105 @@ class AmmService {
     return AmmExactQuote.fromJson((jsonDecode(raw) as Map).cast());
   }
 
+  /// Add liquidity directly to a pool; confirm with `sendErg`.
+  Future<Map<String, dynamic>> buildLpDeposit({
+    required String poolId,
+    required int xAmount,
+    required int yAmount,
+    required String recipient,
+    required String changeAddress,
+    required List<String> spendAddresses,
+  }) async {
+    final raw = await api.ammBuildLpDeposit(
+      handleId: _requireHandle(),
+      poolId: poolId,
+      xAmount: xAmount,
+      yAmount: yAmount,
+      recipientAddress: recipient,
+      changeAddress: changeAddress,
+      spendAddresses: spendAddresses,
+      nodeUrl: _node,
+    );
+    return (jsonDecode(raw) as Map).cast<String, dynamic>();
+  }
+
+  /// Remove liquidity directly from a pool; confirm with `sendErg`.
+  Future<Map<String, dynamic>> buildLpRedeem({
+    required String poolId,
+    required int lpAmount,
+    required String recipient,
+    required String changeAddress,
+    required List<String> spendAddresses,
+  }) async {
+    final raw = await api.ammBuildLpRedeem(
+      handleId: _requireHandle(),
+      poolId: poolId,
+      lpAmount: lpAmount,
+      recipientAddress: recipient,
+      changeAddress: changeAddress,
+      spendAddresses: spendAddresses,
+      nodeUrl: _node,
+    );
+    return (jsonDecode(raw) as Map).cast<String, dynamic>();
+  }
+
+  /// First of a new pool's two transactions; confirm with `sendErg`.
+  Future<Map<String, dynamic>> buildPoolBootstrap({
+    required String poolType,
+    String? xTokenId,
+    required int xAmount,
+    required String yTokenId,
+    required int yAmount,
+    required int feeNum,
+    required String userAddress,
+    required List<String> spendAddresses,
+  }) async {
+    final raw = await api.ammBuildPoolBootstrap(
+      handleId: _requireHandle(),
+      poolType: poolType,
+      xTokenId: xTokenId,
+      xAmount: xAmount,
+      yTokenId: yTokenId,
+      yAmount: yAmount,
+      feeNum: feeNum,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
+      nodeUrl: _node,
+    );
+    return (jsonDecode(raw) as Map).cast<String, dynamic>();
+  }
+
+  /// Second of a new pool's two transactions, once the bootstrap box has
+  /// confirmed; confirm with `sendErg`.
+  Future<Map<String, dynamic>> buildPoolCreate({
+    required String bootstrapBoxId,
+    required String poolType,
+    String? xTokenId,
+    required int xAmount,
+    required String yTokenId,
+    required int yAmount,
+    required int feeNum,
+    required String lpTokenId,
+    required int userLpShare,
+    required String userAddress,
+  }) async {
+    final raw = await api.ammBuildPoolCreate(
+      handleId: _requireHandle(),
+      bootstrapBoxId: bootstrapBoxId,
+      poolType: poolType,
+      xTokenId: xTokenId,
+      xAmount: xAmount,
+      yTokenId: yTokenId,
+      yAmount: yAmount,
+      feeNum: feeNum,
+      lpTokenId: lpTokenId,
+      userLpShare: userLpShare,
+      userAddress: userAddress,
+      nodeUrl: _node,
+    );
+    return (jsonDecode(raw) as Map).cast<String, dynamic>();
+  }
+
   Future<AmmSwapBuild> buildSwap({
     String? fromToken,
     String? toToken,
