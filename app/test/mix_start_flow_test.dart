@@ -11,6 +11,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ScriptedGateway implements MixGateway {
   @override
   void setReservedFunding(String reservationsJson) {}
+  @override
+  void setMixedBoxes(List<String> boxIds) {}
   final calls = <String>[];
   List<Map<String, dynamic>> recovered = const [];
 

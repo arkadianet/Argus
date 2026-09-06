@@ -114,4 +114,15 @@ void _stealthInputTests() {
     // stealth is about provenance, covered by the picker's label.
     expect(sel.addresses, {'9addrA'});
   });
+
+  test('a choice that spends mixed boxes next to ordinary ones is called out', () {
+    final all = [box('m1', 1000000, address: 'a'), box('p1', 2000000, address: 'a'), box('m2', 3000000, address: 'a')];
+    final mixed = summariseSelection(all, {'m1', 'p1'}, mixedIds: {'m1', 'm2'});
+    expect(mixed.undoesMix, isTrue);
+    expect(selectionPrivacyNote(mixed), startsWith('1 of these boxes came out of a mix.'));
+    final onlyMixed = summariseSelection(all, {'m1', 'm2'}, mixedIds: {'m1', 'm2'});
+    expect(onlyMixed.undoesMix, isFalse);
+    expect(selectionPrivacyNote(onlyMixed), isNull, reason: 'one address, all mixed');
+    expect(summariseSelection(all, {'p1'}, mixedIds: {'m1'}).mixedCount, 0);
+  });
 }

@@ -14,6 +14,9 @@ class FakeGateway implements MixGateway {
   String reserved = '[]';
   @override
   void setReservedFunding(String reservationsJson) => reserved = reservationsJson;
+  List<String> mixed = const [];
+  @override
+  void setMixedBoxes(List<String> boxIds) => mixed = boxIds;
 
   /// Script for `observe`, `plan`, `advance`, `leave`, `recover`, keyed by
   /// call name; each is consumed in order, the last repeats.

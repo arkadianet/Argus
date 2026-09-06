@@ -1231,6 +1231,83 @@ impl FundingReservation {
     }
 }
 
+/// Boxes that came out of a mix, per wallet handle. Automatic coin
+/// selection never touches them, and a hand-picked set may hold them only
+/// on their own: one transaction spending a mixed box next to an ordinary
+/// one tells the chain they share an owner, which is what the mix cost
+/// money to hide.
+static MIXED_BOXES: Lazy<Mutex<HashMap<u64, HashSet<String>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Tell coin selection which boxes came out of a mix; an empty list frees them.
+#[flutter_rust_bridge::frb(sync)]
+pub fn mix_set_mixed_boxes(handle_id: u64, box_ids: Vec<String>) -> Result<(), String> {
+    let mut all = recover(MIXED_BOXES.lock());
+    if box_ids.is_empty() {
+        all.remove(&handle_id);
+    } else {
+        all.insert(handle_id, box_ids.into_iter().collect());
+    }
+    Ok(())
+}
+
+/// The mixed-box rule over box ids: which of `available` may be offered.
+/// With no choice made, mixed boxes are left out; with a choice, it must be
+/// all mixed or none.
+fn mixed_rule<'a>(
+    mixed: &HashSet<String>,
+    available: impl Iterator<Item = &'a str>,
+    selected_box_ids: Option<&[String]>,
+) -> Result<HashSet<String>, String> {
+    match selected_box_ids.filter(|ids| !ids.is_empty()) {
+        None => Ok(available
+            .filter(|id| !mixed.contains(*id))
+            .map(str::to_string)
+            .collect()),
+        Some(ids) => {
+            let chosen_mixed = ids.iter().filter(|id| mixed.contains(*id)).count();
+            if chosen_mixed > 0 && chosen_mixed < ids.len() {
+                return Err(ArgusError::TxBuildFailed(
+                    "the chosen boxes mix coins that came out of a mix with ordinary ones; \
+                     spending them together ties the mixed money back to this wallet and \
+                     undoes the mix. Choose only mixed boxes, or none of them"
+                        .into(),
+                )
+                .to_json_string());
+            }
+            Ok(available.map(str::to_string).collect())
+        }
+    }
+}
+
+/// [`mixed_rule`] applied to a wallet's spendable boxes.
+fn apply_mixed_rule(
+    handle_id: u64,
+    boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+    eip12: Vec<ergo_tx::Eip12InputBox>,
+    selected_box_ids: Option<&[String]>,
+) -> Result<
+    (
+        Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+        Vec<ergo_tx::Eip12InputBox>,
+    ),
+    String,
+> {
+    let mixed = recover(MIXED_BOXES.lock())
+        .get(&handle_id)
+        .cloned()
+        .unwrap_or_default();
+    if mixed.is_empty() {
+        return Ok((boxes, eip12));
+    }
+    let keep = mixed_rule(&mixed, eip12.iter().map(|e| e.box_id.as_str()), selected_box_ids)?;
+    Ok(boxes
+        .into_iter()
+        .zip(eip12)
+        .filter(|(_, e)| keep.contains(&e.box_id))
+        .unzip())
+}
+
 static RESERVED_FUNDING: Lazy<Mutex<HashMap<u64, Vec<FundingReservation>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -1418,6 +1495,7 @@ async fn prepare_management<S>(
 
     let client = node_client(node_url.clone()).await?;
     let (boxes, inputs) = gather_unspent(handle_id, &client, spend_addresses).await?;
+    let (boxes, inputs) = apply_mixed_rule(handle_id, boxes, inputs, Some(selected_box_ids))?;
     let inputs = filter_selected_inputs(inputs, selected_box_ids)?;
     if inputs.is_empty() {
         return Err(ArgusError::NoUtxos(no_inputs_message).to_json_string());
@@ -1579,6 +1657,7 @@ async fn prepare(
         eip12.push(crate::api_stealth_impl::to_input(b));
         boxes.push(crate::api_stealth_impl::to_ergo_box(b)?);
     }
+    let (mut boxes, eip12) = apply_mixed_rule(handle_id, boxes, eip12, input_box_ids.as_deref())?;
     if eip12.is_empty() {
         return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());
     }
@@ -4719,6 +4798,20 @@ mod tests {
         assert_eq!(arr[1]["box_id"], "b2");
         assert_eq!(arr[1]["assets"][0]["token_id"], "nft");
         assert_eq!(arr[1]["assets"][0]["amount"], "1");
+    }
+
+    #[test]
+    fn mixed_boxes_stay_out_of_automatic_selection_and_never_mix_with_others() {
+        let mixed: HashSet<String> = ["m1", "m2"].iter().map(|s| s.to_string()).collect();
+        let all = ["m1", "p1", "m2"];
+        let auto = mixed_rule(&mixed, all.iter().copied(), None).unwrap();
+        assert_eq!(auto.into_iter().collect::<Vec<_>>(), ["p1"]);
+        let only_mixed = mixed_rule(&mixed, all.iter().copied(), Some(&["m1".into(), "m2".into()])).unwrap();
+        assert_eq!(only_mixed.len(), 3, "a mixed-only choice sees everything; the filter picks");
+        let err = mixed_rule(&mixed, all.iter().copied(), Some(&["m1".into(), "p1".into()])).unwrap_err();
+        assert!(err.contains("undoes the mix"), "{err}");
+        let none_mixed = mixed_rule(&mixed, all.iter().copied(), Some(&["p1".into()])).unwrap();
+        assert_eq!(none_mixed.len(), 3);
     }
 
     #[test]

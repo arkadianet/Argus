@@ -1271,6 +1271,13 @@ class WalletService {
     RustLib.instance.api.crateApiMixSetReservedFunding(handleId: _handleId!, reservationsJson: reservationsJson);
   }
 
+  /// Boxes that came out of a mix: automatic coin selection leaves them
+  /// alone, and a hand-picked set may hold them only on their own.
+  void mixSetMixedBoxes(List<String> boxIds) {
+    if (!isUnlocked) return;
+    RustLib.instance.api.crateApiMixSetMixedBoxes(handleId: _handleId!, boxIds: boxIds);
+  }
+
   /// The key for one mix, for the background job's keystore. It can spend
   /// that mix's boxes and nothing else.
   Future<String> mixExportKey(int mixId) {

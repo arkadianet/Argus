@@ -28,7 +28,13 @@ class MixRecord {
     this.entryTxId,
     this.acknowledged = false,
     this.tokensLeft,
+    this.mixedBoxId,
   });
+
+  /// The box a withdrawal delivered to the destination, once seen: the
+  /// mixed money, which coin selection keeps apart from the rest. Empty
+  /// means looked and found none.
+  String? mixedBoxId;
 
   Map<String, dynamic> state;
 
@@ -111,6 +117,7 @@ class MixRecord {
         if (entryTxId != null) 'entry_tx_id': entryTxId,
         if (acknowledged) 'acknowledged': true,
         if (tokensLeft != null) 'tokens_left': tokensLeft,
+        if (mixedBoxId != null) 'mixed_box_id': mixedBoxId,
       };
 
   static MixRecord fromJson(Map<String, dynamic> m) => MixRecord(
@@ -123,6 +130,7 @@ class MixRecord {
         entryTxId: m['entry_tx_id'] as String?,
         acknowledged: m['acknowledged'] == true,
         tokensLeft: (m['tokens_left'] as num?)?.toInt(),
+        mixedBoxId: m['mixed_box_id'] as String?,
         lastCheckedAt: (m['last_checked_at'] as num?) == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch((m['last_checked_at'] as num).toInt()),
@@ -140,6 +148,9 @@ abstract class MixGateway {
   /// Tell coin selection which boxes pending mixes have set aside:
   /// `[{"box_ids": [...], "value_nano_erg": n}]`; `[]` frees them all.
   void setReservedFunding(String reservationsJson);
+
+  /// Tell coin selection which boxes came out of a mix; `[]` frees them.
+  void setMixedBoxes(List<String> boxIds);
 
   /// The chain height the wallet already knows from its node, if any.
   int? get chainHeight;
@@ -222,6 +233,9 @@ class LiveMixGateway implements MixGateway {
   int? get chainHeight => networkController.height;
   @override
   void setReservedFunding(String reservationsJson) => walletService.mixSetReservedFunding(reservationsJson);
+
+  @override
+  void setMixedBoxes(List<String> boxIds) => walletService.mixSetMixedBoxes(boxIds);
 
   @override
   String contractTrees() => bridge.mixContractTrees();
@@ -785,9 +799,16 @@ class MixService extends ChangeNotifier {
             {'box_ids': r.fundingBoxIds, 'value_nano_erg': r.fundingNano},
       ]);
 
+  /// Boxes that came out of a mix, for coin selection to keep apart.
+  List<String> get mixedBoxIds => [
+        for (final r in records)
+          if (r.mixedBoxId != null && r.mixedBoxId!.isNotEmpty) r.mixedBoxId!,
+      ];
+
   void _syncReserved() {
     try {
       _gw.setReservedFunding(reservedFundingJson());
+      _gw.setMixedBoxes(mixedBoxIds);
     } catch (_) {
       // A locked wallet has no coin selection to protect; the next load
       // or persist while unlocked sets the reservation again.
@@ -915,6 +936,17 @@ class MixService extends ChangeNotifier {
     return r.finished && last is Map && last['height'] == null && (last['tx_id']?.toString() ?? '').isNotEmpty;
   }
 
+  /// A withdrawal whose delivered box is not known yet. A reclaim is not
+  /// mixed money and is never marked.
+  static bool _awaitsMixedBox(MixRecord r) {
+    if (r.phaseKind != 'withdrawn' || r.mixedBoxId != null || r.destinationErgoTree.isEmpty) return false;
+    final events = r.state['events'] as List?;
+    final last = events == null || events.isEmpty ? null : events.last;
+    return last is Map && (last['tx_id']?.toString() ?? '').isNotEmpty;
+  }
+
+  static bool _awaitsFinishing(MixRecord r) => _awaitsHeight(r) || _awaitsMixedBox(r);
+
   /// Outside a tick: give every finished mix its last height, once.
   ///
   /// Runs without the cross-isolate lease. That is safe only because the
@@ -923,17 +955,18 @@ class MixService extends ChangeNotifier {
   /// this runs only when memory shows no in-pool mix. Widen either side
   /// and the lease is needed here too.
   Future<void> _confirmAllFinished() async {
-    if (_ticking || !records.any(_awaitsHeight)) return;
+    if (_ticking || !records.any(_awaitsFinishing)) return;
     _ticking = true;
     final gen = _generation;
     try {
       var changed = false;
-      for (final r in records.where(_awaitsHeight).toList()) {
+      for (final r in records.where(_awaitsFinishing).toList()) {
         changed |= await _confirmFinished(_explorerBase, r);
         if (gen != _generation) return;
       }
       if (changed) {
         await _persist();
+        _syncReserved();
         notifyListeners();
       }
     } catch (_) {
@@ -943,32 +976,39 @@ class MixService extends ChangeNotifier {
     }
   }
 
-  /// True when the height was learned now.
+  /// True when something was learned now: the height of the last
+  /// transaction, or the box a withdrawal delivered. One read serves both.
   Future<bool> _confirmFinished(String base, MixRecord r) async {
-    if (!_awaitsHeight(r)) return false;
+    if (!_awaitsFinishing(r)) return false;
     final last = (r.state['events'] as List).last as Map;
-    final h = await _txInclusionHeight(base, last['tx_id'].toString());
-    if (h != null && h > 0) {
+    final tx = await _txById(base, last['tx_id'].toString());
+    if (tx == null) return false;
+    var changed = false;
+    final h = (tx['inclusionHeight'] as num?)?.toInt();
+    if (_awaitsHeight(r) && h != null && h > 0) {
       last['height'] = h;
-      return true;
+      changed = true;
     }
-    return false;
+    if (_awaitsMixedBox(r)) {
+      // Empty means looked and found none, so it is not asked again.
+      r.mixedBoxId = mixedOutputId(tx['outputs'] as List? ?? const [], r.destinationErgoTree) ?? '';
+      changed = true;
+    }
+    return changed;
   }
 
-  /// Inclusion height of a transaction, or null while it is not in a block.
-  Future<int?> _txInclusionHeight(String base, String txId) async {
+  /// A transaction's body, node first, or null while it is unknown.
+  Future<Map<String, dynamic>?> _txById(String base, String txId) async {
     final node = _nodeBase;
     if (node != null) {
       try {
-        final tx = _txBody(await _get(Uri.parse('$node/blockchain/transaction/byId/$txId')), txId);
-        return (tx['inclusionHeight'] as num?)?.toInt();
+        return _txBody(await _get(Uri.parse('$node/blockchain/transaction/byId/$txId')), txId);
       } catch (_) {
         // Fall through.
       }
     }
     try {
-      final tx = _txBody(await _get(Uri.parse('$base/api/v1/transactions/$txId')), txId);
-      return (tx['inclusionHeight'] as num?)?.toInt();
+      return _txBody(await _get(Uri.parse('$base/api/v1/transactions/$txId')), txId);
     } catch (_) {
       return null;
     }
@@ -1606,6 +1646,16 @@ int? mixingTokensOn(String? boxId, String snapshotJson, String mixingTokenId) {
       }
       return 0;
     }
+  }
+  return null;
+}
+
+/// The output of a withdrawal that pays [destinationTree]: the mixed box.
+String? mixedOutputId(List<dynamic> outputs, String destinationTree) {
+  for (final o in outputs) {
+    if (o is! Map) continue;
+    final tree = o['ergoTree']?.toString() ?? '';
+    if (tree.toLowerCase() == destinationTree.toLowerCase()) return o['boxId']?.toString();
   }
   return null;
 }
