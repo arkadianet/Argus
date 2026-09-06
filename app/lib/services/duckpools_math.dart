@@ -74,3 +74,28 @@ int extraCollateralForHealth({
   if (needed <= 0) return 0;
   return (needed * collateralAmount / collateralValue).ceil();
 }
+
+/// Collateral value over the debt, in percent: the ratio Duckpools shows
+/// and liquidates on. Infinite with nothing owed.
+double collateralRatioPercent({required int collateralValue, required int owed}) =>
+    owed <= 0 ? double.infinity : collateralValue * 100 / owed;
+
+/// The contract's health (10 000 at the threshold) as a collateral ratio
+/// in percent: health 200% on a 140% threshold is a 280% ratio.
+double ratioFromHealth({required int healthBps, required int threshold}) => healthBps / 10000 * threshold / 10;
+
+/// The collateral ratio at which an alert level fires: the alert levels
+/// are fixed multiples of the threshold.
+double alertRatioPercent({required int threshold, required int healthBps}) => ratioFromHealth(healthBps: healthBps, threshold: threshold);
+
+/// Collateral units that put `loan` at `ratioPercent`, at `unitPrice`
+/// loan-asset units per whole collateral unit; zero when unpriced.
+int collateralForRatio({required int loan, required double ratioPercent, required double unitPrice, required int collateralDecimals}) {
+  if (unitPrice <= 0 || loan <= 0) return 0;
+  final value = loan * ratioPercent / 100;
+  return (value / unitPrice * _pow10(collateralDecimals)).ceil();
+}
+
+/// The lowest collateral ratio worth opening at: ten points over the
+/// threshold, the margin Duckpools' own interface insists on.
+double minimumRatioPercent(int threshold) => threshold / 10 + 10;

@@ -39,4 +39,22 @@ void main() {
     expect(extraCollateralForHealth(owed: owed, threshold: threshold, targetHealthBps: 15000, collateralValue: value, collateralAmount: erg), 100000000);
     expect(extraCollateralForHealth(owed: owed, threshold: threshold, targetHealthBps: 12000, collateralValue: value, collateralAmount: erg), 0);
   });
+
+  test('collateral ratio, in the terms the site and the contract use', () {
+    expect(collateralRatioPercent(collateralValue: value, owed: owed), 200);
+    expect(collateralRatioPercent(collateralValue: value, owed: 0), double.infinity);
+    // Health 200% on a 140% threshold is a 280% ratio; the line itself is 140%.
+    expect(ratioFromHealth(healthBps: 20000, threshold: threshold), closeTo(280, 1e-9));
+    expect(ratioFromHealth(healthBps: 10000, threshold: threshold), closeTo(140, 1e-9));
+    expect(alertRatioPercent(threshold: threshold, healthBps: 13000), closeTo(182, 1e-9));
+    expect(minimumRatioPercent(threshold), 150);
+    expect(minimumRatioPercent(1250), 135);
+  });
+
+  test('collateral for a chosen ratio', () {
+    // 100 cents borrowed at 200% needs 200 cents of value; at 200 cents an ERG that is 1 ERG.
+    expect(collateralForRatio(loan: 100, ratioPercent: 200, unitPrice: 200, collateralDecimals: 9), 1000000000);
+    expect(collateralForRatio(loan: 100, ratioPercent: 150, unitPrice: 200, collateralDecimals: 9), 750000000);
+    expect(collateralForRatio(loan: 100, ratioPercent: 200, unitPrice: 0, collateralDecimals: 9), 0);
+  });
 }

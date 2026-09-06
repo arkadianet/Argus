@@ -590,12 +590,13 @@ class _PoolCard extends StatelessWidget {
           if (s.borrowAprBps != null) row('Borrowers pay', '${(s.borrowAprBps! / 100).toStringAsFixed(2)}% a year'),
           if (market != null && market!.ready && market!.ergValue != null) ...[
             row('1 ERG collateral counts as', '${amt(market!.ergValue!)} ${s.ticker}'),
-            row('Liquidation line', '${(market!.threshold! / 10).toStringAsFixed(0)}% · penalty ${(market!.penalty! / 10).toStringAsFixed(1)}%'),
+            row('Liquidation threshold', '${(market!.threshold! / 10).toStringAsFixed(0)}% collateral ratio'),
+            row('Liquidation penalty', '${(market!.penalty! / 10).toStringAsFixed(1)}% of the collateral'),
             row('Borrow up to', '${maxLoanToValuePercent(market!.threshold!).toStringAsFixed(0)}% of the collateral\'s value'),
           ],
           if (market != null)
             for (final c in market!.collaterals.where((c) => c.ready))
-              row('1 ${c.ticker} collateral', '${formatErg(c.unitValueNano!)} · line ${(c.threshold! / 10).toStringAsFixed(0)}%'),
+              row('1 ${c.ticker} collateral', '${formatErg(c.unitValueNano!)} · threshold ${(c.threshold! / 10).toStringAsFixed(0)}%'),
           if (market != null && !market!.ready) ...[
             const SizedBox(height: 6),
             SelectableText(
@@ -857,7 +858,8 @@ class _LoanCardState extends State<_LoanCard> {
     final muted = ArgusColors.of(context).muted;
     final l = widget.loan;
     String amt(int units) => '${formatTokenAmountGrouped(units, l.decimals)} ${l.ticker}';
-    final health = l.healthBps / 100;
+    final ratio = l.ratioPercent;
+    final thresholdPct = l.threshold / 10;
     final healthColor = healthColorFor(context, l.healthBps, liquidatable: l.liquidatable);
     Widget row(String label, String value, {Color? color, String? note}) => Padding(
           padding: const EdgeInsets.symmetric(vertical: 2),
@@ -905,14 +907,16 @@ class _LoanCardState extends State<_LoanCard> {
                 child: Text('Owe ${amt(l.owed)}', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
               ),
               Text(
-                l.liquidatable ? 'liquidatable' : '${health.toStringAsFixed(0)}% health',
+                l.liquidatable ? 'liquidatable' : '${ratio.isFinite ? ratio.toStringAsFixed(0) : '∞'}% collateral',
                 style: TextStyle(color: healthColor, fontSize: 12, fontWeight: FontWeight.w600),
               ),
             ],
           ),
           const SizedBox(height: 8),
-          HealthBar(healthBps: l.healthBps, liquidatable: l.liquidatable),
+          RatioBar(ratioPercent: ratio, thresholdPercent: thresholdPct, liquidatable: l.liquidatable),
           const SizedBox(height: 10),
+          row('Collateral ratio', '${ratio.isFinite ? ratio.toStringAsFixed(0) : '∞'}%', color: healthColor,
+              note: 'liquidation opens under ${thresholdPct.toStringAsFixed(0)}%'),
           row('Borrowed', amt(l.loan), note: interest > 0 ? '+ ${amt(interest)} interest so far' : null),
           if (apr != null)
             row('Costing', '${(apr / 100).toStringAsFixed(2)}% a year',
@@ -925,8 +929,8 @@ class _LoanCardState extends State<_LoanCard> {
             color: healthColor,
             note: l.liquidatable ? 'the price is below the line now' : 'a ${drop.toStringAsFixed(0)}% fall in $collateralTicker',
           ),
-          row('Line and penalty', '${(l.threshold / 10).toStringAsFixed(0)}% · ${(l.penalty / 10).toStringAsFixed(1)}%',
-              note: 'collateral must cover ${(l.threshold / 10).toStringAsFixed(0)}% of the debt; a liquidator keeps ${(l.penalty / 10).toStringAsFixed(1)}% of it'),
+          row('Liquidation penalty', '${(l.penalty / 10).toStringAsFixed(1)}% of the collateral',
+              note: 'what a liquidator keeps on top of the debt'),
           if (blocksLeft != null)
             row(
               'Called whatever the price',
@@ -934,7 +938,7 @@ class _LoanCardState extends State<_LoanCard> {
               note: blocksLeft == 0 ? null : 'about ${formatCalendarDate(blockDate(blocksLeft, DateTime.now()))}; repay or refinance before then',
             ),
           if (toSafe > 0)
-            row('To reach 150% health', 'add ${formatTokenAmountGrouped(toSafe, collateralDecimals)} $collateralTicker',
+            row('To reach ${(thresholdPct * 1.5).toStringAsFixed(0)}% collateral', 'add ${formatTokenAmountGrouped(toSafe, collateralDecimals)} $collateralTicker',
                 note: 'at today\'s price, through Collateral below'),
           const SizedBox(height: 6),
           Row(
@@ -952,7 +956,7 @@ class _LoanCardState extends State<_LoanCard> {
                 ),
               ),
               Text(
-                '${_priceMove >= 0 ? '+' : ''}${_priceMove.toStringAsFixed(0)}% → ${whatIf <= 10000 ? 'liquidatable' : '${(whatIf / 100).toStringAsFixed(0)}%'}',
+                '${_priceMove >= 0 ? '+' : ''}${_priceMove.toStringAsFixed(0)}% → ${whatIf <= 10000 ? 'liquidatable' : '${ratioFromHealth(healthBps: whatIf, threshold: l.threshold).toStringAsFixed(0)}%'}',
                 style: monoStyle(context, size: 12).copyWith(color: whatIfColor),
               ),
             ],
@@ -982,24 +986,33 @@ Color healthColorFor(BuildContext context, int healthBps, {required bool liquida
   return accentOf(context);
 }
 
-/// A loan's health on a bar from the line (100%) to comfortable (300%),
-/// with the alert levels marked.
-class HealthBar extends StatelessWidget {
-  const HealthBar({super.key, required this.healthBps, required this.liquidatable});
-  final int healthBps;
+/// A loan's collateral ratio on a bar from the pool's threshold to
+/// three times it, with the threshold and the alert ratios marked in
+/// the same terms the site shows.
+class RatioBar extends StatelessWidget {
+  const RatioBar({super.key, required this.ratioPercent, required this.thresholdPercent, required this.liquidatable});
+  final double ratioPercent;
+  final double thresholdPercent;
   final bool liquidatable;
 
-  static double _pos(int bps) => ((bps - 10000) / 20000).clamp(0.0, 1.0);
+  double _pos(double ratio) => thresholdPercent <= 0 ? 0 : ((ratio - thresholdPercent) / (thresholdPercent * 2)).clamp(0.0, 1.0);
 
   @override
   Widget build(BuildContext context) {
+    final healthBps = thresholdPercent <= 0 || !ratioPercent.isFinite ? 30000 : (ratioPercent / thresholdPercent * 10000).round();
     final color = healthColorFor(context, healthBps, liquidatable: liquidatable);
     final muted = ArgusColors.of(context).muted;
+    final marks = [
+      ('${thresholdPercent.toStringAsFixed(0)}%', thresholdPercent),
+      ('${(thresholdPercent * 1.3).toStringAsFixed(0)}%', thresholdPercent * 1.3),
+      ('${(thresholdPercent * 2).toStringAsFixed(0)}%', thresholdPercent * 2),
+      ('${(thresholdPercent * 3).toStringAsFixed(0)}%', thresholdPercent * 3),
+    ];
     return LayoutBuilder(
       builder: (context, c) {
         final w = c.maxWidth;
         return SizedBox(
-          height: 22,
+          height: 24,
           child: Stack(
             children: [
               Positioned(
@@ -1010,18 +1023,18 @@ class HealthBar extends StatelessWidget {
                   height: 6,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(3),
-                    gradient: LinearGradient(colors: [Theme.of(context).colorScheme.error, Colors.orange, accentOf(context)], stops: const [0, 0.15, 0.35]),
+                    gradient: LinearGradient(colors: [Theme.of(context).colorScheme.error, Colors.orange, accentOf(context)], stops: const [0, 0.15, 0.4]),
                   ),
                 ),
               ),
-              for (final (label, bps) in const [('115%', 11500), ('130%', 13000), ('200%', 20000)])
+              for (final (label, ratio) in marks)
                 Positioned(
-                  left: (w * _pos(bps) - 14).clamp(0.0, w - 28),
-                  top: 11,
-                  child: SizedBox(width: 28, child: Text(label, textAlign: TextAlign.center, style: TextStyle(color: muted, fontSize: 9))),
+                  left: (w * _pos(ratio) - 16).clamp(0.0, w - 32),
+                  top: 12,
+                  child: SizedBox(width: 32, child: Text(label, textAlign: TextAlign.center, style: TextStyle(color: muted, fontSize: 9))),
                 ),
               Positioned(
-                left: (w * _pos(healthBps) - 6).clamp(0.0, w - 12),
+                left: (w * _pos(ratioPercent.isFinite ? ratioPercent : thresholdPercent * 3) - 6).clamp(0.0, w - 12),
                 top: 1,
                 child: Container(
                   width: 12,
@@ -1064,8 +1077,9 @@ String formatBlocksAsDuration(int blocks) {
   return '${(minutes / 1440).round()} days';
 }
 
-/// Collateral and loan entry for a borrow, with the quote shown live.
-/// A token pool takes ERG; the ERG pool takes one of its listed tokens.
+/// Borrowing the way Duckpools' site frames it: how much to borrow, at
+/// what collateral ratio, and the collateral that takes. The collateral
+/// stays editable, and the ratio follows it.
 class _BorrowSheet extends StatefulWidget {
   const _BorrowSheet({required this.state, required this.market, required this.spendableNano, required this.held});
   final DuckPoolState state;
@@ -1080,14 +1094,11 @@ class _BorrowSheet extends StatefulWidget {
 }
 
 class _BorrowSheetState extends State<_BorrowSheet> {
-  final _collateral = TextEditingController();
   final _loan = TextEditingController();
+  final _collateral = TextEditingController();
+  final _ratio = TextEditingController(text: '200');
   Map<String, dynamic>? _quote;
   String? _error;
-
-  /// The slider's share of the safe maximum, so the field and the slider
-  /// tell the same story.
-  double _share = 0;
 
   /// The chosen token collateral (ERG pool), or null for ERG.
   DuckMarketCollateral? _asset;
@@ -1100,36 +1111,63 @@ class _BorrowSheetState extends State<_BorrowSheet> {
     super.initState();
     if (_ergPool) {
       final choices = _choices;
-      // The first token the wallet holds, else the first priced one.
       _asset = choices.where((c) => (widget.held[c.asset] ?? 0) > 0).firstOrNull ?? choices.firstOrNull;
     }
   }
 
-  int? _parse(TextEditingController c, int decimals) => parseDuckAmount(c.text, decimals);
+  @override
+  void dispose() {
+    _loan.dispose();
+    _collateral.dispose();
+    _ratio.dispose();
+    super.dispose();
+  }
 
   int get _collateralDecimals => _asset?.decimals ?? 9;
   String get _collateralTicker => _asset?.ticker ?? 'ERG';
-  int? get _collateralUnits => _parse(_collateral, _collateralDecimals);
-  int? get _loanUnits => _parse(_loan, widget.state.decimals);
+  int? get _thresholdRaw => _asset?.threshold ?? widget.market.threshold;
 
-  /// The most the quote will accept for the collateral typed: the line's
-  /// maximum less the half percent the quote keeps back.
-  int? get _safeMax {
-    final c = _collateralUnits;
-    final threshold = _asset?.threshold ?? widget.market.threshold;
+  /// Loan-asset units one whole unit of collateral counts for.
+  double? get _unitPrice {
     final unitValue = _asset == null ? widget.market.ergValue : _asset!.unitValueNano;
-    if (c == null || unitValue == null || threshold == null) return null;
-    final max = (c / _pow10(_collateralDecimals) * unitValue * 1000 / threshold).floor();
-    final safe = max - max ~/ 200;
-    return safe > 0 ? safe : null;
+    if (unitValue == null) return null;
+    // The market quotes 1 ERG in the loan asset, or 1 token in nanoERG.
+    return unitValue.toDouble();
   }
 
-  void _pick(double share) {
-    final max = _safeMax;
-    if (max == null) return;
-    final units = (max * share).floor();
-    _loan.text = formatTokenAmount(units, widget.state.decimals).replaceAll(',', '');
-    _share = share;
+  int? get _loanUnits => parseDuckAmount(_loan.text, widget.state.decimals);
+  int? get _collateralUnits => parseDuckAmount(_collateral.text, _collateralDecimals);
+  /// The typed ratio when it is a usable number: finite and positive.
+  double? get _ratioPercent {
+    final r = double.tryParse(_ratio.text.trim());
+    return r != null && r.isFinite && r > 0 ? r : null;
+  }
+
+  /// What the wallet can lock: spendable ERG less room for the fees, or
+  /// the token held.
+  int get _available => _asset == null ? (widget.spendableNano - 10000000).clamp(0, 1 << 62) : (widget.held[_asset!.asset] ?? 0);
+
+  void _setCollateralFromRatio() {
+    final loan = _loanUnits;
+    final ratio = _ratioPercent;
+    final price = _unitPrice;
+    if (loan == null || ratio == null || price == null) return;
+    final units = collateralForRatio(loan: loan, ratioPercent: ratio, unitPrice: price, collateralDecimals: _collateralDecimals);
+    _collateral.text = formatTokenAmount(units, _collateralDecimals).replaceAll(',', '');
+  }
+
+  void _setRatioFromCollateral() {
+    final loan = _loanUnits;
+    final c = _collateralUnits;
+    final price = _unitPrice;
+    if (loan == null || loan == 0 || c == null || price == null) return;
+    final value = c / _pow10(_collateralDecimals) * price;
+    _ratio.text = (value / loan * 100).toStringAsFixed(0);
+  }
+
+  void _pickRatio(double ratio) {
+    _ratio.text = ratio.toStringAsFixed(0);
+    _setCollateralFromRatio();
     _requote();
   }
 
@@ -1140,14 +1178,30 @@ class _BorrowSheetState extends State<_BorrowSheet> {
       _quote = null;
       _error = null;
       if (c == null || l == null) return;
+      final min = _thresholdRaw == null ? null : minimumRatioPercent(_thresholdRaw!);
+      if (c > _available) {
+        _error = _asset == null
+            ? 'That needs ${formatErg(c)} of collateral; ${formatErg(_available)} is spendable after fees.'
+            : 'That needs ${formatTokenAmountGrouped(c, _collateralDecimals)} $_collateralTicker; you hold ${formatTokenAmountGrouped(_available, _collateralDecimals)}.';
+        return;
+      }
       try {
-        _quote = duckpoolsService.loanQuote(
+        final q = duckpoolsService.loanQuote(
           poolKey: widget.state.pool,
           kind: 'borrow',
           amount: l,
           collateralAsset: _asset?.asset ?? '',
           collateralAmount: c,
         );
+        // The ratio the quote would really open at (fees and price impact
+        // in), not what the field says or the linear estimate.
+        final opensAt = collateralRatioPercent(collateralValue: (q['collateral_value'] as num).toInt(), owed: l);
+        if (min != null && opensAt < min) {
+          _error = 'This opens at ${opensAt.toStringAsFixed(0)}%; open at ${min.toStringAsFixed(0)}% or more, since the threshold is '
+              '${(_thresholdRaw! / 10).toStringAsFixed(0)}% and the price can move before the fill.';
+          return;
+        }
+        _quote = q;
       } catch (e) {
         _error = e.toString().replaceFirst('Bad state: ', '');
       }
@@ -1159,113 +1213,154 @@ class _BorrowSheetState extends State<_BorrowSheet> {
     final s = widget.state;
     final m = widget.market;
     final muted = ArgusColors.of(context).muted;
-    String amt(num units) => '${formatTokenAmountGrouped(units.toInt(), s.decimals)} ${s.ticker}';
+    final threshold = _thresholdRaw;
+    final thresholdPct = threshold == null ? null : threshold / 10;
+    final minRatio = threshold == null ? null : minimumRatioPercent(threshold);
+    final price = _unitPrice;
     final q = _quote;
-    final c = _collateralUnits;
-    final threshold = _asset?.threshold ?? m.threshold;
-    // What this much collateral could borrow at most, before the quote
-    // says so exactly: a whole unit's value scaled, at the line.
-    final unitValue = _asset == null ? m.ergValue : _asset!.unitValueNano;
-    final roughMax = c == null || unitValue == null || threshold == null
-        ? null
-        : (c / _pow10(_collateralDecimals) * unitValue * 1000 / threshold).floor();
-    final heldText = _asset == null
-        ? 'Spendable ${formatErg(widget.spendableNano)}'
-        : 'You hold ${formatTokenAmountGrouped(widget.held[_asset!.asset] ?? 0, _asset!.decimals)} ${_asset!.ticker}';
-    final unitText = _asset == null
+    final ratio = _ratioPercent;
+    // The most the available collateral could borrow at the chosen ratio:
+    // the rounding that sizes the collateral must not tip it past what is
+    // available, so the candidate steps down until it fits.
+    int? maxLoan;
+    if (price != null && ratio != null) {
+      var candidate = (_available / _pow10(_collateralDecimals) * price / (ratio / 100)).floor();
+      for (var i = 0; i < 4 && candidate > 0; i++) {
+        if (collateralForRatio(loan: candidate, ratioPercent: ratio, unitPrice: price, collateralDecimals: _collateralDecimals) <= _available) break;
+        candidate -= 1;
+      }
+      maxLoan = candidate > 0 ? candidate : null;
+    }
+    String amt(num units) => '${formatTokenAmountGrouped(units.toInt(), s.decimals)} ${s.ticker}';
+    final priceText = _asset == null
         ? '1 ERG counts as ${amt(m.ergValue ?? 0)}'
-        : '1 ${_asset!.ticker} sells for about ${formatErg(_asset!.unitValueNano ?? 0)}';
+        : '1 ${_asset!.ticker} counts as ${formatErg(_asset!.unitValueNano ?? 0)}';
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + MediaQuery.of(context).viewInsets.bottom),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(_ergPool ? 'Borrow ERG against a token' : 'Borrow ${s.ticker} against ERG', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 12),
-          if (_ergPool) ...[
-            DropdownButtonFormField<String>(
-              key: const Key('duck-collateral-asset'),
-              initialValue: _asset?.asset,
-              decoration: const InputDecoration(labelText: 'Collateral'),
-              items: [
-                for (final ch in _choices)
-                  DropdownMenuItem(
-                    value: ch.asset,
-                    child: Text('${ch.ticker} · line ${(ch.threshold! / 10).toStringAsFixed(0)}%'),
-                  ),
-              ],
-              onChanged: (v) {
-                setState(() => _asset = _choices.firstWhere((ch) => ch.asset == v));
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(_ergPool ? 'Borrow ERG against a token' : 'Borrow ${s.ticker} against ERG', style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 4),
+            Text(
+              'Liquidation opens when the collateral is worth less than ${thresholdPct?.toStringAsFixed(0) ?? '?'}% of the debt · '
+              'penalty ${((_asset?.penalty ?? m.penalty ?? 0) / 10).toStringAsFixed(1)}% · $priceText',
+              style: TextStyle(color: muted, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            if (_ergPool) ...[
+              DropdownButtonFormField<String>(
+                key: const Key('duck-collateral-asset'),
+                initialValue: _asset?.asset,
+                decoration: const InputDecoration(labelText: 'Collateral'),
+                items: [
+                  for (final ch in _choices)
+                    DropdownMenuItem(
+                      value: ch.asset,
+                      child: Text('${ch.ticker} · threshold ${(ch.threshold! / 10).toStringAsFixed(0)}%'),
+                    ),
+                ],
+                onChanged: (v) {
+                  setState(() => _asset = _choices.firstWhere((ch) => ch.asset == v));
+                  _setCollateralFromRatio();
+                  _requote();
+                },
+              ),
+              const SizedBox(height: 12),
+            ],
+            TextField(
+              key: const Key('duck-loan'),
+              controller: _loan,
+              autofocus: true,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: '${s.ticker} to borrow',
+                helperText: maxLoan == null
+                    ? 'The pool holds ${amt(s.pooled)}${_ergPool ? ' · at least 0.05 ERG' : ''}'
+                    : 'Up to ${amt(maxLoan)} with what you can lock at ${ratio!.toStringAsFixed(0)}% · pool holds ${amt(s.pooled)}',
+                suffixIcon: maxLoan == null || maxLoan <= 0
+                    ? null
+                    : TextButton(
+                        onPressed: () {
+                          _loan.text = formatTokenAmount(maxLoan!, s.decimals).replaceAll(',', '');
+                          _setCollateralFromRatio();
+                          _requote();
+                        },
+                        child: const Text('Max'),
+                      ),
+              ),
+              onChanged: (_) {
+                _setCollateralFromRatio();
                 _requote();
               },
             ),
             const SizedBox(height: 12),
-          ],
-          TextField(
-            key: const Key('duck-collateral'),
-            controller: _collateral,
-            autofocus: true,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(
-              labelText: '$_collateralTicker to lock as collateral',
-              helperText: '$heldText · $unitText',
-            ),
-            onChanged: (_) => _requote(),
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            key: const Key('duck-loan'),
-            controller: _loan,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(
-              labelText: '${s.ticker} to borrow',
-              helperText: roughMax == null
-                  ? 'The pool holds ${amt(s.pooled)}${_ergPool ? ' · at least 0.05 ERG' : ''}'
-                  : 'Up to ${amt(_safeMax ?? roughMax)} for this collateral (the ${(threshold! / 10).toStringAsFixed(0)}% line, '
-                      'less the half percent kept back for a price move before the fill)',
-            ),
-            onChanged: (_) {
-              final max = _safeMax;
-              final l = _loanUnits;
-              _share = max == null || l == null ? 0 : (l / max).clamp(0.0, 1.0);
-              _requote();
-            },
-          ),
-          if (_safeMax != null) ...[
-            Row(
+            Text('Collateral ratio', style: TextStyle(color: muted, fontSize: 12)),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Expanded(
-                  child: Slider(
-                    key: const Key('duck-loan-share'),
-                    value: _share,
-                    divisions: 20,
-                    label: '${(_share * 100).round()}% of the maximum',
-                    onChanged: _pick,
+                for (final r in [if (minRatio != null) minRatio, 200.0, 300.0])
+                  ChoiceChip(
+                    label: Text(r == minRatio ? 'Minimum ${r.toStringAsFixed(0)}%' : '${r.toStringAsFixed(0)}%'),
+                    selected: ratio == r,
+                    visualDensity: VisualDensity.compact,
+                    onSelected: (_) => _pickRatio(r),
+                  ),
+                SizedBox(
+                  width: 96,
+                  child: TextField(
+                    key: const Key('duck-ratio'),
+                    controller: _ratio,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(isDense: true, suffixText: '%', labelText: 'Custom'),
+                    onChanged: (_) {
+                      _setCollateralFromRatio();
+                      _requote();
+                    },
                   ),
                 ),
-                for (final (label, share) in const [('25%', 0.25), ('50%', 0.5), ('75%', 0.75)])
-                  Padding(
-                    padding: const EdgeInsets.only(left: 4),
-                    child: ActionChip(label: Text(label), visualDensity: VisualDensity.compact, onPressed: () => _pick(share)),
-                  ),
               ],
             ),
-            Text(
-              'Half the maximum opens at 200% health: the price can fall by half before liquidation.',
-              style: TextStyle(color: muted, fontSize: 11.5),
+            if (thresholdPct != null && ratio != null && ratio > 0)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'At ${ratio.toStringAsFixed(0)}% the price can fall ${((1 - thresholdPct / ratio) * 100).clamp(0, 100).toStringAsFixed(0)}% before liquidation.',
+                  style: TextStyle(color: muted, fontSize: 11.5),
+                ),
+              ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('duck-collateral'),
+              controller: _collateral,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: '$_collateralTicker to lock',
+                helperText: _asset == null
+                    ? 'Spendable ${formatErg(widget.spendableNano)} · about 0.01 ERG stays for fees'
+                    : 'You hold ${formatTokenAmountGrouped(widget.held[_asset!.asset] ?? 0, _asset!.decimals)} ${_asset!.ticker}',
+              ),
+              onChanged: (_) {
+                _setRatioFromCollateral();
+                _requote();
+              },
+            ),
+            const SizedBox(height: 12),
+            if (_error != null) SelectableText(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
+            if (q != null) _BorrowFigures(quote: q, state: s, collateralTicker: _collateralTicker, collateralDecimals: _collateralDecimals, ergPool: _ergPool),
+            const SizedBox(height: 16),
+            FilledButton(
+              key: const Key('duck-borrow-continue'),
+              onPressed: q == null ? null : () => Navigator.pop(context, (_asset?.asset ?? '', _collateralUnits!, _loanUnits!)),
+              child: const Text('Continue'),
             ),
           ],
-          const SizedBox(height: 12),
-          if (_error != null) SelectableText(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
-          if (q != null) _BorrowFigures(quote: q, state: s, collateralTicker: _collateralTicker, collateralDecimals: _collateralDecimals, ergPool: _ergPool),
-          const SizedBox(height: 16),
-          FilledButton(
-            key: const Key('duck-borrow-continue'),
-            onPressed: q == null ? null : () => Navigator.pop(context, (_asset?.asset ?? '', _collateralUnits!, _loanUnits!)),
-            child: const Text('Continue'),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1311,14 +1406,15 @@ class _BorrowFigures extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        HealthBar(healthBps: healthBps, liquidatable: healthBps <= 10000),
+        RatioBar(ratioPercent: collateralRatioPercent(collateralValue: collateralValue, owed: loan), thresholdPercent: threshold / 10, liquidatable: healthBps <= 10000),
         const SizedBox(height: 6),
-        row('Health at open', '${(healthBps / 100).toStringAsFixed(0)}%', valueColor: color),
+        row('Collateral ratio at open', '${collateralRatioPercent(collateralValue: collateralValue, owed: loan).toStringAsFixed(0)}%', valueColor: color),
+        row('Liquidation threshold', '${(threshold / 10).toStringAsFixed(0)}%'),
         row('Collateral counts as', amt(collateralValue)),
         row('1 $collateralTicker now', amt(priceNow.round())),
         row('Liquidation price', amt(liqPrice.round()), valueColor: color),
         row('Room before liquidation', 'a ${drop.toStringAsFixed(0)}% fall in $collateralTicker', valueColor: color),
-        row('Line · penalty', '${(threshold / 10).toStringAsFixed(0)}% · ${(penalty / 10).toStringAsFixed(1)}%'),
+        row('Liquidation penalty', '${(penalty / 10).toStringAsFixed(1)}% of the collateral'),
         if (apr != null) ...[
           row('Interest at today\'s rate', '${(apr / 100).toStringAsFixed(2)}% a year'),
           row('About', '${amt(interestOver(owed: loan, aprBps: apr, days: 30))} a month · ${amt(interestOver(owed: loan, aprBps: apr, days: 365))} a year'),
