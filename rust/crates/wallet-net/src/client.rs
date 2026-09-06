@@ -423,6 +423,49 @@ impl ErgoNodeClient {
         Ok(boxes)
     }
 
+    /// Unspent boxes under a script, as the node's JSON items (spent ones
+    /// dropped), for callers that read them into more than one shape.
+    pub async fn unspent_boxes_by_ergo_tree(
+        &self,
+        ergo_tree: &str,
+        offset: u64,
+        limit: u64,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let endpoint = format!(
+            "/blockchain/box/unspent/byErgoTree?offset={}&limit={}",
+            offset, limit
+        );
+        let body =
+            serde_json::to_string(ergo_tree).map_err(|e| format!("JSON serialize: {}", e))?;
+        let response = self
+            .inner
+            .send_post_req(&endpoint, body)
+            .await
+            .map_err(|e| format!("Node request: {}", e))?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| format!("Read: {}", e))?;
+        if text.is_empty() {
+            return Ok(Vec::new());
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| format!("Parse: {}", e))?;
+        let items = match value {
+            serde_json::Value::Array(arr) => arr,
+            serde_json::Value::Object(ref map) => map
+                .get("items")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        Ok(items
+            .into_iter()
+            .filter(|item| item["spentTransactionId"].is_null())
+            .collect())
+    }
+
     /// Build an ErgoStateContext by fetching the last 10 block headers from the node.
     ///
     /// `/blocks/lastHeaders/N` returns oldest-first. ergo-lib (and Citadel's

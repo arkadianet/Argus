@@ -7,6 +7,7 @@ import '../services/secure_storage.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'pin_fields.dart';
+import 'wallet_dialogs.dart';
 
 class CreateWalletScreen extends StatefulWidget {
   const CreateWalletScreen({super.key});
@@ -90,6 +91,8 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
         pin: _pinCtrl.text,
         name: _nameCtrl.text,
       );
+      if (!mounted) return null;
+      await offerBiometricUnlock(context, walletId: walletId, pin: _pinCtrl.text);
       if (!mounted) return null;
       Navigator.pop(context, walletId);
     } on ArgusException catch (e) {

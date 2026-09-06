@@ -320,10 +320,13 @@ class StealthService extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Loads (and caches) this wallet's published stealth string.
+  /// Loads (and caches) this wallet's published stealth string, and
+  /// remembers it so it can be offered as a destination while the wallet
+  /// is locked.
   Future<String?> loadAddress() async {
     if (!walletService.isUnlocked) return null;
     final gen = _generation;
+    final walletId = walletService.activeWalletId;
     String? found;
     try {
       found = await walletService.stealthAddress();
@@ -332,8 +335,28 @@ class StealthService extends ChangeNotifier {
     }
     if (gen != _generation) return null;
     address = found;
+    if (found != null && walletId != null) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('$_addressPrefix$walletId', found);
+      } catch (_) {
+        // A picker without this wallet's stealth address is no loss.
+      }
+    }
     notifyListeners();
     return address;
+  }
+
+  static const _addressPrefix = 'argus_stealth_address_v1_';
+
+  /// The published stealth string last seen for each wallet, by wallet
+  /// id. A wallet that never had its stealth address derived is absent.
+  static Future<Map<String, String>> rememberedAddresses() async {
+    final prefs = await SharedPreferences.getInstance();
+    return {
+      for (final k in prefs.getKeys())
+        if (k.startsWith(_addressPrefix)) k.substring(_addressPrefix.length): prefs.getString(k) ?? '',
+    }..removeWhere((_, v) => v.isEmpty);
   }
 
   /// Fetch the template box list and test it against our key.
