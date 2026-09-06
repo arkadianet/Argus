@@ -260,6 +260,99 @@ class WalletSyncController extends ChangeNotifier {
 
   Future<void>? _inFlight;
 
+  /// Transactions this app broadcast recently, by id: when, and the
+  /// balance change they carry. A row for each is shown at once, and kept
+  /// until the node's own view has it or [broadcastGrace] passes.
+  final Map<String, _Broadcast> _broadcasts = {};
+
+  /// How long a broadcast row and its balance delta stand in for the
+  /// node's view. Mempool propagation takes seconds; a transaction still
+  /// unseen after this was most likely dropped, and the node's view wins.
+  static const broadcastGrace = Duration(seconds: 90);
+
+  /// Quiet polls between two stealth scans: the explorer read is the slow
+  /// leg of a refresh and stealth funds move rarely.
+  static const stealthScanEvery = 3;
+  int _quietPollsSinceStealth = 0;
+
+  /// True while something is unconfirmed: a Pending row in the activity, or
+  /// a broadcast still inside its grace. The home screen polls faster then.
+  bool get hasPending {
+    _dropExpiredBroadcasts();
+    if (_broadcasts.isNotEmpty) return true;
+    return recentTxs.any((tx) => ((tx['height'] as num?)?.toInt() ?? 0) == 0);
+  }
+
+  /// A transaction this app just broadcast. Shows it as Pending at once and
+  /// moves the balance by [valueNano] (negative for a spend) when known,
+  /// then refreshes now and again shortly after, by which time the node's
+  /// mempool has it. Calling twice for one id merges the value in.
+  void noteBroadcast(String txId, {int? valueNano}) {
+    if (txId.isEmpty) return;
+    final prior = _broadcasts[txId];
+    final known = prior?.valueNano;
+    final note = _Broadcast(DateTime.now(), valueNano ?? known);
+    _broadcasts[txId] = note;
+    final idx = recentTxs.indexWhere((tx) => tx['tx_id'] == txId);
+    final row = {
+      'tx_id': txId,
+      'height': 0,
+      'timestamp': note.at.millisecondsSinceEpoch,
+      'value_nano_erg': note.valueNano ?? 0,
+      'token_ids': const <String>[],
+      'tokens_received': const <Map<String, dynamic>>[],
+      'confirmed': false,
+      'broadcast': true,
+    };
+    if (idx < 0) {
+      recentTxs = [row, ...recentTxs];
+    } else if (recentTxs[idx]['broadcast'] == true) {
+      recentTxs = [...recentTxs]..[idx] = row;
+    }
+    // Apply the delta once: on the first note that carries a value.
+    if (valueNano != null && known == null && balanceNano != null) {
+      balanceNano = (balanceNano! + valueNano).clamp(0, 1 << 62);
+    }
+    notifyListeners();
+    unawaited(refresh(discover: false, quiet: true));
+    Future.delayed(const Duration(seconds: 4), () {
+      if (_broadcasts.containsKey(txId)) {
+        unawaited(refresh(discover: false, quiet: true));
+      }
+    });
+  }
+
+  void _dropExpiredBroadcasts() {
+    final now = DateTime.now();
+    _broadcasts.removeWhere((_, b) => now.difference(b.at) > broadcastGrace);
+  }
+
+  /// Rows from the node, with the broadcasts it has not seen yet put back
+  /// in front; a broadcast the node does show is settled and forgotten.
+  List<Map<String, dynamic>> _withBroadcasts(List<Map<String, dynamic>> txs) {
+    _dropExpiredBroadcasts();
+    if (_broadcasts.isEmpty) return txs;
+    final ids = {for (final tx in txs) tx['tx_id']?.toString()};
+    for (final id in ids) {
+      if (id != null) _broadcasts.remove(id);
+    }
+    final unseen = <Map<String, dynamic>>[
+      for (final tx in recentTxs)
+        if (tx['broadcast'] == true && _broadcasts.containsKey(tx['tx_id'])) tx,
+    ];
+    return [...unseen, ...txs];
+  }
+
+  /// The node's balance omits a broadcast its mempool has not seen yet;
+  /// the deltas of those are carried until it does.
+  int _withBroadcastDeltas(int nodeBalance) {
+    var out = nodeBalance;
+    for (final b in _broadcasts.values) {
+      out += b.valueNano ?? 0;
+    }
+    return out < 0 ? 0 : out;
+  }
+
   bool get isStale =>
       phase == SyncPhase.failed ||
       phase == SyncPhase.balancesStale ||
@@ -312,6 +405,8 @@ class WalletSyncController extends ChangeNotifier {
     utxoCount = 0;
     pinIssue = null;
     lastSyncedAt = null;
+    _broadcasts.clear();
+    _quietPollsSinceStealth = 0;
     stealthNano = 0;
     stealthTokens = const [];
     stealthRows = const [];
@@ -404,30 +499,45 @@ class WalletSyncController extends ChangeNotifier {
     // Balances, activity, UTXO count and the stealth scan don't depend on
     // each other. The stealth leg never throws: an unreachable explorer
     // leaves the stealth balance unknown and the rest of the sync intact.
-    final results = await Future.wait<Object?>([
-      _fetchBalances(addresses),
-      _fetchHistory(addresses),
-      _gw.countUnspentBoxes(addresses).catchError((_) => utxoCount),
-      _scanStealth(),
-    ]);
+    // The balance is the fast leg and is shown as soon as it lands; the
+    // history, which can take ten seconds on a public node, follows.
+    // A quiet poll asks the explorer only every few ticks.
+    final scanStealth =
+        !quiet || discover || ++_quietPollsSinceStealth >= stealthScanEvery;
+    final balancesFuture = _fetchBalances(addresses);
+    final historyFuture = _fetchHistory(addresses);
+    final countFuture = _gw.countUnspentBoxes(addresses).catchError((_) => utxoCount);
+    final stealthFuture = scanStealth ? _scanStealth() : Future<void>.value();
+    if (scanStealth) _quietPollsSinceStealth = 0;
+
+    final balances = await balancesFuture;
     if (!_gw.isUnlocked) {
       reset();
       return;
     }
-    final balances = results[0] as _BalanceResult;
-    final txs = results[1] as List<Map<String, dynamic>>?;
-    final boxes = results[2] as int;
-
     final failed = balances.failed;
     if (failed < addresses.length) {
-      balanceNano = balances.erg;
+      balanceNano = _withBroadcastDeltas(balances.erg);
       tokens = orderTokensForDisplay(balances.tokens);
+      notifyListeners();
     }
+
+    final results = await Future.wait<Object?>([historyFuture, countFuture, stealthFuture]);
+    if (!_gw.isUnlocked) {
+      reset();
+      return;
+    }
+    final txs = results[0] as List<Map<String, dynamic>>?;
+    final boxes = results[1] as int;
+
     // Replace only when trustworthy: an empty result with no failures means
     // pending entries dropped from the mempool and must leave the list; an
     // empty result alongside failures is unreliable, keep what we had.
     if (txs != null && (txs.isNotEmpty || failed == 0)) {
-      recentTxs = txs.take(5).toList();
+      recentTxs = _withBroadcasts(txs).take(5).toList();
+      // The node now vouches for what it shows; a broadcast it lists no
+      // longer needs its delta carried.
+      if (failed < addresses.length) balanceNano = _withBroadcastDeltas(balances.erg);
     }
     utxoCount = boxes;
 
@@ -669,6 +779,12 @@ class WalletSyncController extends ChangeNotifier {
           .whereType<Map>()
           .map((e) => Map<String, dynamic>.from(e))
           .toList();
+}
+
+class _Broadcast {
+  const _Broadcast(this.at, this.valueNano);
+  final DateTime at;
+  final int? valueNano;
 }
 
 class _BalanceResult {

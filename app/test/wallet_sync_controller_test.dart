@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:argus_wallet/services/stealth_service.dart';
@@ -87,12 +88,16 @@ class FakeGateway implements WalletSyncGateway {
     int limit = 20,
   }) async {
     historyCalls++;
+    if (historyGate != null) await historyGate!.future;
     if (historyThrows) throw Exception('history down');
     return history;
   }
 
   @override
   bool get lastHistoryPartial => historyPartial;
+
+  /// When set, history waits on it: models the slow leg of a refresh.
+  Completer<void>? historyGate;
 
   @override
   Future<int> countUnspentBoxes(List<String> addresses) async => unspentCount;
@@ -146,6 +151,7 @@ void main() {
 
   _stealthSnapshotTests();
   _quietRefreshTests();
+  _broadcastTests();
   late FakeGateway gw;
   late WalletSyncController c;
 
@@ -656,5 +662,104 @@ void _stealthSnapshotTests() {
     await c.refresh(discover: false);
     expect(c.stealthNano, 0);
     expect(c.stealthScannedAt, isNull);
+  });
+}
+
+void _broadcastTests() {
+  late FakeGateway gw;
+  late WalletSyncController c;
+
+  group('broadcasts and pending', () {
+    setUp(() async {
+      gw = FakeGateway();
+      c = WalletSyncController(gw);
+      gw.discovered = [
+        {'address': 'addr0', 'balance_nano_erg': 1000},
+      ];
+      gw.nextUnused = 1;
+      gw.balances = {
+        'addr0': {'balance_nano_erg': 1000, 'tokens': []},
+        'addr1': {'balance_nano_erg': 0, 'tokens': []},
+      };
+      gw.history = [
+        {'tx_id': 't1', 'height': 10},
+      ];
+      await c.hydrateAfterUnlock();
+      await c.refresh(discover: true);
+    });
+
+    test('a broadcast shows as Pending and moves the balance at once', () {
+      c.noteBroadcast('sent1', valueNano: -300);
+      expect(c.recentTxs.first['tx_id'], 'sent1');
+      expect(c.recentTxs.first['height'], 0);
+      expect(c.balanceNano, 700);
+      expect(c.hasPending, isTrue);
+    });
+
+    test('the row and the delta outlive a refresh the node has not caught up with',
+        () async {
+      c.noteBroadcast('sent1', valueNano: -300);
+      await c.refresh(discover: false, quiet: true);
+      expect(c.recentTxs.map((t) => t['tx_id']), ['sent1', 't1']);
+      expect(c.balanceNano, 700, reason: 'the node still says 1000');
+    });
+
+    test("once the node shows the transaction its own figures win", () async {
+      c.noteBroadcast('sent1', valueNano: -300);
+      // The note's own immediate refresh ran against a node that had not
+      // seen the transaction yet.
+      await c.refresh(discover: false, quiet: true);
+      expect(c.balanceNano, 700);
+      gw.balances['addr0'] = {'balance_nano_erg': 690, 'tokens': []};
+      gw.history = [
+        {'tx_id': 'sent1', 'height': 0},
+        {'tx_id': 't1', 'height': 10},
+      ];
+      await c.refresh(discover: false, quiet: true);
+      expect(c.balanceNano, 690);
+      expect(c.recentTxs.map((t) => t['tx_id']), ['sent1', 't1']);
+      expect(c.recentTxs.first['broadcast'], isNull);
+      expect(c.hasPending, isTrue, reason: 'still in the mempool');
+
+      gw.history = [
+        {'tx_id': 'sent1', 'height': 11},
+        {'tx_id': 't1', 'height': 10},
+      ];
+      await c.refresh(discover: false, quiet: true);
+      expect(c.hasPending, isFalse);
+    });
+
+    test('a second note for the same id merges the value without doubling', () {
+      c.noteBroadcast('sent1');
+      expect(c.balanceNano, 1000);
+      c.noteBroadcast('sent1', valueNano: -300);
+      c.noteBroadcast('sent1', valueNano: -300);
+      expect(c.balanceNano, 700);
+      expect(c.recentTxs.where((t) => t['tx_id'] == 'sent1').length, 1);
+    });
+
+    test('the balance is published before the slow history leg lands', () async {
+      gw.balances['addr0'] = {'balance_nano_erg': 1234, 'tokens': []};
+      gw.historyGate = Completer<void>();
+      final op = c.refresh(discover: false, quiet: true);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(c.balanceNano, 1234, reason: 'shown while history is still loading');
+      expect(c.busy, isTrue);
+      gw.historyGate!.complete();
+      await op;
+      expect(c.phase, SyncPhase.synced);
+    });
+
+    test('quiet polls ask the explorer for stealth boxes every third time', () async {
+      final before = gw.stealthCalls;
+      await c.refresh(discover: false, quiet: true);
+      await c.refresh(discover: false, quiet: true);
+      expect(gw.stealthCalls, before, reason: 'two quiet polls reuse the last scan');
+      await c.refresh(discover: false, quiet: true);
+      expect(gw.stealthCalls, before + 1);
+      await c.refresh(discover: false);
+      expect(gw.stealthCalls, before + 2, reason: 'a pull to refresh always scans');
+    });
   });
 }
