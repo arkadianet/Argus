@@ -19,6 +19,7 @@ import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/duckpools_service.dart';
+import '../services/sigmafi_service.dart';
 import '../services/mix_service.dart';
 import '../services/stealth_service.dart';
 import '../services/sigmausd_service.dart';
@@ -121,6 +122,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     _sync.addListener(_onSyncChanged);
     mixService.addListener(_onSyncChanged);
     duckpoolsService.addListener(_onDuckpoolsChanged);
+    // The SigmaFi card reads its subtitle from the service, so it has to
+    // hear about a loan posted or repaid the way the Duckpools card does.
+    sigmafiService.addListener(_onDuckpoolsChanged);
     deepLinkController.addListener(_onDeepLink);
     _pollTimer = Timer.periodic(_pollInterval, (_) => _pollTick());
     _probeTimer = Timer.periodic(_probeInterval, (_) => _probeTick());
@@ -146,6 +150,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (last != null && DateTime.now().difference(last) < const Duration(minutes: 5)) return;
     final holdings = {for (final t in _sync.tokens) t.id: t.amount};
     unawaited(duckpoolsService.refresh(holdings));
+    // Loans are read less often: a borrowing pool is five requests, and
+    // the read also announces any loan that crossed a line.
+    unawaited(duckpoolsService.refreshLoansIfDue(_sync.historyAddresses));
   }
 
   /// Announces payments that appeared since the last refresh. Only fires
@@ -260,6 +267,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     _sync.removeListener(_onSyncChanged);
     mixService.removeListener(_onSyncChanged);
     duckpoolsService.removeListener(_onDuckpoolsChanged);
+    sigmafiService.removeListener(_onDuckpoolsChanged);
     deepLinkController.removeListener(_onDeepLink);
     _pinCtrl.dispose();
     super.dispose();
@@ -308,6 +316,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     stealthService.reset();
     mixService.reset();
     duckpoolsService.reset();
+    sigmafiService.clearIfForeign();
     _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
   }
 
@@ -469,6 +478,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     stealthService.reset();
     mixService.reset();
     duckpoolsService.reset();
+    sigmafiService.clearIfForeign();
     unawaited(stealthService.loadAddress());
     unawaited(mixService.load());
     unawaited(duckpoolsService.load());
@@ -916,6 +926,16 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
     if (switchedTo != _walletId) {
       _selectTab(0);
+      // A wallet just created or restored from Settings is already
+      // unlocked: take it as the home wallet without a second unlock.
+      if (walletService.isUnlocked && walletService.activeWalletId == switchedTo) {
+        _walletId = switchedTo;
+        await sessionLock.run(() async {
+          await _refreshUnlockMethods();
+          await _afterUnlock();
+        });
+        return;
+      }
       await _switchWallet(switchedTo);
       return;
     }
@@ -1376,6 +1396,20 @@ class _DashboardScreenState extends State<DashboardScreen>
                     onTap: () => _go('/duckpools'),
                   ),
                   _discoverCard(
+                    title: 'Rosen bridge',
+                    onLearn: () => _go('/rosen'),
+                    subtitle: 'Send ERG and tokens to Cardano, Bitcoin, Ethereum and more.',
+                    icon: Icons.swap_calls,
+                    onTap: () => _go('/rosen'),
+                  ),
+                  _discoverCard(
+                    title: 'SigmaFi',
+                    onLearn: () => _go('/sigmafi'),
+                    subtitle: sigmafiService.positionLine() ?? 'Peer-to-peer loans against collateral: lend, or ask.',
+                    icon: Icons.handshake_outlined,
+                    onTap: () => _go('/sigmafi'),
+                  ),
+                  _discoverCard(
                     title: 'Mix',
                     onLearn: () => _go('/mix'),
                     subtitle: mixService.enabled
@@ -1816,8 +1850,9 @@ class _DashboardScreenState extends State<DashboardScreen>
               ),
             ),
             const SizedBox(width: 8),
-            // Bounded so a long note wraps instead of overflowing the row.
-            Flexible(
+            // Takes its share of the row so the figure sits flush right on
+            // every row, note or no note; a long note wraps inside it.
+            Expanded(
               child: _rowBalance(
                 balance,
                 isActive ? _sync.isSyncing : false,

@@ -134,6 +134,16 @@ class FakeGateway implements WalletSyncGateway {
 }
 
 void main() {
+  test('tokens are ordered for display the same way every time', () {
+    TokenBalance t(String id, String name, {int emission = 1000}) =>
+        TokenBalance(id: id, amount: 1, name: name, decimals: 0, emissionAmount: emission);
+    final a = [t('b1', 'kushti'), t('n1', 'Ape', emission: 1), t('a1', 'ergopad'), t('c1', 'Kushti')];
+    final ordered = orderTokensForDisplay(a);
+    expect(ordered.map((x) => x.id), ['a1', 'b1', 'c1', 'n1'], reason: 'fungible by name then id, NFTs last');
+    expect(orderTokensForDisplay(a.reversed.toList()).map((x) => x.id), ['a1', 'b1', 'c1', 'n1'],
+        reason: 'input order does not matter');
+  });
+
   _stealthSnapshotTests();
   _quietRefreshTests();
   late FakeGateway gw;

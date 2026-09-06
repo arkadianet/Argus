@@ -11,19 +11,30 @@ class SendFormException implements Exception {
   String toString() => message;
 }
 
-/// One recipient as typed into the form, before parsing.
+/// One token as typed: which, and how much.
+class TokenDraft {
+  const TokenDraft(this.tokenId, this.amountText);
+  final String tokenId;
+  final String? amountText;
+}
+
+/// One recipient as typed into the form, before parsing. ERG and any
+/// number of tokens travel in the recipient's one box.
 class RecipientDraft {
-  const RecipientDraft({
+  RecipientDraft({
     required this.address,
     required this.ergText,
-    this.tokenId,
-    this.tokenAmountText,
-  });
+    String? tokenId,
+    String? tokenAmountText,
+    List<TokenDraft> tokens = const [],
+  }) : tokens = [
+          if (tokenId != null && tokenId.isNotEmpty) TokenDraft(tokenId, tokenAmountText),
+          ...tokens,
+        ];
 
   final String address;
   final String ergText;
-  final String? tokenId;
-  final String? tokenAmountText;
+  final List<TokenDraft> tokens;
 }
 
 /// Parses every draft into the recipient maps the wallet core expects,
@@ -57,8 +68,12 @@ List<Map<String, dynamic>> buildRecipients(
     // payment address is derived just before the transaction is built, so
     // every payment lands on a fresh, unlinkable script.
     if (looksLikeStealthAddress(address)) entry['stealth'] = true;
-    final tokenId = d.tokenId;
-    if (tokenId != null && tokenId.isNotEmpty) {
+    // Every token this recipient gets, summed where one is named twice and
+    // checked against the holding as a whole.
+    final wanted = <String, int>{};
+    for (final td in d.tokens) {
+      final tokenId = td.tokenId;
+      if (tokenId.isEmpty) continue;
       TokenBalance? token;
       for (final t in tokens) {
         if (t.id == tokenId) {
@@ -69,27 +84,44 @@ List<Map<String, dynamic>> buildRecipients(
       if (token == null) {
         throw SendFormException('${who}token is not in this wallet');
       }
-      entry['token_id'] = tokenId;
+      final int amount;
       if (token.isNft) {
-        entry['token_amount'] = 1;
+        amount = 1;
       } else {
-        final amount = parseDecimalToBase(d.tokenAmountText ?? '', token.decimals);
-        if (amount == null || amount <= 0) {
-          throw SendFormException('${who}enter a token amount');
+        final parsed = parseDecimalToBase(td.amountText ?? '', token.decimals);
+        if (parsed == null || parsed <= 0) {
+          throw SendFormException('${who}enter a token amount for ${token.label}');
         }
-        if (amount > token.amount) {
-          throw SendFormException(
-            '${who}you hold ${formatTokenAmount(token.amount, token.decimals)} '
-            '${token.label}',
-          );
-        }
-        entry['token_amount'] = amount;
+        amount = parsed;
+      }
+      final total = (wanted[tokenId] ?? 0) + amount;
+      if (total > token.amount) {
+        throw SendFormException(
+          '${who}you hold ${formatTokenAmount(token.amount, token.decimals)} '
+          '${token.label}',
+        );
+      }
+      wanted[tokenId] = total;
+    }
+    if (wanted.isNotEmpty) {
+      entry['tokens'] = [
+        for (final e in wanted.entries) {'token_id': e.key, 'amount': e.value},
+      ];
+      // The single-token shape too, for the one-recipient path.
+      if (wanted.length == 1) {
+        entry['token_id'] = wanted.keys.first;
+        entry['token_amount'] = wanted.values.first;
       }
     }
     out.add(entry);
   }
   return out;
 }
+
+/// Whether any recipient carries more than one token, which only the
+/// multi-recipient builder can do.
+bool needsMultiBuilder(List<Map<String, dynamic>> recipients) =>
+    recipients.length > 1 || recipients.any((r) => ((r['tokens'] as List?)?.length ?? 0) > 1);
 
 /// Total nanoERG leaving the wallet across [recipients], before the fee.
 int totalNanoErg(List<Map<String, dynamic>> recipients) {
