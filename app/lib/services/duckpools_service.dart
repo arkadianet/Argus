@@ -650,6 +650,20 @@ bool duckDeadlineNear(DuckLoan l, int? height) =>
 
 typedef DuckNotify = Future<void> Function({required String loanId, required String title, required String body});
 
+/// What a filled order delivered, in the units the order is counted in:
+/// lend tokens for a lend, the pool's asset for a borrow (ERG itself for
+/// the ERG pool, whose loan is the marked box's value), else the box's ERG.
+int? receivedFromFill(String kind, DuckPool pool, Map<String, dynamic> outcome) {
+  final assets = (outcome['assets'] as List? ?? const []).cast<Map>();
+  int tokenAmount(String? id) =>
+      int.tryParse(assets.firstWhere((a) => a['token_id'] == id, orElse: () => {'amount': '0'})['amount'].toString()) ?? 0;
+  return switch (kind) {
+    'lend' => tokenAmount(pool.lendToken),
+    'borrow' => pool.currencyId == null ? (outcome['value'] as num?)?.toInt() : tokenAmount(pool.currencyId),
+    _ => (outcome['value'] as num?)?.toInt(),
+  };
+}
+
 /// Parse a typed amount into units exactly: digits, one optional point,
 /// at most `decimals` fractional digits. Null for anything else, so a
 /// figure the asset cannot represent is refused rather than rounded.
@@ -1376,16 +1390,7 @@ class DuckpoolsService extends ChangeNotifier {
         if (kind == 'filled') {
           o.status = 'filled';
           o.outcomeTxId = spentBy;
-          final assets = (outcome['assets'] as List? ?? const []).cast<Map>();
-          final pool = pools.firstWhere((p) => p.key == o.pool);
-          int tokenAmount(String? id) => int.tryParse(
-                  assets.firstWhere((a) => a['token_id'] == id, orElse: () => {'amount': '0'})['amount'].toString()) ??
-              0;
-          o.received = switch (o.kind) {
-            'lend' => tokenAmount(pool.lendToken),
-            'borrow' => tokenAmount(pool.currencyId),
-            _ => (outcome['value'] as num?)?.toInt(),
-          };
+          o.received = receivedFromFill(o.kind, pools.firstWhere((p) => p.key == o.pool), outcome);
           changed = true;
         } else if (kind == 'refunded') {
           o.status = 'refunded';

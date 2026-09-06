@@ -125,9 +125,12 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
     if (_working) return;
     final walletBefore = duckpoolsService.activeWalletId;
     var args = WalletRouteArgs.of(context);
-    final held = args.tokens
-        .where((t) => t.id == duckpoolsService.pools.firstWhere((p) => p.key == l.pool).currencyId)
-        .fold<int>(0, (a, t) => a + t.amount);
+    // What the wallet holds of the loan's asset: the pool's token, or
+    // spendable ERG for the ERG pool.
+    final currencyId = duckpoolsService.pools.firstWhere((p) => p.key == l.pool).currencyId;
+    final held = currencyId == null
+        ? (args.spendableNano ?? 0)
+        : args.tokens.where((t) => t.id == currencyId).fold<int>(0, (a, t) => a + t.amount);
     int? amount;
     if (partial) {
       amount = await showModalBottomSheet<int>(
@@ -172,9 +175,10 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
               ConfirmTxRow('Collateral back', collateral, bold: true),
             ];
       // A token pool's repayment rides as tokens, so the box's ERG is all
-      // fees; the ERG pool's box is the repayment plus the fees.
+      // fees. The ERG pool's box is the repayment alone: the bot's fee and
+      // the fill fee come out of the collateral box's own carry.
       final carried = (q['box_value'] as num).toInt() - (l.collateralAsset == null ? 0 : (q['repayment'] as num).toInt());
-      rows.add(ConfirmTxRow('Bot fee + fill fee', formatErg(carried)));
+      rows.add(ConfirmTxRow('Bot fee + fill fee', carried > 0 ? formatErg(carried) : 'paid from the collateral box\'s 0.002 ERG carry'));
       await _post(prepared, title: partial ? 'Post a partial repayment' : 'Post a repayment', rows: rows);
     } catch (e) {
       if (mounted) showErrorSheet(context, title: 'Could not post the order', message: '$e');
@@ -1010,7 +1014,8 @@ class _BorrowSheetState extends State<_BorrowSheet> {
               labelText: '${s.ticker} to borrow',
               helperText: roughMax == null
                   ? 'The pool holds ${amt(s.pooled)}${_ergPool ? ' · at least 0.05 ERG' : ''}'
-                  : 'Up to about ${amt(roughMax)} at the ${(threshold! / 10).toStringAsFixed(0)}% line; less is safer',
+                  : 'Up to about ${amt(roughMax)} at the ${(threshold! / 10).toStringAsFixed(0)}% line; '
+                      'the last 0.5% is refused, since the price can move before the fill',
             ),
             onChanged: (_) => _requote(),
           ),
@@ -1114,7 +1119,7 @@ class _PartialRepaySheetState extends State<_PartialRepaySheet> {
           if (q != null)
             Text(
               'Owed after: about ${amt(q['owed_after'] as num)}. The collateral stays where it is. '
-              'Plus 0.003 ERG for the bot and the fill, the Argus fee and the miner fee.',
+              'Plus ${l.collateralAsset == null ? '0.003 ERG for the bot and the fill' : '0.002 ERG on top of the repayment for the bot and the fill'}, the Argus fee and the miner fee.',
               style: TextStyle(color: muted, fontSize: 12.5),
             ),
           const SizedBox(height: 16),

@@ -676,9 +676,16 @@ impl BorrowQuote {
                 let collateral_value = dex.token_collateral_value(collateral_amount);
                 let max_loan = (i128::from(collateral_value) * THRESHOLD_DENOMINATION
                     / i128::from(threshold)) as i64;
-                // The ERG pool contract accepts the line itself.
-                if loan > max_loan {
-                    return Err(err(format!("collateral only supports a loan up to {max_loan}")));
+                // The ERG pool contract accepts the line itself, but at the
+                // fill's price, not this quote's: an order at the line fails
+                // on any adverse tick and sits for the whole refund window.
+                // Keep half a percent back.
+                let safe_max = max_loan - max_loan / 200;
+                if loan > safe_max {
+                    return Err(err(format!(
+                        "collateral supports a loan up to {max_loan} at today's price; \
+                         stay at or below {safe_max} so a small price move before the fill cannot reject it"
+                    )));
                 }
                 let liquidation_value =
                     (i128::from(loan) * i128::from(threshold) / THRESHOLD_DENOMINATION) as i64;
@@ -1020,7 +1027,14 @@ pub fn classify_loan_spend(
                 .collect(),
         )
     };
-    let fill_shaped = outputs.len() >= 3;
+    // A fill rebuilds the pool box (its NFT and lend tokens) and, for a
+    // borrow, the collateral box: at least three outputs, one of them an
+    // unmarked box carrying tokens. A refund with change is three outputs
+    // too, but nothing in it but the user's box carries anything.
+    let fill_shaped = outputs.len() >= 3
+        && outputs
+            .iter()
+            .any(|o| register_hex(o, "R4") != Some(marker.as_str()) && !assets(o).is_empty());
     Ok(match kind {
         OrderKind::Lend | OrderKind::Withdraw => return crate::classify_spend(proxy_box_id, tx),
         OrderKind::Borrow => match marked {
@@ -1232,6 +1246,10 @@ mod tests {
         assert!(filled(classify_loan_spend(OrderKind::Borrow, &id, &fill).unwrap()));
         let refund = tx(vec![out(9, 0, Some(&marker)), out(1, 0, None)]);
         assert!(refunded(classify_loan_spend(OrderKind::Borrow, &id, &refund).unwrap()));
+        // A refund with a change box is three outputs, but no unmarked box
+        // carries tokens: not a fill.
+        let refund_with_change = tx(vec![out(9, 0, Some(&marker)), out(5, 0, None), out(1, 0, None)]);
+        assert!(refunded(classify_loan_spend(OrderKind::Borrow, &id, &refund_with_change).unwrap()));
         // Repay: fill returns the collateral with no tokens; refund returns the tokens.
         let fill = tx(vec![out(9, 0, Some(&marker)), out(2, 2, None), out(1, 0, None)]);
         assert!(filled(classify_loan_spend(OrderKind::Repay, &id, &fill).unwrap()));
@@ -1374,7 +1392,13 @@ mod tests {
         assert_eq!(q.box_value, 6_000_000);
         assert_eq!((q.threshold, q.penalty), (1250, 300));
         // The ERG pool accepts a loan on the line itself.
-        assert!(BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, Some(sigusd), 100_000, q.max_loan, 1).is_ok());
+        // The contract accepts the line itself, at the fill's price; the
+        // quote keeps half a percent back so a tick cannot reject the order.
+        let safe_max = q.max_loan - q.max_loan / 200;
+        assert!(BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, Some(sigusd), 100_000, safe_max, 1).is_ok());
+        let at_line = BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, Some(sigusd), 100_000, q.max_loan, 1);
+        assert!(at_line.is_err());
+        assert!(at_line.unwrap_err().to_string().contains(&safe_max.to_string()));
         assert!(BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, Some(sigusd), 100_000, q.max_loan + 1, 1).is_err());
         assert!(BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, Some(sigusd), 100_000, 1_000, 1).is_err(), "below the minimum loan");
         assert!(BorrowQuote::new(erg_pool(), &state, &erg_params(), &dex, None, 100_000, 1_000_000_000, 1).is_err());
