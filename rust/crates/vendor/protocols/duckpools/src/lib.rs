@@ -21,6 +21,7 @@
 //! does, the order is refundable after the height the wallet chose.
 
 pub mod adjust;
+pub mod discovery;
 pub mod encode;
 pub mod fees;
 pub mod interest;
@@ -30,6 +31,7 @@ pub mod pools;
 pub mod state;
 
 pub use adjust::{build_adjust_tx, AdjustDataInputs, AdjustQuote};
+pub use discovery::{discover_orders, proxy_trees, FoundOrder};
 pub use interest::{InterestParams, Rates};
 pub use loans::{
     classify_loan_spend, positions, unpriced_loans, BorrowQuote, CollateralBox, DexPrice,

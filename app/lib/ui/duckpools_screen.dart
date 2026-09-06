@@ -4,6 +4,7 @@ import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
 import '../format.dart';
 import '../services/network_controller.dart';
+import '../services/token_pricer.dart';
 import 'confirm_transaction_sheet.dart';
 import 'widgets/error_sheet.dart';
 import '../services/duckpools_math.dart';
@@ -372,6 +373,24 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       duckpoolsService.refresh(_holdings(context)),
       duckpoolsService.refreshLoans(addresses),
     ]);
+    // A wallet with no recorded orders may still have boxes waiting at
+    // the proxy scripts: a reinstall, a second device. Look once.
+    await duckpoolsService.discoverOrdersIfUnknown(addresses);
+  }
+
+  Future<void> _scan() async {
+    final addresses = WalletRouteArgs.of(context).historyAddresses;
+    final added = await duckpoolsService.discoverOrders(addresses);
+    if (!mounted) return;
+    final err = duckpoolsService.scanError;
+    if (err != null) {
+      showErrorSheet(context, title: 'Could not scan for orders', message: err);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(added == 0 ? 'No orders of this wallet on chain beyond the ones listed.' : 'Found $added ${added == 1 ? 'order' : 'orders'} on chain.'),
+      ));
+      if (added > 0) await duckpoolsService.tickOrders();
+    }
   }
 
   @override
@@ -449,6 +468,25 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
                     const SizedBox(height: 10),
                   ],
                   const SizedBox(height: 12),
+                ],
+                Row(
+                  children: [
+                    TextButton.icon(
+                      onPressed: svc.scanning || _working ? null : _scan,
+                      icon: svc.scanning
+                          ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Icon(Icons.travel_explore, size: 18),
+                      label: Text(svc.scanning ? 'Scanning the proxy scripts…' : 'Find orders on chain'),
+                    ),
+                    if (svc.scannedAt != null && !svc.scanning)
+                      Expanded(
+                        child: Text('Scanned ${formatRelativeTime(svc.scannedAt)}', style: TextStyle(color: muted, fontSize: 11.5)),
+                      ),
+                  ],
+                ),
+                if (svc.scanError != null) ...[
+                  SelectableText(svc.scanError!, style: TextStyle(color: theme.colorScheme.error, fontSize: 12)),
+                  const SizedBox(height: 8),
                 ],
                 if (svc.loansError != null) ...[
                   SelectableText(
@@ -904,7 +942,7 @@ class _LoanCardState extends State<_LoanCard> {
           Row(
             children: [
               Expanded(
-                child: Text('Owe ${amt(l.owed)}', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+                child: Text('Owe ${amt(l.owed)}${_fiatSuffix(l.pool, l.owed)}', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
               ),
               Text(
                 l.liquidatable ? 'liquidatable' : '${ratio.isFinite ? ratio.toStringAsFixed(0) : '∞'}% collateral',
@@ -921,11 +959,11 @@ class _LoanCardState extends State<_LoanCard> {
           if (apr != null)
             row('Costing', '${(apr / 100).toStringAsFixed(2)}% a year',
                 note: 'about ${_smallAmount(interestOver(owed: l.owed, aprBps: apr, days: 30), l.decimals, l.ticker)} a month at today\'s rate'),
-          row('Collateral', _collateralText(l.pool, l.collateralAsset, l.collateralAmount),
+          row('Collateral', '${_collateralText(l.pool, l.collateralAsset, l.collateralAmount)}${_collateralFiatSuffix(l.pool, l.collateralAsset, l.collateralAmount)}',
               note: 'counts as ${amt(l.collateralValue)} · 1 $collateralTicker = ${price(priceNow)}'),
           row(
             'Liquidation price',
-            '1 $collateralTicker = ${price(liqPrice)}',
+            '1 $collateralTicker = ${price(liqPrice)}${_fiatSuffix(l.pool, liqPrice.round())}',
             color: healthColor,
             note: l.liquidatable ? 'the price is below the line now' : 'a ${drop.toStringAsFixed(0)}% fall in $collateralTicker',
           ),
@@ -1063,6 +1101,28 @@ String formatCalendarDate(DateTime d) {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   final now = DateTime.now();
   return '${d.day} ${months[d.month - 1]}${d.year == now.year ? '' : ' ${d.year}'}';
+}
+
+/// "≈ $1.02" for an amount of a pool's asset, or empty when unpriced.
+/// ERG through the wallet's rate; a token through the pricer (SigUSD is
+/// pegged, the others priced through their pools).
+String _fiatSuffix(String poolKey, int units) {
+  final pool = duckpoolsService.pools.where((p) => p.key == poolKey).firstOrNull;
+  if (pool == null) return '';
+  final text = pool.currencyId == null
+      ? networkController.fiatText(units)
+      : tokenPricer.fiatTextFor(tokenId: pool.currencyId!, amount: units, decimals: pool.decimals);
+  return text == null ? '' : ' ≈ $text';
+}
+
+/// The same for a collateral: ERG, or a token of the ERG pool.
+String _collateralFiatSuffix(String poolKey, String? asset, int units) {
+  if (asset == null) {
+    final text = networkController.fiatText(units);
+    return text == null ? '' : ' ≈ $text';
+  }
+  final text = tokenPricer.fiatTextFor(tokenId: asset, amount: units, decimals: _collateralDecimals(poolKey, asset));
+  return text == null ? '' : ' ≈ $text';
 }
 
 int _collateralDecimals(String pool, String? asset) {
@@ -1416,11 +1476,12 @@ class _BorrowFigures extends StatelessWidget {
       children: [
         RatioBar(ratioPercent: collateralRatioPercent(collateralValue: collateralValue, owed: loan), thresholdPercent: threshold / 10, liquidatable: healthBps <= 10000),
         const SizedBox(height: 6),
+        row('Borrowing', '${amt(loan)}${_fiatSuffix(s.pool, loan)}'),
         row('Collateral ratio at open', '${collateralRatioPercent(collateralValue: collateralValue, owed: loan).toStringAsFixed(0)}%', valueColor: color),
         row('Liquidation threshold', '${(threshold / 10).toStringAsFixed(0)}%'),
         row('Collateral counts as', amt(collateralValue)),
         row('1 $collateralTicker now', amt(priceNow.round())),
-        row('Liquidation price', amt(liqPrice.round()), valueColor: color),
+        row('Liquidation price', '${amt(liqPrice.round())}${_fiatSuffix(s.pool, liqPrice.round())}', valueColor: color),
         row('Room before liquidation', 'a ${drop.toStringAsFixed(0)}% fall in $collateralTicker', valueColor: color),
         row('Liquidation penalty', '${(penalty / 10).toStringAsFixed(0)}%, as Duckpools states it'),
         if (apr != null) ...[
