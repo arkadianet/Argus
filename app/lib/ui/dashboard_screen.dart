@@ -1419,6 +1419,30 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ],
               ),
             ),
+            const SizedBox(height: 28),
+            _sectionHeader('Tools'),
+            const SizedBox(height: 10),
+            SoftCard(
+              padding: EdgeInsets.zero,
+              child: DividedColumn(
+                children: [
+                  for (final f in const [DiscoverFeature.tokens, DiscoverFeature.utxos, DiscoverFeature.mix])
+                    ListTile(
+                      key: Key('tool-${f.name}'),
+                      leading: Icon(discoverExplainers[f]!.icon, color: accentOf(context)),
+                      title: Text(discoverExplainers[f]!.title),
+                      subtitle: Text(discoverExplainers[f]!.blurb,
+                          style: TextStyle(fontSize: 12, color: ArgusColors.of(context).muted)),
+                      trailing: IconButton(
+                        tooltip: 'What is this?',
+                        icon: const Icon(Icons.info_outline, size: 18),
+                        onPressed: () => _openDiscover(f),
+                      ),
+                      onTap: () => _openFeature(f),
+                    ),
+                ],
+              ),
+            ),
             if (_sync.usedAddresses.isNotEmpty) ...[
               const SizedBox(height: 28),
               _sectionHeader('Addresses'),

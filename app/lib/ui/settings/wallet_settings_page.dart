@@ -159,30 +159,6 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
               ),
             ],
           ),
-          SettingsGroup(
-            title: 'Tools',
-            scope: 'This wallet',
-            children: [
-              SettingsRow(
-                icon: Icons.layers_outlined,
-                title: 'UTXO management',
-                subtitle: 'Consolidate, split and restructure boxes.',
-                onTap: unlocked ? () => Navigator.pushNamed(context, '/utxos') : null,
-              ),
-              SettingsRow(
-                icon: Icons.token_outlined,
-                title: 'Tokens',
-                subtitle: 'Issue a token or NFT, or burn tokens you hold.',
-                onTap: unlocked ? () => Navigator.pushNamed(context, '/tokens') : null,
-              ),
-              SettingsRow(
-                icon: Icons.blender_outlined,
-                title: 'Mix',
-                subtitle: 'Move ERG through the ErgoMixer pool to weaken the link to where it came from.',
-                onTap: unlocked ? () => Navigator.pushNamed(context, '/mix') : null,
-              ),
-            ],
-          ),
           const SectionLabel('Backup'),
           const SizedBox(height: 10),
           Padding(
