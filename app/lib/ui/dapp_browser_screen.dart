@@ -140,6 +140,10 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
     if (!t.contains('://')) t = 'https://$t';
     final uri = Uri.tryParse(t);
     if (uri == null || uri.host.isEmpty) return;
+    if (uri.scheme != 'https') {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Only https sites can open here: a plain http page could be rewritten on the way.')));
+      return;
+    }
     setState(() => _showStart = false);
     _web.loadRequest(uri);
   }
@@ -154,7 +158,11 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
     final id = req.id;
     final method = req.method;
     final params = req.params;
-    if (_origin.isEmpty) return;
+    // The navigation this request belongs to: if the page changes while
+    // the request is pending, the answer must not reach the new page.
+    final nonce = _nonce;
+    final origin = _origin;
+    if (origin.isEmpty) return;
     bool ok;
     Object? payload;
     try {
@@ -167,8 +175,8 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
       ok = false;
       payload = DappError(DappError.internal, e.toString()).toJson();
     }
-    if (!mounted) return;
-    await _web.runJavaScript('window.__argusDapp && window.__argusDapp.resolve(${jsonEncode(id)}, $ok, ${jsonEncode(payload)});');
+    if (!mounted || nonce != _nonce || origin != _origin) return;
+    await _web.runJavaScript('window.__argusDapp && window.__argusDapp.resolve(${jsonEncode(id)}, $ok, ${jsonEncode(payload)}, ${jsonEncode(nonce)});');
   }
 
   // ── DappHost ──────────────────────────────────────────────────────

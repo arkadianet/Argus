@@ -188,6 +188,7 @@ void main() {
     expect(s, contains("'ergo-wallet:injected'"));
     expect(s, contains("var nonce = 'abc123';"));
     expect(s, contains('nonce: nonce'));
+    expect(s, contains('if (n !== nonce) return;'), reason: 'a reply for another navigation is ignored');
     expect(s, isNot(contains('__NONCE__')));
   });
 
@@ -209,7 +210,8 @@ void main() {
 
   test('origins are scheme, host and port of web pages only', () {
     expect(originOf('https://sigmafi.app/orders?x=1'), 'https://sigmafi.app');
-    expect(originOf('http://localhost:8080/'), 'http://localhost:8080');
+    expect(originOf('https://localhost:8080/'), 'https://localhost:8080');
+    expect(originOf('http://sigmafi.app/'), '', reason: 'plain http never gets or uses a grant');
     expect(originOf('about:blank'), '');
     expect(originOf('file:///etc/passwd'), '');
     expect(originOf(null), '');
@@ -223,9 +225,9 @@ void main() {
         {'tokenId': 't1', 'amount': '5'}
       ]
     });
-    // Boxes without the token are skipped while a token is wanted, so the
-    // ERG comes from the token-bearing boxes; the caller may need more.
-    expect(picked.map((b) => b['boxId']), ['b']);
+    // Both parts must be met: the ERG-only box counts towards the ERG.
+    expect(picked.map((b) => b['boxId']), ['a', 'b']);
+    expect(picked.fold<int>(0, (n, b) => n + int.parse(b['value'] as String)), greaterThanOrEqualTo(2500));
     expect(() => selectUtxos(utxos, {'nanoErgs': 1.5}), throwsA(isA<DappError>()));
   });
 }

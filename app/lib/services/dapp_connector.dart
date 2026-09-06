@@ -107,8 +107,10 @@ List<Map<String, dynamic>> selectUtxos(List<Map<String, dynamic>> utxos, Map<Str
   for (final u in utxos) {
     if (done()) break;
     final assets = (u['assets'] as List? ?? const []).cast<Map>();
-    final relevant = wantErg != null && tokens.isEmpty || assets.any((a) => tokens.containsKey(a['tokenId']));
-    if (!relevant && tokens.isNotEmpty) continue;
+    // A box counts when it can help with any part of the target: ERG is
+    // wanted and it has some, or it carries a wanted token.
+    final relevant = wantErg != null || assets.any((a) => tokens.containsKey(a['tokenId']));
+    if (!relevant) continue;
     out.add(u);
     erg += _big(u['value']) ?? BigInt.zero;
     for (final a in assets) {
@@ -295,10 +297,12 @@ BridgeMessage? parseBridgeMessage(String raw, String nonce) {
   return (id: m['id'], method: method, params: params is List ? params : const []);
 }
 
-/// The origin a page URL belongs to, or empty for anything but http(s).
+/// The origin a page URL belongs to, or empty for anything but https. A
+/// plain-http page can be rewritten on the network, so it never gets a
+/// grant, nor uses one made for the https origin of the same host.
 String originOf(String? url) {
   final u = Uri.tryParse(url ?? '');
-  if (u == null || u.host.isEmpty || (u.scheme != 'https' && u.scheme != 'http')) return '';
+  if (u == null || u.host.isEmpty || u.scheme != 'https') return '';
   return '${u.scheme}://${u.host}${u.hasPort ? ':${u.port}' : ''}';
 }
 
@@ -316,7 +320,8 @@ const _dappInjectedTemplate = r'''
   var next = 1;
   var dapp = {
     pending: pending,
-    resolve: function (id, ok, payload) {
+    resolve: function (id, ok, payload, n) {
+      if (n !== nonce) return;
       var p = pending[id];
       if (!p) return;
       delete pending[id];
