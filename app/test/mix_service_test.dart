@@ -749,8 +749,45 @@ void main() {
     expect(jsonDecode(gw.reserved), hasLength(1));
     await svc.commitEntry(created, state(mixId: 0, kind: 'half_posted', boxId: 'hb', done: 0), 'tx');
     expect(gw.reserved, '[]', reason: 'in the pool: the funding box is spent');
+  });
+
+  test('a reset leaves the reservation to the next load, so an unlock has no window', () async {
+    final gw = FakeGateway();
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true});
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post);
+    await svc.load();
+    final created = await svc.createMix(denomination: 1000000000, level: 20, rounds: 1, destinationAddress: '9a', fundingNano: 1006600000);
+    await svc.recordFunding(created, txId: 'tx7', outputBoxIds: ['fund1', 'change1']);
+    expect(jsonDecode(gw.reserved), hasLength(1));
     svc.reset();
-    expect(gw.reserved, '[]');
+    expect(jsonDecode(gw.reserved), hasLength(1), reason: 'still set aside until the load says otherwise');
+    await svc.load();
+    expect(jsonDecode(gw.reserved), hasLength(1));
+  });
+
+  test('a pending mix funded without its box ids gets them from the transaction on load', () async {
+    final gw = FakeGateway();
+    final ex = FakeExplorer()
+      ..txs['tx7'] = {
+        'id': 'tx7',
+        'outputs': [
+          {'boxId': 'fund1', 'value': 1006600000},
+          {'boxId': 'change1', 'value': 5},
+        ],
+      };
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true});
+    final svc = MixService(gateway: gw, get: ex.get, post: ex.post);
+    await svc.load();
+    final created = await svc.createMix(denomination: 1000000000, level: 20, rounds: 1, destinationAddress: '9a', fundingNano: 1006600000);
+    await svc.recordFunding(created, txId: 'tx7', outputBoxIds: const []);
+    expect(created.lastError, contains('not protected'));
+    expect(gw.reserved, '[]', reason: 'nothing to set aside yet');
+    final again = MixService(gateway: gw, get: ex.get, post: ex.post);
+    await again.load();
+    expect(again.records.single.fundingBoxIds, ['fund1', 'change1']);
+    expect(jsonDecode(gw.reserved), [
+      {'box_ids': ['fund1', 'change1'], 'value_nano_erg': 1006600000}
+    ]);
   });
 
   test('turning mixing off also turns background mixing off and deletes every key', () async {

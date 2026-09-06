@@ -1161,6 +1161,10 @@ struct FundingReservation {
 }
 
 impl FundingReservation {
+    /// The funding box: one of the funding transaction's outputs with the
+    /// funding's exact value and no tokens. A tokenless change box of the
+    /// same value would be held too; that never under-reserves, and it
+    /// frees itself when the entry commits.
     fn covers(&self, b: &ergo_tx::Eip12InputBox) -> bool {
         self.box_ids.iter().any(|id| id == &b.box_id)
             && b.assets.is_empty()
@@ -4305,9 +4309,37 @@ mod tests {
         assert!(!r.covers(&eb("fund", 1_006_600_000, true)), "tokens: not the funding box");
         assert!(!r.covers(&eb("other", 1_006_600_000, false)), "another wallet box of the same size");
         assert!(!recover(RESERVED_FUNDING.lock()).contains_key(&(handle + 1)));
+        // The filter itself: the funding box is dropped from what coin
+        // selection sees, everything else stays, in order.
+        let boxes = [
+            eb("fund", 1_006_600_000, false),
+            eb("change", 5_000, false),
+            eb("other", 1_006_600_000, false),
+            eb("fund", 1_006_600_000, true),
+        ];
+        let ergo: Vec<_> = boxes.iter().map(|b| crate::api_mix_impl::to_ergo_box(b).unwrap_or_else(|_| test_ergo_box(b))).collect();
+        let (kept_boxes, kept) = without_reserved(handle, ergo, boxes.to_vec());
+        assert_eq!(kept.iter().map(|b| b.box_id.as_str()).collect::<Vec<_>>(), ["change", "other", "fund"]);
+        assert_eq!(kept_boxes.len(), 3);
+        let (all_boxes, all) = without_reserved(handle + 1, kept_boxes.clone(), kept.clone());
+        assert_eq!(all.len(), 3, "another handle has no reservation");
+        assert_eq!(all_boxes.len(), 3);
         mix_set_reserved_funding(handle, "[]".into()).unwrap();
         assert!(!recover(RESERVED_FUNDING.lock()).contains_key(&handle));
         assert!(mix_set_reserved_funding(handle, "nope".into()).is_err());
+    }
+
+    /// A stand-in ErgoBox for a synthetic EIP-12 box whose id does not hash.
+    fn test_ergo_box(b: &ergo_tx::Eip12InputBox) -> ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox {
+        let node = serde_json::json!({
+            "boxId": "00".repeat(32), "transactionId": "91".repeat(32), "index": 0,
+            "value": b.value.parse::<i64>().unwrap(), "ergoTree": "0008cd03a11d3028b9bc57b6ac724485e99960b89c278db6bab5d2b961b01aee29405a02",
+            "creationHeight": 1, "assets": [], "additionalRegisters": {},
+        });
+        let err = serde_json::from_value::<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>(node.clone()).err().unwrap().to_string();
+        let id = err.rsplit(' ').next().unwrap().to_string();
+        let mut fixed = node; fixed["boxId"] = serde_json::json!(id);
+        serde_json::from_value(fixed).unwrap()
     }
 
     #[test]

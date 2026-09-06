@@ -115,6 +115,10 @@ class _MixScreenState extends State<MixScreen> {
           );
         },
         findFundingBox: (needed, candidates) async {
+          // Straight from the node, not through the wallet's coin selection:
+          // once the funding is recorded, that selection hides the funding
+          // box from every spend but the mix entry, and this finder is the
+          // entry. Keep it that way if this ever changes source.
           final boxes = await walletService.listUnspentBoxes(
             [args.receiveAddress],
             nodeUrl: networkController.activeUrl,
