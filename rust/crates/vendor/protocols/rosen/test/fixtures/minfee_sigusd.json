@@ -1,0 +1,66 @@
+{
+ "boxId": "cedc89aacedadde36930ccb8f721d6c166c3476310d987b7f0c9af59ed7410d4",
+ "transactionId": "b949205dc57924291b78e7ecaefdb9aff3a70b6718ef98e844c72f970fdd762f",
+ "blockId": "90561da07479cd3ad5ce633949977a1a0ec1614f194cf5c2b7ff2ae1aa3f2cde",
+ "value": 200000,
+ "index": 10,
+ "globalIndex": 575467,
+ "creationHeight": 1857019,
+ "settlementHeight": 1857028,
+ "ergoTree": "0008cd02a13605adc8a653dcbddb01f055a3a7c2c43c410bb66103d02fb6aac56266d734",
+ "ergoTreeConstants": "",
+ "ergoTreeScript": "{SigmaProp(ProveDlog(ECPoint(a13605,a6d3fc,...)))}",
+ "address": "9fk4S98kgDownWsgfSzeKf1ZhywnezXrPQPHsimspMWm1uxJHFR",
+ "assets": [
+  {
+   "tokenId": "e2ed4d64393222db666f20e67803e9e6fbe6d64531e14ff52ddd95615b0cbf17",
+   "index": 0,
+   "amount": 1,
+   "name": "rspv2.1MinFee",
+   "decimals": 0,
+   "type": "EIP-004"
+  },
+  {
+   "tokenId": "03faf2cb329f2e90d6d23b58d91bbb6c046aa143261cc21f52fbe2824bfcbf04",
+   "index": 1,
+   "amount": 1,
+   "name": "SigUSD",
+   "decimals": 2,
+   "type": "EIP-004"
+  }
+ ],
+ "additionalRegisters": {
+  "R5": {
+   "serializedValue": "1c0205fcc5bc6a9c8c75a0918a0d9284e00196b0b418059eee8d70c4d175ce869a0db2d8e201f8abcf18",
+   "sigmaType": "Coll[Coll[SInt]]",
+   "renderedValue": "[[111645054,959246,13714512,1835273,25594891],[117554063,963682,13844903,1857049,25815804]]"
+  },
+  "R6": {
+   "serializedValue": "1d0205fa0efa0efa0efa0efa0e05da0dda0dda0dda0dda0d",
+   "sigmaType": "Coll[Coll[SLong]]",
+   "renderedValue": "[[957,957,957,957,957],[877,877,877,877,877]]"
+  },
+  "R8": {
+   "serializedValue": "0c1d020502fcd813c80102fcd813c80102fcd813c80102fcd813c80102fcd813c8010502b0f90fc80102b0f90fc80102b0f90fc80102b0f90fc80102b0f90fc801",
+   "sigmaType": "Coll[Coll[Coll[SLong]]]",
+   "renderedValue": "[[[161342,100],[161342,100],[161342,100],[161342,100],[161342,100]],[[130648,100],[130648,100],[130648,100],[130648,100],[130648,100]]]"
+  },
+  "R7": {
+   "serializedValue": "1d0205047686010a040504629a010a0a",
+   "sigmaType": "Coll[Coll[SLong]]",
+   "renderedValue": "[[2,59,67,5,2],[2,49,77,5,5]]"
+  },
+  "R9": {
+   "serializedValue": "1d02056464646464056464646464",
+   "sigmaType": "Coll[Coll[SLong]]",
+   "renderedValue": "[[50,50,50,50,50],[50,50,50,50,50]]"
+  },
+  "R4": {
+   "serializedValue": "1a050762696e616e63650d626974636f696e2d72756e65730763617264616e6f046572676f08657468657265756d",
+   "sigmaType": "Coll[Coll[SByte]]",
+   "renderedValue": "[62696e616e6365,626974636f696e2d72756e6573,63617264616e6f,6572676f,657468657265756d]"
+  }
+ },
+ "spentTransactionId": null,
+ "mainChain": true
+}

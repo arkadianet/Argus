@@ -1053,6 +1053,99 @@ fn resolve_spend_addresses(sender: &str, extra: &[String]) -> Vec<String> {
     spend
 }
 
+/// A babel box (EIP-31) able to pay `fee` in `token_id`, as both the
+/// signing box and the EIP-12 input, with the box read.
+struct BabelPick {
+    babel: ergo_tx::BabelBox,
+    eip12: ergo_tx::Eip12InputBox,
+    ergo_box: ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox,
+}
+
+/// The best babel box on the node for `token_id`: the one asking the
+/// fewest tokens for `fee` that still stays a box afterwards.
+async fn find_babel(
+    client: &ErgoNodeClient,
+    token_id: &str,
+    fee: i64,
+) -> Result<BabelPick, String> {
+    let tree = ergo_tx::babel_ergo_tree(token_id);
+    let boxes = client
+        .unspent_boxes_by_ergo_tree(&tree, 0, 100)
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    let mut best: Option<BabelPick> = None;
+    for item in boxes {
+        // Both shapes from the same item: the signer's box and the
+        // builder's input.
+        let (Ok(ergo_box), Ok(eip12)) = (
+            serde_json::from_value::<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>(item.clone()),
+            serde_json::from_value::<ergo_tx::Eip12InputBox>(item),
+        ) else {
+            continue;
+        };
+        let Ok(babel) = ergo_tx::BabelBox::parse(&eip12, token_id) else { continue };
+        if !babel.can_pay(fee) {
+            continue;
+        }
+        if best.as_ref().map(|p| babel.price > p.babel.price).unwrap_or(true) {
+            best = Some(BabelPick { babel, eip12, ergo_box });
+        }
+    }
+    best.ok_or_else(|| {
+        ArgusError::TxBuildFailed(
+            "no babel fee box offers to take this token for the fee right now".into(),
+        )
+        .to_json_string()
+    })
+}
+
+/// Add boxes from `pool` to `selected` until they hold `need` of `token`.
+fn ensure_token(
+    selected: &mut Vec<ergo_tx::Eip12InputBox>,
+    pool: &[ergo_tx::Eip12InputBox],
+    token: &str,
+    need: u64,
+) -> Result<(), String> {
+    let held = |set: &[ergo_tx::Eip12InputBox]| -> u64 {
+        set.iter()
+            .flat_map(|b| b.assets.iter())
+            .filter(|a| a.token_id.eq_ignore_ascii_case(token))
+            .map(|a| a.amount.parse::<u64>().unwrap_or(0))
+            .sum()
+    };
+    let mut have = held(selected);
+    for b in pool {
+        if have >= need {
+            break;
+        }
+        if selected.iter().any(|s| s.box_id == b.box_id) {
+            continue;
+        }
+        let in_box = held(std::slice::from_ref(b));
+        if in_box > 0 {
+            have += in_box;
+            selected.push(b.clone());
+        }
+    }
+    if have < need {
+        return Err(ArgusError::TxBuildFailed(format!(
+            "the wallet holds {have} of the fee token but the fee needs {need}"
+        ))
+        .to_json_string());
+    }
+    Ok(())
+}
+
+fn babel_json(s: &ergo_tx::BabelSummary) -> serde_json::Value {
+    serde_json::json!({
+        "token_id": s.token_id,
+        "tokens_paid": s.tokens_paid,
+        "price": s.price,
+        "fee_nano": s.fee_nano,
+        "babel_box_id": s.babel_box_id,
+    })
+}
+
 async fn gather_unspent(
     handle_id: u64,
     client: &ErgoNodeClient,
@@ -1272,6 +1365,7 @@ fn wallet_can_spend_change(h: &wallet_core::WalletHandle, address: &str) -> Resu
     Ok(secret.owns_tree(&tree))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn prepare(
     handle_id: u64,
     sender_address: &str,
@@ -1285,12 +1379,14 @@ async fn prepare(
     fee_nano: Option<i64>,
     input_box_ids: Option<Vec<String>>,
     stealth_boxes_json: Option<String>,
+    babel_token_id: Option<String>,
 ) -> Result<
     (
         Vec<serde_json::Value>,
         Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
         ergo_tx::SendBuildResult,
         Vec<String>,
+        Option<ergo_tx::BabelSummary>,
     ),
     String,
 > {
@@ -1344,7 +1440,13 @@ async fn prepare(
     }
 
     let fee_for_required = fee_nano.unwrap_or(TX_FEE_NANO);
-    let required = i64::checked_add(amount_nano_erg, fee_for_required)
+    // With a babel box paying the fee, the wallet's ERG covers only the
+    // amount and a change box; the babel box brings the fee's ERG.
+    let babel = match babel_token_id.as_deref().filter(|t| !t.is_empty()) {
+        Some(t) => Some(find_babel(&client, t, fee_for_required).await?),
+        None => None,
+    };
+    let required = i64::checked_add(amount_nano_erg, if babel.is_some() { 0 } else { fee_for_required })
         .and_then(|v| i64::checked_add(v, MIN_BOX_VALUE_NANO))
         .filter(|v| *v > 0)
         .ok_or_else(|| {
@@ -1358,7 +1460,7 @@ async fn prepare(
         .iter()
         .map(|b| b.box_id.clone())
         .collect::<Vec<_>>();
-    let selected = match input_box_ids.as_deref() {
+    let mut selected = match input_box_ids.as_deref() {
         Some(ids) => select_exact(&eip12, ids, required, token_ref)
             .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
         // Automatic selection still avoids putting stealth and ordinary
@@ -1367,6 +1469,19 @@ async fn prepare(
             .map(|(s, _mixed)| s)
             .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
     };
+    if let Some(pick) = &babel {
+        // The fee's worth of the token must be among the inputs too, on
+        // top of whatever the send delivers of it.
+        let sent_same = send_token
+            .as_ref()
+            .filter(|(id, _)| id.eq_ignore_ascii_case(&pick.babel.token_id))
+            .map(|(_, n)| *n)
+            .unwrap_or(0);
+        let need = sent_same + pick.babel.tokens_for(fee_for_required);
+        ensure_token(&mut selected.boxes, &eip12, &pick.babel.token_id, need)?;
+        selected.boxes.push(pick.eip12.clone());
+        boxes.push(pick.ergo_box.clone());
+    }
 
     let height = client
         .current_height()
@@ -1405,6 +1520,25 @@ async fn prepare(
             .map(|o| o.value.parse::<i64>().unwrap_or(0))
             .unwrap_or(0);
     }
+    let babel_summary = match &babel {
+        Some(pick) => {
+            let s = ergo_tx::apply_babel(&mut built.unsigned_tx, &pick.babel, &change_tree)
+                .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+            built.summary.change_erg = built
+                .unsigned_tx
+                .outputs
+                .iter()
+                // From the end, as apply_babel does: a send to the
+                // wallet's own change address gives the recipient box the
+                // same script, and only the last one is the change.
+                .rev()
+                .find(|o| o.ergo_tree == change_tree)
+                .map(|o| o.value.parse::<i64>().unwrap_or(0))
+                .unwrap_or(0);
+            Some(s)
+        }
+        None => None,
+    };
 
     let ergo_boxes = selected
         .boxes
@@ -1430,7 +1564,7 @@ async fn prepare(
 
     let input_boxes = input_boxes_json(&selected.boxes);
 
-    Ok((input_boxes, ergo_boxes, built, stealth_trees))
+    Ok((input_boxes, ergo_boxes, built, stealth_trees, babel_summary))
 }
 
 #[flutter_rust_bridge::frb]
@@ -1447,8 +1581,9 @@ pub async fn prepare_send(
     fee_nano: Option<i64>,
     input_box_ids: Option<Vec<String>>,
     stealth_boxes_json: Option<String>,
+    babel_token_id: Option<String>,
 ) -> Result<String, String> {
-    let (input_boxes, ergo_boxes, built, stealth_trees) = prepare(
+    let (input_boxes, ergo_boxes, built, stealth_trees, babel) = prepare(
         handle_id,
         &sender_address,
         &spend_addresses,
@@ -1461,6 +1596,7 @@ pub async fn prepare_send(
         fee_nano,
         input_box_ids,
         stealth_boxes_json,
+        babel_token_id,
     )
     .await?;
     let recipient_erg = built.summary.recipient_erg;
@@ -1494,6 +1630,7 @@ pub async fn prepare_send(
         "token_id": preview_token_id,
         "token_amount": preview_token_amount,
         "input_boxes": input_boxes,
+        "babel": babel.as_ref().map(babel_json),
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -1681,6 +1818,174 @@ pub async fn prepare_burn(
         "miner_fee": summary.miner_fee,
         "app_fee_nano": summary.citadel_fee_nano,
         "change_nano_erg": summary.change_erg,
+        "input_boxes": input_boxes,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+// ---------------------------------------------------------------------------
+// Rosen bridge: transfers out of Ergo
+// ---------------------------------------------------------------------------
+
+/// The bridge as vendored: lock address, fee NFT, contracts version, and
+/// every Ergo asset it takes with the chains it can go to. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn rosen_info() -> String {
+    serde_json::json!({
+        "lock_address": rosen::LOCK_ADDRESS,
+        "min_fee_nft": rosen::MIN_FEE_NFT,
+        "contracts_version": rosen::CONTRACTS_VERSION,
+        "tokens_map_version": rosen::tokens::map_version(),
+        "chains": rosen::chains(),
+        "tokens": rosen::token_map(),
+    })
+    .to_string()
+}
+
+/// The terms for sending `token_id` (`erg` for ERG) to `to_chain` at
+/// `height`, from the minimum-fee boxes given (a list of boxes carrying
+/// the fee NFT, any shape), and what `amount` would cost and deliver.
+/// Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn rosen_quote(
+    fee_boxes_json: String,
+    token_id: String,
+    to_chain: String,
+    amount: i64,
+    height: i64,
+) -> Result<String, String> {
+    let root: serde_json::Value = serde_json::from_str(&fee_boxes_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let boxes: Vec<serde_json::Value> = match root.get("items") {
+        Some(v) => v.as_array().cloned().unwrap_or_default(),
+        None => root.as_array().cloned().unwrap_or_default(),
+    };
+    let cfg = rosen::fees::find_fee_box(&boxes, &token_id)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let fee = cfg
+        .from_ergo(height, &to_chain)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let quote = fee.quote(amount);
+    serde_json::to_string(&serde_json::json!({
+        "fee": fee,
+        "quote": quote,
+        "fee_box_id": cfg.box_id,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Whether `address` is well formed for `chain`; an empty string when it
+/// is, the reason otherwise. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn rosen_validate_address(chain: String, address: String) -> String {
+    match rosen::validate_address(&chain, &address) {
+        Ok(()) => String::new(),
+        Err(e) => e.to_string(),
+    }
+}
+
+/// Prepare a transfer out of Ergo: `amount` of `token_id` (`erg` for ERG)
+/// locked for `to_chain` and `to_address`, with the bridge and network
+/// fees the quote gave. The lock box records `sender_address` as where a
+/// failed transfer comes back to. Confirm with `send_erg`.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn rosen_prepare_lock(
+    handle_id: u64,
+    sender_address: String,
+    spend_addresses: Vec<String>,
+    change_address: String,
+    token_id: String,
+    amount: i64,
+    to_chain: String,
+    to_address: String,
+    bridge_fee: i64,
+    network_fee: i64,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+) -> Result<String, String> {
+    if let Err(e) = rosen::validate_address(&to_chain, &to_address) {
+        return Err(ArgusError::InvalidAddress(e.to_string()).to_json_string());
+    }
+    let miner_fee = mix_miner_fee(fee_nano)?;
+    let change_tree = with_handle(handle_id, "rosen_prepare_lock", |h| {
+        for a in [&sender_address, &change_address] {
+            if !h.owns_address(a).map_err(err_str)? {
+                return Err(ArgusError::InvalidAddress("transfer addresses must belong to this wallet".into()).to_json_string());
+            }
+        }
+        address_to_ergo_tree(&change_address).map_err(|e| ArgusError::InvalidAddress(e).to_json_string())
+    })?;
+    let lock_tree = address_to_ergo_tree(rosen::LOCK_ADDRESS)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    let is_erg = token_id.eq_ignore_ascii_case("erg");
+    let spec = rosen::LockSpec {
+        token_id: if is_erg { None } else { Some(token_id.to_ascii_lowercase()) },
+        amount,
+        to_chain: to_chain.clone(),
+        to_address: to_address.trim().to_string(),
+        from_address: sender_address.clone(),
+        bridge_fee,
+        network_fee,
+    };
+    let spend = resolve_spend_addresses(&sender_address, &spend_addresses);
+    let client = node_client(node_url.clone()).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let fee_cfg = ergo_tx::resolved_dev_fee_config();
+    let app_fee = if fee_cfg.enabled {
+        Some((fee_cfg.recipient_ergo_tree.as_str(), fee_cfg.budget()))
+    } else {
+        None
+    };
+    let lock_value = if is_erg { amount } else { rosen::LOCK_MIN_BOX_VALUE };
+    let token = if is_erg { None } else { Some((token_id.as_str(), amount as u64)) };
+    let mut built = None;
+    for extra in [0i64, MIN_BOX_VALUE_NANO] {
+        let required = (lock_value + miner_fee + app_fee.map(|(_, n)| n).unwrap_or(0) + extra) as u64;
+        let selected = wallet_core::spend::select_for_send(&utxos, required, token)
+            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        match rosen::build_lock_tx(&selected.boxes, &spec, &lock_tree, &change_tree, app_fee, miner_fee, height as i32) {
+            Ok(r) => {
+                built = Some((r, selected.boxes));
+                break;
+            }
+            Err(rosen::LockError::InsufficientErg { .. }) if extra == 0 => continue,
+            Err(e) => return Err(ArgusError::TxBuildFailed(e.to_string()).to_json_string()),
+        }
+    }
+    let (result, used) = built.ok_or_else(|| {
+        ArgusError::TxBuildFailed("could not select inputs for the transfer".into()).to_json_string()
+    })?;
+    let ergo_boxes = used
+        .iter()
+        .map(crate::api_mix_impl::to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let input_boxes = input_boxes_json(&used);
+    let summary = result.summary;
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes,
+        data_input_boxes: Vec::new(),
+        unsigned_tx: result.unsigned_tx,
+        miner_fee: summary.miner_fee,
+        change_erg: summary.change_erg,
+        recipient_erg: summary.lock_value,
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "lock_address": rosen::LOCK_ADDRESS,
+        "lock_value": summary.lock_value,
+        "miner_fee": summary.miner_fee,
+        "app_fee_nano": summary.app_fee_nano,
+        "change_nano_erg": summary.change_erg,
+        "height": height,
         "input_boxes": input_boxes,
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
@@ -2084,6 +2389,7 @@ pub async fn prepare_send_multi(
     fee_nano: Option<i64>,
     input_box_ids: Option<Vec<String>>,
     stealth_boxes_json: Option<String>,
+    babel_token_id: Option<String>,
 ) -> Result<String, String> {
     let change_tree = address_to_ergo_tree(&change_address)
         .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
@@ -2206,10 +2512,21 @@ pub async fn prepare_send_multi(
 
     // For input selection we need the total ERG + all token amounts
     let fee_for_required = fee_nano.unwrap_or(TX_FEE_NANO);
+    // With a babel box paying the fee, the wallet's ERG covers only the
+    // recipients and a change box, and the fee's worth of the token joins
+    // what the send needs.
+    let babel = match babel_token_id.as_deref().filter(|t| !t.is_empty()) {
+        Some(t) => Some(find_babel(&client, t, fee_for_required).await?),
+        None => None,
+    };
+    if let Some(pick) = &babel {
+        let entry = needed_tokens.entry(pick.babel.token_id.clone()).or_insert(0);
+        *entry = entry.saturating_add(pick.babel.tokens_for(fee_for_required));
+    }
 
     // Use UTXO selection: pick boxes covering total_send_erg + fee + min change,
     // and which collectively hold the needed tokens.
-    let required = i64::checked_add(total_send_erg, fee_for_required)
+    let required = i64::checked_add(total_send_erg, if babel.is_some() { 0 } else { fee_for_required })
         .and_then(|v| i64::checked_add(v, MIN_BOX_VALUE_NANO))
         .filter(|v| *v > 0)
         .ok_or_else(|| {
@@ -2217,7 +2534,7 @@ pub async fn prepare_send_multi(
         })? as u64;
     // Coin control, as in prepare_send: the chosen boxes are the whole
     // input set, never a starting point the selector may extend.
-    let selected = match input_box_ids.as_deref() {
+    let mut selected = match input_box_ids.as_deref() {
         Some(ids) => {
             let token_ref = needed_tokens
                 .iter()
@@ -2277,6 +2594,10 @@ pub async fn prepare_send_multi(
     if selected.is_empty() {
         return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());
     }
+    if let Some(pick) = &babel {
+        selected.push(pick.eip12.clone());
+        boxes.push(pick.ergo_box.clone());
+    }
 
     let height = client
         .current_height()
@@ -2291,8 +2612,26 @@ pub async fn prepare_send_multi(
         height,
     )
     .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
-    let unsigned_tx = built.unsigned_tx;
-    let change_erg = built.summary.change_erg;
+    let mut unsigned_tx = built.unsigned_tx;
+    let mut change_erg = built.summary.change_erg;
+    let babel_summary = match &babel {
+        Some(pick) => {
+            let s = ergo_tx::apply_babel(&mut unsigned_tx, &pick.babel, &change_tree)
+                .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+            change_erg = unsigned_tx
+                .outputs
+                .iter()
+                // From the end, as apply_babel does: a send to the
+                // wallet's own change address gives the recipient box the
+                // same script, and only the last one is the change.
+                .rev()
+                .find(|o| o.ergo_tree == change_tree)
+                .map(|o| o.value.parse::<i64>().unwrap_or(0))
+                .unwrap_or(0);
+            Some(s)
+        }
+        None => None,
+    };
 
     // Get the ErgoBox representations for signing
     let ergo_boxes = selected
@@ -2351,6 +2690,7 @@ pub async fn prepare_send_multi(
         "input_count": selected.len(),
         "citadel_fee_nano": 0,
         "input_boxes": input_boxes,
+        "babel": babel_summary.as_ref().map(babel_json),
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
