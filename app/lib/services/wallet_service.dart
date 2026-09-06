@@ -1231,7 +1231,8 @@ class WalletService {
     String? nodeUrl,
     int? feeNanoErg,
     String? loanBoxesJson,
-    int? collateralNano,
+    String? collateralAsset,
+    int? collateralAmount,
     String? collateralBoxId,
   }) {
     _requireUnlocked();
@@ -1249,7 +1250,8 @@ class WalletService {
       nodeUrl: nodeUrl,
       feeNano: feeNanoErg,
       loanBoxesJson: loanBoxesJson,
-      collateralNano: collateralNano,
+      collateralAsset: collateralAsset,
+      collateralAmount: collateralAmount,
       collateralBoxId: collateralBoxId,
     );
   }

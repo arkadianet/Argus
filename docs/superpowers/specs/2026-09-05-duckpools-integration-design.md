@@ -45,8 +45,11 @@ transaction, never on the fill, whose outputs the contract pins.
 |---|---|---|
 | 1 (#74) | `duckpools` crate: identities, `PoolBox::parse`, `lend_token_value`, `position_value`, fixtures, live test. FFI `duckpools_pools` (identities) and `duckpools_state(pool_boxes_json, holdings_json)` (per pool: pooled, borrowed, utilisation, lend-token value, the wallet's lend tokens and their value). Dart `DuckpoolsService` (fetch the eight pool boxes by script through node then explorer, compute state), a Duckpools screen listing pools and the wallet's positions, a Discover card with a position line, lend tokens named in the verified list. | Positions and pool state render from live boxes; unit tests on the arithmetic against the fixtures. |
 | 2 (#77) | Lend and withdraw orders: proxy-box builders in Rust proven against the pool box (fixtures, live reduction), an order record with refund height, an order tracker on the poll tick (filled, refunded, refundable), the refund transaction, confirm sheets with the fee tiers, interest boxes read for the rate. | A lend order fills against the live ERG pool and a withdraw returns the asset; a deliberately unfilled order is refunded by Argus. |
-| 3 (this PR) | Borrow against ERG from the token pools, full and partial repayment, the wallet's loans read from the collateral boxes with what they owe (interest compounded as the contract does), what the collateral counts for (priced through the Spectrum pool as the contract does), health against the pool's liquidation line and the forced-liquidation height. Refunds for every order kind. | Device-tested against SigUSD, the pool with borrowing today. |
-| later | Collateral top-up and withdrawal (the collateral contract's recreation path), borrowing from the ERG pool against tokens, liquidating other people's loans. | — |
+| 3 (#78) | Borrow against ERG from the token pools, full and partial repayment, the wallet's loans read from the collateral boxes with what they owe (interest compounded as the contract does), what the collateral counts for (priced through the Spectrum pool as the contract does), health against the pool's liquidation line and the forced-liquidation height. Refunds for every order kind. | Device-tested against SigUSD, the pool with borrowing today. |
+| 4 (this PR) | Borrow ERG from the ERG pool against SigUSD, SigRSV, RSN or rsADA, priced the other way round through the same Spectrum pools; ERG-pool loans read, repaid and partly repaid in ERG. | Device-tested: a small SigUSD-backed ERG loan opened and repaid. |
+| 5 | Collateral top-up and withdrawal: the collateral contract's own recreation path, a direct spend the borrower signs with the interest and price boxes as data inputs. No bot. | — |
+| 6 | Health alerts: the poll tick and the background job value every loan and notify when health crosses a warning line or the forced-liquidation height nears. | — |
+| never | Liquidating other people's loans: a bot's business. | — |
 
 ## Found while building batch 2
 
@@ -121,6 +124,34 @@ box in R7; borrow and repay fills mark it in R4, as refunds do, so the
 outcome reader tells them apart by whether the marked box carries tokens
 (borrow: a fill does, a refund does not; repay: the reverse). A partial
 repay marks nothing and is read from the shape of the transaction.
+
+## Found while building batch 4
+
+**The ERG pool prices the other way.** Its collateral is a token in
+`tokens(0)` of the collateral box, the borrow tokens in `tokens(1)`, and
+the box's ERG is a fixed 0.004 carry from the proxy. Collateral value is
+what the token sells for on its Spectrum pool after two percent slippage
+on the *token* reserve and the DEX fee, minus a 0.004 ERG network fee
+(the token pools take 0.005 off the ERG first). The pool contract
+accepts a loan exactly on the line (`>=`) where the token pools want
+strictly above it, and lends no less than 0.05 ERG.
+
+**Four collaterals, one parameter box.** R5 of the ERG pool's parameter
+box lists SigUSD, SigRSV, RSN and rsADA against the R6 price sources,
+with thresholds `[1250, 1250, 1250, 1500]` and penalties of 30%. The
+identities are pinned in the crate for the app to know which price
+boxes to fetch; the parameter box read at run time decides the terms.
+
+**ERG repayments are ERG.** The repay proxy's box value is the
+repayment; the fill's repayment box is that less the borrower's box and
+the fee, plus the collateral box's 0.004, and must reach owed plus one
+fee. A partial repayment's proxy carries the repayment plus 0.002 for
+the fee and the repayment box, and must leave at least 0.05 ERG owed.
+
+**No live ERG-pool loans to pin.** The ERG pool had no collateral boxes
+on 2026-09-05, so the tests build one the way the bot does (registers
+through the crate's own encoders) and price it through the live SigUSD
+market: 1,000 SigUSD counts for 3,716.17 ERG.
 
 ## Live map used by batch 1
 
