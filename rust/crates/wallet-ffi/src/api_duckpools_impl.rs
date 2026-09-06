@@ -236,6 +236,12 @@ impl LoanSnapshot {
             .map_err(err)
     }
 
+    /// The wallet's loans here that no price box in this snapshot covers,
+    /// so the screen can say so rather than quietly drop them.
+    pub fn unpriced(&self, wallet_trees: &[String], height: i64) -> usize {
+        duckpools::unpriced_loans(self.pool, &self.collateral, &self.history, &self.dexes, wallet_trees, height)
+    }
+
     /// One loan by its collateral box id, whoever the borrower is.
     pub fn position(&self, collateral_box_id: &str, height: i64) -> Result<LoanPosition, String> {
         let v = self
@@ -281,6 +287,7 @@ pub fn loans_json(loan_boxes_json: &str, wallet_trees: &[String], height: i64) -
                     "decimals": pool.decimals,
                     "latest_rate": snap.history.latest_rate(),
                     "loans": snap.collateral.len(),
+                    "unpriced": snap.unpriced(wallet_trees, height),
                 });
                 if pool.is_erg() {
                     // One entry per token the ERG pool takes: its terms and

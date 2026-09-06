@@ -575,6 +575,40 @@ pub fn positions(
     Ok(out)
 }
 
+/// How many of the wallet's loans under `pool` this snapshot could not
+/// price. [`positions`] drops them so one unreadable market cannot hide
+/// the rest; the count lets the screen say they are missing instead of
+/// letting them vanish.
+pub fn unpriced_loans(
+    pool: &'static Pool,
+    collateral_boxes: &[serde_json::Value],
+    history: &InterestHistory,
+    dexes: &[DexPrice],
+    wallet_trees: &[String],
+    height: i64,
+) -> usize {
+    let mut n = 0;
+    for v in collateral_boxes {
+        let Ok(c) = CollateralBox::parse(pool, v) else {
+            continue;
+        };
+        if !wallet_trees
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(&c.borrower_tree))
+        {
+            continue;
+        }
+        let priced = dexes
+            .iter()
+            .find(|d| d.nft.eq_ignore_ascii_case(&c.dex_nft))
+            .is_some_and(|dex| LoanPosition::value(pool, &c, history, dex, height).is_ok());
+        if !priced {
+            n += 1;
+        }
+    }
+    n
+}
+
 /// A borrow order, before it is posted.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct BorrowQuote {
@@ -1298,6 +1332,14 @@ mod tests {
         assert!(p.health_bps > 29_000 && p.health_bps < 30_000, "{}", p.health_bps);
         let mine = positions(erg_pool(), &[erg_loan_box(5)], &h, &[dex.clone()], &[BORROWER.into()], 1).unwrap();
         assert_eq!(mine.len(), 1);
+        assert_eq!(unpriced_loans(erg_pool(), &[erg_loan_box(5)], &h, &[dex.clone()], &[BORROWER.into()], 1), 0);
+        // Without that market the loan drops out of the list, and is
+        // counted so the screen can say it is missing.
+        let other = DexPrice { nft: "ff".repeat(32), ..dex.clone() };
+        assert!(positions(erg_pool(), &[erg_loan_box(5)], &h, &[other.clone()], &[BORROWER.into()], 1).unwrap().is_empty());
+        assert_eq!(unpriced_loans(erg_pool(), &[erg_loan_box(5)], &h, &[other], &[BORROWER.into()], 1), 1);
+        // Somebody else's loan is not the wallet's to miss.
+        assert_eq!(unpriced_loans(erg_pool(), &[erg_loan_box(5)], &h, &[], &["0008cd00".into()], 1), 0);
 
         let r = RepayQuote::new(erg_pool(), &p, &h, 0, 1_000_000).unwrap();
         // The proxy's ERG plus the collateral box's 0.004, less the
