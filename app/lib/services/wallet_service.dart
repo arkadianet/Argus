@@ -1432,6 +1432,61 @@ class WalletService {
     );
   }
 
+  // ── SigmaFi ───────────────────────────────────────────
+
+  /// Prepare a SigmaFi loan request; confirm with [sendErg].
+  Future<String> sigmafiPrepareOpen({
+    required String loanAsset,
+    required int principal,
+    required int repayment,
+    required int termBlocks,
+    required int collateralErg,
+    required String collateralTokensJson,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiSigmafiPrepareOpen(
+      handleId: _handleId!,
+      loanAsset: loanAsset,
+      principal: principal,
+      repayment: repayment,
+      termBlocks: termBlocks,
+      collateralErg: collateralErg,
+      collateralTokensJson: collateralTokensJson,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+  }
+
+  /// Prepare a cancel, close, repay or liquidate of a SigmaFi box;
+  /// confirm with [sendErg].
+  Future<String> sigmafiPrepareSpend({
+    required String action,
+    required String boxJson,
+    required String userAddress,
+    required List<String> spendAddresses,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiSigmafiPrepareSpend(
+      handleId: _handleId!,
+      action: action,
+      boxJson: boxJson,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+  }
+
   /// Prepare the refund of an unfilled order; confirm with [sendErg].
   Future<String> duckpoolsPrepareRefund({
     required String proxyBoxJson,
