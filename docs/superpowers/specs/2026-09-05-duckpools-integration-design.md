@@ -41,7 +41,9 @@ transaction, never on the fill, whose outputs the contract pins.
 
 ## Batches
 
-| Batch | Contents | Done when |
+Verification status on 2026-09-06: batches 1 and 2 were device-tested (a lend order filled against the ERG pool, a withdraw returned the asset). Batches 3 to 6 have crate, FFI and Dart tests only; none of the device runs in their "Done when" column has happened yet, and the ERG-pool contract readings (acceptance at the line, the 0.004 fee subtraction, `validRepaymentValue`) are unvalidated against a live fill.
+
+| Batch | Contents | Done when (the acceptance criterion, not a claim) |
 |---|---|---|
 | 1 (#74) | `duckpools` crate: identities, `PoolBox::parse`, `lend_token_value`, `position_value`, fixtures, live test. FFI `duckpools_pools` (identities) and `duckpools_state(pool_boxes_json, holdings_json)` (per pool: pooled, borrowed, utilisation, lend-token value, the wallet's lend tokens and their value). Dart `DuckpoolsService` (fetch the eight pool boxes by script through node then explorer, compute state), a Duckpools screen listing pools and the wallet's positions, a Discover card with a position line, lend tokens named in the verified list. | Positions and pool state render from live boxes; unit tests on the arithmetic against the fixtures. |
 | 2 (#77) | Lend and withdraw orders: proxy-box builders in Rust proven against the pool box (fixtures, live reduction), an order record with refund height, an order tracker on the poll tick (filled, refunded, refundable), the refund transaction, confirm sheets with the fee tiers, interest boxes read for the rate. | A lend order fills against the live ERG pool and a withdraw returns the asset; a deliberately unfilled order is refunded by Argus. |
