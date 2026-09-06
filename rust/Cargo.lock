@@ -2244,6 +2244,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rosen"
+version = "0.1.0"
+dependencies = [
+ "bs58",
+ "ergo-lib",
+ "ergo-tx",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2516,6 +2530,18 @@ source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea9
 dependencies = [
  "blake2",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "sigmafi"
+version = "0.1.0"
+dependencies = [
+ "ergo-chain-types",
+ "ergo-tx",
+ "hex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]
@@ -3086,8 +3112,10 @@ dependencies = [
  "hex",
  "once_cell",
  "rand 0.8.7",
+ "rosen",
  "serde",
  "serde_json",
+ "sigmafi",
  "sigmausd",
  "stealth",
  "thiserror 1.0.69",

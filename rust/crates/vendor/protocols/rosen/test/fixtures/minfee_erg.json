@@ -1,0 +1,58 @@
+{
+ "boxId": "efa6a90f99f7964d6b74b3c42ebadd7f2490cd926388317880c93573a633e7cd",
+ "transactionId": "b949205dc57924291b78e7ecaefdb9aff3a70b6718ef98e844c72f970fdd762f",
+ "blockId": "90561da07479cd3ad5ce633949977a1a0ec1614f194cf5c2b7ff2ae1aa3f2cde",
+ "value": 200000,
+ "index": 0,
+ "globalIndex": 575457,
+ "creationHeight": 1857019,
+ "settlementHeight": 1857028,
+ "ergoTree": "0008cd02a13605adc8a653dcbddb01f055a3a7c2c43c410bb66103d02fb6aac56266d734",
+ "ergoTreeConstants": "",
+ "ergoTreeScript": "{SigmaProp(ProveDlog(ECPoint(a13605,a6d3fc,...)))}",
+ "address": "9fk4S98kgDownWsgfSzeKf1ZhywnezXrPQPHsimspMWm1uxJHFR",
+ "assets": [
+  {
+   "tokenId": "e2ed4d64393222db666f20e67803e9e6fbe6d64531e14ff52ddd95615b0cbf17",
+   "index": 0,
+   "amount": 1,
+   "name": "rspv2.1MinFee",
+   "decimals": 0,
+   "type": "EIP-004"
+  }
+ ],
+ "additionalRegisters": {
+  "R5": {
+   "serializedValue": "1c02059caf846fdcc475d0fe960da89ae201829aca18059eee8d70c4d175ce869a0db2d8e201f8abcf18",
+   "sigmaType": "Coll[Coll[SInt]]",
+   "renderedValue": "[[116427726,962862,13819816,1853076,25773697],[117554063,963682,13844903,1857049,25815804]]"
+  },
+  "R6": {
+   "serializedValue": "1d0205d8f7908df002d8f7908df002d8f7908df002d8f7908df002d8f7908df002058ad9f7f499028ad9f7f499028ad9f7f499028ad9f7f499028ad9f7f49902",
+   "sigmaType": "Coll[Coll[SLong]]",
+   "renderedValue": "[[49405894124,49405894124,49405894124,49405894124,49405894124],[37837796933,37837796933,37837796933,37837796933,37837796933]]"
+  },
+  "R8": {
+   "serializedValue": "0c1d020502a886258090dfc04a02a886258090dfc04a02a886258090dfc04a02a886258090dfc04a02a886258090dfc04a0502a0f8248090dfc04a02a0f8248090dfc04a02a0f8248090dfc04a02a0f8248090dfc04a02a0f8248090dfc04a",
+   "sigmaType": "Coll[Coll[Coll[SLong]]]",
+   "renderedValue": "[[[303508,10000000000],[303508,10000000000],[303508,10000000000],[303508,10000000000],[303508,10000000000]],[[302608,10000000000],[302608,10000000000],[302608,10000000000],[302608,10000000000],[302608,10000000000]]]"
+  },
+  "R7": {
+   "serializedValue": "1d0205ced8ff38aaf2cdda10f6b8f5f11980c7b4c501c29da21f05b4fcc4319281f7be0ff083c1d41880c7b4c5018a89fec501",
+   "sigmaType": "Coll[Coll[SLong]]",
+   "renderedValue": "[[59766311,2242493589,3474894395,207000000,32786273],[51945242,2079252553,3309838584,207000000,207602245]]"
+  },
+  "R9": {
+   "serializedValue": "1d02056464646464056464646464",
+   "sigmaType": "Coll[Coll[SLong]]",
+   "renderedValue": "[[50,50,50,50,50],[50,50,50,50,50]]"
+  },
+  "R4": {
+   "serializedValue": "1a050762696e616e63650d626974636f696e2d72756e65730763617264616e6f046572676f08657468657265756d",
+   "sigmaType": "Coll[Coll[SByte]]",
+   "renderedValue": "[62696e616e6365,626974636f696e2d72756e6573,63617264616e6f,6572676f,657468657265756d]"
+  }
+ },
+ "spentTransactionId": null,
+ "mainChain": true
+}

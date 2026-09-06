@@ -6,8 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `broadcast_mix_move_with`, `broadcast_mix_move`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `babel_json`, `broadcast_mix_move_with`, `broadcast_mix_move`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `BabelPick`, `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 
 /// The app fee as the UI should display it.
 String appFeeInfo() => RustLib.instance.api.crateApiAppFeeInfo();
@@ -274,6 +274,7 @@ Future<String> prepareSend({
   PlatformInt64? feeNano,
   List<String>? inputBoxIds,
   String? stealthBoxesJson,
+  String? babelTokenId,
 }) => RustLib.instance.api.crateApiPrepareSend(
   handleId: handleId,
   senderAddress: senderAddress,
@@ -287,6 +288,7 @@ Future<String> prepareSend({
   feeNano: feeNano,
   inputBoxIds: inputBoxIds,
   stealthBoxesJson: stealthBoxesJson,
+  babelTokenId: babelTokenId,
 );
 
 /// Issue a token (EIP-4): mint `amount` units named `name` into a box of
@@ -342,6 +344,68 @@ Future<String> prepareBurn({
   changeAddress: changeAddress,
   burnsJson: burnsJson,
   nodeUrl: nodeUrl,
+);
+
+/// The bridge as vendored: lock address, fee NFT, contracts version, and
+/// every Ergo asset it takes with the chains it can go to. Pure.
+String rosenInfo() => RustLib.instance.api.crateApiRosenInfo();
+
+/// The terms for sending `token_id` (`erg` for ERG) to `to_chain` at
+/// `height`, from the minimum-fee boxes given (a list of boxes carrying
+/// the fee NFT, any shape), and what `amount` would cost and deliver.
+/// Pure.
+String rosenQuote({
+  required String feeBoxesJson,
+  required String tokenId,
+  required String toChain,
+  required PlatformInt64 amount,
+  required PlatformInt64 height,
+}) => RustLib.instance.api.crateApiRosenQuote(
+  feeBoxesJson: feeBoxesJson,
+  tokenId: tokenId,
+  toChain: toChain,
+  amount: amount,
+  height: height,
+);
+
+/// Whether `address` is well formed for `chain`; an empty string when it
+/// is, the reason otherwise. Pure.
+String rosenValidateAddress({required String chain, required String address}) =>
+    RustLib.instance.api.crateApiRosenValidateAddress(
+      chain: chain,
+      address: address,
+    );
+
+/// Prepare a transfer out of Ergo: `amount` of `token_id` (`erg` for ERG)
+/// locked for `to_chain` and `to_address`, with the bridge and network
+/// fees the quote gave. The lock box records `sender_address` as where a
+/// failed transfer comes back to. Confirm with `send_erg`.
+Future<String> rosenPrepareLock({
+  required BigInt handleId,
+  required String senderAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  required String tokenId,
+  required PlatformInt64 amount,
+  required String toChain,
+  required String toAddress,
+  required PlatformInt64 bridgeFee,
+  required PlatformInt64 networkFee,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiRosenPrepareLock(
+  handleId: handleId,
+  senderAddress: senderAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  tokenId: tokenId,
+  amount: amount,
+  toChain: toChain,
+  toAddress: toAddress,
+  bridgeFee: bridgeFee,
+  networkFee: networkFee,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
 );
 
 /// Prepare a UTXO consolidation transaction to merge multiple boxes into one.
@@ -485,6 +549,7 @@ Future<String> prepareSendMulti({
   PlatformInt64? feeNano,
   List<String>? inputBoxIds,
   String? stealthBoxesJson,
+  String? babelTokenId,
 }) => RustLib.instance.api.crateApiPrepareSendMulti(
   handleId: handleId,
   senderAddress: senderAddress,
@@ -495,6 +560,7 @@ Future<String> prepareSendMulti({
   feeNano: feeNano,
   inputBoxIds: inputBoxIds,
   stealthBoxesJson: stealthBoxesJson,
+  babelTokenId: babelTokenId,
 );
 
 /// Live Dexy protocol state + mint-path rates for `gold` or `usd`.
@@ -1237,4 +1303,71 @@ String duckpoolsOrderOutcome({
   kind: kind,
   proxyBoxId: proxyBoxId,
   txJson: txJson,
+);
+
+/// The loan assets SigmaFi lists, each with the order and bond scripts
+/// whose boxes make up the market. Pure.
+String sigmafiContracts() => RustLib.instance.api.crateApiSigmafiContracts();
+
+/// Boxes under the SigmaFi scripts (explorer or node JSON, one array)
+/// read into open orders and active bonds at `height`. Pure.
+String sigmafiMarket({
+  required String boxesJson,
+  required PlatformInt64 height,
+}) => RustLib.instance.api.crateApiSigmafiMarket(
+  boxesJson: boxesJson,
+  height: height,
+);
+
+/// Prepare a loan request: the collateral into an order box the wallet's
+/// `user_address` key can cancel. Confirm with `send_erg`.
+Future<String> sigmafiPrepareOpen({
+  required BigInt handleId,
+  required String loanAsset,
+  required PlatformInt64 principal,
+  required PlatformInt64 repayment,
+  required PlatformInt64 termBlocks,
+  required PlatformInt64 collateralErg,
+  required String collateralTokensJson,
+  required String userAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiSigmafiPrepareOpen(
+  handleId: handleId,
+  loanAsset: loanAsset,
+  principal: principal,
+  repayment: repayment,
+  termBlocks: termBlocks,
+  collateralErg: collateralErg,
+  collateralTokensJson: collateralTokensJson,
+  userAddress: userAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+);
+
+/// Prepare one of the spends of a SigmaFi box: `cancel` an order of this
+/// wallet, `close` (fill) anyone's order as the lender, `repay` a bond
+/// this wallet borrowed, or `liquidate` a matured bond this wallet lent.
+/// `box_json` is the box as the explorer or node returned it. The
+/// interface fee a fill pays goes to Argus. Confirm with `send_erg`.
+Future<String> sigmafiPrepareSpend({
+  required BigInt handleId,
+  required String action,
+  required String boxJson,
+  required String userAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiSigmafiPrepareSpend(
+  handleId: handleId,
+  action: action,
+  boxJson: boxJson,
+  userAddress: userAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
 );

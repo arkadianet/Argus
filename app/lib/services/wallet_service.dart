@@ -205,6 +205,27 @@ class WalletRouteArgs {
   }
 }
 
+/// A fee paid in a token through a babel box (EIP-31).
+class BabelFee {
+  const BabelFee({required this.tokenId, required this.tokensPaid, required this.price, required this.feeNano});
+  final String tokenId;
+  final int tokensPaid;
+
+  /// nanoERG the babel box pays per token unit.
+  final int price;
+  final int feeNano;
+
+  static BabelFee? fromJson(Object? v) {
+    if (v is! Map) return null;
+    return BabelFee(
+      tokenId: v['token_id'] as String,
+      tokensPaid: (v['tokens_paid'] as num).toInt(),
+      price: (v['price'] as num).toInt(),
+      feeNano: (v['fee_nano'] as num).toInt(),
+    );
+  }
+}
+
 class SendPreview {
   final int preparationId;
   final String recipient;
@@ -236,7 +257,11 @@ class SendPreview {
     this.tokenAmount,
     this.inputBoxes = const [],
     this.recipients,
+    this.babel,
   });
+
+  /// Set when the miner fee was paid in a token rather than ERG.
+  final BabelFee? babel;
 
   factory SendPreview.fromJson(Map<String, dynamic> json) {
     final recipient = json['recipient'];
@@ -260,6 +285,7 @@ class SendPreview {
       tokenAmount: (json['token_amount'] as num?)?.toInt(),
       inputBoxes: _parseInputBoxes(json['input_boxes']),
       recipients: recips,
+      babel: BabelFee.fromJson(json['babel']),
     );
   }
 }
@@ -948,6 +974,7 @@ class WalletService {
     int? feeNanoErg,
     List<String>? inputBoxIds,
     String? stealthBoxesJson,
+    String? babelTokenId,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareSend(
@@ -963,6 +990,7 @@ class WalletService {
       feeNano: feeNanoErg,
       inputBoxIds: inputBoxIds,
       stealthBoxesJson: stealthBoxesJson,
+      babelTokenId: babelTokenId,
     );
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -979,6 +1007,7 @@ class WalletService {
     int? feeNanoErg,
     List<String>? inputBoxIds,
     String? stealthBoxesJson,
+    String? babelTokenId,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareSendMulti(
@@ -991,6 +1020,7 @@ class WalletService {
       feeNano: feeNanoErg,
       inputBoxIds: inputBoxIds,
       stealthBoxesJson: stealthBoxesJson,
+      babelTokenId: babelTokenId,
     );
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }
@@ -1342,6 +1372,38 @@ class WalletService {
     );
   }
 
+  /// Prepare a Rosen bridge transfer out of Ergo; confirm with [sendErg].
+  Future<Map<String, dynamic>> rosenPrepareLock({
+    required String senderAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    required String tokenId,
+    required int amount,
+    required String toChain,
+    required String toAddress,
+    required int bridgeFee,
+    required int networkFee,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiRosenPrepareLock(
+      handleId: _handleId!,
+      senderAddress: senderAddress,
+      spendAddresses: spendAddresses,
+      changeAddress: changeAddress,
+      tokenId: tokenId,
+      amount: amount,
+      toChain: toChain,
+      toAddress: toAddress,
+      bridgeFee: bridgeFee,
+      networkFee: networkFee,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
   /// Prepare a collateral adjustment on a Duckpools loan; confirm with
   /// [sendErg].
   Future<String> duckpoolsPrepareAdjust({
@@ -1365,6 +1427,61 @@ class WalletService {
       userAddress: userAddress,
       spendAddresses: spendAddresses,
       changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+  }
+
+  // ── SigmaFi ───────────────────────────────────────────
+
+  /// Prepare a SigmaFi loan request; confirm with [sendErg].
+  Future<String> sigmafiPrepareOpen({
+    required String loanAsset,
+    required int principal,
+    required int repayment,
+    required int termBlocks,
+    required int collateralErg,
+    required String collateralTokensJson,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiSigmafiPrepareOpen(
+      handleId: _handleId!,
+      loanAsset: loanAsset,
+      principal: principal,
+      repayment: repayment,
+      termBlocks: termBlocks,
+      collateralErg: collateralErg,
+      collateralTokensJson: collateralTokensJson,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+  }
+
+  /// Prepare a cancel, close, repay or liquidate of a SigmaFi box;
+  /// confirm with [sendErg].
+  Future<String> sigmafiPrepareSpend({
+    required String action,
+    required String boxJson,
+    required String userAddress,
+    required List<String> spendAddresses,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiSigmafiPrepareSpend(
+      handleId: _handleId!,
+      action: action,
+      boxJson: boxJson,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
       nodeUrl: nodeUrl,
       feeNano: feeNanoErg,
     );
