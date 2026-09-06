@@ -18,6 +18,6 @@ void main() {
     expect(waitingHint(at(const Duration(hours: 3)), now), ' Waiting 3 hours.');
     expect(waitingHint(at(const Duration(hours: 1)), now), ' Waiting 1 hour.');
     expect(waitingHint(at(const Duration(hours: 25)), now), ' Waiting 1 day.');
-    expect(waitingHint(at(const Duration(days: 3)), now), ' Waiting 3 days. The pool is thin; Reclaim takes it back, minus the mixing tokens.');
+    expect(waitingHint(at(const Duration(days: 3)), now), ' Waiting 3 days. The pool is thin; Withdraw now takes it back, minus the mixing tokens.');
   });
 }

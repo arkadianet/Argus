@@ -95,12 +95,12 @@ class _MixScreenState extends State<MixScreen> {
                 context,
                 preparationId: prepared.preparationId,
                 title: 'Enter the mix',
-                detail: 'The operator fee buys the mixing tokens that pay for each '
-                    'round. From here on the rounds run on their own '
+                detail: 'The operator fee buys the level: one mixing token per round. '
+                    'From here on the rounds run on their own '
                     '${mixService.backgroundEnabled ? 'about every fifteen minutes, with Argus closed too' : 'while Argus is open and unlocked'}.',
                 rows: [
                   ConfirmTxRow('Mixing', formatErg(prepared.amountNano), bold: true),
-                  ConfirmTxRow('Rounds', '${record?.roundsTarget ?? ''}'),
+                  ConfirmTxRow('Rounds', 'about ${record?.roundsTarget ?? ''}'),
                   ConfirmTxRow('Operator fee', formatErg(prepared.appFeeNano)),
                   ConfirmTxRow('Miner fee', formatErg(prepared.minerFeeNano)),
                 ],
@@ -165,7 +165,8 @@ class _MixScreenState extends State<MixScreen> {
         final plan = MixStartPlan(
           denomination: choice.denomination,
           level: choice.level,
-          rounds: choice.rounds,
+          // As ErgoMixer: the level is the number of rounds, one token each.
+          rounds: choice.level,
           destinationAddress: destination,
           neededNano: (need['needed_nano_erg'] as num).toInt(),
           operatorFeeNano: (need['operator_fee_nano'] as num).toInt(),
@@ -209,13 +210,14 @@ class _MixScreenState extends State<MixScreen> {
         final isHalf = r.phaseKind == 'half_posted';
         final ok = await showConfirmTransactionSheet(
           context,
-          title: isHalf ? 'Reclaim the half-mix box' : 'Withdraw from the mix',
-          confirmLabel: isHalf ? 'Reclaim' : 'Withdraw',
+          title: 'Withdraw from the mix',
+          confirmLabel: 'Withdraw',
           detail: isHalf
-              ? 'Nobody joined this box. It goes back to your destination and '
+              ? 'This box is still waiting for a partner, so it has not been mixed '
+                  'this round. It goes to your destination minus the miner fee, and '
                   'the mixing tokens on it are lost.'
-              : 'After ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'}. '
-                  'The money leaves the pool for the destination you chose.',
+              : 'After ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'} of about '
+                  '${r.roundsTarget}. The money leaves the pool for the destination you chose.',
           rows: [
             ConfirmTxRow('Amount', formatErg(r.denomination), bold: true),
             ConfirmTxRow('Rounds done', '${r.roundsDone} of ${r.roundsTarget}'),
@@ -223,7 +225,7 @@ class _MixScreenState extends State<MixScreen> {
         );
         if (!ok) return;
         final tx = await mixService.leave(r, destinationAddress: destination);
-        _snack('Sent: ${shorten(tx)}');
+        _snack('Withdrawing: ${shorten(tx)}');
       });
 
   Future<String?> _pickDestination(WalletRouteArgs args) async {
@@ -312,7 +314,7 @@ class _MixScreenState extends State<MixScreen> {
               body: 'Mixing moves a fixed amount of ERG through rounds with strangers '
                   'in the public ErgoMixer pool, so nothing on chain ties what comes '
                   'out to what went in. Entering costs an operator fee, each round '
-                  'needs a counterpart, and a mix can take hours or days. It only '
+                  'needs a partner, and a mix can take days. It only '
                   'moves while Argus is open and unlocked. The node Argus uses '
                   'still sees which boxes are yours: mix through your own node.',
               actionLabel: 'Turn on mixing',
@@ -326,7 +328,7 @@ class _MixScreenState extends State<MixScreen> {
               Text(
                 'A mix moves a fixed amount through rounds with strangers until '
                 'nothing on chain ties what comes out to what went in. Each round '
-                'needs a counterpart, so a mix can take hours or days. The pool is '
+                'needs a partner and can take hours, so a mix takes days. The pool is '
                 'shared with ErgoMixer; today it is thin. The node Argus talks to '
                 'sees which pool boxes are yours and the withdrawal, so a mix is '
                 'only as private as that node: use your own where you can.',
@@ -390,7 +392,7 @@ class _MixScreenState extends State<MixScreen> {
                 const EmptyState(
                   icon: Icons.blender_outlined,
                   title: 'No mixes yet',
-                  body: 'Start one above. You choose the amount, how many rounds, '
+                  body: 'Start one above. You choose the amount, the mixing level, '
                       'and where the money goes when it is done.',
                   compact: true,
                 )
@@ -447,6 +449,9 @@ class _ErrorLine extends StatelessWidget {
   }
 }
 
+/// "Level 1 · about 30 rounds": ErgoMixer's numbering, one token per round.
+String levelTitle({required int index, required int rounds}) => 'Level ${index + 1} · about $rounds rounds';
+
 /// One line under a ring: who is waiting, and what entering costs. Above
 /// five percent the fee is called out, because a flat batch price makes a
 /// small mix expensive and a large one cheap.
@@ -462,7 +467,7 @@ String ringSubtitle({required int value, required int waiting, required int? ope
 }
 
 /// How long a half box has waited since its last event, and after two
-/// days a nudge towards Reclaim. Empty when the wait is under an hour,
+/// days a nudge towards Withdraw now. Empty when the wait is under an hour,
 /// the events carry no time, or the clock went backwards.
 String waitingHint(List<Map<String, dynamic>> events, DateTime now) {
   final at = events.isEmpty ? null : (events.last['at'] as num?)?.toInt();
@@ -472,7 +477,7 @@ String waitingHint(List<Map<String, dynamic>> events, DateTime now) {
   final how = waited.inDays >= 1
       ? ' Waiting ${waited.inDays} ${waited.inDays == 1 ? 'day' : 'days'}.'
       : ' Waiting ${waited.inHours} ${waited.inHours == 1 ? 'hour' : 'hours'}.';
-  final nudge = waited.inDays >= 2 ? ' The pool is thin; Reclaim takes it back, minus the mixing tokens.' : '';
+  final nudge = waited.inDays >= 2 ? ' The pool is thin; Withdraw now takes it back, minus the mixing tokens.' : '';
   return '$how$nudge';
 }
 
@@ -482,15 +487,15 @@ String mixPhaseText(MixRecord r) {
     case 'pending':
       return 'Funded but not in the pool yet. Continue to enter.';
     case 'half_posted':
-      return 'Waiting for someone to join. Round ${r.roundsDone + 1} of ${r.roundsTarget}.${waitingHint(r.events, DateTime.now())}';
+      return 'Round ${r.roundsDone + 1} of about ${r.roundsTarget} · waiting for a partner.${waitingHint(r.events, DateTime.now())}';
     case 'full_owned':
       if (r.needsDestination) return 'Recovered from your seed. Choose where it should go.';
       if (r.readyToWithdraw) return 'Rounds done. Withdrawing on the next check.';
-      return 'Mixing. Round ${r.roundsDone} of ${r.roundsTarget} done.';
+      return 'Round ${r.roundsDone} of about ${r.roundsTarget} done · mixing.';
     case 'withdrawn':
       return 'Finished after ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'}.';
     case 'reclaimed':
-      return 'Taken back before anyone joined.';
+      return 'Withdrawn before a partner joined.';
   }
   return r.phaseKind;
 }
@@ -562,11 +567,7 @@ class _MixCard extends StatelessWidget {
               if (r.inPool)
                 OutlinedButton(
                   onPressed: working ? null : onLeave,
-                  child: Text(r.phaseKind == 'half_posted'
-                      ? 'Reclaim'
-                      : r.needsDestination
-                          ? 'Withdraw to…'
-                          : 'Withdraw now'),
+                  child: Text(r.needsDestination ? 'Withdraw to…' : 'Withdraw now'),
                 ),
               if (r.finished || r.pending)
                 TextButton(
@@ -585,12 +586,12 @@ class _StartChoice {
   const _StartChoice({
     required this.denomination,
     required this.level,
-    required this.rounds,
     required this.toStealth,
   });
   final int denomination;
+
+  /// Mixing tokens bought, which is also the number of rounds.
   final int level;
-  final int rounds;
   final bool toStealth;
 }
 
@@ -608,7 +609,6 @@ class _StartMixSheetState extends State<_StartMixSheet> {
   late List<({int level, int price, int rate})> _levels;
   int? _denomination;
   int? _level;
-  int _rounds = 3;
   bool _toStealth = true;
 
   @override
@@ -689,47 +689,31 @@ class _StartMixSheetState extends State<_StartMixSheet> {
                   ),
                 ),
               const SizedBox(height: 12),
-              const SectionLabel('Mixing tokens'),
+              const SectionLabel('Mixing level'),
               const SizedBox(height: 4),
               if (_levels.isEmpty)
                 Text('None for sale right now', style: TextStyle(color: theme.colorScheme.error))
               else
-                DropdownButtonFormField<int>(
-                  initialValue: _level,
-                  items: [
-                    for (final l in _levels)
-                      DropdownMenuItem(
-                        value: l.level,
-                        child: Text('${l.level} tokens · ${formatErg(l.price, maxFrac: 4)}'),
-                      ),
-                  ],
-                  onChanged: (v) => setState(() => _level = v),
-                ),
-              Text(
-                'Each round burns one or two tokens; the smallest batch covers more '
-                'rounds than you can choose here. Tokens left when the mix ends are lost.',
-                style: TextStyle(color: muted, fontSize: 12),
-              ),
-              const SizedBox(height: 12),
-              const SectionLabel('Rounds'),
-              Row(
-                children: [
-                  Expanded(
-                    child: Slider(
-                      value: _rounds.toDouble(),
-                      min: 1,
-                      max: 10,
-                      divisions: 9,
-                      label: '$_rounds',
-                      onChanged: (v) => setState(() => _rounds = v.round()),
+                for (final (i, l) in _levels.indexed)
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      l.level == _level ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                      color: l.level == _level ? accentOf(context) : muted,
+                    ),
+                    onTap: () => setState(() => _level = l.level),
+                    title: Text(levelTitle(index: i, rounds: l.level)),
+                    subtitle: Text(
+                      'Cost per box ${formatErg(l.price, maxFrac: 4)}',
+                      style: TextStyle(color: muted, fontSize: 12),
                     ),
                   ),
-                  SizedBox(width: 28, child: Text('$_rounds', textAlign: TextAlign.end)),
-                ],
-              ),
               Text(
-                'More rounds, more strangers between what went in and what comes out, '
-                'and more waiting.',
+                'The level is how many rounds the mix runs, one mixing token each, '
+                'as in ErgoMixer. The count is approximate: a round with a partner '
+                'shares tokens. Each round waits for a partner and can take hours, '
+                'so a mix takes days. Withdraw now is always available.',
                 style: TextStyle(color: muted, fontSize: 12),
               ),
               const SizedBox(height: 12),
@@ -757,7 +741,6 @@ class _StartMixSheetState extends State<_StartMixSheet> {
                           _StartChoice(
                             denomination: _denomination!,
                             level: _level!,
-                            rounds: _rounds,
                             toStealth: _toStealth,
                           ),
                         )

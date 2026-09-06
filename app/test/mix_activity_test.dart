@@ -85,11 +85,11 @@ void main() {
     expect(mixStripSummary([rec(kind: 'withdrawn', acknowledged: true)]), isNull, reason: 'seen and done');
 
     final one = mixStripSummary([rec(kind: 'half_posted', done: 1, target: 3)]);
-    expect(one!.text, '1 ERG · round 1 of 3 · waiting for a counterpart');
+    expect(one!.text, '1 ERG · round 1 of about 3 · waiting for a partner');
     expect(one.finished, isNull);
 
     final ready = mixStripSummary([rec(done: 3, target: 3, checked: DateTime.now())]);
-    expect(ready!.text, startsWith('1 ERG · round 3 of 3 · ready to withdraw · checked'));
+    expect(ready!.text, startsWith('1 ERG · round 3 of about 3 · ready to withdraw · checked'));
 
     final many = mixStripSummary([
       rec(mixId: 0, kind: 'half_posted'),
