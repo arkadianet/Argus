@@ -26,6 +26,7 @@ class ConfirmTransactionSheet extends StatefulWidget {
     required this.title,
     required this.rows,
     this.confirmLabel = 'Sign & broadcast',
+    this.broadcasts = true,
     this.detail,
     this.recipientAddress,
     this.allowSignOnly = false,
@@ -36,6 +37,9 @@ class ConfirmTransactionSheet extends StatefulWidget {
   final String title;
   final List<ConfirmTxRow> rows;
   final String confirmLabel;
+
+  /// Whether Argus broadcasts after signing; false when a dApp page does.
+  final bool broadcasts;
   final String? detail;
 
   /// Shown in full, selectable, so the user can verify every character.
@@ -85,8 +89,11 @@ class _ConfirmTransactionSheetState extends State<ConfirmTransactionSheet> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'This will sign and broadcast a transaction to the '
-                      'network. It cannot be undone once confirmed.',
+                      widget.broadcasts
+                          ? 'This will sign and broadcast a transaction to the '
+                              'network. It cannot be undone once confirmed.'
+                          : 'This will sign a transaction and hand it to the page, '
+                              'which broadcasts it. Once broadcast it cannot be undone.',
                       style: theme.textTheme.bodySmall
                           ?.copyWith(color: rustFor(context)),
                     ),
@@ -225,6 +232,7 @@ Future<ConfirmChoice> showConfirmTransactionChoice(
   String? expandableTitle,
   Widget? expandable,
   int? preparationId,
+  bool broadcasts = true,
 }) async {
   // Every wallet-built transaction can show its whole shape on request.
   if (expandable == null && preparationId != null) {
@@ -245,6 +253,7 @@ Future<ConfirmChoice> showConfirmTransactionChoice(
       detail: detail,
       recipientAddress: recipientAddress,
       allowSignOnly: allowSignOnly,
+      broadcasts: broadcasts,
       expandableTitle: expandableTitle,
       expandable: expandable,
     ),
