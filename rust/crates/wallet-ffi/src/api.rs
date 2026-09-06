@@ -4244,3 +4244,101 @@ pub async fn duckpools_prepare_refund(
 pub fn duckpools_order_outcome(proxy_box_id: String, tx_json: String) -> Result<String, String> {
     crate::api_duckpools_impl::outcome_json(&proxy_box_id, &tx_json)
 }
+
+// ── EIP-12 dApp connector ───────────────────────────────────────────────
+
+/// Check and summarise an unsigned EIP-12 transaction a dApp page asks
+/// the wallet to sign. Every input and data input must carry its whole
+/// box, and each must hash back to its id, so a page cannot slip a
+/// mangled box past the reducer. The result carries `preparation_id`
+/// for the confirm sheet and `sign_preparation`, and the same summary
+/// ErgoPay requests show.
+#[flutter_rust_bridge::frb]
+pub async fn dapp_prepare_sign(
+    handle_id: u64,
+    tx_json: String,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let unsigned_tx = crate::api_dapp_impl::parse_unsigned(&tx_json)?;
+    if unsigned_tx.inputs.is_empty() || unsigned_tx.outputs.is_empty() {
+        return Err(ArgusError::TxBuildFailed(
+            "the transaction has no inputs or no outputs".into(),
+        )
+        .to_json_string());
+    }
+    let ergo_boxes = unsigned_tx
+        .inputs
+        .iter()
+        .map(crate::api_mix_impl::to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let data_input_boxes = unsigned_tx
+        .data_inputs
+        .iter()
+        .map(crate::api_dapp_impl::data_input_to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let tx = ergo_tx::chain::to_unsigned_transaction(&unsigned_tx)
+        .map_err(|e| ArgusError::TxBuildFailed(e).to_json_string())?;
+    let input_json: Vec<Option<serde_json::Value>> =
+        ergo_boxes.iter().map(crate::api_dapp_impl::node_json).collect();
+    let summary = with_handle(handle_id, "dapp_prepare_sign", |h| {
+        Ok(crate::api_ergopay_impl::summarize_unsigned(
+            &tx,
+            &|addr| h.owns_address(addr).unwrap_or(false),
+            &input_json,
+        ))
+    })?;
+    // A page may only ask the wallet to spend the wallet's own boxes; a
+    // transaction spending a contract box the wallet cannot sign for
+    // would fail later anyway, but one spending someone else's P2PK box
+    // is a sign of a confused or hostile page and is refused up front.
+    let foreign_p2pk = ergo_boxes.iter().any(|b| {
+        let tree = b.ergo_tree.sigma_serialize_bytes().map(hex::encode).unwrap_or_default();
+        tree.starts_with("0008cd")
+            && !with_handle(handle_id, "dapp_prepare_sign", |h| {
+                Ok(h.owns_address(&crate::api_ergopay_impl::tree_to_address(&b.ergo_tree))
+                    .unwrap_or(false))
+            })
+            .unwrap_or(false)
+    });
+    if foreign_p2pk {
+        return Err(ArgusError::TxBuildFailed(
+            "the transaction spends a box that belongs to another wallet".into(),
+        )
+        .to_json_string());
+    }
+    let miner_fee = crate::api_dapp_impl::miner_fee_of(&unsigned_tx);
+    let change_erg = summary["change_nano_erg"].as_i64().unwrap_or(0);
+    let sent = summary["sent_nano_erg"].as_i64().unwrap_or(0);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes,
+        data_input_boxes,
+        unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: sent,
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "miner_fee": miner_fee,
+        "summary": summary,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// The wallet's unspent boxes in the shape `ergo.get_utxos()` returns:
+/// full boxes with string amounts.
+#[flutter_rust_bridge::frb]
+pub async fn dapp_utxos(
+    handle_id: u64,
+    addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let client = node_client(node_url).await?;
+    let (_, eip12) = gather_unspent(handle_id, &client, &addresses).await?;
+    let list: Vec<serde_json::Value> = eip12.iter().map(crate::api_dapp_impl::utxo_json).collect();
+    Ok(serde_json::Value::Array(list).to_string())
+}

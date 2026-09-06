@@ -971,3 +971,31 @@ String duckpoolsOrderOutcome({
   proxyBoxId: proxyBoxId,
   txJson: txJson,
 );
+
+/// Check and summarise an unsigned EIP-12 transaction a dApp page asks
+/// the wallet to sign. Every input and data input must carry its whole
+/// box, and each must hash back to its id, so a page cannot slip a
+/// mangled box past the reducer. The result carries `preparation_id`
+/// for the confirm sheet and `sign_preparation`, and the same summary
+/// ErgoPay requests show.
+Future<String> dappPrepareSign({
+  required BigInt handleId,
+  required String txJson,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDappPrepareSign(
+  handleId: handleId,
+  txJson: txJson,
+  nodeUrl: nodeUrl,
+);
+
+/// The wallet's unspent boxes in the shape `ergo.get_utxos()` returns:
+/// full boxes with string amounts.
+Future<String> dappUtxos({
+  required BigInt handleId,
+  required List<String> addresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiDappUtxos(
+  handleId: handleId,
+  addresses: addresses,
+  nodeUrl: nodeUrl,
+);

@@ -1374,6 +1374,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                     onTap: () => _go('/duckpools'),
                   ),
                   _discoverCard(
+                    title: 'dApp browser',
+                    onLearn: () => _go('/dapps'),
+                    subtitle: 'Open any Ergo dApp with this wallet standing in for Nautilus.',
+                    icon: Icons.language,
+                    onTap: () => _go('/dapps'),
+                  ),
+                  _discoverCard(
                     title: 'Mix',
                     onLearn: () => _go('/mix'),
                     subtitle: mixService.enabled
