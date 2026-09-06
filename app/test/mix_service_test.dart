@@ -142,9 +142,11 @@ class FakeGateway implements MixGateway {
     required int nowUnix,
   }) async =>
       jsonEncode(await _next('prepareEntry'));
+  final notificationIds = <int?>[];
   @override
-  Future<void> notify({required String title, required String body}) async {
+  Future<void> notify({required String title, required String body, int? mixId}) async {
     notifications.add('$title | $body');
+    notificationIds.add(mixId);
   }
 }
 
@@ -393,7 +395,25 @@ void main() {
     expect(first.phaseKind, 'full_owned', reason: 'state untouched by a failed move');
     expect(second.finished, isTrue);
     expect(gw.notifications.last, 'A mix finished | Delivered after 3 rounds.');
+    expect(gw.notificationIds.last, 1, reason: 'the mix id keeps two mixes at one step apart');
     expect(svc.lastTickError, isNull);
+  });
+
+  test('a reclaim is announced as taken back, not delivered', () async {
+    final gw = FakeGateway()
+      ..script['observe'] = ['same']
+      ..script['plan'] = [
+        {'action': 'reclaim', 'reason': 'nobody_joined'},
+      ]
+      ..script['advance'] = [
+        {'state': state(mixId: 4, kind: 'reclaimed', done: 0), 'action': 'reclaim', 'tx_id': 'txr'},
+      ];
+    final ex = FakeExplorer()..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null};
+    final svc = await loaded(gw, ex, [state(mixId: 4, kind: 'half_posted', done: 0)]);
+    await svc.tick();
+    expect(svc.records.single.phaseKind, 'reclaimed');
+    expect(gw.notifications.last, 'A mix finished | Taken back from the pool; nobody joined it.');
+    expect(gw.notificationIds.last, 4);
   });
 
   test('a recovered mix with no destination is not withdrawn on its own', () async {

@@ -52,12 +52,15 @@ class NotificationService {
     } catch (_) {}
   }
 
-  /// Progress of a mix: a round done, or the money delivered.
-  Future<void> mixProgress({required String title, required String body}) async {
+  /// Progress of a mix: a round done, or the money delivered. `mixId`
+  /// keeps two mixes at the same step from replacing each other's
+  /// notification, since the text names no amount that would tell them
+  /// apart.
+  Future<void> mixProgress({required String title, required String body, int? mixId}) async {
     if (!_ready) return;
     try {
       await _plugin.show(
-        id: (title + body).hashCode & 0x7fffffff,
+        id: ('$mixId|$title|$body').hashCode & 0x7fffffff,
         title: title,
         body: body,
         notificationDetails: NotificationDetails(

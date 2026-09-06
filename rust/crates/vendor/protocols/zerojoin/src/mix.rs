@@ -447,6 +447,9 @@ impl ChainView {
             .iter()
             .filter(|t| t.tokens_available >= level as i64)
             .filter_map(|t| t.batch_price(level).ok().map(|p| (p, t)))
+            // A negative "price" is a hostile register, not a bargain: it
+            // must not win over an honest box at the same level.
+            .filter(|(p, _)| *p >= 0)
             .min_by_key(|(p, t)| (*p, -t.tokens_available))
             .map(|(_, t)| t)
     }
@@ -973,13 +976,29 @@ mod tests {
 
         // Junk batches from a hostile box never reach the list or the pick.
         let mut junk = fixture_token_box();
-        junk.batches = vec![(0, 1), (-5, 1), (20, -7), (20, 40_000_000)];
+        junk.batches = vec![(0, 1), (-5, 1), (20, 40_000_000)];
         junk.tokens_available = 100;
         let view = ChainView { token: vec![junk], ..view_with(vec![], vec![]) };
         assert_eq!(view.token_levels(), vec![(20, 40_000_000)]);
         assert!(view.token_box_for(0).is_none());
         assert!(view.token_box_for(-5).is_none());
         assert!(view.token_box_for(20).is_some());
+        let mut negative = fixture_token_box();
+        negative.batches = vec![(20, -7)];
+        negative.tokens_available = 100;
+        let view = ChainView { token: vec![negative], ..view_with(vec![], vec![]) };
+        assert!(view.token_levels().is_empty());
+        assert!(view.token_box_for(20).is_none(), "a negative price is not for sale");
+
+        // Two boxes at one level: the negative price loses to the honest one.
+        let mut hostile = fixture_token_box();
+        hostile.batches = vec![(20, -1)];
+        hostile.tokens_available = 1_000_000;
+        let mut honest = fixture_token_box();
+        honest.batches = vec![(20, 40_000_000)];
+        honest.tokens_available = 50;
+        let view = ChainView { token: vec![hostile, honest], ..view_with(vec![], vec![]) };
+        assert_eq!(view.token_box_for(20).map(|t| t.tokens_available), Some(50));
     }
 
     #[test]
