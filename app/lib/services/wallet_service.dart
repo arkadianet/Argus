@@ -14,6 +14,18 @@ import 'secure_storage.dart';
 import 'wallet_database_service.dart';
 
 /// Metadata for a stored wallet.
+/// [wallets] in the order of [order] (wallet ids); any not listed keep
+/// their place after the listed ones.
+List<WalletInfo> orderWallets(List<WalletInfo> wallets, List<String> order) {
+  if (order.isEmpty) return wallets;
+  final rank = {for (final (i, id) in order.indexed) id: i};
+  final out = List<WalletInfo>.of(wallets);
+  final base = order.length;
+  int key(WalletInfo w) => rank[w.walletId] ?? base + wallets.indexOf(w);
+  out.sort((a, b) => key(a).compareTo(key(b)));
+  return out;
+}
+
 class WalletInfo {
   final String walletId;
   final String name;
@@ -760,6 +772,21 @@ class WalletService {
   }
 
   /// Returns metadata for all stored wallets.
+  /// The order the user put their wallets in, as wallet ids; wallets not
+  /// listed follow in storage order.
+  static const _orderKey = 'argus_wallet_order_v1';
+
+  Future<List<String>> walletOrder() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_orderKey) ?? const [];
+  }
+
+  Future<void> setWalletOrder(List<String> ids) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList(_orderKey, ids);
+  }
+
+  /// Wallets as the user ordered them, in every list that shows them.
   Future<List<WalletInfo>> listWallets() async {
     final ids = await SecureStorageService.listWalletIds();
     final all = await _loadAllWalletMeta();
@@ -775,7 +802,7 @@ class WalletService {
             );
       infos.add(info.copyWith(isUnlocked: _handles.containsKey(id)));
     }
-    return infos;
+    return orderWallets(infos, await walletOrder());
   }
 
   /// Returns the pinned address index for [walletId] (defaults to the active
@@ -1231,7 +1258,8 @@ class WalletService {
     String? nodeUrl,
     int? feeNanoErg,
     String? loanBoxesJson,
-    int? collateralNano,
+    String? collateralAsset,
+    int? collateralAmount,
     String? collateralBoxId,
   }) {
     _requireUnlocked();
@@ -1249,7 +1277,8 @@ class WalletService {
       nodeUrl: nodeUrl,
       feeNano: feeNanoErg,
       loanBoxesJson: loanBoxesJson,
-      collateralNano: collateralNano,
+      collateralAsset: collateralAsset,
+      collateralAmount: collateralAmount,
       collateralBoxId: collateralBoxId,
     );
   }
@@ -1284,6 +1313,34 @@ class WalletService {
       feeNano: feeNanoErg,
     );
     return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  /// Prepare a collateral adjustment on a Duckpools loan; confirm with
+  /// [sendErg].
+  Future<String> duckpoolsPrepareAdjust({
+    required String loanBoxesJson,
+    required String poolKey,
+    required String collateralBoxId,
+    required int newAmount,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiDuckpoolsPrepareAdjust(
+      handleId: _handleId!,
+      loanBoxesJson: loanBoxesJson,
+      poolKey: poolKey,
+      collateralBoxId: collateralBoxId,
+      newAmount: newAmount,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
   }
 
   /// Prepare the refund of an unfilled order; confirm with [sendErg].
