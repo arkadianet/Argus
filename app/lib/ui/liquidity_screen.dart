@@ -525,10 +525,11 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
       if (!ok || !mounted) return;
-      final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
-      await _savePending({
+      // Everything step 2 needs is known before step 1 goes out, so write the
+      // record first: if the app dies between the broadcast and the write, the
+      // bootstrap box would otherwise be stranded with the user's reserves in it.
+      final record = <String, dynamic>{
         'bootstrap_box_id': prepared['bootstrap_box_id'],
-        'bootstrap_tx_id': txId,
         'pool_type': poolType,
         'x_token_id': _xTokenId,
         'x_amount': xUnits,
@@ -539,7 +540,11 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
         'user_lp_share': prepared['user_lp_share'],
         'pair': '${_name(_xTokenId)} / ${_name(y)}',
         'created_at': DateTime.now().millisecondsSinceEpoch,
-      });
+        'sent': false,
+      };
+      await _savePending(record);
+      final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
+      await _savePending({...record, 'bootstrap_tx_id': txId, 'sent': true});
     } catch (e) {
       if (mounted) showErrorSheet(context, title: 'Could not start the pool', message: '$e');
     } finally {
@@ -607,8 +612,14 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
               children: [
                 Text('Step 2 waiting: ${pending['pair']}', style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
-                Text('Step 1 was sent ${formatSyncAge(DateTime.fromMillisecondsSinceEpoch((pending['created_at'] as num).toInt()))}. '
-                    'Once it has confirmed, finish the pool.', style: TextStyle(color: muted, fontSize: 12.5)),
+                Text(
+                  (pending['sent'] as bool? ?? true)
+                      ? 'Step 1 was sent ${formatSyncAge(DateTime.fromMillisecondsSinceEpoch((pending['created_at'] as num).toInt()))}. '
+                          'Once it has confirmed, finish the pool.'
+                      : 'Step 1 was prepared ${formatSyncAge(DateTime.fromMillisecondsSinceEpoch((pending['created_at'] as num).toInt()))} but Argus never saw it '
+                          'accepted. If it did go out, finish the pool once it confirms; if it did not, forget this and start again.',
+                  style: TextStyle(color: muted, fontSize: 12.5),
+                ),
                 const SizedBox(height: 10),
                 Wrap(spacing: 8, children: [
                   FilledButton(onPressed: _working ? null : _create, child: const Text('Finish the pool')),
