@@ -229,6 +229,17 @@ void main() {
     expect(service.records, isEmpty);
   });
 
+  test('a failed funding broadcast leaves no record behind', () async {
+    await expectLater(
+      flow(answers: [true], boxes: ['fund1'], failIds: {7}).start(plan, fundingAddress: '9me'),
+      throwsA(isA<StateError>().having((e) => e.message, 'message', 'node down')),
+    );
+    expect(ops().last, 'broadcast:7:records=1', reason: 'the record existed while the money could move');
+    expect(service.records, isEmpty, reason: 'nothing went out, so nothing is recorded');
+    final prefs = await SharedPreferences.getInstance();
+    expect(jsonDecode(prefs.getString('argus_mixes_v1_w') ?? '[]'), isEmpty);
+  });
+
   test('declining the entry leaves a pending mix that can be continued later', () async {
     final f = flow(answers: [true, false, true], boxes: ['fund1', 'fund1']);
     final record = await f.start(plan, fundingAddress: '9me');

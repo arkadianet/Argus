@@ -3641,12 +3641,10 @@ pub fn mix_observe(
 ) -> Result<String, String> {
     let state = crate::api_mix_impl::parse_state(&state_json)?;
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
-    let g = with_handle(handle_id, "mix_observe", |h| {
-        h.mix_secret(state.mix_id, state.round)
-            .map(|s| *s.public_key())
-            .map_err(err_str)
+    let secret = with_handle(handle_id, "mix_observe", |h| {
+        h.mix_secret(state.mix_id, state.round).map_err(err_str)
     })?;
-    let next = zerojoin::observe(state, &view, &g, mix_now(now_unix));
+    let next = zerojoin::observe(state, &view, &secret, mix_now(now_unix));
     crate::api_mix_impl::state_json(&next)
 }
 
@@ -3830,11 +3828,10 @@ pub fn mix_observe_with_key(
     let state = crate::api_mix_impl::parse_state(&state_json)?;
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
     let key = crate::api_mix_impl::parse_key(&key_hex, state.mix_id)?;
-    let g = *key
+    let secret = key
         .round_secret(state.round)
-        .map_err(|e| ArgusError::SigningFailed(e.to_string()).to_json_string())?
-        .public_key();
-    let next = zerojoin::observe(state, &view, &g, mix_now(now_unix));
+        .map_err(|e| ArgusError::SigningFailed(e.to_string()).to_json_string())?;
+    let next = zerojoin::observe(state, &view, &secret, mix_now(now_unix));
     crate::api_mix_impl::state_json(&next)
 }
 

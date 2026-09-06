@@ -116,7 +116,15 @@ class MixStartFlow {
       destinationAddress: plan.destinationAddress,
       fundingNano: plan.neededNano,
     );
-    final sent = await broadcast(funding.preparationId);
+    final MixBroadcast sent;
+    try {
+      sent = await broadcast(funding.preparationId);
+    } catch (e) {
+      // Nothing went out, so nothing is owed a record: a pending mix with
+      // no funding would only wait for a box that was never sent.
+      await service.remove(record);
+      rethrow;
+    }
     await service.recordFunding(record, txId: sent.txId, outputBoxIds: sent.outputBoxIds);
     onStatus?.call('Funding sent: ${sent.txId}');
     return enter(record, fundingAddress: fundingAddress, neededNano: plan.neededNano);

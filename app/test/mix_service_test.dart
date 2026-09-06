@@ -678,6 +678,37 @@ void main() {
     expect(svc.backgroundEnabled, isFalse);
   });
 
+  test('a lock does not cancel the background job while keys are stored', () async {
+    final gw = FakeGateway();
+    final wanted = <bool>[];
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true, 'argus_mixing_background': true});
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post, schedule: wanted.add);
+    await svc.load();
+    final created = await svc.createMix(denomination: 1000000000, level: 20, rounds: 1, destinationAddress: '9a');
+    await svc.commitEntry(created, state(mixId: 0, kind: 'half_posted', boxId: 'hb', done: 0), 'tx');
+    expect(gw.keys, {'w1:0': 'key-0'});
+
+    // The usual sequence: the app goes to the back, auto-lock fires and
+    // resets the service, then a lifecycle change asks again.
+    await svc.setForeground(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(wanted.last, isTrue);
+    svc.reset();
+    expect(svc.active, isEmpty);
+    await svc.setForeground(true);
+    await svc.setForeground(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(wanted.last, isTrue, reason: 'the stored key says there is a mix to move');
+
+    // With the keys gone (background mixing switched off elsewhere), the
+    // job is not wanted.
+    gw.keys.clear();
+    await svc.setForeground(true);
+    await svc.setForeground(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(wanted.last, isFalse);
+  });
+
   test('turning mixing off also turns background mixing off and deletes every key', () async {
     final gw = FakeGateway()..keys['w1:3'] = 'k'..keys['other:9'] = 'k';
     SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true, 'argus_mixing_background': true});
@@ -920,6 +951,26 @@ void main() {
     final w = svc.records.firstWhere((r) => r.mixId == 1);
     expect(w.events.last['height'], 4242);
     expect(svc.mixActivityRows().firstWhere((r) => r['tx_id'] == 'txw')['confirmed'], isTrue);
+  });
+
+  test('the last finished mix learns its height with nothing else active', () async {
+    final gw = FakeGateway();
+    final ex = FakeExplorer()..txs['txw'] = {'inclusionHeight': 4242, 'outputs': []};
+    final done = state(mixId: 1, kind: 'withdrawn', done: 3)
+      ..['events'] = [
+        {'at': 5, 'action': 'withdrawn', 'round': 2, 'tx_id': 'txw'},
+      ];
+    final svc = await loaded(gw, ex, [done]);
+    expect(svc.active, isEmpty);
+    await svc.tick();
+    expect(svc.records.single.events.last['height'], 4242);
+    expect(gw.calls.where((c) => c.startsWith('observe')), isEmpty, reason: 'no engine work without an active mix');
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('argus_mixes_v1_w1'), contains('4242'), reason: 'persisted');
+    // Learned once: the next tick does not ask again.
+    ex.requests.clear();
+    await svc.tick();
+    expect(ex.requests, isEmpty);
   });
 
   test('an explorer "not found" body for our own box is not a box', () async {

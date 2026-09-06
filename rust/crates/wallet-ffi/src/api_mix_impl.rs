@@ -351,8 +351,8 @@ pub fn build_move(
         .full_by_id(box_id)
         .ok_or_else(|| err("our full-mix box is not in the snapshot"))?;
     let fee_box = view
-        .fee_box()
-        .ok_or_else(|| err("no fee emission box to pay the miner from"))?;
+        .fee_box_for(miner_fee)
+        .ok_or_else(|| err("no fee emission box can pay this miner fee"))?;
     let current = secret_for(state.round)?;
     match next {
         Plan::Wait { .. } => Ok(None),
@@ -467,8 +467,8 @@ pub fn build_leave(
                 .full_by_id(box_id)
                 .ok_or_else(|| err("our full-mix box is not in the snapshot"))?;
             let fee_box = view
-                .fee_box()
-                .ok_or_else(|| err("no fee emission box to pay the miner from"))?;
+                .fee_box_for(miner_fee)
+                .ok_or_else(|| err("no fee emission box can pay this miner fee"))?;
             withdraw(
                 state,
                 full,

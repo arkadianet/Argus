@@ -598,8 +598,32 @@ class MixService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _reschedule() =>
-      _schedule?.call(enabled && backgroundEnabled && active.isNotEmpty && !foreground);
+  /// Whether the background job is wanted: background mixing on, the app
+  /// in the back, and a mix to move. "A mix to move" is read from the
+  /// keystore, not only from memory: a lock empties the in-memory records
+  /// (see [reset]) and must not take the job with it, since the job is
+  /// for exactly the time the wallet is locked and the app closed.
+  Future<bool> backgroundWanted() async {
+    if (!enabled || !backgroundEnabled || foreground) return false;
+    if (active.isNotEmpty) return true;
+    try {
+      return (await _gw.listKeys()).isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _reschedule() {
+    final schedule = _schedule;
+    if (schedule == null) return;
+    // Answer at once when memory settles it; ask the keystore only when
+    // memory shows no mix, which is what a lock leaves behind.
+    if (!enabled || !backgroundEnabled || foreground || active.isNotEmpty) {
+      schedule(enabled && backgroundEnabled && !foreground && active.isNotEmpty);
+      return;
+    }
+    backgroundWanted().then(schedule);
+  }
 
   /// Take the cross-isolate lease, or return false if the other driver
   /// holds an unexpired one. Preferences are process-wide on Android, so
@@ -797,15 +821,47 @@ class MixService extends ChangeNotifier {
 
   /// A finished mix has nothing left to observe, so its last transaction
   /// is looked up once to learn its inclusion height.
-  Future<void> _confirmFinished(String base, MixRecord r) async {
-    final events = (r.state['events'] as List?);
-    if (events == null || events.isEmpty) return;
-    final last = events.last;
-    if (last is! Map || last['height'] != null) return;
-    final txId = last['tx_id']?.toString() ?? '';
-    if (txId.isEmpty) return;
-    final h = await _txInclusionHeight(base, txId);
-    if (h != null && h > 0) last['height'] = h;
+  String get _explorerBase => _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
+
+  /// Whether a finished mix still lacks the height of its last transaction.
+  static bool _awaitsHeight(MixRecord r) {
+    final events = r.state['events'] as List?;
+    final last = events == null || events.isEmpty ? null : events.last;
+    return r.finished && last is Map && last['height'] == null && (last['tx_id']?.toString() ?? '').isNotEmpty;
+  }
+
+  /// Outside a tick: give every finished mix its last height, once.
+  Future<void> _confirmAllFinished() async {
+    if (_ticking || !records.any(_awaitsHeight)) return;
+    _ticking = true;
+    final gen = _generation;
+    try {
+      var changed = false;
+      for (final r in records.where(_awaitsHeight).toList()) {
+        changed |= await _confirmFinished(_explorerBase, r);
+        if (gen != _generation) return;
+      }
+      if (changed) {
+        await _persist();
+        notifyListeners();
+      }
+    } catch (_) {
+      // A height that could not be read is asked for again next time.
+    } finally {
+      _ticking = false;
+    }
+  }
+
+  /// True when the height was learned now.
+  Future<bool> _confirmFinished(String base, MixRecord r) async {
+    if (!_awaitsHeight(r)) return false;
+    final last = (r.state['events'] as List).last as Map;
+    final h = await _txInclusionHeight(base, last['tx_id'].toString());
+    if (h != null && h > 0) {
+      last['height'] = h;
+      return true;
+    }
+    return false;
   }
 
   /// Inclusion height of a transaction, or null while it is not in a block.
@@ -1132,9 +1188,14 @@ class MixService extends ChangeNotifier {
   Future<void> tick() async {
     if (_ticking || !enabled || !_gw.isUnlocked) return;
     if (_walletId == null || _walletId != _gw.walletId) return;
-    if (active.isEmpty) return;
     // In the back with background mixing on, the job is the driver.
     if (backgroundEnabled && !foreground) return;
+    if (active.isEmpty) {
+      // Nothing moves, but a mix that just finished may still be waiting
+      // to learn the height of its last transaction.
+      await _confirmAllFinished();
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     if (!await _acquireLease(prefs, 'ui')) return;
     _ticking = true;
@@ -1147,9 +1208,8 @@ class MixService extends ChangeNotifier {
         await _step(r, snap);
         if (gen != _generation) return;
       }
-      final base = _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
       for (final r in records) {
-        if (r.finished) await _confirmFinished(base, r);
+        if (r.finished) await _confirmFinished(_explorerBase, r);
         if (gen != _generation) return;
       }
       lastTickAt = _clock();
