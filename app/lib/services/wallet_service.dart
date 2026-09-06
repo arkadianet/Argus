@@ -1338,6 +1338,29 @@ class WalletService {
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
+  // ── EIP-12 dApp connector ───────────────────────────────────────────
+
+  /// Check and summarise an unsigned EIP-12 transaction from a dApp page;
+  /// sign with [signPreparation].
+  Future<String> dappPrepareSign(String txJson, {String? nodeUrl}) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiDappPrepareSign(
+      handleId: _handleId!,
+      txJson: txJson,
+      nodeUrl: nodeUrl,
+    );
+  }
+
+  /// The wallet's unspent boxes in the shape `ergo.get_utxos()` returns.
+  Future<String> dappUtxos(List<String> addresses, {String? nodeUrl}) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiDappUtxos(
+      handleId: _handleId!,
+      addresses: addresses,
+      nodeUrl: nodeUrl,
+    );
+  }
+
   // ── Duckpools ───────────────────────────────────────────────────────
 
   /// Prepare a Duckpools order of any kind; confirm with [sendErg].
