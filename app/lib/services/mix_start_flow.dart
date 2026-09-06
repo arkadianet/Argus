@@ -1,3 +1,4 @@
+import '../bridge/argus_error.dart';
 import 'mix_service.dart';
 
 /// What the user chose on the start sheet, plus what entering will cost.
@@ -67,6 +68,9 @@ typedef Broadcast = Future<MixBroadcast> Function(int preparationId);
 /// from before the ids were kept) the amount is all there is to go on.
 typedef FindFundingBox = Future<String?> Function(int neededNano, List<String> candidates);
 
+/// Whether the chain knows a box by id, spent or not.
+typedef FindBox = Future<bool> Function(String boxId);
+
 /// Putting money into the pool takes two confirmed transactions: a plain
 /// self-send that makes a box of exactly the right size, and the entry
 /// that spends it. This runs those steps in order, over injected calls, so
@@ -83,6 +87,7 @@ class MixStartFlow {
     required this.confirm,
     required this.broadcast,
     required this.findFundingBox,
+    required this.findBox,
     this.pollInterval = const Duration(seconds: 6),
     this.maxWait = const Duration(minutes: 12),
     this.onStatus,
@@ -94,6 +99,7 @@ class MixStartFlow {
   final ConfirmStep confirm;
   final Broadcast broadcast;
   final FindFundingBox findFundingBox;
+  final FindBox findBox;
   final Duration pollInterval;
   final Duration maxWait;
   final void Function(String)? onStatus;
@@ -116,7 +122,23 @@ class MixStartFlow {
       destinationAddress: plan.destinationAddress,
       fundingNano: plan.neededNano,
     );
-    final sent = await broadcast(funding.preparationId);
+    final MixBroadcast sent;
+    try {
+      sent = await broadcast(funding.preparationId);
+    } catch (e) {
+      if (broadcastCertainlyFailed(e)) {
+        // Nothing went out, so nothing is owed a record: a pending mix
+        // with no funding would only wait for a box that was never sent.
+        await service.remove(record);
+        rethrow;
+      }
+      // The node may have taken the transaction and lost the answer: the
+      // record stays, says so, and Continue adopts the box if it confirms.
+      const why = 'The node did not confirm receiving the funding transaction; it may still be on chain. '
+          'If it confirms, Continue finds the box. If it does not appear, remove the mix.';
+      await service.markFundingUncertain(record, why);
+      throw StateError('$why (${describeError(e)})');
+    }
     await service.recordFunding(record, txId: sent.txId, outputBoxIds: sent.outputBoxIds);
     onStatus?.call('Funding sent: ${sent.txId}');
     return enter(record, fundingAddress: fundingAddress, neededNano: plan.neededNano);
@@ -135,16 +157,26 @@ class MixStartFlow {
     final needed = record.fundingNano ?? neededNano;
 
     // An entry was staged and may have been broadcast before the app
-    // stopped. If the funding box is gone, it was: adopt the staged state
-    // and let the next check confirm it on chain. If the box is still
-    // there, the entry never went out and is built again.
+    // stopped. The staged state names the box the entry creates: seen on
+    // chain, the entry went out, so adopt the state. Not seen with the
+    // funding box still there, it never went out and is built again.
+    // Neither: something else spent the funding box, and the attempt is
+    // cleared rather than guessed at.
     final staged = record.entryAttempt;
     if (staged != null) {
-      final still = await findFundingBox(needed, record.fundingBoxIds);
-      if (still == null) {
+      final entryBoxId = (staged['phase'] as Map?)?['box_id'] as String?;
+      if (entryBoxId != null && await findBox(entryBoxId)) {
         await service.commitEntry(record, staged, record.entryTxId ?? '');
         onStatus?.call('Entry already sent; the next check confirms it');
         return record;
+      }
+      final still = await findFundingBox(needed, record.fundingBoxIds);
+      if (still == null) {
+        const why = 'The funding box was spent, but not by this mix\'s entry: '
+            'the entry box is not on chain. The staged entry was cleared; '
+            'check the wallet\'s recent transactions for what spent it.';
+        await service.clearEntryAttempt(record, error: why);
+        throw StateError(why);
       }
     }
 
@@ -177,6 +209,25 @@ class MixStartFlow {
     await service.commitEntry(record, nextState, sent.txId);
     onStatus?.call('Entered the pool: ${sent.txId}');
     return record;
+  }
+
+  /// Whether a broadcast failure means nothing reached the network.
+  /// Building, signing and local checks fail before anything is sent; a
+  /// node error may come after the node accepted the transaction.
+  static bool broadcastCertainlyFailed(Object e) {
+    final code = e is ArgusException
+        ? e.code
+        : e is String
+            ? ArgusException.fromJson(e).code
+            : null;
+    if (code == null) return true;
+    return !const {'NODE_ERROR', 'NETWORK_ERROR', 'UNKNOWN', 'GENERIC'}.contains(code);
+  }
+
+  static String describeError(Object e) {
+    if (e is ArgusException) return e.message;
+    if (e is String) return ArgusException.fromJson(e).message;
+    return e.toString();
   }
 
   Future<String?> _waitForBox(int neededNano, List<String> candidates) async {

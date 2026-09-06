@@ -63,6 +63,10 @@ class MixRecord {
   Map<String, dynamic> get phase => (state['phase'] as Map).cast<String, dynamic>();
   String get phaseKind => phase['kind'] as String? ?? '';
   String? get boxId => phase['box_id'] as String?;
+
+  /// The box the latest move spent, while that move is not yet seen on
+  /// chain; the engine falls back to it if the move is lost.
+  String? get previousBoxId => ((state['previous'] as Map?)?['phase'] as Map?)?['box_id'] as String?;
   int get denomination => ((state['ring'] as Map)['value'] as num).toInt();
   String? get ringTokenId => (state['ring'] as Map)['token_id'] as String?;
   int get roundsDone => (state['rounds_done'] as num?)?.toInt() ?? 0;
@@ -122,6 +126,10 @@ abstract class MixGateway {
   String? get walletId;
   String? get nodeUrl;
   String get explorerBase;
+
+  /// Tell coin selection which boxes pending mixes have set aside:
+  /// `[{"box_ids": [...], "value_nano_erg": n}]`; `[]` frees them all.
+  void setReservedFunding(String reservationsJson);
 
   /// The chain height the wallet already knows from its node, if any.
   int? get chainHeight;
@@ -200,6 +208,8 @@ class LiveMixGateway implements MixGateway {
   String get explorerBase => networkController.explorer;
   @override
   int? get chainHeight => networkController.height;
+  @override
+  void setReservedFunding(String reservationsJson) => walletService.mixSetReservedFunding(reservationsJson);
 
   @override
   String contractTrees() => bridge.mixContractTrees();
@@ -497,8 +507,12 @@ class MixService extends ChangeNotifier {
   /// Box ids of the mixes in the pool. A record whose phase somehow lacks
   /// one is left out rather than allowed to stop every other mix.
   List<String> get _activeBoxIds => [
-        for (final r in active)
+        for (final r in active) ...[
           if (r.boxId != null) r.boxId!,
+          // The engine needs to see whether the box a pending move spent is
+          // still unspent, to tell a lost move from a slow one.
+          if (r.previousBoxId != null) r.previousBoxId!,
+        ],
       ];
 
   int get _now => _clock().millisecondsSinceEpoch ~/ 1000;
@@ -532,6 +546,10 @@ class MixService extends ChangeNotifier {
       }
       // A key that could not be exported earlier (the wallet was locked
       // when the switch flipped, or when a mix entered) is exported now.
+      // A pending mix funded before the ids were kept (an earlier release,
+      // or a crash between the broadcast and the record) has nothing to
+      // set aside; read the ids from its funding transaction.
+      await _backfillFundingIds();
       if (backgroundEnabled && _gw.isUnlocked) {
         for (final r in active) {
           if (await _gw.loadKey(walletId: id, mixId: r.mixId) == null) {
@@ -540,6 +558,7 @@ class MixService extends ChangeNotifier {
         }
       }
     }
+    _syncReserved();
     _reschedule();
     notifyListeners();
   }
@@ -598,8 +617,42 @@ class MixService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _reschedule() =>
-      _schedule?.call(enabled && backgroundEnabled && active.isNotEmpty && !foreground);
+  /// Whether the background job is wanted: background mixing on, the app
+  /// in the back, and a mix to move. "A mix to move" is read from the
+  /// keystore, not only from memory: a lock empties the in-memory records
+  /// (see [reset]) and must not take the job with it, since the job is
+  /// for exactly the time the wallet is locked and the app closed.
+  /// Null when the keystore could not be read, which says nothing either
+  /// way and must not be taken as "no mixes". "A mix to move" means any
+  /// wallet's: background mixing is one job for every wallet's keys.
+  Future<bool?> backgroundWanted() async {
+    if (!enabled || !backgroundEnabled || foreground) return false;
+    if (active.isNotEmpty) return true;
+    try {
+      return (await _gw.listKeys()).isNotEmpty;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _reschedule() {
+    final schedule = _schedule;
+    if (schedule == null) return;
+    // Answer at once when memory settles it; ask the keystore only when
+    // memory shows no mix, which is what a lock leaves behind.
+    if (!enabled || !backgroundEnabled || foreground || active.isNotEmpty) {
+      schedule(enabled && backgroundEnabled && !foreground && active.isNotEmpty);
+      return;
+    }
+    // An unreadable keystore leaves the job as it is: cancelling it on a
+    // transient failure would stop mixing with the app closed, which is
+    // exactly when nothing is watching to put it back.
+    backgroundWanted().then((wanted) {
+      // The keystore answered for the state the question was asked in; a
+      // foreground or a switch since then has already answered for now.
+      if (wanted != null) schedule(wanted && enabled && backgroundEnabled && !foreground);
+    });
+  }
 
   /// Take the cross-isolate lease, or return false if the other driver
   /// holds an unexpired one. Preferences are process-wide on Android, so
@@ -645,6 +698,9 @@ class MixService extends ChangeNotifier {
     _generation++;
     _walletId = null;
     records = const [];
+    // The reservation is left as it is: it is keyed by the wallet handle,
+    // so it cannot cross wallets, and clearing it here would open a window
+    // between an unlock's reset and the load that sets it again.
     lastTickError = null;
     notifyListeners();
   }
@@ -681,8 +737,49 @@ class MixService extends ChangeNotifier {
     if (id == null) return false;
     final prefs = await SharedPreferences.getInstance();
     final ok = await prefs.setString(_recordsKey(id), jsonEncode([for (final r in records) r.toJson()]));
+    _syncReserved();
     notifyListeners();
     return ok;
+  }
+
+  /// Fill in the funding box ids of pending records that lack them, from
+  /// the funding transaction's outputs. Best effort: a transaction the
+  /// node and explorer do not know yet is tried again next load.
+  Future<void> _backfillFundingIds() async {
+    var changed = false;
+    for (final r in records) {
+      final tx = r.fundingTxId;
+      if (!r.pending || tx == null || tx.isEmpty || r.fundingBoxIds.isNotEmpty) continue;
+      try {
+        final ids = [
+          for (final o in await _txOutputs(_explorerBase, tx))
+            if (o is Map && o['boxId'] is String) o['boxId'] as String,
+        ];
+        if (ids.isNotEmpty) {
+          r.fundingBoxIds = List.unmodifiable(ids);
+          changed = true;
+        }
+      } catch (_) {
+        // Not known yet.
+      }
+    }
+    if (changed) await _persist();
+  }
+
+  /// What pending mixes have set aside, as coin selection must see it.
+  String reservedFundingJson() => jsonEncode([
+        for (final r in records)
+          if (r.pending && r.fundingNano != null && r.fundingBoxIds.isNotEmpty)
+            {'box_ids': r.fundingBoxIds, 'value_nano_erg': r.fundingNano},
+      ]);
+
+  void _syncReserved() {
+    try {
+      _gw.setReservedFunding(reservedFundingJson());
+    } catch (_) {
+      // A locked wallet has no coin selection to protect; the next load
+      // or persist while unlocked sets the reservation again.
+    }
   }
 
   Map<String, String> get _trees {
@@ -797,15 +894,53 @@ class MixService extends ChangeNotifier {
 
   /// A finished mix has nothing left to observe, so its last transaction
   /// is looked up once to learn its inclusion height.
-  Future<void> _confirmFinished(String base, MixRecord r) async {
-    final events = (r.state['events'] as List?);
-    if (events == null || events.isEmpty) return;
-    final last = events.last;
-    if (last is! Map || last['height'] != null) return;
-    final txId = last['tx_id']?.toString() ?? '';
-    if (txId.isEmpty) return;
-    final h = await _txInclusionHeight(base, txId);
-    if (h != null && h > 0) last['height'] = h;
+  String get _explorerBase => _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
+
+  /// Whether a finished mix still lacks the height of its last transaction.
+  static bool _awaitsHeight(MixRecord r) {
+    final events = r.state['events'] as List?;
+    final last = events == null || events.isEmpty ? null : events.last;
+    return r.finished && last is Map && last['height'] == null && (last['tx_id']?.toString() ?? '').isNotEmpty;
+  }
+
+  /// Outside a tick: give every finished mix its last height, once.
+  ///
+  /// Runs without the cross-isolate lease. That is safe only because the
+  /// background job writes a wallet's records only while it holds a key
+  /// for an in-pool mix of that wallet, and a finished mix has no key;
+  /// this runs only when memory shows no in-pool mix. Widen either side
+  /// and the lease is needed here too.
+  Future<void> _confirmAllFinished() async {
+    if (_ticking || !records.any(_awaitsHeight)) return;
+    _ticking = true;
+    final gen = _generation;
+    try {
+      var changed = false;
+      for (final r in records.where(_awaitsHeight).toList()) {
+        changed |= await _confirmFinished(_explorerBase, r);
+        if (gen != _generation) return;
+      }
+      if (changed) {
+        await _persist();
+        notifyListeners();
+      }
+    } catch (_) {
+      // A height that could not be read is asked for again next time.
+    } finally {
+      _ticking = false;
+    }
+  }
+
+  /// True when the height was learned now.
+  Future<bool> _confirmFinished(String base, MixRecord r) async {
+    if (!_awaitsHeight(r)) return false;
+    final last = (r.state['events'] as List).last as Map;
+    final h = await _txInclusionHeight(base, last['tx_id'].toString());
+    if (h != null && h > 0) {
+      last['height'] = h;
+      return true;
+    }
+    return false;
   }
 
   /// Inclusion height of a transaction, or null while it is not in a block.
@@ -1086,6 +1221,20 @@ class MixService extends ChangeNotifier {
   }) async {
     record.fundingTxId = txId;
     record.fundingBoxIds = List.unmodifiable(outputBoxIds);
+    if (outputBoxIds.isEmpty) {
+      // Without the ids the funding box cannot be set aside from other
+      // spends; the load backfills them from the transaction once it is seen.
+      record.lastError = 'The funding transaction\'s outputs are not known yet, so the funding box is not protected from other spends until the next load.';
+    }
+    // The ids are what keeps the funding box out of other spends after a
+    // restart: a write that did not land must not pass unnoticed.
+    if (!await _persist()) throw StateError('Failed to save the mix\'s funding record');
+  }
+
+  /// A funding broadcast whose outcome is not known: the record stays,
+  /// with a persistent note, so the box is adopted if it confirms.
+  Future<void> markFundingUncertain(MixRecord record, String why) async {
+    record.lastError = why;
     await _persist();
   }
 
@@ -1093,6 +1242,24 @@ class MixService extends ChangeNotifier {
   Future<void> stageEntry(MixRecord record, Map<String, dynamic> nextState) async {
     record.entryAttempt = nextState;
     await _persist();
+  }
+
+  /// Forget a staged entry that provably never went out.
+  Future<void> clearEntryAttempt(MixRecord record, {String? error}) async {
+    record.entryAttempt = null;
+    record.lastError = error;
+    await _persist();
+    notifyListeners();
+  }
+
+  /// Whether the chain (node or explorer) knows a box by id, spent or not.
+  Future<bool> boxOnChain(String boxId) async {
+    try {
+      final b = await _boxById(_explorerBase, boxId);
+      return b['boxId'] == boxId;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// Record that a prepared entry was broadcast as `txId` (empty when the
@@ -1132,9 +1299,14 @@ class MixService extends ChangeNotifier {
   Future<void> tick() async {
     if (_ticking || !enabled || !_gw.isUnlocked) return;
     if (_walletId == null || _walletId != _gw.walletId) return;
-    if (active.isEmpty) return;
     // In the back with background mixing on, the job is the driver.
     if (backgroundEnabled && !foreground) return;
+    if (active.isEmpty) {
+      // Nothing moves, but a mix that just finished may still be waiting
+      // to learn the height of its last transaction.
+      await _confirmAllFinished();
+      return;
+    }
     final prefs = await SharedPreferences.getInstance();
     if (!await _acquireLease(prefs, 'ui')) return;
     _ticking = true;
@@ -1147,9 +1319,8 @@ class MixService extends ChangeNotifier {
         await _step(r, snap);
         if (gen != _generation) return;
       }
-      final base = _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
       for (final r in records) {
-        if (r.finished) await _confirmFinished(base, r);
+        if (r.finished) await _confirmFinished(_explorerBase, r);
         if (gen != _generation) return;
       }
       lastTickAt = _clock();
@@ -1281,7 +1452,9 @@ class MixService extends ChangeNotifier {
       if (targets.isEmpty) continue;
       MixSnapshot snap;
       try {
-        snap = await snapshot(ownBoxIds: [for (final r in targets) r.boxId!]);
+        snap = await snapshot(ownBoxIds: [
+          for (final r in targets) ...[r.boxId!, if (r.previousBoxId != null) r.previousBoxId!],
+        ]);
       } catch (_) {
         continue;
       }
@@ -1360,10 +1533,11 @@ class MixService extends ChangeNotifier {
         final have = known[f.mixId];
         if (have == null) {
           fresh.add(f);
-        } else if (have.pending) {
+        } else if (have.pending || (have.inPool && f.boxId != null && f.boxId == have.previousBoxId)) {
           // The chain knows more than we do: the entry went out and the
-          // record never heard. Take the chain's phase, keep what only we
-          // know (destination, rounds wanted).
+          // record never heard, or a move the record believes in never
+          // confirmed and the box it spent is still ours. Take the chain's
+          // phase, keep what only we know (destination, rounds wanted).
           have.state = {
             ...f.state,
             'destination_ergo_tree': have.destinationErgoTree,

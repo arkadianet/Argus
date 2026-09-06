@@ -11,6 +11,9 @@ class FakeGateway implements MixGateway {
   String? wallet = 'w1';
   final calls = <String>[];
   final notifications = <String>[];
+  String reserved = '[]';
+  @override
+  void setReservedFunding(String reservationsJson) => reserved = reservationsJson;
 
   /// Script for `observe`, `plan`, `advance`, `leave`, `recover`, keyed by
   /// call name; each is consumed in order, the last repeats.
@@ -53,15 +56,23 @@ class FakeGateway implements MixGateway {
   }
   @override
   Future<String?> loadKey({required String walletId, required int mixId}) async => keys['$walletId:$mixId'];
+
+  /// Set to make listKeys throw, as an unreadable keystore would.
+  bool keysUnreadable = false;
+
   @override
   Future<void> deleteKey({required String walletId, required int mixId}) async {
     keys.remove('$walletId:$mixId');
   }
   @override
-  Future<List<({String walletId, int mixId})>> listKeys() async => [
-        for (final k in keys.keys)
-          (walletId: k.substring(0, k.lastIndexOf(':')), mixId: int.parse(k.substring(k.lastIndexOf(':') + 1))),
-      ];
+  @override
+  Future<List<({String walletId, int mixId})>> listKeys() async {
+    if (keysUnreadable) throw StateError('keystore unavailable');
+    return [
+      for (final k in keys.keys)
+        (walletId: k.substring(0, k.lastIndexOf(':')), mixId: int.parse(k.substring(k.lastIndexOf(':') + 1))),
+    ];
+  }
 
   @override
   String contractTrees() => jsonEncode({'half': 'aa', 'full': 'bb', 'fee': 'cc', 'token': 'dd'});
@@ -678,6 +689,107 @@ void main() {
     expect(svc.backgroundEnabled, isFalse);
   });
 
+  test('a lock does not cancel the background job while keys are stored', () async {
+    final gw = FakeGateway();
+    final wanted = <bool>[];
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true, 'argus_mixing_background': true});
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post, schedule: wanted.add);
+    await svc.load();
+    final created = await svc.createMix(denomination: 1000000000, level: 20, rounds: 1, destinationAddress: '9a');
+    await svc.commitEntry(created, state(mixId: 0, kind: 'half_posted', boxId: 'hb', done: 0), 'tx');
+    expect(gw.keys, {'w1:0': 'key-0'});
+
+    // The usual sequence: the app goes to the back, auto-lock fires and
+    // resets the service, then a lifecycle change asks again.
+    await svc.setForeground(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(wanted.last, isTrue);
+    svc.reset();
+    expect(svc.active, isEmpty);
+    await svc.setForeground(true);
+    await svc.setForeground(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(wanted.last, isTrue, reason: 'the stored key says there is a mix to move');
+
+    // A keystore that cannot be read says nothing either way, so the job
+    // is left as it is rather than cancelled with the app in the back.
+    gw.keysUnreadable = true;
+    await svc.setForeground(true);
+    final before = wanted.length;
+    await svc.setForeground(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(wanted.length, before, reason: 'a failed read neither schedules nor cancels');
+    gw.keysUnreadable = false;
+
+    // With the keys gone (background mixing switched off elsewhere), the
+    // job is not wanted.
+    gw.keys.clear();
+    await svc.setForeground(true);
+    await svc.setForeground(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(wanted.last, isFalse);
+  });
+
+  test('a pending mix sets its funding box aside until it enters the pool', () async {
+    final gw = FakeGateway();
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true});
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post);
+    await svc.load();
+    expect(gw.reserved, '[]');
+    final created = await svc.createMix(denomination: 1000000000, level: 20, rounds: 1, destinationAddress: '9a', fundingNano: 1006600000);
+    expect(gw.reserved, '[]', reason: 'no funding transaction yet');
+    await svc.recordFunding(created, txId: 'tx7', outputBoxIds: ['fund1', 'change1']);
+    expect(jsonDecode(gw.reserved), [
+      {'box_ids': ['fund1', 'change1'], 'value_nano_erg': 1006600000}
+    ]);
+    // A fresh load (a restart) sets it again from disk.
+    final again = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post);
+    gw.reserved = '[]';
+    await again.load();
+    expect(jsonDecode(gw.reserved), hasLength(1));
+    await svc.commitEntry(created, state(mixId: 0, kind: 'half_posted', boxId: 'hb', done: 0), 'tx');
+    expect(gw.reserved, '[]', reason: 'in the pool: the funding box is spent');
+  });
+
+  test('a reset leaves the reservation to the next load, so an unlock has no window', () async {
+    final gw = FakeGateway();
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true});
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post);
+    await svc.load();
+    final created = await svc.createMix(denomination: 1000000000, level: 20, rounds: 1, destinationAddress: '9a', fundingNano: 1006600000);
+    await svc.recordFunding(created, txId: 'tx7', outputBoxIds: ['fund1', 'change1']);
+    expect(jsonDecode(gw.reserved), hasLength(1));
+    svc.reset();
+    expect(jsonDecode(gw.reserved), hasLength(1), reason: 'still set aside until the load says otherwise');
+    await svc.load();
+    expect(jsonDecode(gw.reserved), hasLength(1));
+  });
+
+  test('a pending mix funded without its box ids gets them from the transaction on load', () async {
+    final gw = FakeGateway();
+    final ex = FakeExplorer()
+      ..txs['tx7'] = {
+        'id': 'tx7',
+        'outputs': [
+          {'boxId': 'fund1', 'value': 1006600000},
+          {'boxId': 'change1', 'value': 5},
+        ],
+      };
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true});
+    final svc = MixService(gateway: gw, get: ex.get, post: ex.post);
+    await svc.load();
+    final created = await svc.createMix(denomination: 1000000000, level: 20, rounds: 1, destinationAddress: '9a', fundingNano: 1006600000);
+    await svc.recordFunding(created, txId: 'tx7', outputBoxIds: const []);
+    expect(created.lastError, contains('not protected'));
+    expect(gw.reserved, '[]', reason: 'nothing to set aside yet');
+    final again = MixService(gateway: gw, get: ex.get, post: ex.post);
+    await again.load();
+    expect(again.records.single.fundingBoxIds, ['fund1', 'change1']);
+    expect(jsonDecode(gw.reserved), [
+      {'box_ids': ['fund1', 'change1'], 'value_nano_erg': 1006600000}
+    ]);
+  });
+
   test('turning mixing off also turns background mixing off and deletes every key', () async {
     final gw = FakeGateway()..keys['w1:3'] = 'k'..keys['other:9'] = 'k';
     SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true, 'argus_mixing_background': true});
@@ -920,6 +1032,26 @@ void main() {
     final w = svc.records.firstWhere((r) => r.mixId == 1);
     expect(w.events.last['height'], 4242);
     expect(svc.mixActivityRows().firstWhere((r) => r['tx_id'] == 'txw')['confirmed'], isTrue);
+  });
+
+  test('the last finished mix learns its height with nothing else active', () async {
+    final gw = FakeGateway();
+    final ex = FakeExplorer()..txs['txw'] = {'inclusionHeight': 4242, 'outputs': []};
+    final done = state(mixId: 1, kind: 'withdrawn', done: 3)
+      ..['events'] = [
+        {'at': 5, 'action': 'withdrawn', 'round': 2, 'tx_id': 'txw'},
+      ];
+    final svc = await loaded(gw, ex, [done]);
+    expect(svc.active, isEmpty);
+    await svc.tick();
+    expect(svc.records.single.events.last['height'], 4242);
+    expect(gw.calls.where((c) => c.startsWith('observe')), isEmpty, reason: 'no engine work without an active mix');
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getString('argus_mixes_v1_w1'), contains('4242'), reason: 'persisted');
+    // Learned once: the next tick does not ask again.
+    ex.requests.clear();
+    await svc.tick();
+    expect(ex.requests, isEmpty);
   });
 
   test('an explorer "not found" body for our own box is not a box', () async {

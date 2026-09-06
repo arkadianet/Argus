@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:argus_wallet/bridge/argus_error.dart';
 import 'package:argus_wallet/services/mix_service.dart';
 import 'package:argus_wallet/services/mix_start_flow.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Only what the flow touches on the service: createMix, prepareEntry,
 /// commitEntry, recover.
 class ScriptedGateway implements MixGateway {
+  @override
+  void setReservedFunding(String reservationsJson) {}
   final calls = <String>[];
   List<Map<String, dynamic>> recovered = const [];
 
@@ -160,6 +163,8 @@ void main() {
     required List<String?> boxes,
     Duration maxWait = const Duration(seconds: 30),
     Set<int> failIds = const {},
+    bool entryBoxSeen = false,
+    Set<int> nodeDownIds = const {},
   }) {
     final replies = List<bool>.from(answers);
     final found = List<String?>.from(boxes);
@@ -177,11 +182,16 @@ void main() {
       broadcast: (id) async {
         log.add('broadcast:$id:records=${service.records.length}');
         if (failIds.contains(id)) throw StateError('node down');
+        if (nodeDownIds.contains(id)) throw ArgusException(code: 'NODE_ERROR', message: 'request timed out');
         return MixBroadcast(txId: 'tx$id', outputBoxIds: id == 7 ? ['fund1', 'change1'] : []);
       },
       findFundingBox: (needed, candidates) async {
         log.add('find:$needed:${candidates.join(",")}');
         return found.isEmpty ? null : found.removeAt(0);
+      },
+      findBox: (id) async {
+        log.add('box:$id');
+        return entryBoxSeen;
       },
       pollInterval: const Duration(seconds: 10),
       maxWait: maxWait,
@@ -229,6 +239,32 @@ void main() {
     expect(service.records, isEmpty);
   });
 
+  test('a failed funding broadcast leaves no record behind', () async {
+    await expectLater(
+      flow(answers: [true], boxes: ['fund1'], failIds: {7}).start(plan, fundingAddress: '9me'),
+      throwsA(isA<StateError>().having((e) => e.message, 'message', 'node down')),
+    );
+    expect(ops().last, 'broadcast:7:records=1', reason: 'the record existed while the money could move');
+    expect(service.records, isEmpty, reason: 'nothing went out, so nothing is recorded');
+    final prefs = await SharedPreferences.getInstance();
+    expect(jsonDecode(prefs.getString('argus_mixes_v1_w') ?? '[]'), isEmpty);
+  });
+
+  test('a funding broadcast the node may have taken keeps the record with a note', () async {
+    await expectLater(
+      flow(answers: [true], boxes: ['fund1'], nodeDownIds: {7}).start(plan, fundingAddress: '9me'),
+      throwsA(isA<StateError>().having((e) => e.message, 'message', contains('may still be on chain'))),
+    );
+    final record = service.records.single;
+    expect(record.pending, isTrue);
+    expect(record.lastError, contains('may still be on chain'));
+    final prefs = await SharedPreferences.getInstance();
+    expect(jsonDecode(prefs.getString('argus_mixes_v1_w')!), hasLength(1), reason: 'kept on disk too');
+    expect(MixStartFlow.broadcastCertainlyFailed(StateError('x')), isTrue);
+    expect(MixStartFlow.broadcastCertainlyFailed('{"code":"SIGNING_FAILED","message":"m"}'), isTrue);
+    expect(MixStartFlow.broadcastCertainlyFailed('{"code":"NODE_ERROR","message":"m"}'), isFalse);
+  });
+
   test('declining the entry leaves a pending mix that can be continued later', () async {
     final f = flow(answers: [true, false, true], boxes: ['fund1', 'fund1']);
     final record = await f.start(plan, fundingAddress: '9me');
@@ -252,11 +288,32 @@ void main() {
     await service.stageEntry(record, staged);
     expect(record.pending, isTrue);
 
-    final resumed = flow(answers: [], boxes: []);
+    final resumed = flow(answers: [], boxes: [], entryBoxSeen: true);
     final after = await resumed.enter(record, fundingAddress: '9me', neededNano: plan.neededNano);
     expect(after.phaseKind, 'half_posted');
     expect(after.entryAttempt, isNull);
     expect(ops().where((l) => l.startsWith('broadcast')).length, 2, reason: 'the two original sends only');
+    expect(log.last, isNot(startsWith('find:')), reason: 'the entry box on chain settles it; the funding box is not consulted');
+  });
+
+  test('a staged entry whose box is unseen and whose funding box is gone is cleared, not guessed', () async {
+    // Something else spent the funding box (a send, the UTXO tools): the
+    // entry cannot have gone out, and the staged state must not be adopted.
+    final f = flow(answers: [true, true], boxes: ['fund1']);
+    final record = await f.start(plan, fundingAddress: '9me');
+    final staged = Map<String, dynamic>.from(record!.state);
+    record.state = {...staged, 'phase': {'kind': 'pending'}};
+    await service.stageEntry(record, staged);
+
+    final resumed = flow(answers: [], boxes: [null]);
+    await expectLater(
+      resumed.enter(record, fundingAddress: '9me', neededNano: plan.neededNano),
+      throwsA(isA<StateError>().having((e) => e.message, 'message', contains('not by this mix'))),
+    );
+    expect(record.pending, isTrue);
+    expect(record.entryAttempt, isNull);
+    expect(record.lastError, contains('entry box is not on chain'));
+    expect(ops().where((l) => l.startsWith('broadcast')).length, 2, reason: 'nothing new was sent');
   });
 
   test('a staged entry whose funding box is still there is built again', () async {
