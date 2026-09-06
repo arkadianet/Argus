@@ -168,10 +168,17 @@ void main() {
   });
 
   test('the injected script names both wallets and the bridge', () {
-    expect(dappInjectedScript, contains('connector.nautilus = api'));
-    expect(dappInjectedScript, contains('connector.argus = api'));
-    expect(dappInjectedScript, contains('ArgusBridge.postMessage'));
-    expect(dappInjectedScript, contains('__argusDapp'));
-    expect(dappInjectedScript, contains("'ergo-wallet:injected'"));
+    final script = dappInjectedScript('deadbeef');
+    expect(script, contains('connector.nautilus = api'));
+    expect(script, contains('connector.argus = api'));
+    expect(script, contains('ArgusBridge.postMessage'));
+    expect(script, contains('__argusDapp'));
+    expect(script, contains("'ergo-wallet:injected'"));
+    // The token the main frame carries on every message, so that a
+    // cross-origin iframe posting to the channel is not answered.
+    expect(script, contains("var TOKEN = 'deadbeef';"));
+    expect(script, contains('token: TOKEN'));
+    expect(script, isNot(contains('__ARGUS_BRIDGE_TOKEN__')));
+    expect(dappInjectedScript('other'), contains("var TOKEN = 'other';"));
   });
 }

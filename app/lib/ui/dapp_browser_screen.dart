@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -59,7 +60,10 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
       ..addJavaScriptChannel('ArgusBridge', onMessageReceived: (m) => _onMessage(m.message))
       ..setNavigationDelegate(NavigationDelegate(
         onPageStarted: (u) {
-          _web.runJavaScript(dappInjectedScript);
+          // A fresh secret per document: the old page's token must not let
+          // anything still running answer as the new one.
+          _bridgeToken = _newBridgeToken();
+          _web.runJavaScript(dappInjectedScript(_bridgeToken));
           if (mounted) {
             setState(() {
               _loading = true;
@@ -69,7 +73,7 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
           }
         },
         onPageFinished: (u) {
-          _web.runJavaScript(dappInjectedScript);
+          _web.runJavaScript(dappInjectedScript(_bridgeToken));
           if (mounted) setState(() => _loading = false);
         },
         onUrlChange: (c) {
@@ -102,6 +106,14 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
     _web.loadRequest(uri);
   }
 
+  /// The secret the main frame's script carries on every message.
+  String _bridgeToken = _newBridgeToken();
+
+  static String _newBridgeToken() {
+    final r = Random.secure();
+    return List.generate(32, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+  }
+
   String get _origin {
     final u = Uri.tryParse(_current ?? '');
     return u == null || u.host.isEmpty ? '' : '${u.scheme}://${u.host}${u.hasPort ? ':${u.port}' : ''}';
@@ -114,6 +126,10 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
     } catch (_) {
       return;
     }
+    // Only the main frame was given the token, so a message without it
+    // came from an iframe (or from something replaying an old page's) and
+    // must not be answered as this site.
+    if (req['token'] != _bridgeToken) return;
     final id = req['id'];
     final method = req['method'] as String? ?? '';
     final params = (req['params'] as List?) ?? const [];

@@ -264,11 +264,21 @@ class DappConnector {
   }
 }
 
-/// The script injected into every page: `ergoConnector.nautilus` (and
+/// The script for the page: `ergoConnector.nautilus` (and
 /// `ergoConnector.argus`) whose methods post to the `ArgusBridge` channel
 /// and wait for `window.__argusDapp.resolve`.
-const dappInjectedScript = r'''
+///
+/// A JavaScript channel is added to every frame of the page, cross-origin
+/// iframes included, so an advertisement on a connected site could post to
+/// `ArgusBridge` itself and be answered as the site. This script runs in
+/// the main frame only, so only the main frame learns `token`, and the
+/// screen ignores any message that does not carry it.
+String dappInjectedScript(String token) =>
+    _dappScriptTemplate.replaceAll('__ARGUS_BRIDGE_TOKEN__', token);
+
+const _dappScriptTemplate = r'''
 (function () {
+  var TOKEN = '__ARGUS_BRIDGE_TOKEN__';
   if (window.__argusDapp) return;
   var pending = {};
   var next = 1;
@@ -286,7 +296,7 @@ const dappInjectedScript = r'''
     return new Promise(function (resolve, reject) {
       var id = next++;
       pending[id] = { resolve: resolve, reject: reject };
-      ArgusBridge.postMessage(JSON.stringify({ id: id, method: method, params: params || [] }));
+      ArgusBridge.postMessage(JSON.stringify({ token: TOKEN, id: id, method: method, params: params || [] }));
     });
   }
   function context() {
