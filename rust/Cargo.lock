@@ -2244,6 +2244,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rosen"
+version = "0.1.0"
+dependencies = [
+ "bs58",
+ "ergo-lib",
+ "ergo-tx",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3086,6 +3100,7 @@ dependencies = [
  "hex",
  "once_cell",
  "rand 0.8.7",
+ "rosen",
  "serde",
  "serde_json",
  "sigmausd",

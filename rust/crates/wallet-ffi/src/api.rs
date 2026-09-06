@@ -1823,6 +1823,174 @@ pub async fn prepare_burn(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+// ---------------------------------------------------------------------------
+// Rosen bridge: transfers out of Ergo
+// ---------------------------------------------------------------------------
+
+/// The bridge as vendored: lock address, fee NFT, contracts version, and
+/// every Ergo asset it takes with the chains it can go to. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn rosen_info() -> String {
+    serde_json::json!({
+        "lock_address": rosen::LOCK_ADDRESS,
+        "min_fee_nft": rosen::MIN_FEE_NFT,
+        "contracts_version": rosen::CONTRACTS_VERSION,
+        "tokens_map_version": rosen::tokens::map_version(),
+        "chains": rosen::chains(),
+        "tokens": rosen::token_map(),
+    })
+    .to_string()
+}
+
+/// The terms for sending `token_id` (`erg` for ERG) to `to_chain` at
+/// `height`, from the minimum-fee boxes given (a list of boxes carrying
+/// the fee NFT, any shape), and what `amount` would cost and deliver.
+/// Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn rosen_quote(
+    fee_boxes_json: String,
+    token_id: String,
+    to_chain: String,
+    amount: i64,
+    height: i64,
+) -> Result<String, String> {
+    let root: serde_json::Value = serde_json::from_str(&fee_boxes_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let boxes: Vec<serde_json::Value> = match root.get("items") {
+        Some(v) => v.as_array().cloned().unwrap_or_default(),
+        None => root.as_array().cloned().unwrap_or_default(),
+    };
+    let cfg = rosen::fees::find_fee_box(&boxes, &token_id)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let fee = cfg
+        .from_ergo(height, &to_chain)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let quote = fee.quote(amount);
+    serde_json::to_string(&serde_json::json!({
+        "fee": fee,
+        "quote": quote,
+        "fee_box_id": cfg.box_id,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Whether `address` is well formed for `chain`; an empty string when it
+/// is, the reason otherwise. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn rosen_validate_address(chain: String, address: String) -> String {
+    match rosen::validate_address(&chain, &address) {
+        Ok(()) => String::new(),
+        Err(e) => e.to_string(),
+    }
+}
+
+/// Prepare a transfer out of Ergo: `amount` of `token_id` (`erg` for ERG)
+/// locked for `to_chain` and `to_address`, with the bridge and network
+/// fees the quote gave. The lock box records `sender_address` as where a
+/// failed transfer comes back to. Confirm with `send_erg`.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn rosen_prepare_lock(
+    handle_id: u64,
+    sender_address: String,
+    spend_addresses: Vec<String>,
+    change_address: String,
+    token_id: String,
+    amount: i64,
+    to_chain: String,
+    to_address: String,
+    bridge_fee: i64,
+    network_fee: i64,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+) -> Result<String, String> {
+    if let Err(e) = rosen::validate_address(&to_chain, &to_address) {
+        return Err(ArgusError::InvalidAddress(e.to_string()).to_json_string());
+    }
+    let miner_fee = mix_miner_fee(fee_nano)?;
+    let change_tree = with_handle(handle_id, "rosen_prepare_lock", |h| {
+        for a in [&sender_address, &change_address] {
+            if !h.owns_address(a).map_err(err_str)? {
+                return Err(ArgusError::InvalidAddress("transfer addresses must belong to this wallet".into()).to_json_string());
+            }
+        }
+        address_to_ergo_tree(&change_address).map_err(|e| ArgusError::InvalidAddress(e).to_json_string())
+    })?;
+    let lock_tree = address_to_ergo_tree(rosen::LOCK_ADDRESS)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    let is_erg = token_id.eq_ignore_ascii_case("erg");
+    let spec = rosen::LockSpec {
+        token_id: if is_erg { None } else { Some(token_id.to_ascii_lowercase()) },
+        amount,
+        to_chain: to_chain.clone(),
+        to_address: to_address.trim().to_string(),
+        from_address: sender_address.clone(),
+        bridge_fee,
+        network_fee,
+    };
+    let spend = resolve_spend_addresses(&sender_address, &spend_addresses);
+    let client = node_client(node_url.clone()).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let fee_cfg = ergo_tx::resolved_dev_fee_config();
+    let app_fee = if fee_cfg.enabled {
+        Some((fee_cfg.recipient_ergo_tree.as_str(), fee_cfg.budget()))
+    } else {
+        None
+    };
+    let lock_value = if is_erg { amount } else { rosen::LOCK_MIN_BOX_VALUE };
+    let token = if is_erg { None } else { Some((token_id.as_str(), amount as u64)) };
+    let mut built = None;
+    for extra in [0i64, MIN_BOX_VALUE_NANO] {
+        let required = (lock_value + miner_fee + app_fee.map(|(_, n)| n).unwrap_or(0) + extra) as u64;
+        let selected = wallet_core::spend::select_for_send(&utxos, required, token)
+            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        match rosen::build_lock_tx(&selected.boxes, &spec, &lock_tree, &change_tree, app_fee, miner_fee, height as i32) {
+            Ok(r) => {
+                built = Some((r, selected.boxes));
+                break;
+            }
+            Err(rosen::LockError::InsufficientErg { .. }) if extra == 0 => continue,
+            Err(e) => return Err(ArgusError::TxBuildFailed(e.to_string()).to_json_string()),
+        }
+    }
+    let (result, used) = built.ok_or_else(|| {
+        ArgusError::TxBuildFailed("could not select inputs for the transfer".into()).to_json_string()
+    })?;
+    let ergo_boxes = used
+        .iter()
+        .map(crate::api_mix_impl::to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let input_boxes = input_boxes_json(&used);
+    let summary = result.summary;
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes,
+        data_input_boxes: Vec::new(),
+        unsigned_tx: result.unsigned_tx,
+        miner_fee: summary.miner_fee,
+        change_erg: summary.change_erg,
+        recipient_erg: summary.lock_value,
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "lock_address": rosen::LOCK_ADDRESS,
+        "lock_value": summary.lock_value,
+        "miner_fee": summary.miner_fee,
+        "app_fee_nano": summary.app_fee_nano,
+        "change_nano_erg": summary.change_erg,
+        "height": height,
+        "input_boxes": input_boxes,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 /// Prepare a UTXO consolidation transaction to merge multiple boxes into one.
 #[flutter_rust_bridge::frb]
 pub async fn prepare_consolidate(

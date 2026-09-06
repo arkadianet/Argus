@@ -346,6 +346,68 @@ Future<String> prepareBurn({
   nodeUrl: nodeUrl,
 );
 
+/// The bridge as vendored: lock address, fee NFT, contracts version, and
+/// every Ergo asset it takes with the chains it can go to. Pure.
+String rosenInfo() => RustLib.instance.api.crateApiRosenInfo();
+
+/// The terms for sending `token_id` (`erg` for ERG) to `to_chain` at
+/// `height`, from the minimum-fee boxes given (a list of boxes carrying
+/// the fee NFT, any shape), and what `amount` would cost and deliver.
+/// Pure.
+String rosenQuote({
+  required String feeBoxesJson,
+  required String tokenId,
+  required String toChain,
+  required PlatformInt64 amount,
+  required PlatformInt64 height,
+}) => RustLib.instance.api.crateApiRosenQuote(
+  feeBoxesJson: feeBoxesJson,
+  tokenId: tokenId,
+  toChain: toChain,
+  amount: amount,
+  height: height,
+);
+
+/// Whether `address` is well formed for `chain`; an empty string when it
+/// is, the reason otherwise. Pure.
+String rosenValidateAddress({required String chain, required String address}) =>
+    RustLib.instance.api.crateApiRosenValidateAddress(
+      chain: chain,
+      address: address,
+    );
+
+/// Prepare a transfer out of Ergo: `amount` of `token_id` (`erg` for ERG)
+/// locked for `to_chain` and `to_address`, with the bridge and network
+/// fees the quote gave. The lock box records `sender_address` as where a
+/// failed transfer comes back to. Confirm with `send_erg`.
+Future<String> rosenPrepareLock({
+  required BigInt handleId,
+  required String senderAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  required String tokenId,
+  required PlatformInt64 amount,
+  required String toChain,
+  required String toAddress,
+  required PlatformInt64 bridgeFee,
+  required PlatformInt64 networkFee,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiRosenPrepareLock(
+  handleId: handleId,
+  senderAddress: senderAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  tokenId: tokenId,
+  amount: amount,
+  toChain: toChain,
+  toAddress: toAddress,
+  bridgeFee: bridgeFee,
+  networkFee: networkFee,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+);
+
 /// Prepare a UTXO consolidation transaction to merge multiple boxes into one.
 Future<String> prepareConsolidate({
   required BigInt handleId,
