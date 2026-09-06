@@ -25,6 +25,7 @@ pub struct FoundOrder {
     pub refund_height: i64,
 }
 
+#[allow(dead_code)]
 fn err(m: impl Into<String>) -> PoolsError {
     PoolsError::Serialization(m.into())
 }

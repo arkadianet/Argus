@@ -27,4 +27,16 @@ void main() {
     expect(levelTitle(index: 0, rounds: 30), 'Level 1 · about 30 rounds');
     expect(levelTitle(index: 3, rounds: 180), 'Level 4 · about 180 rounds');
   });
+
+  test('a ring insight says who is there, how fast it moves and how long a level takes', () {
+    expect(ringInsight(depth: 0, recentRounds: 0, rounds: 30), 'Nobody mixing here · no rounds here in the past week, so a mix would wait indefinitely');
+    expect(ringInsight(depth: 132, recentRounds: 28, rounds: 30), '132 boxes to hide among · about 2 rounds a day here · about 2 weeks for 30 rounds');
+    expect(ringInsight(depth: 5, recentRounds: 2, rounds: 30), '5 boxes to hide among · about 1 round a week here · about 30 weeks for 30 rounds');
+    expect(ringInsight(depth: 1, recentRounds: 14, rounds: null), '1 box to hide among · about 1 round a day here');
+  });
+
+  test('tokens left say how many rounds the box can still pay for', () {
+    expect(tokensLeftText(12, 11), '12 mixing tokens on the box · about 11 more rounds affordable');
+    expect(tokensLeftText(1, 0), '1 mixing token on the box · no more rounds affordable, it withdraws next');
+  });
 }

@@ -27,9 +27,18 @@ class MixRecord {
     this.entryAttempt,
     this.entryTxId,
     this.acknowledged = false,
+    this.tokensLeft,
   });
 
   Map<String, dynamic> state;
+
+  /// Mixing tokens on the mix's box at the last check: one is burned per
+  /// round as Alice, and a box needs two to afford another. Null until a
+  /// check has seen the box.
+  int? tokensLeft;
+
+  /// Rounds the tokens on the box can still pay for, at one each.
+  int? get roundsAffordable => tokensLeft == null ? null : (tokensLeft! - 1).clamp(0, 1 << 30);
   String? lastError;
   DateTime? lastCheckedAt;
 
@@ -101,6 +110,7 @@ class MixRecord {
         if (entryAttempt != null) 'entry_attempt': entryAttempt,
         if (entryTxId != null) 'entry_tx_id': entryTxId,
         if (acknowledged) 'acknowledged': true,
+        if (tokensLeft != null) 'tokens_left': tokensLeft,
       };
 
   static MixRecord fromJson(Map<String, dynamic> m) => MixRecord(
@@ -112,6 +122,7 @@ class MixRecord {
         entryAttempt: (m['entry_attempt'] as Map?)?.cast<String, dynamic>(),
         entryTxId: m['entry_tx_id'] as String?,
         acknowledged: m['acknowledged'] == true,
+        tokensLeft: (m['tokens_left'] as num?)?.toInt(),
         lastCheckedAt: (m['last_checked_at'] as num?) == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch((m['last_checked_at'] as num).toInt()),
@@ -1139,7 +1150,8 @@ class MixService extends ChangeNotifier {
 
   /// What the pool offers now, as the engine reports it.
   Future<Map<String, dynamic>> rings() async {
-    final snap = await snapshot();
+    // Every full box too: how deep each ring is and how fast it moves.
+    final snap = await snapshot(allFullBoxes: true);
     return (jsonDecode(await _gw.rings(snap.json)) as Map).cast<String, dynamic>();
   }
 
@@ -1348,6 +1360,10 @@ class MixService extends ChangeNotifier {
       final observed = await _gw.observe(jsonEncode(r.state), snap.json, _now);
       r.state = (jsonDecode(observed) as Map).cast<String, dynamic>();
       if (r.roundsDone > before) await _announceRound(r);
+      final mixingToken = _trees['mixing_token_id'];
+      if (mixingToken != null) {
+        r.tokensLeft = mixingTokensOn(r.boxId, snap.json, mixingToken) ?? r.tokensLeft;
+      }
 
       final plan = (jsonDecode(await _gw.plan(jsonEncode(r.state), snap.json, ownHalfBoxIds)) as Map)
           .cast<String, dynamic>();
@@ -1575,4 +1591,21 @@ class _OwnBox {
   const _OwnBox({this.unspent, this.spenderOutputs = const []});
   final Map<String, dynamic>? unspent;
   final List<dynamic> spenderOutputs;
+}
+
+/// Mixing tokens on box [boxId] in a snapshot, or null when the snapshot
+/// does not hold the box. Half and full boxes carry the token first.
+int? mixingTokensOn(String? boxId, String snapshotJson, String mixingTokenId) {
+  if (boxId == null || boxId.isEmpty) return null;
+  final snap = jsonDecode(snapshotJson) as Map;
+  for (final key in const ['full_boxes', 'half_boxes']) {
+    for (final b in (snap[key] as List? ?? const [])) {
+      if (b is! Map || b['boxId'] != boxId) continue;
+      for (final a in (b['assets'] as List? ?? const [])) {
+        if (a is Map && a['tokenId'] == mixingTokenId) return (a['amount'] as num).toInt();
+      }
+      return 0;
+    }
+  }
+  return null;
 }

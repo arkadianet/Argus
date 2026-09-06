@@ -449,6 +449,21 @@ class _ErrorLine extends StatelessWidget {
   }
 }
 
+/// What the full boxes say about a ring: how many boxes there are to hide
+/// among, how fast it moved in the past week, and what that means for a
+/// mix of [rounds]. A join creates two full boxes and completes one round
+/// for each side, so joins a day is recent boxes over fourteen.
+String ringInsight({required int depth, required int recentRounds, required int? rounds}) {
+  final hide = depth == 0 ? 'Nobody mixing here' : '$depth ${depth == 1 ? 'box' : 'boxes'} to hide among';
+  if (recentRounds == 0) return '$hide · no rounds here in the past week, so a mix would wait indefinitely';
+  final joinsPerDay = recentRounds / 14;
+  final pace = joinsPerDay >= 1 ? 'about ${joinsPerDay.round()} ${joinsPerDay.round() == 1 ? 'round' : 'rounds'} a day here' : 'about ${(recentRounds / 2).round()} ${recentRounds / 2 >= 1.5 ? 'rounds' : 'round'} a week here';
+  if (rounds == null) return '$hide · $pace';
+  final days = (rounds / joinsPerDay).ceil();
+  final eta = days >= 14 ? 'about ${(days / 7).round()} weeks' : 'about $days ${days == 1 ? 'day' : 'days'}';
+  return '$hide · $pace · $eta for $rounds rounds';
+}
+
 /// "Level 1 · about 30 rounds": ErgoMixer's numbering, one token per round.
 String levelTitle({required int index, required int rounds}) => 'Level ${index + 1} · about $rounds rounds';
 
@@ -480,6 +495,11 @@ String waitingHint(List<Map<String, dynamic>> events, DateTime now) {
   final nudge = waited.inDays >= 2 ? ' The pool is thin; Withdraw now takes it back, minus the mixing tokens.' : '';
   return '$how$nudge';
 }
+
+/// "12 mixing tokens on the box · about 11 more rounds affordable".
+String tokensLeftText(int tokens, int rounds) => rounds == 0
+    ? '$tokens mixing ${tokens == 1 ? 'token' : 'tokens'} on the box · no more rounds affordable, it withdraws next'
+    : '$tokens mixing tokens on the box · about $rounds more ${rounds == 1 ? 'round' : 'rounds'} affordable';
 
 /// What a mix is doing, in words the user can act on.
 String mixPhaseText(MixRecord r) {
@@ -546,6 +566,10 @@ class _MixCard extends StatelessWidget {
               child: LinearProgressIndicator(value: progress, minHeight: 6),
             ),
           ],
+          if (r.inPool && r.tokensLeft != null) ...[
+            const SizedBox(height: 6),
+            Text(tokensLeftText(r.tokensLeft!, r.roundsAffordable!), style: TextStyle(color: muted, fontSize: 12)),
+          ],
           if (r.lastCheckedAt != null) ...[
             const SizedBox(height: 6),
             Text('Checked ${formatSyncAge(r.lastCheckedAt!)}',
@@ -605,7 +629,7 @@ class _StartMixSheet extends StatefulWidget {
 }
 
 class _StartMixSheetState extends State<_StartMixSheet> {
-  late List<({int value, int waiting})> _rings;
+  late List<({int value, int waiting, int depth, int recentRounds})> _rings;
   late List<({int level, int price, int rate})> _levels;
   int? _denomination;
   int? _level;
@@ -614,17 +638,24 @@ class _StartMixSheetState extends State<_StartMixSheet> {
   @override
   void initState() {
     super.initState();
-    final seen = <int, int>{};
+    final seen = <int, ({int waiting, int depth, int recentRounds})>{};
     for (final r in (widget.pool['rings'] as List? ?? const [])) {
       final m = r as Map;
       if (m['token_id'] != null) continue; // token rings: not in the UI yet
-      seen[(m['value'] as num).toInt()] = (m['waiting'] as num?)?.toInt() ?? 0;
+      seen[(m['value'] as num).toInt()] = (
+        waiting: (m['waiting'] as num?)?.toInt() ?? 0,
+        depth: (m['depth'] as num?)?.toInt() ?? 0,
+        recentRounds: (m['recent_rounds'] as num?)?.toInt() ?? 0,
+      );
     }
     for (final d in defaultErgRings) {
-      seen.putIfAbsent(d, () => 0);
+      seen.putIfAbsent(d, () => (waiting: 0, depth: 0, recentRounds: 0));
     }
     final values = seen.keys.toList()..sort();
-    _rings = [for (final v in values) (value: v, waiting: seen[v]!)];
+    _rings = [
+      for (final v in values)
+        (value: v, waiting: seen[v]!.waiting, depth: seen[v]!.depth, recentRounds: seen[v]!.recentRounds),
+    ];
     _levels = [
       for (final l in (widget.pool['token_levels'] as List? ?? const []))
         (
@@ -640,6 +671,8 @@ class _StartMixSheetState extends State<_StartMixSheet> {
     _denomination = (waiting.isNotEmpty ? waiting.first : _rings.first).value;
     _level = _levels.isEmpty ? null : _levels.first.level;
   }
+
+  int get _deepest => _rings.fold(0, (m, r) => r.depth > m ? r.depth : m);
 
   /// What entering `value` costs the user in operator fees at the chosen
   /// batch: the batch price plus the pool's cut of the amount.
@@ -679,13 +712,24 @@ class _StartMixSheetState extends State<_StartMixSheet> {
                     color: r.value == _denomination ? accentOf(context) : muted,
                   ),
                   onTap: () => setState(() => _denomination = r.value),
-                  title: Text(formatErg(r.value)),
-                  subtitle: Text(
-                    ringSubtitle(value: r.value, waiting: r.waiting, operatorFee: _operatorFee(r.value)),
-                    style: TextStyle(
-                      color: (_operatorFee(r.value) ?? 0) * 20 >= r.value ? theme.colorScheme.error : muted,
-                      fontSize: 12,
-                    ),
+                  title: Text(
+                    r.depth == _deepest && r.depth > 0 ? '${formatErg(r.value)} · deepest ring' : formatErg(r.value),
+                  ),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        ringSubtitle(value: r.value, waiting: r.waiting, operatorFee: _operatorFee(r.value)),
+                        style: TextStyle(
+                          color: (_operatorFee(r.value) ?? 0) * 20 >= r.value ? theme.colorScheme.error : muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                      Text(
+                        ringInsight(depth: r.depth, recentRounds: r.recentRounds, rounds: _level),
+                        style: TextStyle(color: r.recentRounds == 0 ? theme.colorScheme.error : muted, fontSize: 12),
+                      ),
+                    ],
                   ),
                 ),
               const SizedBox(height: 12),
