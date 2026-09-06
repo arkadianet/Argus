@@ -603,13 +603,15 @@ class MixService extends ChangeNotifier {
   /// keystore, not only from memory: a lock empties the in-memory records
   /// (see [reset]) and must not take the job with it, since the job is
   /// for exactly the time the wallet is locked and the app closed.
-  Future<bool> backgroundWanted() async {
+  /// Null when the keystore could not be read, which says nothing either
+  /// way and must not be taken as "no mixes".
+  Future<bool?> backgroundWanted() async {
     if (!enabled || !backgroundEnabled || foreground) return false;
     if (active.isNotEmpty) return true;
     try {
       return (await _gw.listKeys()).isNotEmpty;
     } catch (_) {
-      return false;
+      return null;
     }
   }
 
@@ -622,7 +624,12 @@ class MixService extends ChangeNotifier {
       schedule(enabled && backgroundEnabled && !foreground && active.isNotEmpty);
       return;
     }
-    backgroundWanted().then(schedule);
+    // An unreadable keystore leaves the job as it is: cancelling it on a
+    // transient failure would stop mixing with the app closed, which is
+    // exactly when nothing is watching to put it back.
+    backgroundWanted().then((wanted) {
+      if (wanted != null) schedule(wanted);
+    });
   }
 
   /// Take the cross-isolate lease, or return false if the other driver
