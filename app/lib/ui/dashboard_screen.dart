@@ -1819,8 +1819,9 @@ class _DashboardScreenState extends State<DashboardScreen>
               ),
             ),
             const SizedBox(width: 8),
-            // Bounded so a long note wraps instead of overflowing the row.
-            Flexible(
+            // Takes its share of the row so the figure sits flush right on
+            // every row, note or no note; a long note wraps inside it.
+            Expanded(
               child: _rowBalance(
                 balance,
                 isActive ? _sync.isSyncing : false,
