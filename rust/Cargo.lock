@@ -2533,6 +2533,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sigmafi"
+version = "0.1.0"
+dependencies = [
+ "ergo-chain-types",
+ "ergo-tx",
+ "hex",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "sigmausd"
 version = "0.1.0"
 dependencies = [
@@ -3103,6 +3115,7 @@ dependencies = [
  "rosen",
  "serde",
  "serde_json",
+ "sigmafi",
  "sigmausd",
  "stealth",
  "thiserror 1.0.69",

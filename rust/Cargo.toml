@@ -13,6 +13,7 @@ members = [
     "crates/vendor/protocols/dexy",
     "crates/vendor/protocols/duckpools",
     "crates/vendor/protocols/rosen",
+    "crates/vendor/protocols/sigmafi",
     "crates/vendor/protocols/stealth",
     "crates/vendor/protocols/zerojoin",
 ]
@@ -82,6 +83,7 @@ sigmausd = { path = "crates/vendor/protocols/sigmausd" }
 dexy = { path = "crates/vendor/protocols/dexy" }
 duckpools = { path = "crates/vendor/protocols/duckpools" }
 rosen = { path = "crates/vendor/protocols/rosen" }
+sigmafi = { path = "crates/vendor/protocols/sigmafi" }
 stealth = { path = "crates/vendor/protocols/stealth" }
 zerojoin = { path = "crates/vendor/protocols/zerojoin" }
 

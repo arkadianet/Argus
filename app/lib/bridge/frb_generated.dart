@@ -66,7 +66,7 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.11.1';
 
   @override
-  int get rustContentHash => -1067741513;
+  int get rustContentHash => 1616033944;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
@@ -619,6 +619,38 @@ abstract class RustLibApi extends BaseApi {
   Future<void> crateApiSetNetwork({
     required List<String> nodeUrls,
     String? explorerUrl,
+  });
+
+  String crateApiSigmafiContracts();
+
+  String crateApiSigmafiMarket({
+    required String boxesJson,
+    required PlatformInt64 height,
+  });
+
+  Future<String> crateApiSigmafiPrepareOpen({
+    required BigInt handleId,
+    required String loanAsset,
+    required PlatformInt64 principal,
+    required PlatformInt64 repayment,
+    required PlatformInt64 termBlocks,
+    required PlatformInt64 collateralErg,
+    required String collateralTokensJson,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+  });
+
+  Future<String> crateApiSigmafiPrepareSpend({
+    required BigInt handleId,
+    required String action,
+    required String boxJson,
+    required String userAddress,
+    required List<String> spendAddresses,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
   });
 
   Future<String> crateApiSigmausdBuild({
@@ -4025,6 +4057,198 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   );
 
   @override
+  String crateApiSigmafiContracts() {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 71)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: null,
+        ),
+        constMeta: kCrateApiSigmafiContractsConstMeta,
+        argValues: [],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSigmafiContractsConstMeta =>
+      const TaskConstMeta(debugName: "sigmafi_contracts", argNames: []);
+
+  @override
+  String crateApiSigmafiMarket({
+    required String boxesJson,
+    required PlatformInt64 height,
+  }) {
+    return handler.executeSync(
+      SyncTask(
+        callFfi: () {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_String(boxesJson, serializer);
+          sse_encode_i_64(height, serializer);
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 72)!;
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSigmafiMarketConstMeta,
+        argValues: [boxesJson, height],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSigmafiMarketConstMeta => const TaskConstMeta(
+    debugName: "sigmafi_market",
+    argNames: ["boxesJson", "height"],
+  );
+
+  @override
+  Future<String> crateApiSigmafiPrepareOpen({
+    required BigInt handleId,
+    required String loanAsset,
+    required PlatformInt64 principal,
+    required PlatformInt64 repayment,
+    required PlatformInt64 termBlocks,
+    required PlatformInt64 collateralErg,
+    required String collateralTokensJson,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_String(loanAsset, serializer);
+          sse_encode_i_64(principal, serializer);
+          sse_encode_i_64(repayment, serializer);
+          sse_encode_i_64(termBlocks, serializer);
+          sse_encode_i_64(collateralErg, serializer);
+          sse_encode_String(collateralTokensJson, serializer);
+          sse_encode_String(userAddress, serializer);
+          sse_encode_list_String(spendAddresses, serializer);
+          sse_encode_String(changeAddress, serializer);
+          sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 73,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSigmafiPrepareOpenConstMeta,
+        argValues: [
+          handleId,
+          loanAsset,
+          principal,
+          repayment,
+          termBlocks,
+          collateralErg,
+          collateralTokensJson,
+          userAddress,
+          spendAddresses,
+          changeAddress,
+          nodeUrl,
+          feeNano,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSigmafiPrepareOpenConstMeta => const TaskConstMeta(
+    debugName: "sigmafi_prepare_open",
+    argNames: [
+      "handleId",
+      "loanAsset",
+      "principal",
+      "repayment",
+      "termBlocks",
+      "collateralErg",
+      "collateralTokensJson",
+      "userAddress",
+      "spendAddresses",
+      "changeAddress",
+      "nodeUrl",
+      "feeNano",
+    ],
+  );
+
+  @override
+  Future<String> crateApiSigmafiPrepareSpend({
+    required BigInt handleId,
+    required String action,
+    required String boxJson,
+    required String userAddress,
+    required List<String> spendAddresses,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+  }) {
+    return handler.executeNormal(
+      NormalTask(
+        callFfi: (port_) {
+          final serializer = SseSerializer(generalizedFrbRustBinding);
+          sse_encode_u_64(handleId, serializer);
+          sse_encode_String(action, serializer);
+          sse_encode_String(boxJson, serializer);
+          sse_encode_String(userAddress, serializer);
+          sse_encode_list_String(spendAddresses, serializer);
+          sse_encode_opt_String(nodeUrl, serializer);
+          sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
+          pdeCallFfi(
+            generalizedFrbRustBinding,
+            serializer,
+            funcId: 74,
+            port: port_,
+          );
+        },
+        codec: SseCodec(
+          decodeSuccessData: sse_decode_String,
+          decodeErrorData: sse_decode_String,
+        ),
+        constMeta: kCrateApiSigmafiPrepareSpendConstMeta,
+        argValues: [
+          handleId,
+          action,
+          boxJson,
+          userAddress,
+          spendAddresses,
+          nodeUrl,
+          feeNano,
+        ],
+        apiImpl: this,
+      ),
+    );
+  }
+
+  TaskConstMeta get kCrateApiSigmafiPrepareSpendConstMeta =>
+      const TaskConstMeta(
+        debugName: "sigmafi_prepare_spend",
+        argNames: [
+          "handleId",
+          "action",
+          "boxJson",
+          "userAddress",
+          "spendAddresses",
+          "nodeUrl",
+          "feeNano",
+        ],
+      );
+
+  @override
   Future<String> crateApiSigmausdBuild({
     required BigInt handleId,
     required String action,
@@ -4050,7 +4274,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 71,
+            funcId: 75,
             port: port_,
           );
         },
@@ -4104,7 +4328,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 72,
+            funcId: 76,
             port: port_,
           );
         },
@@ -4134,7 +4358,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 73,
+            funcId: 77,
             port: port_,
           );
         },
@@ -4166,7 +4390,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 74,
+            funcId: 78,
             port: port_,
           );
         },
@@ -4200,7 +4424,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 75,
+            funcId: 79,
             port: port_,
           );
         },
@@ -4231,7 +4455,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 76,
+            funcId: 80,
             port: port_,
           );
         },
@@ -4255,7 +4479,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 77)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -4283,7 +4507,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 78,
+            funcId: 82,
             port: port_,
           );
         },
@@ -4318,7 +4542,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 79,
+            funcId: 83,
             port: port_,
           );
         },
@@ -4350,7 +4574,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 80,
+            funcId: 84,
             port: port_,
           );
         },
@@ -4377,7 +4601,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       SyncTask(
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 81)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 85)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_String,
@@ -4407,7 +4631,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 82,
+            funcId: 86,
             port: port_,
           );
         },
@@ -4442,7 +4666,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 83,
+            funcId: 87,
             port: port_,
           );
         },
@@ -4472,7 +4696,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 84,
+            funcId: 88,
             port: port_,
           );
         },
@@ -4500,7 +4724,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: () {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(address, serializer);
-          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 85)!;
+          return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 89)!;
         },
         codec: SseCodec(
           decodeSuccessData: sse_decode_bool,
@@ -4537,7 +4761,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 86,
+            funcId: 90,
             port: port_,
           );
         },
@@ -4572,7 +4796,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 87,
+            funcId: 91,
             port: port_,
           );
         },
@@ -4602,7 +4826,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 88,
+            funcId: 92,
             port: port_,
           );
         },
@@ -4632,7 +4856,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 89,
+            funcId: 93,
             port: port_,
           );
         },
@@ -4664,7 +4888,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 90,
+            funcId: 94,
             port: port_,
           );
         },
@@ -4698,7 +4922,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 91,
+            funcId: 95,
             port: port_,
           );
         },
@@ -4732,7 +4956,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
-            funcId: 92,
+            funcId: 96,
             port: port_,
           );
         },

@@ -5407,3 +5407,219 @@ pub fn duckpools_order_outcome(
 ) -> Result<String, String> {
     crate::api_duckpools_impl::outcome_json(&kind, &proxy_box_id, &tx_json)
 }
+
+// ── SigmaFi ─────────────────────────────────────────────────────────────
+
+/// The loan assets SigmaFi lists, each with the order and bond scripts
+/// whose boxes make up the market. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn sigmafi_contracts() -> String {
+    crate::api_sigmafi_impl::contracts_json()
+}
+
+/// Boxes under the SigmaFi scripts (explorer or node JSON, one array)
+/// read into open orders and active bonds at `height`. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn sigmafi_market(boxes_json: String, height: i64) -> Result<String, String> {
+    crate::api_sigmafi_impl::market_json(&boxes_json, height)
+}
+
+/// Prepare a loan request: the collateral into an order box the wallet's
+/// `user_address` key can cancel. Confirm with `send_erg`.
+#[allow(clippy::too_many_arguments)]
+#[flutter_rust_bridge::frb]
+pub async fn sigmafi_prepare_open(
+    handle_id: u64,
+    loan_asset: String,
+    principal: i64,
+    repayment: i64,
+    term_blocks: i64,
+    collateral_erg: i64,
+    collateral_tokens_json: String,
+    user_address: String,
+    spend_addresses: Vec<String>,
+    change_address: String,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+) -> Result<String, String> {
+    let miner_fee = mix_miner_fee(fee_nano)?;
+    if sigmafi::loan_token(&loan_asset).is_none() {
+        return Err(ArgusError::TxBuildFailed(format!(
+            "SigmaFi does not lend {loan_asset}"
+        ))
+        .to_json_string());
+    }
+    let (user_tree, change_tree) = with_handle(handle_id, "sigmafi_prepare_open", |h| {
+        for a in [&user_address, &change_address] {
+            if !h.owns_address(a).map_err(err_str)? {
+                return Err(ArgusError::InvalidAddress(
+                    "order addresses must belong to this wallet".into(),
+                )
+                .to_json_string());
+            }
+        }
+        Ok((
+            address_to_ergo_tree(&user_address)
+                .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?,
+            address_to_ergo_tree(&change_address)
+                .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?,
+        ))
+    })?;
+    let collateral_tokens = crate::api_sigmafi_impl::parse_collateral_tokens(&collateral_tokens_json)?;
+    let to_u64 = |n: i64, what: &str| {
+        u64::try_from(n).map_err(|_| ArgusError::TxBuildFailed(format!("{what} is negative")).to_json_string())
+    };
+    let principal = to_u64(principal, "the loan")?;
+    let repayment = to_u64(repayment, "the repayment")?;
+    let collateral_erg = to_u64(collateral_erg, "the collateral")?;
+    let term_blocks = i32::try_from(term_blocks)
+        .map_err(|_| ArgusError::TxBuildFailed("term".into()).to_json_string())?;
+    let client = node_client(node_url.clone()).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    let spend: Vec<String> = if spend_addresses.is_empty() {
+        vec![user_address.clone()]
+    } else {
+        spend_addresses
+    };
+    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let unsigned_tx = sigmafi::build_open_order(&sigmafi::OpenOrderRequest {
+        borrower_tree: &user_tree,
+        change_tree: Some(&change_tree),
+        loan_asset: &loan_asset,
+        principal,
+        repayment,
+        term_blocks,
+        collateral_erg,
+        collateral_tokens: &collateral_tokens,
+        utxos: &utxos,
+        height,
+        miner_fee,
+    })
+    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let used: Vec<ergo_tx::Eip12InputBox> = unsigned_tx.inputs.clone();
+    let ergo_boxes = used
+        .iter()
+        .map(crate::api_mix_impl::to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let order_box_id = ergo_tx::chain::derive_output_boxes(&unsigned_tx)
+        .map(|(_, outs)| outs.first().map(|b| b.box_id.clone()).unwrap_or_default())
+        .map_err(|e| ArgusError::TxBuildFailed(e).to_json_string())?;
+    let order_value: i64 = unsigned_tx.outputs[0].value.parse().unwrap_or(0);
+    let change_erg = user_change_erg(&unsigned_tx, &change_tree);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes,
+        data_input_boxes: Vec::new(),
+        unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: order_value,
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "order_box_id": order_box_id,
+        "order_value": order_value,
+        "height": height,
+        "miner_fee": miner_fee,
+        "dev_fee": sigmafi::dev_fee(principal),
+        "ui_fee": sigmafi::ui_fee(principal),
+        "input_boxes": input_boxes_json(&used),
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Prepare one of the spends of a SigmaFi box: `cancel` an order of this
+/// wallet, `close` (fill) anyone's order as the lender, `repay` a bond
+/// this wallet borrowed, or `liquidate` a matured bond this wallet lent.
+/// `box_json` is the box as the explorer or node returned it. The
+/// interface fee a fill pays goes to Argus. Confirm with `send_erg`.
+#[flutter_rust_bridge::frb]
+pub async fn sigmafi_prepare_spend(
+    handle_id: u64,
+    action: String,
+    box_json: String,
+    user_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+    fee_nano: Option<i64>,
+) -> Result<String, String> {
+    let miner_fee = mix_miner_fee(fee_nano)?;
+    let protocol_box = crate::api_sigmafi_impl::parse_box(&box_json)?;
+    let user_tree = with_handle(handle_id, "sigmafi_prepare_spend", |h| {
+        if !h.owns_address(&user_address).map_err(err_str)? {
+            return Err(ArgusError::InvalidAddress(
+                "the address must belong to this wallet".into(),
+            )
+            .to_json_string());
+        }
+        address_to_ergo_tree(&user_address).map_err(|e| ArgusError::InvalidAddress(e).to_json_string())
+    })?;
+    let client = node_client(node_url.clone()).await?;
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
+    let spend = crate::api_sigmafi_impl::Spend::read(&action, &protocol_box, height)?;
+    if let Some(required) = spend.required_address() {
+        let owns = with_handle(handle_id, "sigmafi_prepare_spend", |h| {
+            h.owns_address(required).map_err(err_str)
+        })?;
+        if !owns {
+            return Err(ArgusError::TxBuildFailed(format!(
+                "this {} belongs to {}, not to this wallet",
+                if action == "cancel" { "order" } else { "bond" },
+                required
+            ))
+            .to_json_string());
+        }
+    }
+    let ui_fee_tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    let mut spend_from: Vec<String> = if spend_addresses.is_empty() {
+        vec![user_address.clone()]
+    } else {
+        spend_addresses
+    };
+    // The change returns to the key the contract names; that address must
+    // be readable too, or its own boxes would be left out of the spend.
+    if let Some(required) = spend.required_address() {
+        if !spend_from.iter().any(|a| a == required) {
+            spend_from.push(required.to_string());
+        }
+    }
+    let (_, utxos) = gather_unspent(handle_id, &client, &spend_from).await?;
+    let unsigned_tx = spend.build(&protocol_box, &user_tree, &ui_fee_tree, &utxos, height, miner_fee)?;
+    let ergo_boxes = unsigned_tx
+        .inputs
+        .iter()
+        .map(crate::api_mix_impl::to_ergo_box)
+        .collect::<Result<Vec<_>, _>>()?;
+    let change_tree = spend.change_tree(&user_tree);
+    let change_erg = user_change_erg(&unsigned_tx, &change_tree);
+    let first_out: i64 = unsigned_tx.outputs[0].value.parse().unwrap_or(0);
+    let input_boxes = input_boxes_json(&unsigned_tx.inputs);
+    let mut summary = spend.summary(height);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes,
+        data_input_boxes: Vec::new(),
+        unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: first_out,
+        node_url,
+    });
+    summary["preparation_id"] = serde_json::json!(preparation_id);
+    summary["miner_fee"] = serde_json::json!(miner_fee);
+    summary["height"] = serde_json::json!(height);
+    summary["input_boxes"] = serde_json::json!(input_boxes);
+    Ok(summary.to_string())
+}
