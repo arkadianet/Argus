@@ -890,7 +890,9 @@ class DuckpoolsService extends ChangeNotifier {
     // Serialise before the await, so a reset or load in between cannot
     // change what is written under this wallet's key.
     final snapshot = jsonEncode([for (final o in orders) o.toJson()]);
-    return _persistChain = _persistChain.then((_) async {
+    // A failed write is the caller's to report; it must not stop every
+    // later write, so the chain is recovered before the next is queued.
+    return _persistChain = _persistChain.catchError((_) {}).then((_) async {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_ordersKey(id), snapshot);
       notifyListeners();

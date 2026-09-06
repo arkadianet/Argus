@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:argus_wallet/services/duckpools_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
 /// Pool identities as the Rust side reports them, and a state answer built
 /// the way the FFI does from the boxes it is handed.
@@ -544,6 +545,33 @@ void main() {
     expect(svc.orders, hasLength(2));
   });
 
+  test('a failed write does not stop the next one', () async {
+    final store = _FailingOnceStore();
+    SharedPreferencesStorePlatform.instance = store;
+    addTearDown(() => SharedPreferences.setMockInitialValues({}));
+    final gw = FakeGateway(node: 'http://node')
+      ..height = 1000
+      ..found = [
+        {'pool': 'sigusd', 'kind': 'borrow', 'box_id': 'pb1', 'tx_id': 'tx1', 'amount': 100, 'value': 1, 'refund_height': 900},
+      ];
+    final svc = DuckpoolsService(
+      gateway: gw,
+      get: (u) async => throw StateError('unexpected $u'),
+      post: (u, body) async => jsonEncode([{'boxId': 'x', 'ergoTree': jsonDecode(body)}]),
+    );
+    await svc.load();
+    expect(await svc.discoverOrders(['9me']), 0, reason: 'the write failed');
+    expect(svc.scanError, contains('disk full'));
+    gw.found = [
+      {'pool': 'erg', 'kind': 'lend', 'box_id': 'pb2', 'tx_id': 'tx2', 'amount': 1, 'value': 1, 'refund_height': 1},
+    ];
+    expect(await svc.discoverOrders(['9me']), 1);
+    expect(svc.scanError, isNull);
+    expect(store.writes, 2);
+    final prefs = await SharedPreferences.getInstance();
+    expect(jsonDecode(prefs.getString('argus_duck_orders_v1_w1')!), hasLength(2));
+  });
+
   test('a scan that outlives a wallet switch does not touch the new wallet', () async {
     SharedPreferences.setMockInitialValues({
       'argus_duck_orders_v1_w2': jsonEncode([
@@ -851,4 +879,16 @@ void main() {
     await svc.markRefundSent(o, 'rtx');
     expect(o.status, 'refund_sent');
   });
+}
+
+/// The in-memory store, except that its first write fails.
+class _FailingOnceStore extends InMemorySharedPreferencesStore {
+  _FailingOnceStore() : super.empty();
+  int writes = 0;
+
+  @override
+  Future<bool> setValue(String valueType, String key, Object value) {
+    if (++writes == 1) throw StateError('disk full');
+    return super.setValue(valueType, key, value);
+  }
 }
