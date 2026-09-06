@@ -5,7 +5,9 @@ import '../../bridge/argus_error.dart';
 import '../../services/privacy_service.dart';
 import '../../services/secure_storage.dart';
 import '../../services/session_lock.dart';
+import '../../services/battery_service.dart';
 import '../../services/mix_service.dart';
+import '../widgets/battery_note.dart';
 import '../../services/stealth_service.dart';
 import '../../services/wallet_service.dart';
 import '../pin_fields.dart';
@@ -442,6 +444,13 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                             await mixService.setBackgroundEnabled(v);
                           } catch (e) {
                             _snack('Could not change background mixing: $e');
+                            return;
+                          }
+                          // Android will delay the job unless the app is exempt
+                          // from battery optimisation; offer that now.
+                          if (v && await BatteryService.isUnrestricted() == false) {
+                            final shown = await BatteryService.requestUnrestricted();
+                            if (!shown) await BatteryService.openBatterySettings();
                           }
                         },
                 ),
@@ -454,6 +463,15 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
           'costs an operator fee; each round needs a stranger to pair with, '
           'so a mix can take hours or days. Not every app store allows a '
           'wallet with a built-in mixer; it stays off until you turn it on.',
+        ),
+        ListenableBuilder(
+          listenable: mixService,
+          builder: (context, _) => mixService.backgroundEnabled
+              ? const Padding(
+                  padding: EdgeInsets.fromLTRB(4, 0, 4, 8),
+                  child: BatteryNote(),
+                )
+              : const SizedBox.shrink(),
         ),
       ],
     );
