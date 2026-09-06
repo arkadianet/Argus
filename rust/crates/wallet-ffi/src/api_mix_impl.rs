@@ -126,6 +126,9 @@ pub fn to_ergo_box(b: &Eip12InputBox) -> Result<ErgoBox, String> {
 /// absurd prices is a nuisance anyone can post; the confirm sheet would
 /// show it, but the Start sheet must not offer it either.
 pub fn check_operator_fee(fee: i64, denomination: i64) -> Result<(), String> {
+    if denomination <= 0 || fee < 0 {
+        return Err(err("the mix amount and the operator fee must be positive"));
+    }
     let cap = denomination / 20 + 1_000_000_000;
     if fee > cap {
         return Err(err(format!(
@@ -142,10 +145,18 @@ pub fn rings_json(view: &ChainView) -> serde_json::Value {
     let inputs: Vec<Eip12InputBox> = view.half.iter().map(|h| h.input.clone()).collect();
     let rings = discover_rings(&inputs);
     let token = view.token_box();
+    // Each level with the price and the rate of the box that would sell
+    // it, so the sheet's estimate comes from the same box as the quote.
     let levels: Vec<serde_json::Value> = view
         .token_levels()
         .into_iter()
-        .map(|(l, p)| serde_json::json!({ "level": l, "price_nano_erg": p }))
+        .map(|(l, p)| {
+            serde_json::json!({
+                "level": l,
+                "price_nano_erg": p,
+                "rate": view.token_box_for(l).map(|t| t.rate),
+            })
+        })
         .collect();
     serde_json::json!({
         "rings": rings,
@@ -567,6 +578,45 @@ mod tests {
             additional_registers: Default::default(),
             extension: Default::default(),
         }
+    }
+
+    /// A hostile emission box cannot make the wallet quote or build an
+    /// entry above the fee cap, nor slip past it by overflowing the fee.
+    #[test]
+    fn the_operator_fee_cap_refuses_dear_and_overflowing_boxes() {
+        let h = handle();
+        let mut v = view("[]", vec![]);
+        let denomination = 1_000_000_000;
+        let level = v.token_box().unwrap().levels()[0];
+        let cap = denomination / 20 + 1_000_000_000;
+        let rate = v.token[0].rate as i64;
+        // The fixture holds several emission boxes and the cheapest wins,
+        // so every box must ask the price under test.
+        let price_all = |v: &mut ChainView, price: i64| {
+            for t in v.token.iter_mut() {
+                t.batches = vec![(level, price)];
+            }
+        };
+        // Just under the cap: accepted.
+        price_all(&mut v, cap - denomination / rate - 1);
+        assert!(funding_requirement(&v, denomination, level, MINER_FEE).is_ok());
+        // Over the cap: refused with the limit named, before any money moves.
+        price_all(&mut v, cap + 1);
+        let err = funding_requirement(&v, denomination, level, MINER_FEE).unwrap_err();
+        assert!(err.contains("sanity limit"), "{err}");
+        let state = MixState::new(0, RingSpec::erg(denomination), level, 2, DEST.into(), 1);
+        let err = match build_entry(&handle_secrets(&h, 0), &state, &v, &funding(denomination * 2), &[], MINER_FEE, HEIGHT) {
+            Ok(_) => panic!("an entry above the cap was built"),
+            Err(e) => e,
+        };
+        assert!(err.contains("sanity limit"), "{err}");
+        // A price that would overflow the fee saturates and is refused too.
+        price_all(&mut v, i64::MAX - 5);
+        assert!(funding_requirement(&v, denomination, level, MINER_FEE).unwrap_err().contains("sanity limit"));
+        // A junk level is not for sale.
+        assert!(funding_requirement(&v, denomination, 0, MINER_FEE).is_err());
+        assert!(check_operator_fee(-1, denomination).is_err());
+        assert!(check_operator_fee(1, 0).is_err());
     }
 
     /// Enter as Bob against a real fixture half box, then own the box the

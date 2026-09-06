@@ -438,6 +438,11 @@ impl ChainView {
     /// on a tie. Anyone may post a box under the emission script with
     /// absurd prices; it is simply never the cheapest.
     pub fn token_box_for(&self, level: i32) -> Option<&TokenEmissionBox> {
+        // A level is a count of tokens bought: R4 is attacker-controlled,
+        // and a zero or negative "batch" would sell nothing at any price.
+        if level < 1 {
+            return None;
+        }
         self.token
             .iter()
             .filter(|t| t.tokens_available >= level as i64)
@@ -451,7 +456,7 @@ impl ChainView {
         let mut best: std::collections::BTreeMap<i32, i64> = Default::default();
         for t in &self.token {
             for (l, p) in &t.batches {
-                if t.tokens_available >= *l as i64 {
+                if *l >= 1 && *p >= 0 && t.tokens_available >= *l as i64 {
                     best.entry(*l).and_modify(|b| *b = (*b).min(*p)).or_insert(*p);
                 }
             }
@@ -965,6 +970,16 @@ mod tests {
         assert!(view.token_box_for(60).is_none(), "no box sells a batch of 60");
         assert_eq!(view.token_levels(), vec![(20, 30_000_000), (40, 2_000_000_000_000)]);
         assert_eq!(view.token_box().map(|t| t.tokens_available), Some(1_000_000), "existence still counts any box");
+
+        // Junk batches from a hostile box never reach the list or the pick.
+        let mut junk = fixture_token_box();
+        junk.batches = vec![(0, 1), (-5, 1), (20, -7), (20, 40_000_000)];
+        junk.tokens_available = 100;
+        let view = ChainView { token: vec![junk], ..view_with(vec![], vec![]) };
+        assert_eq!(view.token_levels(), vec![(20, 40_000_000)]);
+        assert!(view.token_box_for(0).is_none());
+        assert!(view.token_box_for(-5).is_none());
+        assert!(view.token_box_for(20).is_some());
     }
 
     #[test]
