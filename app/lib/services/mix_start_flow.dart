@@ -1,3 +1,4 @@
+import '../bridge/argus_error.dart';
 import 'mix_service.dart';
 
 /// What the user chose on the start sheet, plus what entering will cost.
@@ -125,10 +126,18 @@ class MixStartFlow {
     try {
       sent = await broadcast(funding.preparationId);
     } catch (e) {
-      // Nothing went out, so nothing is owed a record: a pending mix with
-      // no funding would only wait for a box that was never sent.
-      await service.remove(record);
-      rethrow;
+      if (broadcastCertainlyFailed(e)) {
+        // Nothing went out, so nothing is owed a record: a pending mix
+        // with no funding would only wait for a box that was never sent.
+        await service.remove(record);
+        rethrow;
+      }
+      // The node may have taken the transaction and lost the answer: the
+      // record stays, says so, and Continue adopts the box if it confirms.
+      const why = 'The node did not confirm receiving the funding transaction; it may still be on chain. '
+          'If it confirms, Continue finds the box. If it does not appear, remove the mix.';
+      await service.markFundingUncertain(record, why);
+      throw StateError('$why (${describeError(e)})');
     }
     await service.recordFunding(record, txId: sent.txId, outputBoxIds: sent.outputBoxIds);
     onStatus?.call('Funding sent: ${sent.txId}');
@@ -200,6 +209,25 @@ class MixStartFlow {
     await service.commitEntry(record, nextState, sent.txId);
     onStatus?.call('Entered the pool: ${sent.txId}');
     return record;
+  }
+
+  /// Whether a broadcast failure means nothing reached the network.
+  /// Building, signing and local checks fail before anything is sent; a
+  /// node error may come after the node accepted the transaction.
+  static bool broadcastCertainlyFailed(Object e) {
+    final code = e is ArgusException
+        ? e.code
+        : e is String
+            ? ArgusException.fromJson(e).code
+            : null;
+    if (code == null) return true;
+    return !const {'NODE_ERROR', 'NETWORK_ERROR', 'UNKNOWN', 'GENERIC'}.contains(code);
+  }
+
+  static String describeError(Object e) {
+    if (e is ArgusException) return e.message;
+    if (e is String) return ArgusException.fromJson(e).message;
+    return e.toString();
   }
 
   Future<String?> _waitForBox(int neededNano, List<String> candidates) async {

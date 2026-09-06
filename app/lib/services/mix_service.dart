@@ -622,7 +622,8 @@ class MixService extends ChangeNotifier {
   /// (see [reset]) and must not take the job with it, since the job is
   /// for exactly the time the wallet is locked and the app closed.
   /// Null when the keystore could not be read, which says nothing either
-  /// way and must not be taken as "no mixes".
+  /// way and must not be taken as "no mixes". "A mix to move" means any
+  /// wallet's: background mixing is one job for every wallet's keys.
   Future<bool?> backgroundWanted() async {
     if (!enabled || !backgroundEnabled || foreground) return false;
     if (active.isNotEmpty) return true;
@@ -646,7 +647,9 @@ class MixService extends ChangeNotifier {
     // transient failure would stop mixing with the app closed, which is
     // exactly when nothing is watching to put it back.
     backgroundWanted().then((wanted) {
-      if (wanted != null) schedule(wanted);
+      // The keystore answered for the state the question was asked in; a
+      // foreground or a switch since then has already answered for now.
+      if (wanted != null) schedule(wanted && enabled && backgroundEnabled && !foreground);
     });
   }
 
@@ -900,6 +903,12 @@ class MixService extends ChangeNotifier {
   }
 
   /// Outside a tick: give every finished mix its last height, once.
+  ///
+  /// Runs without the cross-isolate lease. That is safe only because the
+  /// background job writes a wallet's records only while it holds a key
+  /// for an in-pool mix of that wallet, and a finished mix has no key;
+  /// this runs only when memory shows no in-pool mix. Widen either side
+  /// and the lease is needed here too.
   Future<void> _confirmAllFinished() async {
     if (_ticking || !records.any(_awaitsHeight)) return;
     _ticking = true;
@@ -1219,6 +1228,13 @@ class MixService extends ChangeNotifier {
     // The ids are what keeps the funding box out of other spends after a
     // restart: a write that did not land must not pass unnoticed.
     if (!await _persist()) throw StateError('Failed to save the mix\'s funding record');
+  }
+
+  /// A funding broadcast whose outcome is not known: the record stays,
+  /// with a persistent note, so the box is adopted if it confirms.
+  Future<void> markFundingUncertain(MixRecord record, String why) async {
+    record.lastError = why;
+    await _persist();
   }
 
   /// Persist what an entry will produce, before it is broadcast.
