@@ -50,9 +50,10 @@ class FakeGateway implements DuckpoolsGateway {
   List<String>? lastLoanAddresses;
   String? lastPrepareLoanBoxes;
 
-  /// Health the fake reports for the wallet's loan, so a test can tell
-  /// one read's result from another's.
+  /// Health the fake reports for the wallet's loan, and whether it is
+  /// liquidatable; the forced height stays at 1 920 515.
   int healthBps = 18594;
+  bool liquidatable = false;
 
   @override
   Future<String> loans(String loanBoxesJson, List<String> walletAddresses, int height) async {
@@ -70,7 +71,7 @@ class FakeGateway implements DuckpoolsGateway {
               'pool': 'sigusd', 'ticker': 'SigUSD', 'decimals': 2, 'box_id': c['boxId'],
               'collateral_nano': c['value'], 'loan': 23899, 'owed': 23939, 'collateral_value': 62316,
               'threshold': 1400, 'penalty': 400, 'health_bps': healthBps, 'liquidation_value': 33514,
-              'liquidatable': false, 'forced_liquidation_height': 1920515,
+              'liquidatable': liquidatable, 'forced_liquidation_height': 1920515,
             },
       ],
       'markets': [
@@ -162,6 +163,33 @@ class FakeGateway implements DuckpoolsGateway {
   @override
   String orderOutcome(String kind, String proxyBoxId, String txJson) =>
       jsonEncode(outcomes[proxyBoxId] ?? {'outcome': 'unknown'});
+  String? lastAdjustLoanBoxes;
+  @override
+  String adjustQuote(String loanBoxesJson, String poolKey, String collateralBoxId, int newAmount, int height) {
+    if (newAmount < 1338000000000) throw StateError('that leaves the loan at or below its liquidation line');
+    return jsonEncode({
+      'pool': poolKey, 'collateral_box_id': collateralBoxId, 'current_amount': 2500000000000, 'new_amount': newAmount,
+      'delta': newAmount - 2500000000000, 'owed': 23939, 'collateral_value_after': newAmount ~/ 40000000,
+      'liquidation_value': 33514, 'health_after_bps': newAmount ~/ 40000000 * 10000 ~/ 33514, 'min_amount': 1338000000000,
+    });
+  }
+  @override
+  Future<String> prepareAdjust({
+    required String loanBoxesJson,
+    required String poolKey,
+    required String collateralBoxId,
+    required int newAmount,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+  }) async {
+    lastAdjustLoanBoxes = loanBoxesJson;
+    return jsonEncode({
+      'preparation_id': 11,
+      'quote': jsonDecode(adjustQuote(loanBoxesJson, poolKey, collateralBoxId, newAmount, 1)),
+      'height': 1000, 'miner_fee': 1100000,
+    });
+  }
 
   @override
   String pools() => jsonEncode([
@@ -519,6 +547,17 @@ void main() {
     final quote = svc.loanQuote(poolKey: 'sigusd', kind: 'partial_repay', amount: 5000, collateralBoxId: 'loan-1');
     expect(quote['owed_after'], 18939);
 
+    // A collateral adjustment quotes against the same snapshot and needs no order.
+    final adj = svc.adjustQuote(poolKey: 'sigusd', collateralBoxId: 'loan-1', newAmount: 1500000000000);
+    expect(adj['delta'], -1000000000000);
+    expect(() => svc.adjustQuote(poolKey: 'sigusd', collateralBoxId: 'loan-1', newAmount: 1000000000000), throwsStateError);
+    final preparedAdj = await svc.prepareAdjust(
+      poolKey: 'sigusd', collateralBoxId: 'loan-1', newAmount: 2600000000000,
+      userAddress: '9me', spendAddresses: const [], changeAddress: '9me',
+    );
+    expect(preparedAdj['preparation_id'], 11);
+    expect(gw.lastAdjustLoanBoxes, gw.lastLoanBoxes);
+    expect(svc.orders.where((o) => o.kind == 'adjust'), isEmpty);
     // A pool whose collateral boxes cannot be read says so on its market
     // rather than looking fine with the loans silently missing.
     var collateralDown = true;
@@ -584,6 +623,95 @@ void main() {
     expect(svc.marketFor('sigusd')!.ready, isFalse);
     expect(svc.marketFor('sigusd')!.error, contains('parameter box'));
     expect(svc.loans.single.boxId, 'loan-1', reason: 'positions still read from the collateral boxes');
+  });
+
+  test('loan alert levels follow the health and the deadline', () {
+    DuckLoan loan(int health, {bool liq = false, int forced = 2000000}) => DuckLoan(
+          pool: 'sigusd', ticker: 'SigUSD', decimals: 2, boxId: 'b', collateralNano: 1, loan: 1, owed: 1,
+          collateralValue: 1, threshold: 1400, penalty: 400, healthBps: health, liquidationValue: 1,
+          liquidatable: liq, forcedLiquidationHeight: forced,
+        );
+    expect(duckAlertLevel(loan(18594)), isNull);
+    expect(duckAlertLevel(loan(13000)), isNull, reason: 'the line itself is fine');
+    expect(duckAlertLevel(loan(12999)), DuckAlertLevel.watch);
+    expect(duckAlertLevel(loan(11499)), DuckAlertLevel.danger);
+    expect(duckAlertLevel(loan(20000, liq: true)), DuckAlertLevel.liquidatable);
+    expect(duckDeadlineNear(loan(1, forced: 1002160), 1000000), isTrue);
+    expect(duckDeadlineNear(loan(1, forced: 1002161), 1000000), isFalse);
+    expect(duckDeadlineNear(loan(1, forced: 1002160), null), isFalse, reason: 'no height, no claim');
+  });
+
+  test('a loan crossing a line is announced once per level, and the watch record feeds the background job', () async {
+    SharedPreferences.setMockInitialValues({});
+    final gw = FakeGateway(node: 'http://node')..height = 1866418;
+    final notified = <String>[];
+    final scheduled = <bool>[];
+    final myLoan = {'boxId': 'loan-1', 'value': 2500000000000, 'ergoTree': 'cc', 'borrower': '9me'};
+    final svc = DuckpoolsService(
+      gateway: gw,
+      get: (uri) async {
+        final p = uri.path;
+        if (p.contains('byTokenId/')) return jsonEncode([{'boxId': p.split('/').last}]);
+        throw StateError('unexpected $uri');
+      },
+      post: (uri, body) async => jsonEncode(body == '"cc"' ? [myLoan] : []),
+      notify: ({required loanId, required title, required body}) async => notified.add('$loanId $title'),
+      schedule: (wanted) async => scheduled.add(wanted),
+    );
+    await svc.load();
+    await svc.refreshLoans(const ['9me']);
+    expect(notified, isEmpty, reason: 'healthy');
+    expect(scheduled, [true], reason: 'a loan exists, so the background check is on');
+
+    gw.healthBps = 12500;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified, ['loan-1 Loan health falling']);
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.length, 1, reason: 'the same level is not repeated');
+
+    gw.healthBps = 11000;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.last, 'loan-1 Loan close to liquidation');
+    gw.healthBps = 12500;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.length, 2, reason: 'a milder level after a worse one says nothing');
+
+    // Recovery resets, so the next fall speaks again.
+    gw.healthBps = 20000;
+    await svc.refreshLoans(const ['9me']);
+    gw.healthBps = 12500;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.length, 3);
+
+    // The deadline, once.
+    gw.height = 1920515 - 2000;
+    await svc.refreshLoans(const ['9me']);
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.where((n) => n.contains('deadline')).length, 1);
+
+    // The record the background job reads.
+    final prefs = await SharedPreferences.getInstance();
+    final record = jsonDecode(prefs.getString('argus_duck_watch_v1_w1')!) as Map;
+    expect(record['addresses'], ['9me']);
+    expect((record['alerted'] as Map)['loan-1:health'], DuckAlertLevel.watch.index);
+
+    // The headless pass reads by the recorded addresses, wallet locked.
+    gw.liquidatable = true;
+    await svc.tickHeadless();
+    expect(notified.last, 'loan-1 Loan can be liquidated');
+    expect(gw.lastLoanAddresses, ['9me']);
+
+    // Another wallet with no loans must not stop watching this one's.
+    myLoan['borrower'] = '9someone';
+    gw.wallet = 'w2';
+    await svc.refreshLoans(const ['9other'], walletId: 'w2');
+    expect(svc.loans, isEmpty);
+    expect(scheduled.last, isTrue, reason: 'wallet w1 still has a loan to watch');
+    gw.wallet = 'w1';
+
+    // Once the loan is gone the job is cancelled.
+    await svc.tickHeadless();
+    expect(scheduled.last, isFalse);
   });
 
   test('a refund is prepared only for an unspent order box', () async {

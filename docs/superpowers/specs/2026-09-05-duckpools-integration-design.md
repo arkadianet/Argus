@@ -46,9 +46,9 @@ transaction, never on the fill, whose outputs the contract pins.
 | 1 (#74) | `duckpools` crate: identities, `PoolBox::parse`, `lend_token_value`, `position_value`, fixtures, live test. FFI `duckpools_pools` (identities) and `duckpools_state(pool_boxes_json, holdings_json)` (per pool: pooled, borrowed, utilisation, lend-token value, the wallet's lend tokens and their value). Dart `DuckpoolsService` (fetch the eight pool boxes by script through node then explorer, compute state), a Duckpools screen listing pools and the wallet's positions, a Discover card with a position line, lend tokens named in the verified list. | Positions and pool state render from live boxes; unit tests on the arithmetic against the fixtures. |
 | 2 (#77) | Lend and withdraw orders: proxy-box builders in Rust proven against the pool box (fixtures, live reduction), an order record with refund height, an order tracker on the poll tick (filled, refunded, refundable), the refund transaction, confirm sheets with the fee tiers, interest boxes read for the rate. | A lend order fills against the live ERG pool and a withdraw returns the asset; a deliberately unfilled order is refunded by Argus. |
 | 3 (#78) | Borrow against ERG from the token pools, full and partial repayment, the wallet's loans read from the collateral boxes with what they owe (interest compounded as the contract does), what the collateral counts for (priced through the Spectrum pool as the contract does), health against the pool's liquidation line and the forced-liquidation height. Refunds for every order kind. | Device-tested against SigUSD, the pool with borrowing today. |
-| 4 (this PR) | Borrow ERG from the ERG pool against SigUSD, SigRSV, RSN or rsADA, priced the other way round through the same Spectrum pools; ERG-pool loans read, repaid and partly repaid in ERG. | Device-tested: a small SigUSD-backed ERG loan opened and repaid. |
-| 5 | Collateral top-up and withdrawal: the collateral contract's own recreation path, a direct spend the borrower signs with the interest and price boxes as data inputs. No bot. | — |
-| 6 | Health alerts: the poll tick and the background job value every loan and notify when health crosses a warning line or the forced-liquidation height nears. | — |
+| 4 (#79) | Borrow ERG from the ERG pool against SigUSD, SigRSV, RSN or rsADA, priced the other way round through the same Spectrum pools; ERG-pool loans read, repaid and partly repaid in ERG. | Device-tested: a small SigUSD-backed ERG loan opened and repaid. |
+| 5 (#80) | Collateral top-up and withdrawal: the collateral contract's own recreation path, a direct spend the borrower signs with the interest and price boxes as data inputs. No bot. | Device-tested: collateral taken out of and added to a live loan. |
+| 6 (this PR) | Health alerts: the dashboard re-reads loans every half hour and an hourly background job reads them by address with the wallet locked; a loan is announced once per level (health below 130% of the line, below 115%, liquidatable) and once when the forced liquidation is within three days, and again only after it recovers. | Device-tested: a notification arrives with the app closed. |
 | never | Liquidating other people's loans: a bot's business. | — |
 
 ## Found while building batch 2
@@ -152,6 +152,48 @@ the fee and the repayment box, and must leave at least 0.05 ERG owed.
 on 2026-09-05, so the tests build one the way the bot does (registers
 through the crate's own encoders) and price it through the live SigUSD
 market: 1,000 SigUSD counts for 3,716.17 ERG.
+
+## Found while building batch 5
+
+**Adjustment is the borrower's own transaction.** The collateral
+contract's first branch (`INPUTS(0) == SELF`) is `proveDlog(userPk) &&
+conditions`: the borrower signs with the key in R8 and rebuilds the box
+as `OUTPUTS(0)` with the same script, borrow tokens and registers, the
+data inputs being the base child, the parent, the head child and the
+price box, in that order. Argus builds it like any wallet spend: the
+collateral box first, wallet boxes for the fee and anything added,
+change with anything released. No order record, no bot, no refund.
+
+**What may change.** A token pool lets the ERG go up or down while the
+box keeps at least 0.004 ERG and its value (after the 0.005 network fee)
+stays strictly above `owed × threshold / 1000`. The ERG pool lets the
+token amount change under the same line but never lets the box's ERG
+fall. The quote reports the least collateral the contract would accept
+right now, by bisection over the contract's own valuation.
+
+**No Argus fee.** The contract pins only `OUTPUTS(0)`, so a fee box
+would be legal, but the transaction is a contract spend rather than a
+wallet-shaped one and carries none, as the standing rule says.
+
+## Found while building batch 6
+
+**Health is relative to the line.** The alert levels are on the health
+figure Argus already shows, collateral value over the liquidation value:
+130% and 115% of the line, and the contract's own `liquidatable`. A
+loan at 180% collateral over debt on a 140% pool is at 129% health, so
+the first word comes well before the contract would act.
+
+**Reading loans needs no key.** The collateral boxes are found by the
+pool's script and matched by the borrower's tree, so the background job
+only needs the wallet's addresses. They are kept, per wallet, in a watch
+record with the level each loan was last announced at; the job runs
+hourly while any wallet has a loan and cancels itself when none does.
+The job shares the WorkManager dispatcher with background mixing and is
+told apart by task name.
+
+**Once per level.** A loan is announced when it first reaches a level
+and again only for a worse one; recovery above the watch line clears the
+record so the next fall speaks again. The deadline is announced once.
 
 ## Live map used by batch 1
 

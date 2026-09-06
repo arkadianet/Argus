@@ -65,6 +65,13 @@ class SendScreen extends StatefulWidget {
   State<SendScreen> createState() => _SendScreenState();
 }
 
+/// One extra token on the main recipient: which, and its amount field.
+class _TokenEntry {
+  String? tokenId;
+  final amountCtrl = TextEditingController();
+  void dispose() => amountCtrl.dispose();
+}
+
 class _RecipientEntry {
   _RecipientEntry() {}
   final addressCtrl = TextEditingController();
@@ -87,6 +94,9 @@ class _SendScreenState extends State<SendScreen> {
   final _recipientCtrl = TextEditingController();
   final _amountCtrl = TextEditingController();
   final _tokenAmtCtrl = TextEditingController();
+
+  /// Tokens beyond the picked asset that ride in the main recipient's box.
+  final List<_TokenEntry> _extraTokens = [];
   bool _sending = false;
   String? _resultTxId;
   late String? _assetId = widget.initialAssetId;
@@ -181,6 +191,10 @@ class _SendScreenState extends State<SendScreen> {
     if (mounted) setState(() {});
   }
   final _feeCtrl = TextEditingController();
+
+  /// The token the miner fee is paid in through a babel box, or null
+  /// for ERG.
+  String? _feeTokenId;
   final List<_RecipientEntry> _extraRecipients = [];
   bool get _multiRecipient => _extraRecipients.isNotEmpty;
 
@@ -210,6 +224,7 @@ class _SendScreenState extends State<SendScreen> {
     _tokenAmtCtrl.dispose();
     _feeCtrl.dispose();
     for (final e in _extraRecipients) e.dispose();
+    for (final e in _extraTokens) e.dispose();
     super.dispose();
   }
 
@@ -387,14 +402,19 @@ class _SendScreenState extends State<SendScreen> {
   List<RecipientDraft> _drafts() {
     final token = _selectedToken;
     final erg = _amountCtrl.text.trim();
+    final carriesTokens = token != null || _extraTokens.any((e) => e.tokenId != null);
     return [
       RecipientDraft(
         address: _recipientCtrl.text,
-        ergText: token != null && erg.isEmpty
+        ergText: carriesTokens && erg.isEmpty
             ? formatErg(minBoxNano, unit: false)
             : erg,
         tokenId: token?.id,
         tokenAmountText: _tokenAmtCtrl.text,
+        tokens: [
+          for (final e in _extraTokens)
+            if (e.tokenId case final id?) TokenDraft(id, e.amountCtrl.text),
+        ],
       ),
       for (final e in _extraRecipients)
         RecipientDraft(
@@ -471,7 +491,7 @@ class _SendScreenState extends State<SendScreen> {
             'your wallet address');
       }
     }
-    final isMulti = recipients.length > 1;
+    final isMulti = needsMultiBuilder(recipients);
     setState(() => _sending = true);
     try {
       final SendPreview preview;
@@ -485,6 +505,7 @@ class _SendScreenState extends State<SendScreen> {
           feeNanoErg: parseErgToNano(_feeCtrl.text),
           inputBoxIds: _inputBoxIds,
           stealthBoxesJson: _stealthBoxesJson,
+          babelTokenId: _feeTokenId,
         );
       } else {
         final r = recipients.single;
@@ -500,6 +521,7 @@ class _SendScreenState extends State<SendScreen> {
           feeNanoErg: parseErgToNano(_feeCtrl.text),
           inputBoxIds: _inputBoxIds,
           stealthBoxesJson: _stealthBoxesJson,
+          babelTokenId: _feeTokenId,
         );
       }
       await _confirmAndSend(
@@ -724,7 +746,7 @@ class _SendScreenState extends State<SendScreen> {
           ConfirmTxRow(
             shorten(r['address']?.toString() ?? '', head: 8, tail: 6),
             '${formatErg((r['amount_nano_erg'] as num?)?.toInt() ?? 0)}'
-            '${r['token_id'] != null ? ' + ${_tokenLabel((r['token_amount'] as num?)?.toInt() ?? 0, r['token_id'] as String)}' : ''}',
+            '${_tokensSuffix(r)}',
           ),
       ConfirmTxRow(
         isMulti ? 'Total sent' : 'Amount',
@@ -741,7 +763,14 @@ class _SendScreenState extends State<SendScreen> {
               : '${stealthRecipients.length} stealth recipients',
           bold: true,
         ),
-      ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
+      if (preview.babel case final b?)
+        ConfirmTxRow(
+          'Miner fee paid in ${_tokenById(b.tokenId)?.label ?? 'token'}',
+          '${_tokenLabel(b.tokensPaid, b.tokenId)} for ${formatErg(b.feeNano)}',
+          bold: true,
+        )
+      else
+        ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
       argusFeeRow(),
       ConfirmTxRow(
         stealthChange ? 'Change to a new stealth address' : 'Change to you',
@@ -880,8 +909,94 @@ class _SendScreenState extends State<SendScreen> {
     return [
       picked == 0 ? 'All $all addresses' : '$picked of $all addresses',
       if (_chosenBoxIds.isNotEmpty) '${_chosenBoxIds.length} boxes chosen',
-      'Fee ${formatErg(fee, unit: false)} ERG',
+      _feeTokenId == null
+          ? 'Fee ${formatErg(fee, unit: false)} ERG'
+          : 'Fee in ${_tokenById(_feeTokenId)?.label ?? 'token'}',
     ].join('  ·  ');
+  }
+
+  /// The tokens added to the main recipient beyond the picked asset, each
+  /// with its own amount, and the button that adds one more.
+  List<Widget> _extraTokenRows(TokenBalance? picked) {
+    final choices = _args.tokens.where((t) => t.id != picked?.id).toList();
+    if (choices.isEmpty && _extraTokens.isEmpty) return const [];
+    return [
+      for (final (i, e) in _extraTokens.indexed) ...[
+        const SizedBox(height: 12),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              flex: 5,
+              child: DropdownButtonFormField<String>(
+                // Keyed by the entry, not its index: removing a row must not
+                // hand its field state to the row that shifts up.
+                key: ObjectKey(e),
+                initialValue: e.tokenId,
+                decoration: const InputDecoration(labelText: 'Another token'),
+                items: [
+                  for (final t in choices) DropdownMenuItem(value: t.id, child: Text(t.label, overflow: TextOverflow.ellipsis)),
+                ],
+                onChanged: (v) => setState(() => e.tokenId = v),
+                validator: (v) => v == null ? 'Pick a token' : null,
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (_tokenById(e.tokenId) case final t? when !t.isNft)
+              Expanded(
+                flex: 4,
+                child: TextFormField(
+                  controller: e.amountCtrl,
+                  decoration: InputDecoration(
+                    labelText: 'Amount',
+                    helperText: 'Have ${formatTokenAmount(t.amount, t.decimals)}',
+                    helperMaxLines: 1,
+                  ),
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  onChanged: (_) => setState(() {}),
+                  validator: (v) {
+                    final n = parseDecimalToBase(v ?? '', t.decimals);
+                    if (n == null || n <= 0) return 'Amount';
+                    if (n > t.amount) return 'Too much';
+                    return null;
+                  },
+                ),
+              ),
+            IconButton(
+              tooltip: 'Remove',
+              icon: const Icon(Icons.close, size: 18),
+              onPressed: () {
+                setState(() => _extraTokens.removeAt(i));
+                WidgetsBinding.instance.addPostFrameCallback((_) => e.dispose());
+              },
+            ),
+          ],
+        ),
+      ],
+      if (choices.length > _extraTokens.length)
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            onPressed: () => setState(() => _extraTokens.add(_TokenEntry())),
+            icon: const Icon(Icons.add, size: 18),
+            label: Text(picked == null ? 'Also send a token' : 'Add another token'),
+          ),
+        ),
+    ];
+  }
+
+  /// " + 5 kushti + 1 Ape" for a recipient's tokens, or nothing.
+  String _tokensSuffix(Map<String, dynamic> r) {
+    final list = r['tokens'];
+    if (list is List && list.isNotEmpty) {
+      return [
+        for (final t in list.cast<Map>()) ' + ${_tokenLabel((t['amount'] as num?)?.toInt() ?? 0, t['token_id'] as String)}',
+      ].join();
+    }
+    if (r['token_id'] != null) {
+      return ' + ${_tokenLabel((r['token_amount'] as num?)?.toInt() ?? 0, r['token_id'] as String)}';
+    }
+    return '';
   }
 
   TokenBalance? _tokenById(String? id) {
@@ -1048,10 +1163,11 @@ class _SendScreenState extends State<SendScreen> {
           IconButton(
             tooltip: 'Contacts',
             onPressed: () async {
-              final result =
-                  await Navigator.pushNamed<WalletContact>(context, '/contacts', arguments: true);
+              // Untyped on purpose: the app's routes are built untyped, and
+              // a typed push throws before the picker even opens.
+              final result = await Navigator.pushNamed(context, '/contacts', arguments: true);
               if (!mounted) return;
-              if (result != null && result.address.isNotEmpty) {
+              if (result is WalletContact && result.address.isNotEmpty) {
                 _recipientCtrl.text = result.address;
                 _recipientTrusted = true;
                 setState(() {});
@@ -1178,8 +1294,8 @@ class _SendScreenState extends State<SendScreen> {
                             if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
                             return null;
                           },
-                        )
-                      else if (!token.isNft)
+                        ),
+                      if (token != null && !token.isNft)
                         TextFormField(
                           controller: _tokenAmtCtrl,
                           decoration: InputDecoration(
@@ -1197,9 +1313,28 @@ class _SendScreenState extends State<SendScreen> {
                             }
                             return null;
                           },
-                        )
-                      else
+                        ),
+                      if (token != null && token.isNft)
                         Text('Sends 1 ${token.label}', style: Theme.of(context).textTheme.bodySmall),
+                      // A token send may carry ERG too, and more tokens: they
+                      // all travel in the recipient's one box.
+                      if (token != null) ...[
+                        const SizedBox(height: 12),
+                        AmountEntry(
+                          controller: _amountCtrl,
+                          label: 'ERG to send with it (optional)',
+                          helperText: 'Blank sends the 0.001 ERG minimum a box needs. ${_availableLine()}',
+                          onMax: _applyMaxErg,
+                          onChanged: (_) => setState(() {}),
+                          validator: (v) {
+                            if (v == null || v.trim().isEmpty) return null;
+                            final n = parseErgToNano(v);
+                            if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
+                            return null;
+                          },
+                        ),
+                      ],
+                      ..._extraTokenRows(token),
                     ],
                     const SizedBox(height: 16),
                     if (_multiRecipient && swapVariant == null)
@@ -1438,6 +1573,24 @@ class _SendScreenState extends State<SendScreen> {
                               child: const Text('Use all addresses'),
                             ),
                           ),
+                        if (_args.tokens.any((t) => !t.isNft)) ...[
+                          const SizedBox(height: 12),
+                          DropdownButtonFormField<String?>(
+                            key: const Key('send-fee-token'),
+                            initialValue: _feeTokenId,
+                            decoration: const InputDecoration(
+                              labelText: 'Pay the miner fee in',
+                              helperText: 'A token fee is bought from a babel box on chain at its posted price; the ERG fee below is what it buys.',
+                              helperMaxLines: 3,
+                            ),
+                            items: [
+                              const DropdownMenuItem(value: null, child: Text('ERG')),
+                              for (final t in _args.tokens.where((t) => !t.isNft))
+                                DropdownMenuItem(value: t.id, child: Text(t.label, overflow: TextOverflow.ellipsis)),
+                            ],
+                            onChanged: (v) => setState(() => _feeTokenId = v),
+                          ),
+                        ],
                         const SizedBox(height: 12),
                         TextFormField(
                           controller: _feeCtrl,
