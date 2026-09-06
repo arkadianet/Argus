@@ -141,6 +141,10 @@ class _WalletsPageState extends State<WalletsPage> {
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
                     buildDefaultDragHandles: false,
+                    // onReorderItem, the replacement, only exists on newer
+                    // Flutter than this project builds with; _reorder makes
+                    // the same index adjustment onReorderItem would.
+                    // ignore: deprecated_member_use
                     onReorder: (o, n) => _reorder(wallets, o, n),
                     children: [
                       for (final (i, w) in wallets.indexed)
