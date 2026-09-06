@@ -75,24 +75,27 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
     var args = WalletRouteArgs.of(context);
     final market = duckpoolsService.marketFor(s.pool);
     if (market == null || !market.ready) return;
-    final picked = await showModalBottomSheet<(int, int)>(
+    final pool = duckpoolsService.pools.firstWhere((p) => p.key == s.pool);
+    final held = {for (final t in args.tokens) t.id: t.amount};
+    final picked = await showModalBottomSheet<(String, int, int)>(
       context: context,
       isScrollControlled: true,
       backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(cardRadius))),
-      builder: (_) => _BorrowSheet(state: s, market: market, spendableNano: args.spendableNano ?? 0),
+      builder: (_) => _BorrowSheet(state: s, market: market, spendableNano: args.spendableNano ?? 0, held: held),
     );
     if (picked == null || !mounted) return;
     if (!_sameWallet(walletBefore)) return;
     args = WalletRouteArgs.of(context);
-    final (collateralNano, loan) = picked;
+    final (asset, collateralAmount, loan) = picked;
     setState(() => _working = true);
     try {
       final prepared = await duckpoolsService.prepareOrder(
         poolKey: s.pool,
         kind: 'borrow',
         amount: loan,
-        collateralNano: collateralNano,
+        collateralAsset: asset.isEmpty ? null : asset,
+        collateralAmount: collateralAmount,
         userAddress: args.receiveAddress,
         spendAddresses: args.historyAddresses,
         changeAddress: args.changeAddress,
@@ -100,9 +103,10 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       if (!mounted) return;
       final q = (prepared['quote'] as Map).cast<String, dynamic>();
       String amt(num units) => '${formatTokenAmountGrouped(units.toInt(), s.decimals)} ${s.ticker}';
+      final (cTicker, cDecimals) = pool.collateralUnit(q['collateral_asset'] as String?);
       await _post(prepared, title: 'Post a borrow order', rows: [
         ConfirmTxRow('Borrow', amt(q['loan'] as num), bold: true),
-        ConfirmTxRow('Collateral', formatErg((q['collateral_nano'] as num).toInt()), bold: true),
+        ConfirmTxRow('Collateral', '${formatTokenAmountGrouped((q['collateral_amount'] as num).toInt(), cDecimals)} $cTicker', bold: true),
         ConfirmTxRow('Collateral counts as', amt(q['collateral_value'] as num)),
         ConfirmTxRow('Liquidation line', '${((q['threshold'] as num) / 10).toStringAsFixed(0)}% of the debt'),
         ConfirmTxRow('Health at open', '${((q['health_bps'] as num) / 100).toStringAsFixed(0)}%'),
@@ -151,24 +155,93 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       if (!mounted) return;
       final q = (prepared['quote'] as Map).cast<String, dynamic>();
       String amt(num units) => '${formatTokenAmountGrouped(units.toInt(), l.decimals)} ${l.ticker}';
+      final pool = duckpoolsService.pools.firstWhere((p) => p.key == l.pool);
+      final (cTicker, cDecimals) = pool.collateralUnit(l.collateralAsset);
+      final collateral = '${formatTokenAmountGrouped(l.collateralAmount, cDecimals)} $cTicker';
       final rows = partial
           ? [
               ConfirmTxRow('Repay', amt(q['repayment'] as num), bold: true),
               ConfirmTxRow('Owed now', amt(l.owed)),
               ConfirmTxRow('Owed after', amt(q['owed_after'] as num)),
-              ConfirmTxRow('Collateral stays', formatErg(l.collateralNano)),
+              ConfirmTxRow('Collateral stays', collateral),
             ]
           : [
               ConfirmTxRow('Repay', amt(q['repayment'] as num), bold: true),
               ConfirmTxRow('Owed now', amt(q['owed_now'] as num)),
               ConfirmTxRow('Covers interest until filled', 'yes; the rest stays with the pool'),
-              ConfirmTxRow('Collateral back', formatErg((q['collateral_nano'] as num).toInt()), bold: true),
+              ConfirmTxRow('Collateral back', collateral, bold: true),
             ];
-      // The repayment rides as tokens, so the box's ERG is all fees.
-      rows.add(ConfirmTxRow('Bot fee + fill fee', formatErg((q['box_value'] as num).toInt())));
+      // A token pool's repayment rides as tokens, so the box's ERG is all
+      // fees; the ERG pool's box is the repayment plus the fees.
+      final carried = (q['box_value'] as num).toInt() - (l.collateralAsset == null ? 0 : (q['repayment'] as num).toInt());
+      rows.add(ConfirmTxRow('Bot fee + fill fee', formatErg(carried)));
       await _post(prepared, title: partial ? 'Post a partial repayment' : 'Post a repayment', rows: rows);
     } catch (e) {
       if (mounted) showErrorSheet(context, title: 'Could not post the order', message: '$e');
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  /// Add collateral to a loan, or take some out: the borrower's own spend
+  /// of the collateral box, no bot.
+  Future<void> _adjust(DuckLoan l) async {
+    if (_working) return;
+    final walletBefore = duckpoolsService.activeWalletId;
+    var args = WalletRouteArgs.of(context);
+    final pool = duckpoolsService.pools.firstWhere((p) => p.key == l.pool);
+    final (cTicker, cDecimals) = pool.collateralUnit(l.collateralAsset);
+    final held = l.collateralAsset == null
+        ? (args.spendableNano ?? 0)
+        : args.tokens.where((t) => t.id == l.collateralAsset).fold<int>(0, (a, t) => a + t.amount);
+    final newAmount = await showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(cardRadius))),
+      builder: (_) => _AdjustSheet(loan: l, ticker: cTicker, decimals: cDecimals, held: held),
+    );
+    if (newAmount == null || !mounted) return;
+    if (!_sameWallet(walletBefore)) return;
+    args = WalletRouteArgs.of(context);
+    setState(() => _working = true);
+    try {
+      final prepared = await duckpoolsService.prepareAdjust(
+        poolKey: l.pool,
+        collateralBoxId: l.boxId,
+        newAmount: newAmount,
+        userAddress: args.receiveAddress,
+        spendAddresses: args.historyAddresses,
+        changeAddress: args.changeAddress,
+      );
+      if (!mounted) return;
+      final q = (prepared['quote'] as Map).cast<String, dynamic>();
+      String c(num units) => '${formatTokenAmountGrouped(units.toInt(), cDecimals)} $cTicker';
+      final delta = (q['delta'] as num).toInt();
+      final ok = await showConfirmTransactionSheet(
+        context,
+        title: delta > 0 ? 'Add collateral' : 'Take collateral out',
+        confirmLabel: delta > 0 ? 'Add' : 'Take out',
+        detail: 'This rebuilds your collateral box directly; nothing waits for a bot. '
+            'The loan, its interest and its liquidation date stay as they are.',
+        rows: [
+          ConfirmTxRow(delta > 0 ? 'Add' : 'Take out', c(delta.abs()), bold: true),
+          ConfirmTxRow('Collateral now', c(q['current_amount'] as num)),
+          ConfirmTxRow('Collateral after', c(q['new_amount'] as num), bold: true),
+          ConfirmTxRow('Health after', '${((q['health_after_bps'] as num) / 100).toStringAsFixed(0)}%'),
+          ConfirmTxRow('Least allowed now', c(q['min_amount'] as num)),
+          ConfirmTxRow('Miner fee', formatErg((prepared['miner_fee'] as num).toInt())),
+        ],
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
+      if (!ok || !mounted) return;
+      final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Collateral adjusted: ${shorten(txId)}')));
+      }
+      await duckpoolsService.refreshLoans(args.historyAddresses);
+    } catch (e) {
+      if (mounted) showErrorSheet(context, title: 'Could not adjust the collateral', message: '$e');
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -387,6 +460,7 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
                       loan: l,
                       onRepay: _working ? null : () => _repay(l, partial: false),
                       onRepayPart: _working ? null : () => _repay(l, partial: true),
+                      onAdjust: _working ? null : () => _adjust(l),
                     ),
                     const SizedBox(height: 10),
                   ],
@@ -493,9 +567,20 @@ class _PoolCard extends StatelessWidget {
           row('Per lend token', '${s.lendTokenPrice.toStringAsFixed(4)} ${s.ticker}'),
           if (s.lendAprBps != null) row('Lenders earn', '${(s.lendAprBps! / 100).toStringAsFixed(2)}% a year'),
           if (s.borrowAprBps != null) row('Borrowers pay', '${(s.borrowAprBps! / 100).toStringAsFixed(2)}% a year'),
-          if (market != null && market!.ready) ...[
+          if (market != null && market!.ready && market!.ergValue != null) ...[
             row('1 ERG collateral counts as', '${amt(market!.ergValue!)} ${s.ticker}'),
             row('Liquidation line', '${(market!.threshold! / 10).toStringAsFixed(0)}% · penalty ${(market!.penalty! / 10).toStringAsFixed(0)}%'),
+          ],
+          if (market != null)
+            for (final c in market!.collaterals.where((c) => c.ready))
+              row('1 ${c.ticker} collateral', '${formatErg(c.unitValueNano!)} · line ${(c.threshold! / 10).toStringAsFixed(0)}%'),
+          if (market != null && market!.unpriced > 0) ...[
+            const SizedBox(height: 6),
+            SelectableText(
+              '${market!.unpriced} of your loans here could not be priced, so ${market!.unpriced == 1 ? 'it is' : 'they are'} '
+              'not listed below. Refresh once the price boxes are readable again.',
+              style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12),
+            ),
           ],
           if (s.utilisationBps == 0) ...[
             const SizedBox(height: 6),
@@ -554,7 +639,7 @@ class _OrderCard extends StatelessWidget {
     final what = switch (o.kind) {
       'lend' => 'Lend ${formatTokenAmountGrouped(o.amount, o.decimals)} ${o.ticker}',
       'borrow' => 'Borrow ${formatTokenAmountGrouped(o.amount, o.decimals)} ${o.ticker}'
-          '${o.collateralNano != null ? ' against ${formatErg(o.collateralNano!)}' : ''}',
+          '${o.collateralNano != null ? ' against ${_collateralText(o.pool, o.collateralAsset, o.collateralNano!)}' : ''}',
       'repay' => 'Repay ${formatTokenAmountGrouped(o.amount, o.decimals)} ${o.ticker}',
       'partial_repay' => 'Repay ${formatTokenAmountGrouped(o.amount, o.decimals)} ${o.ticker} of a loan',
       _ => 'Withdraw ${formatTokenAmountGrouped(o.amount, o.decimals)} lend tokens (${o.ticker})',
@@ -704,13 +789,21 @@ class _OrderSheetState extends State<_OrderSheet> {
 }
 
 
+/// "2.5 ERG" or "1,000 SigUSD": a collateral amount in its own unit.
+String _collateralText(String poolKey, String? asset, int amount) {
+  final pool = duckpoolsService.pools.where((p) => p.key == poolKey).firstOrNull;
+  final (ticker, decimals) = pool?.collateralUnit(asset) ?? ('ERG', 9);
+  return '${formatTokenAmountGrouped(amount, decimals)} $ticker';
+}
+
 /// One loan: what it owes, what backs it, how close to the line it is.
 class _LoanCard extends StatelessWidget {
-  const _LoanCard({required this.loan, this.onRepay, this.onRepayPart});
+  const _LoanCard({required this.loan, this.onRepay, this.onRepayPart, this.onAdjust});
 
   final DuckLoan loan;
   final VoidCallback? onRepay;
   final VoidCallback? onRepayPart;
+  final VoidCallback? onAdjust;
 
   @override
   Widget build(BuildContext context) {
@@ -753,7 +846,7 @@ class _LoanCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           row('Borrowed', amt(l.loan)),
-          row('Collateral', formatErg(l.collateralNano)),
+          row('Collateral', _collateralText(l.pool, l.collateralAsset, l.collateralAmount)),
           row('Counts as', amt(l.collateralValue)),
           row('Liquidation below', amt(l.liquidationValue), color: healthColor),
           row('Collateral over debt', '${l.ratioPercent.toStringAsFixed(0)}% (line ${(l.threshold / 10).toStringAsFixed(0)}%)'),
@@ -767,6 +860,7 @@ class _LoanCard extends StatelessWidget {
             children: [
               FilledButton.tonal(onPressed: onRepay, child: const Text('Repay')),
               OutlinedButton(onPressed: onRepayPart, child: const Text('Repay part')),
+              OutlinedButton(onPressed: onAdjust, child: const Text('Collateral')),
             ],
           ),
         ],
@@ -784,11 +878,15 @@ String formatBlocksAsDuration(int blocks) {
 }
 
 /// Collateral and loan entry for a borrow, with the quote shown live.
+/// A token pool takes ERG; the ERG pool takes one of its listed tokens.
 class _BorrowSheet extends StatefulWidget {
-  const _BorrowSheet({required this.state, required this.market, required this.spendableNano});
+  const _BorrowSheet({required this.state, required this.market, required this.spendableNano, required this.held});
   final DuckPoolState state;
   final DuckMarket market;
   final int spendableNano;
+
+  /// Token id to amount held, for the ERG pool's collateral choice.
+  final Map<String, int> held;
 
   @override
   State<_BorrowSheet> createState() => _BorrowSheetState();
@@ -800,20 +898,44 @@ class _BorrowSheetState extends State<_BorrowSheet> {
   Map<String, dynamic>? _quote;
   String? _error;
 
+  /// The chosen token collateral (ERG pool), or null for ERG.
+  DuckMarketCollateral? _asset;
+
+  bool get _ergPool => widget.state.pool == 'erg';
+  List<DuckMarketCollateral> get _choices => widget.market.collaterals.where((c) => c.ready).toList();
+
+  @override
+  void initState() {
+    super.initState();
+    if (_ergPool) {
+      final choices = _choices;
+      // The first token the wallet holds, else the first priced one.
+      _asset = choices.where((c) => (widget.held[c.asset] ?? 0) > 0).firstOrNull ?? choices.firstOrNull;
+    }
+  }
+
   int? _parse(TextEditingController c, int decimals) => parseDuckAmount(c.text, decimals);
 
-  int? get _collateralNano => _parse(_collateral, 9);
+  int get _collateralDecimals => _asset?.decimals ?? 9;
+  String get _collateralTicker => _asset?.ticker ?? 'ERG';
+  int? get _collateralUnits => _parse(_collateral, _collateralDecimals);
   int? get _loanUnits => _parse(_loan, widget.state.decimals);
 
   void _requote() {
-    final c = _collateralNano;
+    final c = _collateralUnits;
     final l = _loanUnits;
     setState(() {
       _quote = null;
       _error = null;
       if (c == null || l == null) return;
       try {
-        _quote = duckpoolsService.loanQuote(poolKey: widget.state.pool, kind: 'borrow', amount: l, collateralNano: c);
+        _quote = duckpoolsService.loanQuote(
+          poolKey: widget.state.pool,
+          kind: 'borrow',
+          amount: l,
+          collateralAsset: _asset?.asset ?? '',
+          collateralAmount: c,
+        );
       } catch (e) {
         _error = e.toString().replaceFirst('Bad state: ', '');
       }
@@ -827,28 +949,55 @@ class _BorrowSheetState extends State<_BorrowSheet> {
     final muted = ArgusColors.of(context).muted;
     String amt(num units) => '${formatTokenAmountGrouped(units.toInt(), s.decimals)} ${s.ticker}';
     final q = _quote;
-    final c = _collateralNano;
+    final c = _collateralUnits;
+    final threshold = _asset?.threshold ?? m.threshold;
     // What this much collateral could borrow at most, before the quote
-    // says so exactly.
-    final roughMax = c == null || m.ergValue == null || m.threshold == null
+    // says so exactly: a whole unit's value scaled, at the line.
+    final unitValue = _asset == null ? m.ergValue : _asset!.unitValueNano;
+    final roughMax = c == null || unitValue == null || threshold == null
         ? null
-        : (c / 1000000000 * m.ergValue! * 1000 / m.threshold!).floor();
+        : (c / _pow10(_collateralDecimals) * unitValue * 1000 / threshold).floor();
+    final heldText = _asset == null
+        ? 'Spendable ${formatErg(widget.spendableNano)}'
+        : 'You hold ${formatTokenAmountGrouped(widget.held[_asset!.asset] ?? 0, _asset!.decimals)} ${_asset!.ticker}';
+    final unitText = _asset == null
+        ? '1 ERG counts as ${amt(m.ergValue ?? 0)}'
+        : '1 ${_asset!.ticker} sells for about ${formatErg(_asset!.unitValueNano ?? 0)}';
     return Padding(
       padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + MediaQuery.of(context).viewInsets.bottom),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text('Borrow ${s.ticker} against ERG', style: Theme.of(context).textTheme.titleLarge),
+          Text(_ergPool ? 'Borrow ERG against a token' : 'Borrow ${s.ticker} against ERG', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 12),
+          if (_ergPool) ...[
+            DropdownButtonFormField<String>(
+              key: const Key('duck-collateral-asset'),
+              initialValue: _asset?.asset,
+              decoration: const InputDecoration(labelText: 'Collateral'),
+              items: [
+                for (final ch in _choices)
+                  DropdownMenuItem(
+                    value: ch.asset,
+                    child: Text('${ch.ticker} · line ${(ch.threshold! / 10).toStringAsFixed(0)}%'),
+                  ),
+              ],
+              onChanged: (v) {
+                setState(() => _asset = _choices.firstWhere((ch) => ch.asset == v));
+                _requote();
+              },
+            ),
+            const SizedBox(height: 12),
+          ],
           TextField(
             key: const Key('duck-collateral'),
             controller: _collateral,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             decoration: InputDecoration(
-              labelText: 'ERG to lock as collateral',
-              helperText: 'Spendable ${formatErg(widget.spendableNano)} · 1 ERG counts as ${amt(m.ergValue ?? 0)}',
+              labelText: '$_collateralTicker to lock as collateral',
+              helperText: '$heldText · $unitText',
             ),
             onChanged: (_) => _requote(),
           ),
@@ -860,8 +1009,8 @@ class _BorrowSheetState extends State<_BorrowSheet> {
             decoration: InputDecoration(
               labelText: '${s.ticker} to borrow',
               helperText: roughMax == null
-                  ? 'The pool holds ${amt(s.pooled)}'
-                  : 'Up to about ${amt(roughMax)} at the ${(m.threshold! / 10).toStringAsFixed(0)}% line; less is safer',
+                  ? 'The pool holds ${amt(s.pooled)}${_ergPool ? ' · at least 0.05 ERG' : ''}'
+                  : 'Up to about ${amt(roughMax)} at the ${(threshold! / 10).toStringAsFixed(0)}% line; less is safer',
             ),
             onChanged: (_) => _requote(),
           ),
@@ -876,19 +1025,27 @@ class _BorrowSheetState extends State<_BorrowSheet> {
             const SizedBox(height: 4),
             Text('Interest compounds every 120 blocks at the pool\'s rate. The loan is called '
                 'after about ${formatBlocksAsDuration(65520)} whatever the price does. '
-                'Plus 0.002 ERG for the bot and the fill, the Argus fee and the miner fee.',
+                'Plus ${_ergPool ? '0.006' : '0.002'} ERG for the collateral box, the bot and the fill, the Argus fee and the miner fee.',
                 style: TextStyle(color: muted, fontSize: 12)),
           ],
           const SizedBox(height: 16),
           FilledButton(
             key: const Key('duck-borrow-continue'),
-            onPressed: q == null ? null : () => Navigator.pop(context, (_collateralNano!, _loanUnits!)),
+            onPressed: q == null ? null : () => Navigator.pop(context, (_asset?.asset ?? '', _collateralUnits!, _loanUnits!)),
             child: const Text('Continue'),
           ),
         ],
       ),
     );
   }
+}
+
+int _pow10(int n) {
+  var v = 1;
+  for (var i = 0; i < n; i++) {
+    v *= 10;
+  }
+  return v;
 }
 
 /// Amount entry for a partial repayment.
@@ -963,6 +1120,98 @@ class _PartialRepaySheetState extends State<_PartialRepaySheet> {
           const SizedBox(height: 16),
           FilledButton(
             key: const Key('duck-repay-continue'),
+            onPressed: q == null ? null : () => Navigator.pop(context, _units),
+            child: const Text('Continue'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// New collateral amount for a loan, with the health it would give.
+class _AdjustSheet extends StatefulWidget {
+  const _AdjustSheet({required this.loan, required this.ticker, required this.decimals, required this.held});
+  final DuckLoan loan;
+  final String ticker;
+  final int decimals;
+
+  /// What the wallet holds of the collateral asset, for adding.
+  final int held;
+
+  @override
+  State<_AdjustSheet> createState() => _AdjustSheetState();
+}
+
+class _AdjustSheetState extends State<_AdjustSheet> {
+  late final TextEditingController _ctl;
+  Map<String, dynamic>? _quote;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctl = TextEditingController(text: formatTokenAmount(widget.loan.collateralAmount, widget.decimals));
+  }
+
+  int? get _units => parseDuckAmount(_ctl.text, widget.decimals);
+
+  void _requote() {
+    final units = _units;
+    setState(() {
+      _quote = null;
+      _error = null;
+      if (units == null) return;
+      try {
+        _quote = duckpoolsService.adjustQuote(poolKey: widget.loan.pool, collateralBoxId: widget.loan.boxId, newAmount: units);
+      } catch (e) {
+        _error = e.toString().replaceFirst('Bad state: ', '');
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final l = widget.loan;
+    final muted = ArgusColors.of(context).muted;
+    String c(num units) => '${formatTokenAmountGrouped(units.toInt(), widget.decimals)} ${widget.ticker}';
+    final q = _quote;
+    final delta = q == null ? 0 : (q['delta'] as num).toInt();
+    return Padding(
+      padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + MediaQuery.of(context).viewInsets.bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('Change the collateral', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(height: 4),
+          Text('Now ${c(l.collateralAmount)} backs ${formatTokenAmountGrouped(l.owed, l.decimals)} ${l.ticker} '
+              'at ${(l.healthBps / 100).toStringAsFixed(0)}% health. You hold ${c(widget.held)} to add.',
+              style: TextStyle(color: muted, fontSize: 12.5)),
+          const SizedBox(height: 12),
+          TextField(
+            key: const Key('duck-adjust-amount'),
+            controller: _ctl,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: '${widget.ticker} to keep as collateral',
+              helperText: 'More makes the loan safer; less comes back to the wallet.',
+            ),
+            onChanged: (_) => _requote(),
+          ),
+          const SizedBox(height: 12),
+          if (_error != null) Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
+          if (q != null)
+            Text(
+              '${delta > 0 ? 'Add ${c(delta)}' : 'Take out ${c(-delta)}'} · health after '
+              '${((q['health_after_bps'] as num) / 100).toStringAsFixed(0)}% · the least allowed right now is ${c(q['min_amount'] as num)}. '
+              'Plus the miner fee; no bot fee.',
+              style: TextStyle(color: muted, fontSize: 12.5),
+            ),
+          const SizedBox(height: 16),
+          FilledButton(
+            key: const Key('duck-adjust-continue'),
             onPressed: q == null ? null : () => Navigator.pop(context, _units),
             child: const Text('Continue'),
           ),

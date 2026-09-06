@@ -26,6 +26,39 @@ void main() {
     expect(out.single['token_amount'], 250);
   });
 
+  test('ERG and several tokens travel in one recipient box', () {
+    final out = buildRecipients(
+      [
+        RecipientDraft(
+          address: addr,
+          ergText: '2',
+          tokenId: 'usd',
+          tokenAmountText: '1.00',
+          tokens: const [TokenDraft('nft', null), TokenDraft('usd', '0.50')],
+        ),
+      ],
+      tokens: [usd, nft],
+    );
+    expect(out.single['amount_nano_erg'], 2000000000);
+    expect(out.single['tokens'], [
+      {'token_id': 'usd', 'amount': 150},
+      {'token_id': 'nft', 'amount': 1},
+    ], reason: 'the same token twice is summed');
+    expect(out.single['token_id'], isNull, reason: 'the single-token shape only when there is one');
+    expect(needsMultiBuilder(out), isTrue);
+    final one = buildRecipients([RecipientDraft(address: addr, ergText: '1', tokenId: 'usd', tokenAmountText: '1')], tokens: [usd]);
+    expect(one.single['token_id'], 'usd');
+    expect(needsMultiBuilder(one), isFalse);
+    expect(
+      () => buildRecipients(
+        [RecipientDraft(address: addr, ergText: '1', tokens: const [TokenDraft('usd', '4'), TokenDraft('usd', '1.01')])],
+        tokens: [usd],
+      ),
+      throwsA(isA<SendFormException>()),
+      reason: 'the total across rows must fit the holding',
+    );
+  });
+
   test('an NFT always sends exactly one unit', () {
     final out = buildRecipients(
       [RecipientDraft(address: addr, ergText: '0.001', tokenId: 'nft')],
