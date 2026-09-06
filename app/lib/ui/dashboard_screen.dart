@@ -146,6 +146,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (last != null && DateTime.now().difference(last) < const Duration(minutes: 5)) return;
     final holdings = {for (final t in _sync.tokens) t.id: t.amount};
     unawaited(duckpoolsService.refresh(holdings));
+    // Loans are read less often: a borrowing pool is five requests, and
+    // the read also announces any loan that crossed a line.
+    unawaited(duckpoolsService.refreshLoansIfDue(_sync.historyAddresses));
   }
 
   /// Announces payments that appeared since the last refresh. Only fires
@@ -916,6 +919,16 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
     if (switchedTo != _walletId) {
       _selectTab(0);
+      // A wallet just created or restored from Settings is already
+      // unlocked: take it as the home wallet without a second unlock.
+      if (walletService.isUnlocked && walletService.activeWalletId == switchedTo) {
+        _walletId = switchedTo;
+        await sessionLock.run(() async {
+          await _refreshUnlockMethods();
+          await _afterUnlock();
+        });
+        return;
+      }
       await _switchWallet(switchedTo);
       return;
     }
@@ -1816,8 +1829,9 @@ class _DashboardScreenState extends State<DashboardScreen>
               ),
             ),
             const SizedBox(width: 8),
-            // Bounded so a long note wraps instead of overflowing the row.
-            Flexible(
+            // Takes its share of the row so the figure sits flush right on
+            // every row, note or no note; a long note wraps inside it.
+            Expanded(
               child: _rowBalance(
                 balance,
                 isActive ? _sync.isSyncing : false,

@@ -170,6 +170,21 @@ class LiveWalletSyncGateway implements WalletSyncGateway {
 /// refresh runs address discovery and a node probe; the poll path reuses
 /// the addresses already known, which keeps a 20-second tick to a handful
 /// of calls instead of a whole rescan.
+/// Tokens in a stable order for display: fungible before NFTs, then by
+/// name, then by id. The balance answer lists them in whatever order the
+/// node's map iterates, which changes from one poll to the next and made
+/// the asset tiles shuffle while the screen sat idle.
+List<TokenBalance> orderTokensForDisplay(List<TokenBalance> tokens) {
+  final out = List<TokenBalance>.of(tokens);
+  out.sort((a, b) {
+    if (a.isNft != b.isNft) return a.isNft ? 1 : -1;
+    final byName = a.label.toLowerCase().compareTo(b.label.toLowerCase());
+    if (byName != 0) return byName;
+    return a.id.compareTo(b.id);
+  });
+  return out;
+}
+
 class WalletSyncController extends ChangeNotifier {
   WalletSyncController(this._gw);
 
@@ -333,7 +348,7 @@ class WalletSyncController extends ChangeNotifier {
       usedAddresses = _mapList(cached['used_addresses']);
       balanceNano = (cached['balance_nano_erg'] as num?)?.toInt();
       recentTxs = _mapList(cached['transactions']);
-      tokens = [
+      tokens = orderTokensForDisplay([
         for (final t in (cached['tokens'] as List? ?? const []))
           if (t is Map)
             TokenBalance(
@@ -343,7 +358,7 @@ class WalletSyncController extends ChangeNotifier {
               decimals: (t['decimals'] as num?)?.toInt() ?? 0,
               iconUrl: t['iconUrl']?.toString(),
             ),
-      ];
+      ]);
       utxoCount = (cached['utxo_count'] as num?)?.toInt() ?? 0;
     }
     senderAddress ??= _bestSender(receive);
@@ -406,7 +421,7 @@ class WalletSyncController extends ChangeNotifier {
     final failed = balances.failed;
     if (failed < addresses.length) {
       balanceNano = balances.erg;
-      tokens = balances.tokens;
+      tokens = orderTokensForDisplay(balances.tokens);
     }
     // Replace only when trustworthy: an empty result with no failures means
     // pending entries dropped from the mempool and must leave the list; an
