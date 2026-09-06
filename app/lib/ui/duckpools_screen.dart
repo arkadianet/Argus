@@ -6,6 +6,7 @@ import '../format.dart';
 import '../services/network_controller.dart';
 import 'confirm_transaction_sheet.dart';
 import 'widgets/error_sheet.dart';
+import '../services/duckpools_math.dart';
 import '../services/duckpools_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -469,6 +470,7 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
                   for (final l in svc.loans) ...[
                     _LoanCard(
                       loan: l,
+                      pool: svc.states.where((st) => st.pool == l.pool).firstOrNull,
                       onRepay: _working ? null : () => _repay(l, partial: false),
                       onRepayPart: _working ? null : () => _repay(l, partial: true),
                       onAdjust: _working ? null : () => _adjust(l),
@@ -588,7 +590,8 @@ class _PoolCard extends StatelessWidget {
           if (s.borrowAprBps != null) row('Borrowers pay', '${(s.borrowAprBps! / 100).toStringAsFixed(2)}% a year'),
           if (market != null && market!.ready && market!.ergValue != null) ...[
             row('1 ERG collateral counts as', '${amt(market!.ergValue!)} ${s.ticker}'),
-            row('Liquidation line', '${(market!.threshold! / 10).toStringAsFixed(0)}% · penalty ${(market!.penalty! / 10).toStringAsFixed(0)}%'),
+            row('Liquidation line', '${(market!.threshold! / 10).toStringAsFixed(0)}% · penalty ${(market!.penalty! / 10).toStringAsFixed(1)}%'),
+            row('Borrow up to', '${maxLoanToValuePercent(market!.threshold!).toStringAsFixed(0)}% of the collateral\'s value'),
           ],
           if (market != null)
             for (final c in market!.collaterals.where((c) => c.ready))
@@ -829,37 +832,68 @@ String _collateralText(String poolKey, String? asset, int amount) {
 }
 
 /// One loan: what it owes, what backs it, how close to the line it is.
-class _LoanCard extends StatelessWidget {
-  const _LoanCard({required this.loan, this.onRepay, this.onRepayPart, this.onAdjust});
+class _LoanCard extends StatefulWidget {
+  const _LoanCard({required this.loan, this.pool, this.onRepay, this.onRepayPart, this.onAdjust});
 
   final DuckLoan loan;
+
+  /// The pool's current rates, for the interest the loan is costing.
+  final DuckPoolState? pool;
   final VoidCallback? onRepay;
   final VoidCallback? onRepayPart;
   final VoidCallback? onAdjust;
 
   @override
+  State<_LoanCard> createState() => _LoanCardState();
+}
+
+class _LoanCardState extends State<_LoanCard> {
+  /// The "what if the price moves" slider, percent.
+  double _priceMove = 0;
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final muted = ArgusColors.of(context).muted;
-    final l = loan;
+    final l = widget.loan;
     String amt(int units) => '${formatTokenAmountGrouped(units, l.decimals)} ${l.ticker}';
     final health = l.healthBps / 100;
-    final healthColor = l.liquidatable || health < 110
-        ? theme.colorScheme.error
-        : health < 130
-            ? Colors.orange
-            : accentOf(context);
-    Widget row(String label, String value, {Color? color}) => Padding(
+    final healthColor = healthColorFor(context, l.healthBps, liquidatable: l.liquidatable);
+    Widget row(String label, String value, {Color? color, String? note}) => Padding(
           padding: const EdgeInsets.symmetric(vertical: 2),
           child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Expanded(child: Text(label, style: TextStyle(color: muted, fontSize: 12.5))),
-              Text(value, style: monoStyle(context, size: 12.5).copyWith(color: color)),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(value, style: monoStyle(context, size: 12.5).copyWith(color: color)),
+                  if (note != null) Text(note, style: TextStyle(color: muted, fontSize: 11)),
+                ],
+              ),
             ],
           ),
         );
+    final collateralDecimals = _collateralDecimals(l.pool, l.collateralAsset);
+    final collateralTicker = _collateralTicker(l.pool, l.collateralAsset);
+    final priceNow = collateralUnitPrice(collateralValue: l.collateralValue, collateralAmount: l.collateralAmount, collateralDecimals: collateralDecimals);
+    final liqPrice = liquidationUnitPrice(liquidationValue: l.liquidationValue, collateralAmount: l.collateralAmount, collateralDecimals: collateralDecimals);
+    final drop = dropToLiquidationPercent(collateralValue: l.collateralValue, liquidationValue: l.liquidationValue);
+    String price(double units) => '${formatTokenAmountGrouped(units.round(), l.decimals)} ${l.ticker}';
+    final interest = l.owed - l.loan;
+    final apr = widget.pool?.borrowAprBps;
     final height = networkController.height;
     final blocksLeft = height == null ? null : (l.forcedLiquidationHeight - height).clamp(0, 1 << 30);
+    final whatIf = healthAfterPriceChange(l.healthBps, _priceMove);
+    final whatIfColor = healthColorFor(context, whatIf, liquidatable: whatIf <= 10000);
+    final toSafe = extraCollateralForHealth(
+      owed: l.owed,
+      threshold: l.threshold,
+      targetHealthBps: 15000,
+      collateralValue: l.collateralValue,
+      collateralAmount: l.collateralAmount,
+    );
     return SoftCard(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -877,28 +911,149 @@ class _LoanCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          row('Borrowed', amt(l.loan)),
-          row('Collateral', _collateralText(l.pool, l.collateralAsset, l.collateralAmount)),
-          row('Counts as', amt(l.collateralValue)),
-          row('Liquidation below', amt(l.liquidationValue), color: healthColor),
-          row('Collateral over debt', '${l.ratioPercent.toStringAsFixed(0)}% (line ${(l.threshold / 10).toStringAsFixed(0)}%)'),
+          HealthBar(healthBps: l.healthBps, liquidatable: l.liquidatable),
+          const SizedBox(height: 10),
+          row('Borrowed', amt(l.loan), note: interest > 0 ? '+ ${amt(interest)} interest so far' : null),
+          if (apr != null)
+            row('Costing', '${(apr / 100).toStringAsFixed(2)}% a year',
+                note: 'about ${amt(interestOver(owed: l.owed, aprBps: apr, days: 30))} a month at today\'s rate'),
+          row('Collateral', _collateralText(l.pool, l.collateralAsset, l.collateralAmount),
+              note: 'counts as ${amt(l.collateralValue)} · 1 $collateralTicker = ${price(priceNow)}'),
+          row(
+            'Liquidation price',
+            '1 $collateralTicker = ${price(liqPrice)}',
+            color: healthColor,
+            note: l.liquidatable ? 'the price is below the line now' : 'a ${drop.toStringAsFixed(0)}% fall in $collateralTicker',
+          ),
+          row('Line and penalty', '${(l.threshold / 10).toStringAsFixed(0)}% · ${(l.penalty / 10).toStringAsFixed(1)}%',
+              note: 'collateral must cover ${(l.threshold / 10).toStringAsFixed(0)}% of the debt; a liquidator keeps ${(l.penalty / 10).toStringAsFixed(1)}% of it'),
           if (blocksLeft != null)
-            row('Forced liquidation', blocksLeft == 0 ? 'now' : 'in ${formatBlocksAsDuration(blocksLeft)}'),
-          const SizedBox(height: 4),
+            row(
+              'Called whatever the price',
+              blocksLeft == 0 ? 'now' : 'in ${formatBlocksAsDuration(blocksLeft)}',
+              note: blocksLeft == 0 ? null : 'about ${formatCalendarDate(blockDate(blocksLeft, DateTime.now()))}; repay or refinance before then',
+            ),
+          if (toSafe > 0)
+            row('To reach 150% health', 'add ${formatTokenAmountGrouped(toSafe, collateralDecimals)} $collateralTicker',
+                note: 'at today\'s price, through Collateral below'),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Text('If $collateralTicker moves', style: TextStyle(color: muted, fontSize: 12)),
+              Expanded(
+                child: Slider(
+                  key: Key('duck-whatif-${l.boxId}'),
+                  value: _priceMove,
+                  min: -60,
+                  max: 30,
+                  divisions: 18,
+                  label: '${_priceMove >= 0 ? '+' : ''}${_priceMove.toStringAsFixed(0)}%',
+                  onChanged: (v) => setState(() => _priceMove = v),
+                ),
+              ),
+              Text(
+                '${_priceMove >= 0 ? '+' : ''}${_priceMove.toStringAsFixed(0)}% → ${whatIf <= 10000 ? 'liquidatable' : '${(whatIf / 100).toStringAsFixed(0)}%'}',
+                style: monoStyle(context, size: 12).copyWith(color: whatIfColor),
+              ),
+            ],
+          ),
           Text('Loan ${shorten(l.boxId, head: 8, tail: 6)}', style: TextStyle(color: muted, fontSize: 12)),
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
             children: [
-              FilledButton.tonal(onPressed: onRepay, child: const Text('Repay')),
-              OutlinedButton(onPressed: onRepayPart, child: const Text('Repay part')),
-              OutlinedButton(onPressed: onAdjust, child: const Text('Collateral')),
+              FilledButton.tonal(onPressed: widget.onRepay, child: const Text('Repay')),
+              OutlinedButton(onPressed: widget.onRepayPart, child: const Text('Repay part')),
+              OutlinedButton(onPressed: widget.onAdjust, child: const Text('Collateral')),
             ],
           ),
         ],
       ),
     );
   }
+}
+
+/// Green well above the line, orange near it, red at it: the same scale
+/// the alerts use (130% watch, 115% danger).
+Color healthColorFor(BuildContext context, int healthBps, {required bool liquidatable}) {
+  final theme = Theme.of(context);
+  if (liquidatable || healthBps < 11500) return theme.colorScheme.error;
+  if (healthBps < 13000) return Colors.orange;
+  return accentOf(context);
+}
+
+/// A loan's health on a bar from the line (100%) to comfortable (300%),
+/// with the alert levels marked.
+class HealthBar extends StatelessWidget {
+  const HealthBar({super.key, required this.healthBps, required this.liquidatable});
+  final int healthBps;
+  final bool liquidatable;
+
+  static double _pos(int bps) => ((bps - 10000) / 20000).clamp(0.0, 1.0);
+
+  @override
+  Widget build(BuildContext context) {
+    final color = healthColorFor(context, healthBps, liquidatable: liquidatable);
+    final muted = ArgusColors.of(context).muted;
+    return LayoutBuilder(
+      builder: (context, c) {
+        final w = c.maxWidth;
+        return SizedBox(
+          height: 22,
+          child: Stack(
+            children: [
+              Positioned(
+                left: 0,
+                right: 0,
+                top: 4,
+                child: Container(
+                  height: 6,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(3),
+                    gradient: LinearGradient(colors: [Theme.of(context).colorScheme.error, Colors.orange, accentOf(context)], stops: const [0, 0.15, 0.35]),
+                  ),
+                ),
+              ),
+              for (final (label, bps) in const [('115%', 11500), ('130%', 13000), ('200%', 20000)])
+                Positioned(
+                  left: (w * _pos(bps) - 14).clamp(0.0, w - 28),
+                  top: 11,
+                  child: SizedBox(width: 28, child: Text(label, textAlign: TextAlign.center, style: TextStyle(color: muted, fontSize: 9))),
+                ),
+              Positioned(
+                left: (w * _pos(healthBps) - 6).clamp(0.0, w - 12),
+                top: 1,
+                child: Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(shape: BoxShape.circle, color: color, border: Border.all(color: Theme.of(context).colorScheme.surface, width: 2)),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// "6 Dec" or "6 Dec 2027" for a date in another year.
+String formatCalendarDate(DateTime d) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final now = DateTime.now();
+  return '${d.day} ${months[d.month - 1]}${d.year == now.year ? '' : ' ${d.year}'}';
+}
+
+int _collateralDecimals(String pool, String? asset) {
+  if (asset == null) return 9;
+  final c = duckpoolsService.marketFor(pool)?.collaterals.where((c) => c.asset == asset).firstOrNull;
+  return c?.decimals ?? 0;
+}
+
+String _collateralTicker(String pool, String? asset) {
+  if (asset == null) return 'ERG';
+  final c = duckpoolsService.marketFor(pool)?.collaterals.where((c) => c.asset == asset).firstOrNull;
+  return c?.ticker ?? shorten(asset);
 }
 
 /// "2 days" from a block count, two-minute blocks.
@@ -930,6 +1085,10 @@ class _BorrowSheetState extends State<_BorrowSheet> {
   Map<String, dynamic>? _quote;
   String? _error;
 
+  /// The slider's share of the safe maximum, so the field and the slider
+  /// tell the same story.
+  double _share = 0;
+
   /// The chosen token collateral (ERG pool), or null for ERG.
   DuckMarketCollateral? _asset;
 
@@ -952,6 +1111,27 @@ class _BorrowSheetState extends State<_BorrowSheet> {
   String get _collateralTicker => _asset?.ticker ?? 'ERG';
   int? get _collateralUnits => _parse(_collateral, _collateralDecimals);
   int? get _loanUnits => _parse(_loan, widget.state.decimals);
+
+  /// The most the quote will accept for the collateral typed: the line's
+  /// maximum less the half percent the quote keeps back.
+  int? get _safeMax {
+    final c = _collateralUnits;
+    final threshold = _asset?.threshold ?? widget.market.threshold;
+    final unitValue = _asset == null ? widget.market.ergValue : _asset!.unitValueNano;
+    if (c == null || unitValue == null || threshold == null) return null;
+    final max = (c / _pow10(_collateralDecimals) * unitValue * 1000 / threshold).floor();
+    final safe = max - max ~/ 200;
+    return safe > 0 ? safe : null;
+  }
+
+  void _pick(double share) {
+    final max = _safeMax;
+    if (max == null) return;
+    final units = (max * share).floor();
+    _loan.text = formatTokenAmount(units, widget.state.decimals).replaceAll(',', '');
+    _share = share;
+    _requote();
+  }
 
   void _requote() {
     final c = _collateralUnits;
@@ -1042,25 +1222,43 @@ class _BorrowSheetState extends State<_BorrowSheet> {
               labelText: '${s.ticker} to borrow',
               helperText: roughMax == null
                   ? 'The pool holds ${amt(s.pooled)}${_ergPool ? ' · at least 0.05 ERG' : ''}'
-                  : 'Up to about ${amt(roughMax)} at the ${(threshold! / 10).toStringAsFixed(0)}% line; '
-                      'the last 0.5% is refused, since the price can move before the fill',
+                  : 'Up to ${amt(_safeMax ?? roughMax)} for this collateral (the ${(threshold! / 10).toStringAsFixed(0)}% line, '
+                      'less the half percent kept back for a price move before the fill)',
             ),
-            onChanged: (_) => _requote(),
+            onChanged: (_) {
+              final max = _safeMax;
+              final l = _loanUnits;
+              _share = max == null || l == null ? 0 : (l / max).clamp(0.0, 1.0);
+              _requote();
+            },
           ),
-          const SizedBox(height: 12),
-          if (_error != null) Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
-          if (q != null) ...[
-            Text(
-              'Collateral counts as ${amt(q['collateral_value'] as num)} · health at open '
-              '${((q['health_bps'] as num) / 100).toStringAsFixed(0)}% · liquidated below 100%',
-              style: TextStyle(color: muted, fontSize: 12.5),
+          if (_safeMax != null) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: Slider(
+                    key: const Key('duck-loan-share'),
+                    value: _share,
+                    divisions: 20,
+                    label: '${(_share * 100).round()}% of the maximum',
+                    onChanged: _pick,
+                  ),
+                ),
+                for (final (label, share) in const [('25%', 0.25), ('50%', 0.5), ('75%', 0.75)])
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4),
+                    child: ActionChip(label: Text(label), visualDensity: VisualDensity.compact, onPressed: () => _pick(share)),
+                  ),
+              ],
             ),
-            const SizedBox(height: 4),
-            Text('Interest compounds every 120 blocks at the pool\'s rate. The loan is called '
-                'after about ${formatBlocksAsDuration(65520)} whatever the price does. '
-                'Plus ${_ergPool ? '0.006' : '0.002'} ERG for the collateral box, the bot and the fill, the Argus fee and the miner fee.',
-                style: TextStyle(color: muted, fontSize: 12)),
+            Text(
+              'Half the maximum opens at 200% health: the price can fall by half before liquidation.',
+              style: TextStyle(color: muted, fontSize: 11.5),
+            ),
           ],
+          const SizedBox(height: 12),
+          if (_error != null) SelectableText(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
+          if (q != null) _BorrowFigures(quote: q, state: s, collateralTicker: _collateralTicker, collateralDecimals: _collateralDecimals, ergPool: _ergPool),
           const SizedBox(height: 16),
           FilledButton(
             key: const Key('duck-borrow-continue'),
@@ -1069,6 +1267,70 @@ class _BorrowSheetState extends State<_BorrowSheet> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// What the quote means to the borrower: health, the liquidation price,
+/// the fall that reaches it, the interest, and the clock.
+class _BorrowFigures extends StatelessWidget {
+  const _BorrowFigures({required this.quote, required this.state, required this.collateralTicker, required this.collateralDecimals, required this.ergPool});
+  final Map<String, dynamic> quote;
+  final DuckPoolState state;
+  final String collateralTicker;
+  final int collateralDecimals;
+  final bool ergPool;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = ArgusColors.of(context).muted;
+    final q = quote;
+    final s = state;
+    String amt(num units) => '${formatTokenAmountGrouped(units.toInt(), s.decimals)} ${s.ticker}';
+    final healthBps = (q['health_bps'] as num).toInt();
+    final loan = (q['loan'] as num).toInt();
+    final collateralValue = (q['collateral_value'] as num).toInt();
+    final collateralAmount = (q['collateral_amount'] as num).toInt();
+    final threshold = (q['threshold'] as num).toInt();
+    final penalty = (q['penalty'] as num).toInt();
+    final liquidationValue = (loan * threshold / 1000).ceil();
+    final liqPrice = liquidationUnitPrice(liquidationValue: liquidationValue, collateralAmount: collateralAmount, collateralDecimals: collateralDecimals);
+    final priceNow = collateralUnitPrice(collateralValue: collateralValue, collateralAmount: collateralAmount, collateralDecimals: collateralDecimals);
+    final drop = dropToLiquidationPercent(collateralValue: collateralValue, liquidationValue: liquidationValue);
+    final apr = s.borrowAprBps;
+    final color = healthColorFor(context, healthBps, liquidatable: healthBps <= 10000);
+    Widget row(String label, String value, {Color? valueColor}) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 1.5),
+          child: Row(
+            children: [
+              Expanded(child: Text(label, style: TextStyle(color: muted, fontSize: 12.5))),
+              Text(value, style: monoStyle(context, size: 12.5).copyWith(color: valueColor)),
+            ],
+          ),
+        );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        HealthBar(healthBps: healthBps, liquidatable: healthBps <= 10000),
+        const SizedBox(height: 6),
+        row('Health at open', '${(healthBps / 100).toStringAsFixed(0)}%', valueColor: color),
+        row('Collateral counts as', amt(collateralValue)),
+        row('1 $collateralTicker now', amt(priceNow.round())),
+        row('Liquidation price', amt(liqPrice.round()), valueColor: color),
+        row('Room before liquidation', 'a ${drop.toStringAsFixed(0)}% fall in $collateralTicker', valueColor: color),
+        row('Line · penalty', '${(threshold / 10).toStringAsFixed(0)}% · ${(penalty / 10).toStringAsFixed(1)}%'),
+        if (apr != null) ...[
+          row('Interest at today\'s rate', '${(apr / 100).toStringAsFixed(2)}% a year'),
+          row('About', '${amt(interestOver(owed: loan, aprBps: apr, days: 30))} a month · ${amt(interestOver(owed: loan, aprBps: apr, days: 365))} a year'),
+        ],
+        row('Called whatever the price', 'about ${formatCalendarDate(blockDate(forcedLiquidationBlocks, DateTime.now()))}'),
+        const SizedBox(height: 4),
+        Text(
+          'Interest compounds every 120 blocks at the pool\'s rate, which moves with utilisation. '
+          'Plus ${ergPool ? '0.006' : '0.002'} ERG for the collateral box, the bot and the fill, the Argus fee and the miner fee.',
+          style: TextStyle(color: muted, fontSize: 11.5),
+        ),
+      ],
     );
   }
 }
