@@ -699,7 +699,7 @@ void main() {
 
     gw.healthBps = 12500;
     await svc.refreshLoans(const ['9me']);
-    expect(notified, ['loan-1 Loan health falling']);
+    expect(notified, ['loan-1 Loan collateral ratio falling']);
     await svc.refreshLoans(const ['9me']);
     expect(notified.length, 1, reason: 'the same level is not repeated');
 

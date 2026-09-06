@@ -1082,17 +1082,20 @@ class DuckpoolsService extends ChangeNotifier {
   }
 
   static String _alertTitle(DuckAlertLevel level, DuckLoan l) => switch (level) {
-        DuckAlertLevel.watch => 'Loan health falling',
+        DuckAlertLevel.watch => 'Loan collateral ratio falling',
         DuckAlertLevel.danger => 'Loan close to liquidation',
         DuckAlertLevel.liquidatable => 'Loan can be liquidated',
       };
 
+  /// In the ratio the contract liquidates on, with the threshold beside
+  /// it, so the figure means the same here as on Duckpools' own site.
   static String _alertBody(DuckAlertLevel level, DuckLoan l) {
-    final health = (l.healthBps / 100).toStringAsFixed(0);
+    final ratio = l.ratioPercent.isFinite ? '${l.ratioPercent.toStringAsFixed(0)}%' : 'n/a';
+    final threshold = '${(l.threshold / 10).toStringAsFixed(0)}%';
     return switch (level) {
-      DuckAlertLevel.watch => 'Your ${l.ticker} loan is at $health% of its liquidation line. Add collateral or repay part to be safe.',
-      DuckAlertLevel.danger => 'Your ${l.ticker} loan is at $health% of its liquidation line. Add collateral or repay now.',
-      DuckAlertLevel.liquidatable => 'Your ${l.ticker} loan is below its line. Anyone can liquidate it; repay or add collateral at once.',
+      DuckAlertLevel.watch => 'Your ${l.ticker} loan\'s collateral ratio is $ratio; liquidation opens at $threshold. Add collateral or repay part to be safe.',
+      DuckAlertLevel.danger => 'Your ${l.ticker} loan\'s collateral ratio is $ratio, close to the $threshold threshold. Add collateral or repay now.',
+      DuckAlertLevel.liquidatable => 'Your ${l.ticker} loan\'s collateral ratio is under the $threshold threshold. Anyone can liquidate it; repay or add collateral at once.',
     };
   }
 
