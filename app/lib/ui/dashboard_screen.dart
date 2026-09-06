@@ -1389,6 +1389,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                     onTap: () => _go('/duckpools'),
                   ),
                   _discoverCard(
+                    title: 'Rosen bridge',
+                    onLearn: () => _go('/rosen'),
+                    subtitle: 'Send ERG and tokens to Cardano, Bitcoin, Ethereum and more.',
+                    icon: Icons.swap_calls,
+                    onTap: () => _go('/rosen'),
+                  ),
+                  _discoverCard(
                     title: 'Mix',
                     onLearn: () => _go('/mix'),
                     subtitle: mixService.enabled
