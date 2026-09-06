@@ -914,7 +914,9 @@ class _SendScreenState extends State<SendScreen> {
             Expanded(
               flex: 5,
               child: DropdownButtonFormField<String>(
-                key: ValueKey('extra-token-$i'),
+                // Keyed by the entry, not its index: removing a row must not
+                // hand its field state to the row that shifts up.
+                key: ObjectKey(e),
                 initialValue: e.tokenId,
                 decoration: const InputDecoration(labelText: 'Another token'),
                 items: [
