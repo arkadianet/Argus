@@ -6,8 +6,8 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `broadcast_mix_move_with`, `broadcast_mix_move`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `babel_json`, `broadcast_mix_move_with`, `broadcast_mix_move`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `BabelPick`, `CachedPreparation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 
 /// The app fee as the UI should display it.
 String appFeeInfo() => RustLib.instance.api.crateApiAppFeeInfo();
@@ -274,6 +274,7 @@ Future<String> prepareSend({
   PlatformInt64? feeNano,
   List<String>? inputBoxIds,
   String? stealthBoxesJson,
+  String? babelTokenId,
 }) => RustLib.instance.api.crateApiPrepareSend(
   handleId: handleId,
   senderAddress: senderAddress,
@@ -287,6 +288,62 @@ Future<String> prepareSend({
   feeNano: feeNano,
   inputBoxIds: inputBoxIds,
   stealthBoxesJson: stealthBoxesJson,
+  babelTokenId: babelTokenId,
+);
+
+/// Issue a token (EIP-4): mint `amount` units named `name` into a box of
+/// this wallet's `change_address`, with `description` and `decimals`.
+/// For an NFT pass `nft_kind` (`picture`, `audio`, `video`), the SHA-256
+/// of the content as hex, and its link; amount must be 1 and decimals 0.
+/// Confirm with `send_erg`. The token id is known before signing.
+Future<String> prepareMint({
+  required BigInt handleId,
+  required String senderAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  required String name,
+  required String description,
+  required int decimals,
+  required BigInt amount,
+  String? nftKind,
+  String? nftContentHashHex,
+  String? nftUrl,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiPrepareMint(
+  handleId: handleId,
+  senderAddress: senderAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  name: name,
+  description: description,
+  decimals: decimals,
+  amount: amount,
+  nftKind: nftKind,
+  nftContentHashHex: nftContentHashHex,
+  nftUrl: nftUrl,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+);
+
+/// Burn tokens: every input token not in `burns_json` (`[{"token_id":
+/// "...", "amount": 5}]`) comes back to `change_address`; the named
+/// amounts are left out of every output and so cease to exist. Confirm
+/// with `send_erg`. The wallet's ordinary boxes only, never stealth.
+Future<String> prepareBurn({
+  required BigInt handleId,
+  required String senderAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  required String burnsJson,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiPrepareBurn(
+  handleId: handleId,
+  senderAddress: senderAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  burnsJson: burnsJson,
+  nodeUrl: nodeUrl,
 );
 
 /// The bridge as vendored: lock address, fee NFT, contracts version, and
@@ -492,6 +549,7 @@ Future<String> prepareSendMulti({
   PlatformInt64? feeNano,
   List<String>? inputBoxIds,
   String? stealthBoxesJson,
+  String? babelTokenId,
 }) => RustLib.instance.api.crateApiPrepareSendMulti(
   handleId: handleId,
   senderAddress: senderAddress,
@@ -502,6 +560,7 @@ Future<String> prepareSendMulti({
   feeNano: feeNano,
   inputBoxIds: inputBoxIds,
   stealthBoxesJson: stealthBoxesJson,
+  babelTokenId: babelTokenId,
 );
 
 /// Live Dexy protocol state + mint-path rates for `gold` or `usd`.
