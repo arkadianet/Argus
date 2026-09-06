@@ -125,6 +125,7 @@ class _MixScreenState extends State<MixScreen> {
           }
           return null;
         },
+        findBox: mixService.boxOnChain,
       );
 
   Future<void> _start(WalletRouteArgs args) => _guard('Could not start the mix', () async {

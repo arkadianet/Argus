@@ -68,6 +68,9 @@ typedef Broadcast = Future<MixBroadcast> Function(int preparationId);
 /// from before the ids were kept) the amount is all there is to go on.
 typedef FindFundingBox = Future<String?> Function(int neededNano, List<String> candidates);
 
+/// Whether the chain knows a box by id, spent or not.
+typedef FindBox = Future<bool> Function(String boxId);
+
 /// Putting money into the pool takes two confirmed transactions: a plain
 /// self-send that makes a box of exactly the right size, and the entry
 /// that spends it. This runs those steps in order, over injected calls, so
@@ -84,6 +87,7 @@ class MixStartFlow {
     required this.confirm,
     required this.broadcast,
     required this.findFundingBox,
+    required this.findBox,
     this.pollInterval = const Duration(seconds: 6),
     this.maxWait = const Duration(minutes: 12),
     this.onStatus,
@@ -95,6 +99,7 @@ class MixStartFlow {
   final ConfirmStep confirm;
   final Broadcast broadcast;
   final FindFundingBox findFundingBox;
+  final FindBox findBox;
   final Duration pollInterval;
   final Duration maxWait;
   final void Function(String)? onStatus;
@@ -152,16 +157,26 @@ class MixStartFlow {
     final needed = record.fundingNano ?? neededNano;
 
     // An entry was staged and may have been broadcast before the app
-    // stopped. If the funding box is gone, it was: adopt the staged state
-    // and let the next check confirm it on chain. If the box is still
-    // there, the entry never went out and is built again.
+    // stopped. The staged state names the box the entry creates: seen on
+    // chain, the entry went out, so adopt the state. Not seen with the
+    // funding box still there, it never went out and is built again.
+    // Neither: something else spent the funding box, and the attempt is
+    // cleared rather than guessed at.
     final staged = record.entryAttempt;
     if (staged != null) {
-      final still = await findFundingBox(needed, record.fundingBoxIds);
-      if (still == null) {
+      final entryBoxId = (staged['phase'] as Map?)?['box_id'] as String?;
+      if (entryBoxId != null && await findBox(entryBoxId)) {
         await service.commitEntry(record, staged, record.entryTxId ?? '');
         onStatus?.call('Entry already sent; the next check confirms it');
         return record;
+      }
+      final still = await findFundingBox(needed, record.fundingBoxIds);
+      if (still == null) {
+        const why = 'The funding box was spent, but not by this mix\'s entry: '
+            'the entry box is not on chain. The staged entry was cleared; '
+            'check the wallet\'s recent transactions for what spent it.';
+        await service.clearEntryAttempt(record, error: why);
+        throw StateError(why);
       }
     }
 

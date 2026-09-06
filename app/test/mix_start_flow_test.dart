@@ -161,6 +161,7 @@ void main() {
     required List<String?> boxes,
     Duration maxWait = const Duration(seconds: 30),
     Set<int> failIds = const {},
+    bool entryBoxSeen = false,
     Set<int> nodeDownIds = const {},
   }) {
     final replies = List<bool>.from(answers);
@@ -185,6 +186,10 @@ void main() {
       findFundingBox: (needed, candidates) async {
         log.add('find:$needed:${candidates.join(",")}');
         return found.isEmpty ? null : found.removeAt(0);
+      },
+      findBox: (id) async {
+        log.add('box:$id');
+        return entryBoxSeen;
       },
       pollInterval: const Duration(seconds: 10),
       maxWait: maxWait,
@@ -281,11 +286,32 @@ void main() {
     await service.stageEntry(record, staged);
     expect(record.pending, isTrue);
 
-    final resumed = flow(answers: [], boxes: []);
+    final resumed = flow(answers: [], boxes: [], entryBoxSeen: true);
     final after = await resumed.enter(record, fundingAddress: '9me', neededNano: plan.neededNano);
     expect(after.phaseKind, 'half_posted');
     expect(after.entryAttempt, isNull);
     expect(ops().where((l) => l.startsWith('broadcast')).length, 2, reason: 'the two original sends only');
+    expect(log.last, isNot(startsWith('find:')), reason: 'the entry box on chain settles it; the funding box is not consulted');
+  });
+
+  test('a staged entry whose box is unseen and whose funding box is gone is cleared, not guessed', () async {
+    // Something else spent the funding box (a send, the UTXO tools): the
+    // entry cannot have gone out, and the staged state must not be adopted.
+    final f = flow(answers: [true, true], boxes: ['fund1']);
+    final record = await f.start(plan, fundingAddress: '9me');
+    final staged = Map<String, dynamic>.from(record!.state);
+    record.state = {...staged, 'phase': {'kind': 'pending'}};
+    await service.stageEntry(record, staged);
+
+    final resumed = flow(answers: [], boxes: [null]);
+    await expectLater(
+      resumed.enter(record, fundingAddress: '9me', neededNano: plan.neededNano),
+      throwsA(isA<StateError>().having((e) => e.message, 'message', contains('not by this mix'))),
+    );
+    expect(record.pending, isTrue);
+    expect(record.entryAttempt, isNull);
+    expect(record.lastError, contains('entry box is not on chain'));
+    expect(ops().where((l) => l.startsWith('broadcast')).length, 2, reason: 'nothing new was sent');
   });
 
   test('a staged entry whose funding box is still there is built again', () async {
