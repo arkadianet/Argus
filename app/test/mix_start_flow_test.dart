@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:argus_wallet/bridge/argus_error.dart';
 import 'package:argus_wallet/services/mix_service.dart';
 import 'package:argus_wallet/services/mix_start_flow.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -161,6 +162,7 @@ void main() {
     Duration maxWait = const Duration(seconds: 30),
     Set<int> failIds = const {},
     bool entryBoxSeen = false,
+    Set<int> nodeDownIds = const {},
   }) {
     final replies = List<bool>.from(answers);
     final found = List<String?>.from(boxes);
@@ -178,6 +180,7 @@ void main() {
       broadcast: (id) async {
         log.add('broadcast:$id:records=${service.records.length}');
         if (failIds.contains(id)) throw StateError('node down');
+        if (nodeDownIds.contains(id)) throw ArgusException(code: 'NODE_ERROR', message: 'request timed out');
         return MixBroadcast(txId: 'tx$id', outputBoxIds: id == 7 ? ['fund1', 'change1'] : []);
       },
       findFundingBox: (needed, candidates) async {
@@ -243,6 +246,21 @@ void main() {
     expect(service.records, isEmpty, reason: 'nothing went out, so nothing is recorded');
     final prefs = await SharedPreferences.getInstance();
     expect(jsonDecode(prefs.getString('argus_mixes_v1_w') ?? '[]'), isEmpty);
+  });
+
+  test('a funding broadcast the node may have taken keeps the record with a note', () async {
+    await expectLater(
+      flow(answers: [true], boxes: ['fund1'], nodeDownIds: {7}).start(plan, fundingAddress: '9me'),
+      throwsA(isA<StateError>().having((e) => e.message, 'message', contains('may still be on chain'))),
+    );
+    final record = service.records.single;
+    expect(record.pending, isTrue);
+    expect(record.lastError, contains('may still be on chain'));
+    final prefs = await SharedPreferences.getInstance();
+    expect(jsonDecode(prefs.getString('argus_mixes_v1_w')!), hasLength(1), reason: 'kept on disk too');
+    expect(MixStartFlow.broadcastCertainlyFailed(StateError('x')), isTrue);
+    expect(MixStartFlow.broadcastCertainlyFailed('{"code":"SIGNING_FAILED","message":"m"}'), isTrue);
+    expect(MixStartFlow.broadcastCertainlyFailed('{"code":"NODE_ERROR","message":"m"}'), isFalse);
   });
 
   test('declining the entry leaves a pending mix that can be continued later', () async {
