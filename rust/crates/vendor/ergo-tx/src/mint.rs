@@ -82,6 +82,8 @@ pub enum MintError {
     EmptyName,
     #[error("Amount must be greater than zero")]
     ZeroAmount,
+    #[error("Amount is beyond what a box can hold")]
+    AmountTooLarge,
     #[error("An NFT is a single unit with no decimals")]
     NftShape,
     #[error("Content hash must be 32 bytes")]
@@ -148,6 +150,11 @@ pub fn build_mint_tx(
     }
     if spec.amount == 0 {
         return Err(MintError::ZeroAmount);
+    }
+    // A box asset amount is a signed 64-bit number; anything larger would
+    // wrap to a negative supply rather than be refused.
+    if spec.amount > i64::MAX as u64 {
+        return Err(MintError::AmountTooLarge);
     }
     if spec.nft.is_some() && (spec.amount != 1 || spec.decimals != 0) {
         return Err(MintError::NftShape);
@@ -315,6 +322,16 @@ mod tests {
         assert!(matches!(build_mint_tx(&[input(1_000_000_000, vec![])], &MintSpec { name: " ".into(), ..ok.clone() }, "00", 1), Err(MintError::EmptyName)));
         assert!(matches!(build_mint_tx(&[input(1_000_000_000, vec![])], &MintSpec { amount: 0, ..ok.clone() }, "00", 1), Err(MintError::ZeroAmount)));
         assert!(matches!(build_mint_tx(&[input(2_000_000, vec![])], &ok, "00", 1), Err(MintError::InsufficientErg { .. })));
+        let huge = MintSpec { amount: i64::MAX as u64 + 1, ..ok.clone() };
+        assert!(
+            matches!(build_mint_tx(&[input(1_000_000_000, vec![])], &huge, "00", 1), Err(MintError::AmountTooLarge)),
+            "a supply past i64::MAX would wrap negative"
+        );
+        let most = MintSpec { amount: i64::MAX as u64, ..ok.clone() };
+        assert_eq!(
+            build_mint_tx(&[input(1_000_000_000, vec![])], &most, "00", 1).unwrap().unsigned_tx.outputs[0].assets[0].amount,
+            i64::MAX.to_string()
+        );
         assert!(NftKind::parse("audio") == Some(NftKind::Audio) && NftKind::parse("gif").is_none());
     }
 }
