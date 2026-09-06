@@ -3081,6 +3081,322 @@ pub async fn amm_pools(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+// ---------------------------------------------------------------------------
+// Spectrum liquidity: add, remove, and create a pool
+// ---------------------------------------------------------------------------
+
+/// The pool box and the wallet's boxes for a liquidity transaction: the
+/// pool by its id (always fresh), the user's boxes, the height.
+async fn liquidity_context(
+    handle_id: u64,
+    pool_id: &str,
+    spend_addresses: &[String],
+    node_url: Option<String>,
+) -> Result<
+    (
+        amm::state::AmmPool,
+        ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox,
+        ergo_tx::Eip12InputBox,
+        Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+        Vec<ergo_tx::Eip12InputBox>,
+        i32,
+    ),
+    String,
+> {
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    let (pool, pool_ergo_box) = crate::api_amm_impl::fetch_pool(&client, pool_id).await?;
+    let creation = client
+        .get_box_creation_info(&pool_ergo_box.box_id().to_string())
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    let pool_box = ergo_tx::Eip12InputBox::from_ergo_box(&pool_ergo_box, creation.0, creation.1);
+    let (all_boxes, eip12) = gather_wallet_boxes(handle_id, spend_addresses, node_url).await?;
+    if eip12.is_empty() {
+        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+    }
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+    Ok((pool, pool_ergo_box, pool_box, all_boxes, eip12, height))
+}
+
+/// Store a built pool transaction (pool box first, then the user's boxes)
+/// and answer with its preparation id and summary.
+#[allow(clippy::too_many_arguments)]
+fn store_pool_tx(
+    handle_id: u64,
+    unsigned_tx: ergo_tx::Eip12UnsignedTx,
+    pool_ergo_box: ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox,
+    all_boxes: &[ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox],
+    change_tree: &str,
+    miner_fee: i64,
+    node_url: Option<String>,
+    summary: serde_json::Value,
+) -> Result<String, String> {
+    let output_trees: Vec<String> = unsigned_tx.outputs.iter().map(|o| o.ergo_tree.clone()).collect();
+    if crate::api_amm_impl::pays_citadel_dev_fee(&output_trees) {
+        return Err(ArgusError::Generic(
+            "DEV_FEE_LEAK: built tx pays the Citadel dev fee — init_app guard failed".into(),
+        )
+        .to_json_string());
+    }
+    let selected_ids = unsigned_tx
+        .inputs
+        .iter()
+        .skip(1)
+        .map(|i| i.box_id.clone())
+        .collect::<Vec<_>>();
+    let user_boxes = ordered_user_boxes(&selected_ids, all_boxes)?;
+    let mut ergo_boxes = vec![pool_ergo_box];
+    ergo_boxes.extend(user_boxes);
+    let change_erg = user_change_erg(&unsigned_tx, change_tree);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes,
+        data_input_boxes: vec![],
+        unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: 0,
+        node_url,
+    });
+    let mut out = summary;
+    out["preparation_id"] = serde_json::json!(preparation_id);
+    serde_json::to_string(&out).map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Add liquidity to a Spectrum pool directly (no bot): `x_amount` is
+/// nanoERG for an ERG pool or the X token's units for a token pair,
+/// `y_amount` the Y token's units; the LP tokens come back to
+/// `recipient_address`. Confirm with `send_erg`.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn amm_build_lp_deposit(
+    handle_id: u64,
+    pool_id: String,
+    x_amount: i64,
+    y_amount: i64,
+    recipient_address: String,
+    change_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    if x_amount <= 0 || y_amount <= 0 {
+        return Err(ArgusError::Generic("Amounts must be positive".into()).to_json_string());
+    }
+    let (recipient_tree, change_tree) =
+        resolve_dexy_destinations(handle_id, "amm_build_lp_deposit", &recipient_address, &change_address)?;
+    let (pool, pool_ergo_box, pool_box, all_boxes, eip12, height) =
+        liquidity_context(handle_id, &pool_id, &spend_addresses, node_url.clone()).await?;
+    let built = amm::build_lp_deposit_eip12(&pool_box, &pool, x_amount as u64, y_amount as u64, &eip12, &recipient_tree, height)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let s = &built.summary;
+    let summary = serde_json::json!({
+        "pool_id": pool_id,
+        "x_deposited": s.erg_deposited,
+        "y_deposited": s.token_deposited,
+        "token_name": s.token_name,
+        "lp_reward": s.lp_reward,
+        "lp_token_id": pool.lp_token_id,
+        "miner_fee": s.miner_fee,
+        "total_erg_cost": s.total_erg_cost,
+    });
+    store_pool_tx(handle_id, built.unsigned_tx, pool_ergo_box, &all_boxes, &change_tree, s.miner_fee as i64, node_url, summary)
+}
+
+/// Remove liquidity: hand `lp_amount` LP tokens back to the pool for the
+/// matching share of both reserves, paid to `recipient_address`. Confirm
+/// with `send_erg`.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn amm_build_lp_redeem(
+    handle_id: u64,
+    pool_id: String,
+    lp_amount: i64,
+    recipient_address: String,
+    change_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    if lp_amount <= 0 {
+        return Err(ArgusError::Generic("Amount must be positive".into()).to_json_string());
+    }
+    let (recipient_tree, change_tree) =
+        resolve_dexy_destinations(handle_id, "amm_build_lp_redeem", &recipient_address, &change_address)?;
+    let (pool, pool_ergo_box, pool_box, all_boxes, eip12, height) =
+        liquidity_context(handle_id, &pool_id, &spend_addresses, node_url.clone()).await?;
+    let built = amm::build_lp_redeem_eip12(&pool_box, &pool, lp_amount as u64, &eip12, &recipient_tree, height)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let s = &built.summary;
+    let summary = serde_json::json!({
+        "pool_id": pool_id,
+        "lp_redeemed": s.lp_redeemed,
+        "x_received": s.erg_received,
+        "y_received": s.token_received,
+        "token_name": s.token_name,
+        "miner_fee": s.miner_fee,
+        "total_erg_cost": s.total_erg_cost,
+    });
+    store_pool_tx(handle_id, built.unsigned_tx, pool_ergo_box, &all_boxes, &change_tree, s.miner_fee as i64, node_url, summary)
+}
+
+fn pool_setup_params(
+    pool_type: &str,
+    x_token_id: Option<String>,
+    x_amount: i64,
+    y_token_id: &str,
+    y_amount: i64,
+    fee_num: i32,
+) -> Result<amm::pool_setup::PoolSetupParams, String> {
+    let pool_type = match pool_type {
+        "N2T" => amm::state::PoolType::N2T,
+        "T2T" => amm::state::PoolType::T2T,
+        other => return Err(ArgusError::Generic(format!("unknown pool type {other:?}")).to_json_string()),
+    };
+    if x_amount <= 0 || y_amount <= 0 {
+        return Err(ArgusError::Generic("Amounts must be positive".into()).to_json_string());
+    }
+    Ok(amm::pool_setup::PoolSetupParams {
+        pool_type,
+        x_token_id: x_token_id.filter(|s| !s.is_empty()),
+        x_amount: x_amount as u64,
+        y_token_id: y_token_id.to_string(),
+        y_amount: y_amount as u64,
+        fee_num,
+    })
+}
+
+/// First of a pool's two transactions: mint the LP supply into a
+/// *bootstrap* box of this wallet holding the initial reserves. The LP
+/// token id is known before signing; the pool's NFT will be the bootstrap
+/// box's id once it exists. Confirm with `send_erg`, then call
+/// `amm_build_pool_create` with the bootstrap box id once it confirms.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn amm_build_pool_bootstrap(
+    handle_id: u64,
+    pool_type: String,
+    x_token_id: Option<String>,
+    x_amount: i64,
+    y_token_id: String,
+    y_amount: i64,
+    fee_num: i32,
+    user_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let params = pool_setup_params(&pool_type, x_token_id, x_amount, &y_token_id, y_amount, fee_num)?;
+    let (user_tree, _) = resolve_dexy_destinations(handle_id, "amm_build_pool_bootstrap", &user_address, &user_address)?;
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    let (all_boxes, eip12) = gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
+    if eip12.is_empty() {
+        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+    }
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+    let built = amm::build_pool_bootstrap_eip12(&params, &eip12, &user_tree, height)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let ids: Vec<String> = built.unsigned_tx.inputs.iter().map(|i| i.box_id.clone()).collect();
+    let ergo_boxes = ordered_user_boxes(&ids, &all_boxes)?;
+    let bootstrap_box_id = ergo_tx::chain::derive_output_boxes(&built.unsigned_tx)
+        .map(|(_, outs)| outs.first().map(|b| b.box_id.clone()).unwrap_or_default())
+        .map_err(|e| ArgusError::TxBuildFailed(e).to_json_string())?;
+    let s = built.summary.clone();
+    let change_erg = user_change_erg(&built.unsigned_tx, &user_tree);
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes,
+        data_input_boxes: vec![],
+        unsigned_tx: built.unsigned_tx,
+        miner_fee: s.miner_fee as i64,
+        change_erg,
+        recipient_erg: 0,
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "bootstrap_box_id": bootstrap_box_id,
+        "lp_token_id": s.lp_token_id,
+        "lp_minted": s.lp_minted,
+        "user_lp_share": s.user_lp_share,
+        "pool_type": pool_type,
+        "x_amount": s.x_amount,
+        "y_amount": s.y_amount,
+        "fee_percent": s.fee_percent,
+        "miner_fee": s.miner_fee,
+        "total_erg_cost": s.total_erg_cost,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Second of a pool's two transactions: spend the confirmed bootstrap box
+/// into the pool box (its NFT minted here) and the user's LP share. The
+/// parameters must be the ones the bootstrap was built with. Confirm with
+/// `send_erg`.
+#[flutter_rust_bridge::frb]
+#[allow(clippy::too_many_arguments)]
+pub async fn amm_build_pool_create(
+    handle_id: u64,
+    bootstrap_box_id: String,
+    pool_type: String,
+    x_token_id: Option<String>,
+    x_amount: i64,
+    y_token_id: String,
+    y_amount: i64,
+    fee_num: i32,
+    lp_token_id: String,
+    user_lp_share: i64,
+    user_address: String,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let params = pool_setup_params(&pool_type, x_token_id, x_amount, &y_token_id, y_amount, fee_num)?;
+    let (user_tree, _) = resolve_dexy_destinations(handle_id, "amm_build_pool_create", &user_address, &user_address)?;
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    let bootstrap = client
+        .get_eip12_box_by_id(&bootstrap_box_id)
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())?;
+    if !bootstrap.ergo_tree.eq_ignore_ascii_case(&user_tree) {
+        return Err(ArgusError::TxBuildFailed("the bootstrap box is not this wallet's".into()).to_json_string());
+    }
+    let height = client
+        .current_height()
+        .await
+        .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
+    let built = amm::build_pool_create_eip12(&bootstrap, &params, &lp_token_id, user_lp_share as u64, &user_tree, height)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let ergo_box = crate::api_mix_impl::to_ergo_box(&bootstrap)?;
+    let s = built.summary.clone();
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        ergo_boxes: vec![ergo_box],
+        data_input_boxes: vec![],
+        unsigned_tx: built.unsigned_tx,
+        miner_fee: TX_FEE_NANO,
+        change_erg: 0,
+        recipient_erg: 0,
+        node_url,
+    });
+    serde_json::to_string(&serde_json::json!({
+        "preparation_id": preparation_id,
+        "pool_nft_id": s.pool_nft_id,
+        "lp_token_id": s.lp_token_id,
+        "pool_type": s.pool_type,
+        "fee_num": s.fee_num,
+        "miner_fee": TX_FEE_NANO,
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 /// Quote a single-hop swap. `from_token`/`to_token` are `None` for ERG,
 /// matching how the Send screen encodes ERG as a null asset id.
 #[flutter_rust_bridge::frb]
