@@ -1247,7 +1247,7 @@ class WalletService {
 
   // ── Duckpools ───────────────────────────────────────────────────────
 
-  /// Prepare a lend or withdraw order; confirm with [sendErg].
+  /// Prepare a Duckpools order of any kind; confirm with [sendErg].
   Future<String> duckpoolsPrepareOrder({
     required String poolBoxesJson,
     required String poolKey,
@@ -1260,6 +1260,9 @@ class WalletService {
     required String changeAddress,
     String? nodeUrl,
     int? feeNanoErg,
+    String? loanBoxesJson,
+    int? collateralNano,
+    String? collateralBoxId,
   }) {
     _requireUnlocked();
     return RustLib.instance.api.crateApiDuckpoolsPrepareOrder(
@@ -1275,6 +1278,9 @@ class WalletService {
       changeAddress: changeAddress,
       nodeUrl: nodeUrl,
       feeNano: feeNanoErg,
+      loanBoxesJson: loanBoxesJson,
+      collateralNano: collateralNano,
+      collateralBoxId: collateralBoxId,
     );
   }
 
