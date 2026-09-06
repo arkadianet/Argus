@@ -412,7 +412,7 @@ void main() {
     final svc = await loaded(gw, ex, [state(mixId: 4, kind: 'half_posted', done: 0)]);
     await svc.tick();
     expect(svc.records.single.phaseKind, 'reclaimed');
-    expect(gw.notifications.last, 'A mix finished | Taken back from the pool; nobody joined it.');
+    expect(gw.notifications.last, 'A mix finished | Withdrawn before a partner joined.');
     expect(gw.notificationIds.last, 4);
   });
 

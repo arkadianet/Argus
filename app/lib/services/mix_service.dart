@@ -1395,7 +1395,7 @@ class MixService extends ChangeNotifier {
         title: 'A mix finished',
         body: r.phaseKind == 'withdrawn'
             ? 'Delivered after ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'}.'
-            : 'Taken back from the pool; nobody joined it.',
+            : 'Withdrawn before a partner joined.',
         mixId: r.mixId,
       );
 

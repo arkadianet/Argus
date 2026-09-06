@@ -9,7 +9,7 @@ String mixEventLabel(String action, {required int denomination, required int rou
     'remixed_as_bob' || 'remixed_as_alice' => 'Mix round ${round + 1}',
     'joined' => 'Mix round ${round + 1}',
     'withdrawn' => 'Mix finished: $amount delivered',
-    'reclaimed' => 'Mix reclaimed: $amount back',
+    'reclaimed' => 'Mix withdrawn early: $amount back',
     'recovered' => 'Mix found from seed',
     _ => 'Mix: $action',
   };
@@ -91,7 +91,7 @@ List<Map<String, dynamic>> mergeMixActivity(
     return (
       text: r.phaseKind == 'withdrawn'
           ? 'Mix finished · ${formatErg(r.denomination, maxFrac: 4)} delivered'
-          : 'Mix reclaimed · ${formatErg(r.denomination, maxFrac: 4)} back',
+          : 'Mix withdrawn early · ${formatErg(r.denomination, maxFrac: 4)} back',
       finished: r,
     );
   }
@@ -102,12 +102,12 @@ List<Map<String, dynamic>> mergeMixActivity(
     final amount = formatErg(r.denomination, maxFrac: 4);
     final what = switch (r.phaseKind) {
       'pending' => 'funded, not entered',
-      'half_posted' => 'waiting for a counterpart',
+      'half_posted' => 'waiting for a partner',
       _ => r.readyToWithdraw ? 'ready to withdraw' : 'mixing',
     };
     final checked = r.lastCheckedAt == null ? '' : ' · checked ${formatSyncAge(r.lastCheckedAt)}';
     return (
-      text: '$amount · round ${r.roundsDone} of ${r.roundsTarget} · $what$checked',
+      text: '$amount · round ${r.roundsDone} of about ${r.roundsTarget} · $what$checked',
       finished: null,
     );
   }

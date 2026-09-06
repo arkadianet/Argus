@@ -22,4 +22,9 @@ void main() {
       reason: 'no batch chosen yet',
     );
   });
+
+  test('a level is numbered as ErgoMixer does, with its rounds', () {
+    expect(levelTitle(index: 0, rounds: 30), 'Level 1 · about 30 rounds');
+    expect(levelTitle(index: 3, rounds: 180), 'Level 4 · about 180 rounds');
+  });
 }
