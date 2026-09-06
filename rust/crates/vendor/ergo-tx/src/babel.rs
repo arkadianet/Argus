@@ -211,10 +211,14 @@ pub fn apply_babel(
         return Err(BabelError::TooSmall);
     }
     let needed = babel.tokens_for(fee);
+    // From the end: the builders put the recipients first and the change
+    // after them, and a send to the wallet's own change address gives the
+    // recipient box the same script. Taking the first match would move the
+    // babel ERG and tokens out of what the user meant to send.
     let change_index = tx
         .outputs
         .iter()
-        .position(|o| o.ergo_tree == change_tree)
+        .rposition(|o| o.ergo_tree == change_tree)
         .ok_or(BabelError::NoChange)?;
 
     // The change: give back the babel box's ERG (less the fee it pays),
@@ -359,6 +363,27 @@ mod tests {
         assert_eq!(recreated.additional_registers["R6"], format!("0e20{}", "bb".repeat(32)));
         assert_eq!(tx.inputs[1].extension["0"], "0404", "context variable 0 names output 2");
         assert_eq!(tx.outputs[3].ergo_tree, MINER_FEE_ERGO_TREE);
+    }
+
+    #[test]
+    fn a_send_to_the_wallets_own_change_address_still_takes_the_change_box() {
+        let babel = BabelBox::parse(&babel_input(), TOKEN).unwrap();
+        // The recipient is the wallet's own change address, so output 0
+        // and output 1 share a script; only output 1 is the change.
+        let mut tx = Eip12UnsignedTx {
+            inputs: vec![input("aa", 10_000_000, USER, vec![(TOKEN, 100)], vec![]), babel_input()],
+            data_inputs: vec![],
+            outputs: vec![
+                Eip12Output { value: "2000000".into(), ergo_tree: USER.into(), assets: vec![], creation_height: 5, additional_registers: HashMap::new() },
+                Eip12Output { value: (10_000_000 - 2_000_000 - 1_100_000 + 1_000_000_000).to_string(), ergo_tree: USER.into(), assets: vec![Eip12Asset::new(TOKEN.to_string(), 105)], creation_height: 5, additional_registers: HashMap::new() },
+                Eip12Output::fee(1_100_000, 5),
+            ],
+        };
+        apply_babel(&mut tx, &babel, USER).unwrap();
+        assert_eq!(tx.outputs[0].value, "2000000", "the recipient box is untouched");
+        assert!(tx.outputs[0].assets.is_empty());
+        assert_eq!(tx.outputs[1].value, (10_000_000 - 2_000_000).to_string());
+        assert_eq!(tx.outputs[1].assets[0].amount, "98");
     }
 
     #[test]

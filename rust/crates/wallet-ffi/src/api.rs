@@ -1528,6 +1528,10 @@ async fn prepare(
                 .unsigned_tx
                 .outputs
                 .iter()
+                // From the end, as apply_babel does: a send to the
+                // wallet's own change address gives the recipient box the
+                // same script, and only the last one is the change.
+                .rev()
                 .find(|o| o.ergo_tree == change_tree)
                 .map(|o| o.value.parse::<i64>().unwrap_or(0))
                 .unwrap_or(0);
@@ -2261,6 +2265,10 @@ pub async fn prepare_send_multi(
             change_erg = unsigned_tx
                 .outputs
                 .iter()
+                // From the end, as apply_babel does: a send to the
+                // wallet's own change address gives the recipient box the
+                // same script, and only the last one is the change.
+                .rev()
                 .find(|o| o.ergo_tree == change_tree)
                 .map(|o| o.value.parse::<i64>().unwrap_or(0))
                 .unwrap_or(0);
