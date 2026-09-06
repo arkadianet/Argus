@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// Only what the flow touches on the service: createMix, prepareEntry,
 /// commitEntry, recover.
 class ScriptedGateway implements MixGateway {
+  @override
+  void setReservedFunding(String reservationsJson) {}
   final calls = <String>[];
   List<Map<String, dynamic>> recovered = const [];
 

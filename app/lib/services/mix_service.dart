@@ -127,6 +127,10 @@ abstract class MixGateway {
   String? get nodeUrl;
   String get explorerBase;
 
+  /// Tell coin selection which boxes pending mixes have set aside:
+  /// `[{"box_ids": [...], "value_nano_erg": n}]`; `[]` frees them all.
+  void setReservedFunding(String reservationsJson);
+
   /// The chain height the wallet already knows from its node, if any.
   int? get chainHeight;
 
@@ -204,6 +208,8 @@ class LiveMixGateway implements MixGateway {
   String get explorerBase => networkController.explorer;
   @override
   int? get chainHeight => networkController.height;
+  @override
+  void setReservedFunding(String reservationsJson) => walletService.mixSetReservedFunding(reservationsJson);
 
   @override
   String contractTrees() => bridge.mixContractTrees();
@@ -540,6 +546,10 @@ class MixService extends ChangeNotifier {
       }
       // A key that could not be exported earlier (the wallet was locked
       // when the switch flipped, or when a mix entered) is exported now.
+      // A pending mix funded before the ids were kept (an earlier release,
+      // or a crash between the broadcast and the record) has nothing to
+      // set aside; read the ids from its funding transaction.
+      await _backfillFundingIds();
       if (backgroundEnabled && _gw.isUnlocked) {
         for (final r in active) {
           if (await _gw.loadKey(walletId: id, mixId: r.mixId) == null) {
@@ -548,6 +558,7 @@ class MixService extends ChangeNotifier {
         }
       }
     }
+    _syncReserved();
     _reschedule();
     notifyListeners();
   }
@@ -687,6 +698,9 @@ class MixService extends ChangeNotifier {
     _generation++;
     _walletId = null;
     records = const [];
+    // The reservation is left as it is: it is keyed by the wallet handle,
+    // so it cannot cross wallets, and clearing it here would open a window
+    // between an unlock's reset and the load that sets it again.
     lastTickError = null;
     notifyListeners();
   }
@@ -723,8 +737,49 @@ class MixService extends ChangeNotifier {
     if (id == null) return false;
     final prefs = await SharedPreferences.getInstance();
     final ok = await prefs.setString(_recordsKey(id), jsonEncode([for (final r in records) r.toJson()]));
+    _syncReserved();
     notifyListeners();
     return ok;
+  }
+
+  /// Fill in the funding box ids of pending records that lack them, from
+  /// the funding transaction's outputs. Best effort: a transaction the
+  /// node and explorer do not know yet is tried again next load.
+  Future<void> _backfillFundingIds() async {
+    var changed = false;
+    for (final r in records) {
+      final tx = r.fundingTxId;
+      if (!r.pending || tx == null || tx.isEmpty || r.fundingBoxIds.isNotEmpty) continue;
+      try {
+        final ids = [
+          for (final o in await _txOutputs(_explorerBase, tx))
+            if (o is Map && o['boxId'] is String) o['boxId'] as String,
+        ];
+        if (ids.isNotEmpty) {
+          r.fundingBoxIds = List.unmodifiable(ids);
+          changed = true;
+        }
+      } catch (_) {
+        // Not known yet.
+      }
+    }
+    if (changed) await _persist();
+  }
+
+  /// What pending mixes have set aside, as coin selection must see it.
+  String reservedFundingJson() => jsonEncode([
+        for (final r in records)
+          if (r.pending && r.fundingNano != null && r.fundingBoxIds.isNotEmpty)
+            {'box_ids': r.fundingBoxIds, 'value_nano_erg': r.fundingNano},
+      ]);
+
+  void _syncReserved() {
+    try {
+      _gw.setReservedFunding(reservedFundingJson());
+    } catch (_) {
+      // A locked wallet has no coin selection to protect; the next load
+      // or persist while unlocked sets the reservation again.
+    }
   }
 
   Map<String, String> get _trees {
@@ -1166,7 +1221,14 @@ class MixService extends ChangeNotifier {
   }) async {
     record.fundingTxId = txId;
     record.fundingBoxIds = List.unmodifiable(outputBoxIds);
-    await _persist();
+    if (outputBoxIds.isEmpty) {
+      // Without the ids the funding box cannot be set aside from other
+      // spends; the load backfills them from the transaction once it is seen.
+      record.lastError = 'The funding transaction\'s outputs are not known yet, so the funding box is not protected from other spends until the next load.';
+    }
+    // The ids are what keeps the funding box out of other spends after a
+    // restart: a write that did not land must not pass unnoticed.
+    if (!await _persist()) throw StateError('Failed to save the mix\'s funding record');
   }
 
   /// A funding broadcast whose outcome is not known: the record stays,
