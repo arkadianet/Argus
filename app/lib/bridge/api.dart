@@ -289,6 +289,61 @@ Future<String> prepareSend({
   stealthBoxesJson: stealthBoxesJson,
 );
 
+/// Issue a token (EIP-4): mint `amount` units named `name` into a box of
+/// this wallet's `change_address`, with `description` and `decimals`.
+/// For an NFT pass `nft_kind` (`picture`, `audio`, `video`), the SHA-256
+/// of the content as hex, and its link; amount must be 1 and decimals 0.
+/// Confirm with `send_erg`. The token id is known before signing.
+Future<String> prepareMint({
+  required BigInt handleId,
+  required String senderAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  required String name,
+  required String description,
+  required int decimals,
+  required BigInt amount,
+  String? nftKind,
+  String? nftContentHashHex,
+  String? nftUrl,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiPrepareMint(
+  handleId: handleId,
+  senderAddress: senderAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  name: name,
+  description: description,
+  decimals: decimals,
+  amount: amount,
+  nftKind: nftKind,
+  nftContentHashHex: nftContentHashHex,
+  nftUrl: nftUrl,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+);
+
+/// Burn tokens: every input token not in `burns_json` (`[{"token_id":
+/// "...", "amount": 5}]`) comes back to `change_address`; the named
+/// amounts are left out of every output and so cease to exist. Confirm
+/// with `send_erg`. The wallet's ordinary boxes only, never stealth.
+Future<String> prepareBurn({
+  required BigInt handleId,
+  required String senderAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  required String burnsJson,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiPrepareBurn(
+  handleId: handleId,
+  senderAddress: senderAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  burnsJson: burnsJson,
+  nodeUrl: nodeUrl,
+);
+
 /// Prepare a UTXO consolidation transaction to merge multiple boxes into one.
 Future<String> prepareConsolidate({
   required BigInt handleId,

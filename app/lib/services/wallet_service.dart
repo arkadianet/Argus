@@ -1242,6 +1242,65 @@ class WalletService {
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
+  // ── Tokens: issue and burn ─────────────────────────────────────────
+
+  /// Issue a token into this wallet; confirm with [sendErg].
+  Future<Map<String, dynamic>> prepareMint({
+    required String senderAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    required String name,
+    required String description,
+    required int decimals,
+    required BigInt amount,
+    String? nftKind,
+    String? nftContentHashHex,
+    String? nftUrl,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareMint(
+      handleId: _handleId!,
+      senderAddress: senderAddress,
+      spendAddresses: spendAddresses,
+      changeAddress: changeAddress,
+      name: name,
+      description: description,
+      decimals: decimals,
+      amount: amount,
+      nftKind: nftKind,
+      nftContentHashHex: nftContentHashHex,
+      nftUrl: nftUrl,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
+  /// Burn tokens held by this wallet; confirm with [sendErg]. `burns` maps
+  /// token id to the amount to destroy.
+  Future<Map<String, dynamic>> prepareBurn({
+    required String senderAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    required Map<String, int> burns,
+    String? nodeUrl,
+  }) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiPrepareBurn(
+      handleId: _handleId!,
+      senderAddress: senderAddress,
+      spendAddresses: spendAddresses,
+      changeAddress: changeAddress,
+      burnsJson: jsonEncode([
+        for (final e in burns.entries) {'token_id': e.key, 'amount': e.value},
+      ]),
+      nodeUrl: nodeUrl,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
   // ── Duckpools ───────────────────────────────────────────────────────
 
   /// Prepare a Duckpools order of any kind; confirm with [sendErg].
