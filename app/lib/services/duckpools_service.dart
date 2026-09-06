@@ -509,6 +509,11 @@ abstract class DuckpoolsGateway {
     required List<String> spendAddresses,
     required String changeAddress,
   });
+
+  /// Every proxy script to read boxes under, and the wallet's orders
+  /// among such boxes.
+  String proxyTrees();
+  String discoverOrders(String boxesJson, List<String> addresses);
 }
 
 class LiveDuckpoolsGateway implements DuckpoolsGateway {
@@ -632,6 +637,11 @@ class LiveDuckpoolsGateway implements DuckpoolsGateway {
         spendAddresses: spendAddresses,
         changeAddress: changeAddress,
       );
+  @override
+  String proxyTrees() => bridge.duckpoolsProxyTrees();
+  @override
+  String discoverOrders(String boxesJson, List<String> addresses) =>
+      bridge.duckpoolsDiscoverOrders(boxesJson: boxesJson, addresses: addresses);
 }
 
 /// How close a loan is to trouble, worst last.
@@ -1426,6 +1436,89 @@ class DuckpoolsService extends ChangeNotifier {
       }
     }
     if (changed) await _persistOrders();
+  }
+
+  /// Wallets that already looked for orders on chain this session.
+  final _scanned = <String>{};
+  bool _scanning = false;
+  bool get scanning => _scanning;
+  String? scanError;
+  DateTime? scannedAt;
+
+  /// Find the wallet's orders on chain: every proxy box under a Duckpools
+  /// proxy script whose user register names one of `addresses`. A
+  /// reinstall or a second device has no record of an order it posted;
+  /// the box is still there and refundable after its height. Returns how
+  /// many were new to the records.
+  Future<int> discoverOrders(List<String> addresses) async {
+    if (_scanning || addresses.isEmpty) return 0;
+    final walletId = _gw.walletId;
+    if (walletId == null) return 0;
+    _scanning = true;
+    scanError = null;
+    notifyListeners();
+    try {
+      final trees = [for (final t in (jsonDecode(_gw.proxyTrees()) as List)) t as String];
+      final boxes = <dynamic>[];
+      final failures = <String>[];
+      await Future.wait([
+        for (final t in trees)
+          _allBoxesUnderTree(t).then(boxes.addAll, onError: (Object e) => failures.add(e.toString())),
+      ]);
+      if (boxes.isEmpty && failures.isNotEmpty) throw StateError('No proxy script could be read: ${failures.first}');
+      final found = (jsonDecode(_gw.discoverOrders(jsonEncode(boxes), addresses)) as List).cast<Map>();
+      if (_gw.walletId != walletId) return 0;
+      final known = {for (final o in orders) o.proxyBoxId};
+      var added = 0;
+      for (final f in found) {
+        final m = f.cast<String, dynamic>();
+        final id = m['box_id'] as String;
+        if (known.contains(id)) continue;
+        final pool = pools.firstWhere((p) => p.key == m['pool']);
+        final kind = m['kind'] as String;
+        final isLendTokens = kind == 'withdraw';
+        orders = [
+          DuckOrder(
+            kind: kind,
+            pool: pool.key,
+            ticker: isLendTokens ? '${pool.ticker} lend tokens' : pool.ticker,
+            decimals: isLendTokens ? 0 : pool.decimals,
+            proxyBoxId: id,
+            txId: m['tx_id'] as String,
+            amount: (m['amount'] as num).toInt(),
+            expected: 0,
+            minOut: 0,
+            refundHeight: (m['refund_height'] as num).toInt(),
+            createdAt: DateTime.now(),
+          ),
+          ...orders,
+        ];
+        added++;
+      }
+      _scanned.add(walletId);
+      scannedAt = DateTime.now();
+      if (failures.isNotEmpty) scanError = 'Some proxy scripts could not be read: ${failures.first}';
+      // The records are kept per wallet; a scan before any refresh has
+      // not bound the service to one yet.
+      _walletId ??= walletId;
+      if (added > 0) await _persistOrders();
+      return added;
+    } catch (e) {
+      scanError = e.toString();
+      return 0;
+    } finally {
+      _scanning = false;
+      notifyListeners();
+    }
+  }
+
+  /// Look for orders once per wallet and session when the records hold
+  /// none, so a reinstalled wallet sees what it left on chain.
+  Future<void> discoverOrdersIfUnknown(List<String> addresses) async {
+    final id = _gw.walletId;
+    if (id == null || _scanned.contains(id) || orders.isNotEmpty) return;
+    await discoverOrders(addresses);
+    if (orders.isNotEmpty) await tickOrders();
   }
 
   /// Prepare the refund of a refundable order. The proxy box is read

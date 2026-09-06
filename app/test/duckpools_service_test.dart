@@ -9,6 +9,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// the way the FFI does from the boxes it is handed.
 class FakeGateway implements DuckpoolsGateway {
   FakeGateway({this.node});
+  List<Map<String, dynamic>> found = const [];
+  String? lastDiscoverBoxes;
+  @override
+  String proxyTrees() => jsonEncode(['pt-lend', 'pt-borrow']);
+  @override
+  String discoverOrders(String boxesJson, List<String> addresses) {
+    lastDiscoverBoxes = boxesJson;
+    return jsonEncode(found);
+  }
   final String? node;
   String? lastBoxes;
   String? lastHoldings;
@@ -493,6 +502,43 @@ void main() {
       DuckMarketCollateral(asset: 'a', ticker: 'SigUSD', decimals: 2, ready: false),
     ]);
     expect(erg.unavailableReason, contains('token collaterals'));
+  });
+
+  test('orders left on chain are found by the proxy scripts and recorded once', () async {
+    SharedPreferences.setMockInitialValues({});
+    final gw = FakeGateway(node: 'http://node')
+      ..height = 1000
+      ..found = [
+        {'pool': 'sigusd', 'kind': 'borrow', 'box_id': 'pb1', 'tx_id': 'tx1', 'amount': 100, 'value': 12003000000, 'refund_height': 900},
+        {'pool': 'erg', 'kind': 'withdraw', 'box_id': 'pb2', 'tx_id': 'tx2', 'amount': 5, 'value': 3000000, 'refund_height': 5000},
+      ];
+    final posted = <String>[];
+    final svc = DuckpoolsService(
+      gateway: gw,
+      get: (u) async => throw StateError('unexpected $u'),
+      post: (u, body) async {
+        posted.add(jsonDecode(body) as String);
+        return jsonEncode([{'boxId': 'x', 'ergoTree': jsonDecode(body)}]);
+      },
+    );
+    expect(await svc.discoverOrders(['9me']), 2);
+    expect(posted.toSet(), {'pt-lend', 'pt-borrow'}, reason: 'every proxy script is read');
+    expect(jsonDecode(gw.lastDiscoverBoxes!), hasLength(2));
+    expect(svc.orders.map((o) => o.proxyBoxId), ['pb2', 'pb1']);
+    expect(svc.orders.last.kind, 'borrow');
+    expect(svc.orders.last.refundHeight, 900);
+    expect(svc.orders.first.ticker, 'ERG lend tokens');
+    // Found again: nothing new, nothing duplicated.
+    expect(await svc.discoverOrders(['9me']), 0);
+    expect(svc.orders, hasLength(2));
+    final prefs = await SharedPreferences.getInstance();
+    expect(jsonDecode(prefs.getString('argus_duck_orders_v1_w1')!), hasLength(2), reason: 'persisted');
+    // The once-per-session scan does nothing when records exist.
+    gw.found = [
+      {'pool': 'erg', 'kind': 'lend', 'box_id': 'pb3', 'tx_id': 'tx3', 'amount': 1, 'value': 1, 'refund_height': 1}
+    ];
+    await svc.discoverOrdersIfUnknown(['9me']);
+    expect(svc.orders, hasLength(2));
   });
 
   test('loans are read from the collateral, interest, price and parameter boxes', () async {

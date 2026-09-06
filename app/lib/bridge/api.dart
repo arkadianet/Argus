@@ -1411,3 +1411,18 @@ Future<String> dappUtxos({
   addresses: addresses,
   nodeUrl: nodeUrl,
 );
+
+/// Every Duckpools proxy script, hex, for the app to read boxes under
+/// when it looks for orders it has no record of. Pure.
+String duckpoolsProxyTrees() =>
+    RustLib.instance.api.crateApiDuckpoolsProxyTrees();
+
+/// The wallet's orders among boxes read under the proxy scripts: those
+/// whose user register names one of `addresses`. Pure.
+String duckpoolsDiscoverOrders({
+  required String boxesJson,
+  required List<String> addresses,
+}) => RustLib.instance.api.crateApiDuckpoolsDiscoverOrders(
+  boxesJson: boxesJson,
+  addresses: addresses,
+);
