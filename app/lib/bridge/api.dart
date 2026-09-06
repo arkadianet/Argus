@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `broadcast_mix_move_with`, `broadcast_mix_move`, `covers`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent_all`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`, `without_reserved`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `broadcast_mix_move_with`, `broadcast_mix_move`, `covers`, `drop_preparations_for`, `err_str`, `filter_selected_inputs`, `gather_unspent_all`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `node_client`, `open_wallet`, `ordered_user_boxes`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `with_handle`, `without_reserved`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CachedPreparation`, `FundingReservation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`
 
@@ -646,6 +646,112 @@ Future<String> ammPools({
   knownTokensJson: knownTokensJson,
 );
 
+/// Add liquidity to a Spectrum pool directly (no bot): `x_amount` is
+/// nanoERG for an ERG pool or the X token's units for a token pair,
+/// `y_amount` the Y token's units; the LP tokens come back to
+/// `recipient_address`. Confirm with `send_erg`.
+Future<String> ammBuildLpDeposit({
+  required BigInt handleId,
+  required String poolId,
+  required PlatformInt64 xAmount,
+  required PlatformInt64 yAmount,
+  required String recipientAddress,
+  required String changeAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmBuildLpDeposit(
+  handleId: handleId,
+  poolId: poolId,
+  xAmount: xAmount,
+  yAmount: yAmount,
+  recipientAddress: recipientAddress,
+  changeAddress: changeAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
+
+/// Remove liquidity: hand `lp_amount` LP tokens back to the pool for the
+/// matching share of both reserves, paid to `recipient_address`. Confirm
+/// with `send_erg`.
+Future<String> ammBuildLpRedeem({
+  required BigInt handleId,
+  required String poolId,
+  required PlatformInt64 lpAmount,
+  required String recipientAddress,
+  required String changeAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmBuildLpRedeem(
+  handleId: handleId,
+  poolId: poolId,
+  lpAmount: lpAmount,
+  recipientAddress: recipientAddress,
+  changeAddress: changeAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
+
+/// First of a pool's two transactions: mint the LP supply into a
+/// *bootstrap* box of this wallet holding the initial reserves. The LP
+/// token id is known before signing; the pool's NFT will be the bootstrap
+/// box's id once it exists. Confirm with `send_erg`, then call
+/// `amm_build_pool_create` with the bootstrap box id once it confirms.
+Future<String> ammBuildPoolBootstrap({
+  required BigInt handleId,
+  required String poolType,
+  String? xTokenId,
+  required PlatformInt64 xAmount,
+  required String yTokenId,
+  required PlatformInt64 yAmount,
+  required int feeNum,
+  required String userAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmBuildPoolBootstrap(
+  handleId: handleId,
+  poolType: poolType,
+  xTokenId: xTokenId,
+  xAmount: xAmount,
+  yTokenId: yTokenId,
+  yAmount: yAmount,
+  feeNum: feeNum,
+  userAddress: userAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+);
+
+/// Second of a pool's two transactions: spend the confirmed bootstrap box
+/// into the pool box (its NFT minted here) and the user's LP share. The
+/// parameters must be the ones the bootstrap was built with. Confirm with
+/// `send_erg`.
+Future<String> ammBuildPoolCreate({
+  required BigInt handleId,
+  required String bootstrapBoxId,
+  required String poolType,
+  String? xTokenId,
+  required PlatformInt64 xAmount,
+  required String yTokenId,
+  required PlatformInt64 yAmount,
+  required int feeNum,
+  required String lpTokenId,
+  required PlatformInt64 userLpShare,
+  required String userAddress,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiAmmBuildPoolCreate(
+  handleId: handleId,
+  bootstrapBoxId: bootstrapBoxId,
+  poolType: poolType,
+  xTokenId: xTokenId,
+  xAmount: xAmount,
+  yTokenId: yTokenId,
+  yAmount: yAmount,
+  feeNum: feeNum,
+  lpTokenId: lpTokenId,
+  userLpShare: userLpShare,
+  userAddress: userAddress,
+  nodeUrl: nodeUrl,
+);
+
 /// Quote a single-hop swap. `from_token`/`to_token` are `None` for ERG,
 /// matching how the Send screen encodes ERG as a null asset id.
 Future<String> ammQuote({
@@ -926,10 +1032,53 @@ String duckpoolsQuote({
   refundHeight: refundHeight,
 );
 
+/// The wallet's loans and the markets it can borrow in, from one JSON
+/// object of boxes: `collateral` (every box under the collateral scripts),
+/// `parents` and `children` (the interest boxes), `dex` (the Spectrum
+/// ERG pools that price collateral) and `params` (the pool parameter
+/// boxes). `wallet_addresses` are the wallet's addresses. Pure, but the
+/// collateral list is unbounded, so it runs off the UI isolate.
+Future<String> duckpoolsLoans({
+  required String loanBoxesJson,
+  required List<String> walletAddresses,
+  required PlatformInt64 height,
+}) => RustLib.instance.api.crateApiDuckpoolsLoans(
+  loanBoxesJson: loanBoxesJson,
+  walletAddresses: walletAddresses,
+  height: height,
+);
+
+/// A borrow, repay or partial-repay quote. Borrow: `amount` is the loan
+/// and `collateral_nano` the ERG put up. Repay: `collateral_box_id` names
+/// the loan. Partial repay: both `amount` (the repayment) and the box id.
+/// Pure.
+String duckpoolsLoanQuote({
+  required String poolBoxesJson,
+  required String loanBoxesJson,
+  required String poolKey,
+  required String kind,
+  required PlatformInt64 amount,
+  required PlatformInt64 collateralNano,
+  required String collateralBoxId,
+  required PlatformInt64 height,
+}) => RustLib.instance.api.crateApiDuckpoolsLoanQuote(
+  poolBoxesJson: poolBoxesJson,
+  loanBoxesJson: loanBoxesJson,
+  poolKey: poolKey,
+  kind: kind,
+  amount: amount,
+  collateralNano: collateralNano,
+  collateralBoxId: collateralBoxId,
+  height: height,
+);
+
 /// Prepare an order: the proxy box from the wallet's boxes, confirmed with
 /// `send_erg`. The proxy pays fills and refunds to `user_address`, which
 /// must be this wallet's. Returns the preparation, the quote, the proxy
-/// box id (known before signing) and the refund height.
+/// box id (known before signing) and the refund height. Loan-side kinds
+/// (`borrow`, `repay`, `partial_repay`) need `loan_boxes_json` as
+/// `duckpools_loans` takes it, plus `collateral_nano` for a borrow and
+/// `collateral_box_id` for a repayment.
 Future<String> duckpoolsPrepareOrder({
   required BigInt handleId,
   required String poolBoxesJson,
@@ -943,6 +1092,9 @@ Future<String> duckpoolsPrepareOrder({
   required String changeAddress,
   String? nodeUrl,
   PlatformInt64? feeNano,
+  String? loanBoxesJson,
+  PlatformInt64? collateralNano,
+  String? collateralBoxId,
 }) => RustLib.instance.api.crateApiDuckpoolsPrepareOrder(
   handleId: handleId,
   poolBoxesJson: poolBoxesJson,
@@ -956,12 +1108,17 @@ Future<String> duckpoolsPrepareOrder({
   changeAddress: changeAddress,
   nodeUrl: nodeUrl,
   feeNano: feeNano,
+  loanBoxesJson: loanBoxesJson,
+  collateralNano: collateralNano,
+  collateralBoxId: collateralBoxId,
 );
 
 /// Prepare the refund of an unfilled order after its refund height: the
 /// proxy box back to `user_address` less the contract's one fee. Confirm
-/// with `send_erg`. The proxy contract needs no signature for this; it
-/// checks the outputs.
+/// with `send_erg`. The proxy contracts need no signature for this; they
+/// check the outputs. A borrow order also accepts the borrower's own
+/// signature at any height, and the wallet signs, so it can be taken
+/// back early.
 Future<String> duckpoolsPrepareRefund({
   required BigInt handleId,
   required String proxyBoxJson,
@@ -977,9 +1134,11 @@ Future<String> duckpoolsPrepareRefund({
 /// What the transaction that spent a proxy box did with it: filled,
 /// refunded, or something else. Pure.
 String duckpoolsOrderOutcome({
+  required String kind,
   required String proxyBoxId,
   required String txJson,
 }) => RustLib.instance.api.crateApiDuckpoolsOrderOutcome(
+  kind: kind,
   proxyBoxId: proxyBoxId,
   txJson: txJson,
 );
