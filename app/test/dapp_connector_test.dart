@@ -183,12 +183,12 @@ void main() {
     final s = dappInjectedScript('abc123');
     expect(s, contains('connector.nautilus = api'));
     expect(s, contains('connector.argus = api'));
-    expect(s, contains('ArgusBridge.postMessage'));
+    expect(s, contains("callHandler('ArgusBridge'"));
+    expect(s, contains('flutterInAppWebViewPlatformReady'), reason: 'calls wait for the bridge at document start');
     expect(s, contains('__argusDapp'));
     expect(s, contains("'ergo-wallet:injected'"));
     expect(s, contains("var nonce = 'abc123';"));
     expect(s, contains('nonce: nonce'));
-    expect(s, contains('if (n !== nonce) return;'), reason: 'a reply for another navigation is ignored');
     expect(s, isNot(contains('__NONCE__')));
   });
 

@@ -36,12 +36,12 @@ dependencies:
   mobile_scanner: ^7.0.1
   share_plus: ^11.0.0
   url_launcher: ^6.3.1
-  webview_flutter: ^4.9.0
   http: ^1.4.0
   cupertino_icons: ^1.0.8
   uuid: ^4.0.0
   flutter_local_notifications: ^22.3.0
   workmanager: ^0.10.9
+  flutter_inappwebview: ^6.1.5
 
 dev_dependencies:
   flutter_test:

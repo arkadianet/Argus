@@ -276,11 +276,11 @@ class DappConnector {
 /// One request a page posted over the bridge.
 typedef BridgeMessage = ({Object? id, String method, List<dynamic> params});
 
-/// Parse a bridge message and check its nonce. Android hands the channel
-/// to every frame of the WebView, so a cross-origin iframe can post to it
-/// directly; only the main frame, where the connector script lives, knows
-/// the nonce of the current navigation. A message without it, with a
-/// stale one, or with no recognisable shape is dropped (null).
+/// Parse a bridge message and check its nonce. The handler is reachable
+/// from every frame of the WebView, so a cross-origin iframe can call it
+/// directly; only main frames, where the connector script is injected,
+/// know the browser session's nonce. A message without it, with another
+/// one, or with no recognisable shape is dropped (null).
 BridgeMessage? parseBridgeMessage(String raw, String nonce) {
   Map<String, dynamic> m;
   try {
@@ -306,34 +306,27 @@ String originOf(String? url) {
   return '${u.scheme}://${u.host}${u.hasPort ? ':${u.port}' : ''}';
 }
 
-/// The script injected into the main frame of every page:
-/// `ergoConnector.nautilus` (and `ergoConnector.argus`) whose methods post
-/// to the `ArgusBridge` channel, stamped with this navigation's `nonce`,
-/// and wait for `window.__argusDapp.resolve`.
+/// The script injected into the main frame of every page at document
+/// start: `ergoConnector.nautilus` (and `ergoConnector.argus`) whose
+/// methods call the `ArgusBridge` handler with this session's `nonce`
+/// and get the answer back as the handler's own result.
 String dappInjectedScript(String nonce) => _dappInjectedTemplate.replaceAll('__NONCE__', nonce);
 
 const _dappInjectedTemplate = r'''
 (function () {
   if (window.__argusDapp) return;
   var nonce = '__NONCE__';
-  var pending = {};
-  var next = 1;
-  var dapp = {
-    pending: pending,
-    resolve: function (id, ok, payload, n) {
-      if (n !== nonce) return;
-      var p = pending[id];
-      if (!p) return;
-      delete pending[id];
-      if (ok) p.resolve(payload); else p.reject(payload);
-    }
-  };
-  Object.defineProperty(window, '__argusDapp', { value: dapp, writable: false, configurable: false });
+  Object.defineProperty(window, '__argusDapp', { value: Object.freeze({ nonce: true }), writable: false, configurable: false });
+  var ready = new Promise(function (resolve) {
+    if (window.flutter_inappwebview && window.flutter_inappwebview.callHandler) { resolve(); return; }
+    window.addEventListener('flutterInAppWebViewPlatformReady', function () { resolve(); }, { once: true });
+  });
   function call(method, params) {
-    return new Promise(function (resolve, reject) {
-      var id = next++;
-      pending[id] = { resolve: resolve, reject: reject };
-      ArgusBridge.postMessage(JSON.stringify({ id: id, nonce: nonce, method: method, params: params || [] }));
+    return ready.then(function () {
+      return window.flutter_inappwebview.callHandler('ArgusBridge', JSON.stringify({ nonce: nonce, method: method, params: params || [] }));
+    }).then(function (r) {
+      if (r && r.ok) return r.payload;
+      throw (r && r.payload) || { code: -2, info: 'No answer from the wallet.' };
     });
   }
   function context() {
