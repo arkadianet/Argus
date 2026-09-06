@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:argus_wallet/services/mix_activity.dart';
 import 'package:argus_wallet/services/mix_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -102,5 +103,22 @@ void main() {
     final finished = mixStripSummary([rec(mixId: 5, kind: 'withdrawn'), rec(mixId: 6, kind: 'half_posted')]);
     expect(finished!.text, 'Mix finished · 1 ERG delivered');
     expect(finished.finished!.mixId, 5, reason: 'announced until dismissed, ahead of live mixes');
+  });
+
+  test('the mixing tokens on a box are read from the snapshot', () {
+    final snap = jsonEncode({
+      'half_boxes': [
+        {'boxId': 'h1', 'assets': [{'tokenId': 'mix', 'amount': 29}]},
+      ],
+      'full_boxes': [
+        {'boxId': 'f1', 'assets': [{'tokenId': 'mix', 'amount': 12}]},
+        {'boxId': 'f2', 'assets': <Map<String, Object>>[]},
+      ],
+    });
+    expect(mixingTokensOn('f1', snap, 'mix'), 12);
+    expect(mixingTokensOn('h1', snap, 'mix'), 29);
+    expect(mixingTokensOn('f2', snap, 'mix'), 0, reason: 'seen, holding none');
+    expect(mixingTokensOn('nope', snap, 'mix'), isNull, reason: 'not in the snapshot');
+    expect(mixingTokensOn(null, snap, 'mix'), isNull);
   });
 }

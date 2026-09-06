@@ -141,9 +141,62 @@ pub fn check_operator_fee(fee: i64, denomination: i64) -> Result<(), String> {
 
 /// What the pool offers right now: rings with waiting counts, the token
 /// levels for sale, and whether the operator's boxes are there.
-pub fn rings_json(view: &ChainView) -> serde_json::Value {
+/// Blocks in a week: the window for a ring's recent pace.
+pub const RECENT_ROUND_BLOCKS: i32 = 5040;
+
+/// Rings from the waiting half boxes, each with what the full boxes say
+/// about it: `depth`, the unspent full boxes to hide among, and
+/// `recent_rounds`, the full boxes created in the past week (two per join).
+/// A ring with full boxes but nobody waiting is listed too, with `waiting: 0`.
+pub fn ring_stats(view: &ChainView) -> Vec<serde_json::Value> {
     let inputs: Vec<Eip12InputBox> = view.half.iter().map(|h| h.input.clone()).collect();
-    let rings = discover_rings(&inputs);
+    let mut rings: Vec<serde_json::Value> = discover_rings(&inputs)
+        .into_iter()
+        .map(|r| serde_json::to_value(r).unwrap_or_default())
+        .collect();
+    let since = view.height.saturating_sub(RECENT_ROUND_BLOCKS);
+    // Ring key: value, mixing token id, token amount. Depth and recent count.
+    type RingKey = (i64, Option<String>, Option<i64>);
+    let mut stats: std::collections::BTreeMap<RingKey, (usize, usize)> = std::collections::BTreeMap::new();
+    for f in &view.full {
+        let key = (
+            f.value,
+            f.mixing_token.as_ref().map(|(id, _)| id.clone()),
+            f.mixing_token.as_ref().map(|(_, a)| *a),
+        );
+        let e = stats.entry(key).or_insert((0, 0));
+        e.0 += 1;
+        if f.input.creation_height >= since {
+            e.1 += 1;
+        }
+    }
+    for r in rings.iter_mut() {
+        let key = (
+            r["value"].as_i64().unwrap_or(0),
+            r["token_id"].as_str().map(str::to_string),
+            r["token_amount"].as_i64(),
+        );
+        let (depth, recent) = stats.remove(&key).unwrap_or((0, 0));
+        r["depth"] = serde_json::json!(depth);
+        r["recent_rounds"] = serde_json::json!(recent);
+    }
+    for ((value, token_id, token_amount), (depth, recent)) in stats {
+        rings.push(serde_json::json!({
+            "value": value,
+            "token_id": token_id,
+            "token_amount": token_amount,
+            "waiting": 0,
+            "max_mix_level": 0,
+            "depth": depth,
+            "recent_rounds": recent,
+        }));
+    }
+    rings.sort_by_key(|r| (r["value"].as_i64().unwrap_or(0), r["token_id"].as_str().map(str::to_string)));
+    rings
+}
+
+pub fn rings_json(view: &ChainView) -> serde_json::Value {
+    let rings = ring_stats(view);
     let token = view.token_box();
     // Each level with the price and the rate of the box that would sell
     // it, so the sheet's estimate comes from the same box as the quote.
@@ -553,6 +606,44 @@ mod tests {
 
     fn handle() -> WalletHandle {
         WalletHandle::create(MnemonicPhrase::parse(APPKIT).unwrap(), "").unwrap()
+    }
+
+    #[test]
+    fn ring_stats_count_depth_and_recent_rounds_from_full_boxes() {
+        const FULL: &str =
+            include_str!("../../vendor/protocols/zerojoin/test/fixtures/full_mix_boxes.json");
+        let mut full: serde_json::Value = serde_json::from_str::<serde_json::Value>(FULL).unwrap()["items"].clone();
+        let items = full.as_array_mut().unwrap();
+        assert!(items.len() >= 2, "fixture holds full boxes");
+        // One box is over a week old, the rest are fresh.
+        items[0]["creationHeight"] = serde_json::json!(HEIGHT - RECENT_ROUND_BLOCKS - 1);
+        for f in items.iter_mut().skip(1) {
+            f["creationHeight"] = serde_json::json!(HEIGHT - 10);
+        }
+        let with = |full: serde_json::Value| {
+            let json = serde_json::json!({
+                "half_boxes": serde_json::from_str::<serde_json::Value>(HALF).unwrap(),
+                "full_boxes": full,
+                "fee_boxes": serde_json::from_str::<serde_json::Value>(FEE).unwrap(),
+                "token_boxes": serde_json::from_str::<serde_json::Value>(TOKEN).unwrap(),
+                "height": HEIGHT,
+            });
+            ChainView::parse(&json.to_string()).unwrap()
+        };
+        let v = with(full.clone());
+        let parsed = v.full.len();
+        assert!(parsed >= 2, "{parsed} full boxes parsed");
+        let rings = ring_stats(&v);
+        let depth: u64 = rings.iter().map(|r| r["depth"].as_u64().unwrap()).sum();
+        let recent: u64 = rings.iter().map(|r| r["recent_rounds"].as_u64().unwrap()).sum();
+        assert_eq!(depth, parsed as u64, "every full box counts towards one ring's depth");
+        assert_eq!(recent, parsed as u64 - 1, "the old box is not recent");
+        assert!(rings.iter().all(|r| r.get("waiting").is_some() && r.get("depth").is_some()));
+        // Without full boxes every ring is empty; with them, rings seen
+        // only among full boxes are listed with nobody waiting.
+        let half_only = ring_stats(&with(serde_json::json!([])));
+        assert!(half_only.iter().all(|r| r["depth"].as_u64() == Some(0)));
+        assert!(rings.len() >= half_only.len());
     }
 
     fn view(half: &str, full: Vec<Eip12InputBox>) -> ChainView {
