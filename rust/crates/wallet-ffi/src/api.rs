@@ -1011,6 +1011,34 @@ fn resolve_send_token(
     }
 }
 
+/// A recipient's tokens: the `tokens` array when it has any, else the
+/// single `token_id`/`token_amount` pair. The two shapes are alternatives,
+/// never added together. A caller sending one token writes both, so that
+/// the single-recipient path can read the pair, and summing them would
+/// send twice what was asked for.
+fn parse_recipient_tokens(rcpt: &serde_json::Value) -> Result<Vec<(String, u64)>, String> {
+    if let Some(list) = rcpt["tokens"].as_array() {
+        if !list.is_empty() {
+            let mut tokens = Vec::with_capacity(list.len());
+            for t in list {
+                if let Some(pair) = resolve_send_token(
+                    t["token_id"].as_str().map(|id| id.to_string()),
+                    t["amount"].as_u64(),
+                )? {
+                    tokens.push(pair);
+                }
+            }
+            return Ok(tokens);
+        }
+    }
+    Ok(resolve_send_token(
+        rcpt["token_id"].as_str().map(|id| id.to_string()),
+        rcpt["token_amount"].as_u64(),
+    )?
+    .into_iter()
+    .collect())
+}
+
 fn resolve_spend_addresses(sender: &str, extra: &[String]) -> Vec<String> {
     let mut spend = extra
         .iter()
@@ -2037,11 +2065,12 @@ pub async fn sign_preparation(handle_id: u64, preparation_id: u64) -> Result<Str
 struct ParsedRecipient {
     address: String,
     amount_nano_erg: i64,
-    token: Option<(String, u64)>,
+    tokens: Vec<(String, u64)>,
 }
 
 /// Prepare a multi-recipient send. Each element of `recipients_json` is a JSON
-/// object: `{"address":"...","amount_nano_erg":123,"token_id":"...","token_amount":456}`.
+/// object: `{"address":"...","amount_nano_erg":123,"tokens":[{"token_id":"...","amount":456}]}`;
+/// a single `token_id`/`token_amount` pair is accepted too.
 /// At least one recipient must carry ERG or tokens. The change goes to
 /// `change_address`. Supports all `prepare_send` options (fee_nano, etc.).
 #[flutter_rust_bridge::frb]
@@ -2083,10 +2112,7 @@ pub async fn prepare_send_multi(
         let addr = rcpt["address"].as_str().ok_or_else(|| {
             ArgusError::TxBuildFailed("recipient missing address".into()).to_json_string()
         })?;
-        let token = resolve_send_token(
-            rcpt["token_id"].as_str().map(|id| id.to_string()),
-            rcpt["token_amount"].as_u64(),
-        )?;
+        let tokens = parse_recipient_tokens(&rcpt)?;
         let mut amount = match rcpt.get("amount_nano_erg") {
             None | Some(serde_json::Value::Null) => 0,
             Some(value) => value.as_i64().ok_or_else(|| {
@@ -2094,7 +2120,7 @@ pub async fn prepare_send_multi(
                     .to_json_string()
             })?,
         };
-        if token.is_some() {
+        if !tokens.is_empty() {
             if amount < MIN_BOX_VALUE_NANO {
                 amount = MIN_BOX_VALUE_NANO;
             }
@@ -2111,11 +2137,11 @@ pub async fn prepare_send_multi(
         parsed.push(ParsedRecipient {
             address: addr.to_string(),
             amount_nano_erg: amount,
-            token,
+            tokens,
         });
     }
 
-    let has_sent_tokens = parsed.iter().any(|rcpt| rcpt.token.is_some());
+    let has_sent_tokens = parsed.iter().any(|rcpt| !rcpt.tokens.is_empty());
     if total_send_erg <= 0 && !has_sent_tokens {
         return Err(ArgusError::TxBuildFailed(
             "at least one recipient must receive ERG or tokens".into(),
@@ -2131,7 +2157,7 @@ pub async fn prepare_send_multi(
         recipient_specs.push(ergo_tx::RecipientSpec {
             ergo_tree: tree,
             amount_nano_erg: rcpt.amount_nano_erg,
-            token: rcpt.token.clone(),
+            tokens: rcpt.tokens.clone(),
         });
     }
 
@@ -2170,7 +2196,7 @@ pub async fn prepare_send_multi(
     // Collect tokens we need to cover
     let mut needed_tokens: HashMap<String, u64> = HashMap::new();
     for rcpt in &parsed {
-        if let Some((id, amt)) = &rcpt.token {
+        for (id, amt) in &rcpt.tokens {
             let entry = needed_tokens.entry(id.clone()).or_insert(0);
             *entry = entry.checked_add(*amt).ok_or_else(|| {
                 ArgusError::TxBuildFailed("token requirement out of range".into()).to_json_string()
@@ -2307,8 +2333,9 @@ pub async fn prepare_send_multi(
             serde_json::json!({
                 "address": rcpt.address,
                 "amount_nano_erg": rcpt.amount_nano_erg,
-                "token_id": rcpt.token.as_ref().map(|(id, _)| id),
-                "token_amount": rcpt.token.as_ref().map(|(_, amt)| amt),
+                "token_id": rcpt.tokens.first().map(|(id, _)| id),
+                "token_amount": rcpt.tokens.first().map(|(_, amt)| amt),
+                "tokens": rcpt.tokens.iter().map(|(id, amt)| serde_json::json!({"token_id": id, "amount": amt})).collect::<Vec<_>>(),
             })
         })
         .collect();
@@ -3783,6 +3810,51 @@ pub async fn amm_build_swap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_recipients_token_shapes_are_alternatives_not_a_sum() {
+        // The app writes both shapes when a recipient gets one token, so
+        // that the single-recipient path can read the pair. Reading both
+        // would send twice what was asked for.
+        let both = serde_json::json!({
+            "address": "9x",
+            "tokens": [{"token_id": "tok_a", "amount": 250}],
+            "token_id": "tok_a",
+            "token_amount": 250,
+        });
+        assert_eq!(
+            parse_recipient_tokens(&both).unwrap(),
+            vec![("tok_a".to_string(), 250)]
+        );
+        // Several tokens in one box come through in order.
+        let many = serde_json::json!({
+            "tokens": [{"token_id": "tok_a", "amount": 1}, {"token_id": "tok_b", "amount": 2}],
+            "token_id": "tok_a",
+            "token_amount": 1,
+        });
+        assert_eq!(
+            parse_recipient_tokens(&many).unwrap(),
+            vec![("tok_a".to_string(), 1), ("tok_b".to_string(), 2)]
+        );
+        // The pair alone still works, and no tokens at all is fine.
+        let pair = serde_json::json!({"token_id": "tok_a", "token_amount": 7});
+        assert_eq!(
+            parse_recipient_tokens(&pair).unwrap(),
+            vec![("tok_a".to_string(), 7)]
+        );
+        assert!(parse_recipient_tokens(&serde_json::json!({"address": "9x"}))
+            .unwrap()
+            .is_empty());
+        assert!(parse_recipient_tokens(&serde_json::json!({"tokens": []}))
+            .unwrap()
+            .is_empty());
+        // A half-written pair is still refused rather than dropped.
+        assert!(parse_recipient_tokens(&serde_json::json!({"token_id": "tok_a"})).is_err());
+        assert!(parse_recipient_tokens(&serde_json::json!({
+            "tokens": [{"token_id": "tok_a"}]
+        }))
+        .is_err());
+    }
 
     #[test]
     fn mix_miner_fee_defaults_and_refuses_below_the_minimum() {
