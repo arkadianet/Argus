@@ -19,6 +19,7 @@ import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/duckpools_service.dart';
+import '../services/sigmafi_service.dart';
 import '../services/mix_service.dart';
 import '../services/stealth_service.dart';
 import '../services/sigmausd_service.dart';
@@ -1372,6 +1373,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                         'Lend and borrow on Ergo. Read-only for now.',
                     icon: Icons.water_outlined,
                     onTap: () => _go('/duckpools'),
+                  ),
+                  _discoverCard(
+                    title: 'SigmaFi',
+                    onLearn: () => _go('/sigmafi'),
+                    subtitle: sigmafiService.positionLine() ?? 'Peer-to-peer loans against collateral: lend, or ask.',
+                    icon: Icons.handshake_outlined,
+                    onTap: () => _go('/sigmafi'),
                   ),
                   _discoverCard(
                     title: 'Mix',

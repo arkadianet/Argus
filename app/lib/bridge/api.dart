@@ -971,3 +971,70 @@ String duckpoolsOrderOutcome({
   proxyBoxId: proxyBoxId,
   txJson: txJson,
 );
+
+/// The loan assets SigmaFi lists, each with the order and bond scripts
+/// whose boxes make up the market. Pure.
+String sigmafiContracts() => RustLib.instance.api.crateApiSigmafiContracts();
+
+/// Boxes under the SigmaFi scripts (explorer or node JSON, one array)
+/// read into open orders and active bonds at `height`. Pure.
+String sigmafiMarket({
+  required String boxesJson,
+  required PlatformInt64 height,
+}) => RustLib.instance.api.crateApiSigmafiMarket(
+  boxesJson: boxesJson,
+  height: height,
+);
+
+/// Prepare a loan request: the collateral into an order box the wallet's
+/// `user_address` key can cancel. Confirm with `send_erg`.
+Future<String> sigmafiPrepareOpen({
+  required BigInt handleId,
+  required String loanAsset,
+  required PlatformInt64 principal,
+  required PlatformInt64 repayment,
+  required PlatformInt64 termBlocks,
+  required PlatformInt64 collateralErg,
+  required String collateralTokensJson,
+  required String userAddress,
+  required List<String> spendAddresses,
+  required String changeAddress,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiSigmafiPrepareOpen(
+  handleId: handleId,
+  loanAsset: loanAsset,
+  principal: principal,
+  repayment: repayment,
+  termBlocks: termBlocks,
+  collateralErg: collateralErg,
+  collateralTokensJson: collateralTokensJson,
+  userAddress: userAddress,
+  spendAddresses: spendAddresses,
+  changeAddress: changeAddress,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+);
+
+/// Prepare one of the spends of a SigmaFi box: `cancel` an order of this
+/// wallet, `close` (fill) anyone's order as the lender, `repay` a bond
+/// this wallet borrowed, or `liquidate` a matured bond this wallet lent.
+/// `box_json` is the box as the explorer or node returned it. The
+/// interface fee a fill pays goes to Argus. Confirm with `send_erg`.
+Future<String> sigmafiPrepareSpend({
+  required BigInt handleId,
+  required String action,
+  required String boxJson,
+  required String userAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+  PlatformInt64? feeNano,
+}) => RustLib.instance.api.crateApiSigmafiPrepareSpend(
+  handleId: handleId,
+  action: action,
+  boxJson: boxJson,
+  userAddress: userAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
+  feeNano: feeNano,
+);
