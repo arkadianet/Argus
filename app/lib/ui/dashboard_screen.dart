@@ -19,6 +19,7 @@ import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/duckpools_service.dart';
+import '../services/sigmafi_service.dart';
 import '../services/mix_service.dart';
 import '../services/stealth_service.dart';
 import '../services/sigmausd_service.dart';
@@ -121,6 +122,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     _sync.addListener(_onSyncChanged);
     mixService.addListener(_onSyncChanged);
     duckpoolsService.addListener(_onDuckpoolsChanged);
+    // The SigmaFi card reads its subtitle from the service, so it has to
+    // hear about a loan posted or repaid the way the Duckpools card does.
+    sigmafiService.addListener(_onDuckpoolsChanged);
     deepLinkController.addListener(_onDeepLink);
     _pollTimer = Timer.periodic(_pollInterval, (_) => _pollTick());
     _probeTimer = Timer.periodic(_probeInterval, (_) => _probeTick());
@@ -263,6 +267,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     _sync.removeListener(_onSyncChanged);
     mixService.removeListener(_onSyncChanged);
     duckpoolsService.removeListener(_onDuckpoolsChanged);
+    sigmafiService.removeListener(_onDuckpoolsChanged);
     deepLinkController.removeListener(_onDeepLink);
     _pinCtrl.dispose();
     super.dispose();
@@ -311,6 +316,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     stealthService.reset();
     mixService.reset();
     duckpoolsService.reset();
+    sigmafiService.clearIfForeign();
     _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
   }
 
@@ -472,6 +478,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     stealthService.reset();
     mixService.reset();
     duckpoolsService.reset();
+    sigmafiService.clearIfForeign();
     unawaited(stealthService.loadAddress());
     unawaited(mixService.load());
     unawaited(duckpoolsService.load());
@@ -1401,6 +1408,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                     subtitle: 'Send ERG and tokens to Cardano, Bitcoin, Ethereum and more.',
                     icon: Icons.swap_calls,
                     onTap: () => _go('/rosen'),
+                  ),
+                  _discoverCard(
+                    title: 'SigmaFi',
+                    onLearn: () => _go('/sigmafi'),
+                    subtitle: sigmafiService.positionLine() ?? 'Peer-to-peer loans against collateral: lend, or ask.',
+                    icon: Icons.handshake_outlined,
+                    onTap: () => _go('/sigmafi'),
                   ),
                   _discoverCard(
                     title: 'Mix',
