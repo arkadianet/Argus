@@ -1022,9 +1022,31 @@ class DuckpoolsService extends ChangeNotifier {
     }
     await prefs.setString(
       _watchKey(walletId),
-      jsonEncode({'addresses': addresses, 'alerted': next, 'checked_at': DateTime.now().millisecondsSinceEpoch}),
+      jsonEncode({
+        'addresses': addresses,
+        'alerted': next,
+        'has_loans': loans.isNotEmpty,
+        'checked_at': DateTime.now().millisecondsSinceEpoch,
+      }),
     );
-    await _schedule?.call(loans.isNotEmpty);
+    // The job watches every wallet, so it stays registered while any of
+    // them has a loan: reading a wallet with none must not stop watching
+    // another wallet's.
+    await _schedule?.call(_anyWatchedLoans(prefs));
+  }
+
+  /// Whether any wallet's watch record says it has a loan.
+  static bool _anyWatchedLoans(SharedPreferences prefs) {
+    for (final key in prefs.getKeys().where((k) => k.startsWith(_watchPrefix))) {
+      final raw = prefs.getString(key);
+      if (raw == null) continue;
+      try {
+        if (((jsonDecode(raw) as Map).cast<String, dynamic>()['has_loans']) == true) return true;
+      } catch (_) {
+        // A record we cannot read says nothing either way.
+      }
+    }
+    return false;
   }
 
   static String _alertTitle(DuckAlertLevel level, DuckLoan l) => switch (level) {

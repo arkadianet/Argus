@@ -701,8 +701,15 @@ void main() {
     expect(notified.last, 'loan-1 Loan can be liquidated');
     expect(gw.lastLoanAddresses, ['9me']);
 
-    // Once the loan is gone the job is cancelled.
+    // Another wallet with no loans must not stop watching this one's.
     myLoan['borrower'] = '9someone';
+    gw.wallet = 'w2';
+    await svc.refreshLoans(const ['9other'], walletId: 'w2');
+    expect(svc.loans, isEmpty);
+    expect(scheduled.last, isTrue, reason: 'wallet w1 still has a loan to watch');
+    gw.wallet = 'w1';
+
+    // Once the loan is gone the job is cancelled.
     await svc.tickHeadless();
     expect(scheduled.last, isFalse);
   });
