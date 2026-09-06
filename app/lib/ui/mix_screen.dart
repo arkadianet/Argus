@@ -260,6 +260,8 @@ class _MixScreenState extends State<MixScreen> {
               'A mix is only as private as the node Argus talks to: that node '
               'sees which pool boxes are yours and where the money ends up, so '
               'use your own node for mixing if you can (Settings → Network). '
+              'The mix records on this phone (boxes, rounds, destination) are '
+              'stored unencrypted for now; the seed and the keys are not. '
               'Some app stores do not allow a wallet with a built-in mixer, so '
               'this stays off unless you choose it. You can turn it off again '
               'in Settings → Security.',
@@ -459,13 +461,28 @@ String ringSubtitle({required int value, required int waiting, required int? ope
   return pct >= 5 ? '$who · $cost, expensive for this amount' : '$who · $cost';
 }
 
+/// How long a half box has waited since its last event, and after two
+/// days a nudge towards Reclaim. Empty when the wait is under an hour,
+/// the events carry no time, or the clock went backwards.
+String waitingHint(List<Map<String, dynamic>> events, DateTime now) {
+  final at = events.isEmpty ? null : (events.last['at'] as num?)?.toInt();
+  if (at == null) return '';
+  final waited = now.difference(DateTime.fromMillisecondsSinceEpoch(at * 1000));
+  if (waited.inHours < 1) return '';
+  final how = waited.inDays >= 1
+      ? ' Waiting ${waited.inDays} ${waited.inDays == 1 ? 'day' : 'days'}.'
+      : ' Waiting ${waited.inHours} ${waited.inHours == 1 ? 'hour' : 'hours'}.';
+  final nudge = waited.inDays >= 2 ? ' The pool is thin; Reclaim takes it back, minus the mixing tokens.' : '';
+  return '$how$nudge';
+}
+
 /// What a mix is doing, in words the user can act on.
 String mixPhaseText(MixRecord r) {
   switch (r.phaseKind) {
     case 'pending':
       return 'Funded but not in the pool yet. Continue to enter.';
     case 'half_posted':
-      return 'Waiting for someone to join. Round ${r.roundsDone + 1} of ${r.roundsTarget}.';
+      return 'Waiting for someone to join. Round ${r.roundsDone + 1} of ${r.roundsTarget}.${waitingHint(r.events, DateTime.now())}';
     case 'full_owned':
       if (r.needsDestination) return 'Recovered from your seed. Choose where it should go.';
       if (r.readyToWithdraw) return 'Rounds done. Withdrawing on the next check.';
@@ -588,8 +605,7 @@ class _StartMixSheet extends StatefulWidget {
 
 class _StartMixSheetState extends State<_StartMixSheet> {
   late List<({int value, int waiting})> _rings;
-  late List<({int level, int price})> _levels;
-  late int _rate;
+  late List<({int level, int price, int rate})> _levels;
   int? _denomination;
   int? _level;
   int _rounds = 3;
@@ -611,9 +627,14 @@ class _StartMixSheetState extends State<_StartMixSheet> {
     _rings = [for (final v in values) (value: v, waiting: seen[v]!)];
     _levels = [
       for (final l in (widget.pool['token_levels'] as List? ?? const []))
-        (level: ((l as Map)['level'] as num).toInt(), price: (l['price_nano_erg'] as num).toInt()),
+        (
+          level: ((l as Map)['level'] as num).toInt(),
+          price: (l['price_nano_erg'] as num).toInt(),
+          // The rate of the box that sells this level; the pool-wide rate
+          // is the fallback for a level answer without one.
+          rate: (l['rate'] as num?)?.toInt() ?? (widget.pool['token_rate'] as num?)?.toInt() ?? 0,
+        ),
     ];
-    _rate = (widget.pool['token_rate'] as num?)?.toInt() ?? 0;
     // Prefer a ring with someone waiting, and the cheapest token batch.
     final waiting = _rings.where((r) => r.waiting > 0).toList();
     _denomination = (waiting.isNotEmpty ? waiting.first : _rings.first).value;
@@ -624,10 +645,10 @@ class _StartMixSheetState extends State<_StartMixSheet> {
   /// batch: the batch price plus the pool's cut of the amount.
   int? _operatorFee(int value) {
     final level = _level;
-    if (level == null || _rate <= 0) return null;
+    if (level == null) return null;
     final batch = _levels.where((l) => l.level == level).firstOrNull;
-    if (batch == null) return null;
-    return batch.price + value ~/ _rate;
+    if (batch == null || batch.rate <= 0) return null;
+    return batch.price + value ~/ batch.rate;
   }
 
   @override

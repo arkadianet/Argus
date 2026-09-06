@@ -265,8 +265,10 @@ pub struct OperatorFee {
 }
 
 impl OperatorFee {
+    /// The fee as a whole; `i64::MAX` when a hostile price would overflow,
+    /// so a cap check above it fails rather than wraps.
     pub fn total(&self) -> i64 {
-        self.batch_price + self.proportional
+        self.batch_price.saturating_add(self.proportional)
     }
 }
 
@@ -281,8 +283,19 @@ pub fn operator_fee(
             "token emission box has a non-positive rate".into(),
         ));
     }
+    if level < 1 {
+        return Err(ZeroJoinError::Invalid(format!(
+            "a mix buys at least one token, not {level}"
+        )));
+    }
+    let batch_price = token_box.batch_price(level)?;
+    if batch_price < 0 || denomination <= 0 {
+        return Err(ZeroJoinError::Invalid(
+            "token emission box names a negative price".into(),
+        ));
+    }
     Ok(OperatorFee {
-        batch_price: token_box.batch_price(level)?,
+        batch_price,
         proportional: denomination / token_box.rate as i64,
     })
 }

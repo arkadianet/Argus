@@ -117,7 +117,7 @@ class ScriptedGateway implements MixGateway {
   @override
   Future<String> recover(String c, int n) async => jsonEncode(recovered);
   @override
-  Future<void> notify({required String title, required String body}) async {}
+  Future<void> notify({required String title, required String body, int? mixId}) async {}
   @override
   Future<String> observeWithKey(String s, String c, String k, int n) async => s;
   @override
