@@ -2447,7 +2447,14 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
     // What the wallet's balance moves by once the mempool shows this
     // transaction: outputs back to us minus the inputs we spent. The app
     // shows the row and the figure at once instead of waiting for a poll.
-    let wallet_delta = wallet_delta_nano_erg(handle_id, &prep.unsigned_tx, &prep.ergo_boxes);
+    // Only for an ordinary spend: a stealth sweep or a mix move spends
+    // boxes outside the public balance, so no figure is offered and the
+    // node's view is waited for.
+    let wallet_delta = if prep.stealth_trees.is_empty() && prep.mix_proofs.is_empty() {
+        Some(wallet_delta_nano_erg(handle_id, &prep.unsigned_tx, &prep.ergo_boxes))
+    } else {
+        None
+    };
 
     serde_json::to_string(&serde_json::json!({
         "tx_id": tx_id,

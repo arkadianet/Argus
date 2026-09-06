@@ -950,6 +950,9 @@ class _DashboardScreenState extends State<DashboardScreen>
       // unlocked: take it as the home wallet without a second unlock.
       if (walletService.isUnlocked && walletService.activeWalletId == switchedTo) {
         _walletId = switchedTo;
+        // Nothing of the previous wallet may carry over: its rows, its
+        // figures, or a broadcast it made moments ago.
+        _sync.reset();
         await sessionLock.run(() async {
           await _refreshUnlockMethods();
           await _afterUnlock();
