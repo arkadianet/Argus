@@ -1095,7 +1095,8 @@ class DuckpoolsService extends ChangeNotifier {
     return switch (level) {
       DuckAlertLevel.watch => 'Your ${l.ticker} loan\'s collateral ratio is $ratio; liquidation opens at $threshold. Add collateral or repay part to be safe.',
       DuckAlertLevel.danger => 'Your ${l.ticker} loan\'s collateral ratio is $ratio, close to the $threshold threshold. Add collateral or repay now.',
-      DuckAlertLevel.liquidatable => 'Your ${l.ticker} loan\'s collateral ratio is under the $threshold threshold. Anyone can liquidate it; repay or add collateral at once.',
+      // Liquidation also opens at the forced height, whatever the ratio.
+      DuckAlertLevel.liquidatable => 'Your ${l.ticker} loan can be liquidated now: its collateral ratio is $ratio against the $threshold threshold. Repay or add collateral at once.',
     };
   }
 

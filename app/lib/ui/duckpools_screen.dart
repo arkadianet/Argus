@@ -1137,7 +1137,11 @@ class _BorrowSheetState extends State<_BorrowSheet> {
 
   int? get _loanUnits => parseDuckAmount(_loan.text, widget.state.decimals);
   int? get _collateralUnits => parseDuckAmount(_collateral.text, _collateralDecimals);
-  double? get _ratioPercent => double.tryParse(_ratio.text.trim());
+  /// The typed ratio when it is a usable number: finite and positive.
+  double? get _ratioPercent {
+    final r = double.tryParse(_ratio.text.trim());
+    return r != null && r.isFinite && r > 0 ? r : null;
+  }
 
   /// What the wallet can lock: spendable ERG less room for the fees, or
   /// the token held.
@@ -1175,11 +1179,6 @@ class _BorrowSheetState extends State<_BorrowSheet> {
       _error = null;
       if (c == null || l == null) return;
       final min = _thresholdRaw == null ? null : minimumRatioPercent(_thresholdRaw!);
-      final ratio = _ratioPercent;
-      if (min != null && ratio != null && ratio < min) {
-        _error = 'Open at ${min.toStringAsFixed(0)}% or more: the threshold is ${(_thresholdRaw! / 10).toStringAsFixed(0)}% and the price can move before the fill.';
-        return;
-      }
       if (c > _available) {
         _error = _asset == null
             ? 'That needs ${formatErg(c)} of collateral; ${formatErg(_available)} is spendable after fees.'
@@ -1187,13 +1186,22 @@ class _BorrowSheetState extends State<_BorrowSheet> {
         return;
       }
       try {
-        _quote = duckpoolsService.loanQuote(
+        final q = duckpoolsService.loanQuote(
           poolKey: widget.state.pool,
           kind: 'borrow',
           amount: l,
           collateralAsset: _asset?.asset ?? '',
           collateralAmount: c,
         );
+        // The ratio the quote would really open at (fees and price impact
+        // in), not what the field says or the linear estimate.
+        final opensAt = collateralRatioPercent(collateralValue: (q['collateral_value'] as num).toInt(), owed: l);
+        if (min != null && opensAt < min) {
+          _error = 'This opens at ${opensAt.toStringAsFixed(0)}%; open at ${min.toStringAsFixed(0)}% or more, since the threshold is '
+              '${(_thresholdRaw! / 10).toStringAsFixed(0)}% and the price can move before the fill.';
+          return;
+        }
+        _quote = q;
       } catch (e) {
         _error = e.toString().replaceFirst('Bad state: ', '');
       }
@@ -1211,8 +1219,18 @@ class _BorrowSheetState extends State<_BorrowSheet> {
     final price = _unitPrice;
     final q = _quote;
     final ratio = _ratioPercent;
-    // The most the available collateral could borrow at the chosen ratio.
-    final maxLoan = price == null || ratio == null || ratio <= 0 ? null : (_available / _pow10(_collateralDecimals) * price / (ratio / 100)).floor();
+    // The most the available collateral could borrow at the chosen ratio:
+    // the rounding that sizes the collateral must not tip it past what is
+    // available, so the candidate steps down until it fits.
+    int? maxLoan;
+    if (price != null && ratio != null) {
+      var candidate = (_available / _pow10(_collateralDecimals) * price / (ratio / 100)).floor();
+      for (var i = 0; i < 4 && candidate > 0; i++) {
+        if (collateralForRatio(loan: candidate, ratioPercent: ratio, unitPrice: price, collateralDecimals: _collateralDecimals) <= _available) break;
+        candidate -= 1;
+      }
+      maxLoan = candidate > 0 ? candidate : null;
+    }
     String amt(num units) => '${formatTokenAmountGrouped(units.toInt(), s.decimals)} ${s.ticker}';
     final priceText = _asset == null
         ? '1 ERG counts as ${amt(m.ergValue ?? 0)}'
@@ -1266,7 +1284,7 @@ class _BorrowSheetState extends State<_BorrowSheet> {
                     ? null
                     : TextButton(
                         onPressed: () {
-                          _loan.text = formatTokenAmount(maxLoan, s.decimals).replaceAll(',', '');
+                          _loan.text = formatTokenAmount(maxLoan!, s.decimals).replaceAll(',', '');
                           _setCollateralFromRatio();
                           _requote();
                         },
