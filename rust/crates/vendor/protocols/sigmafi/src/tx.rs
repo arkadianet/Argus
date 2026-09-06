@@ -281,6 +281,14 @@ pub fn build_repay(
     let asset = loan_asset_of_bond(&bond_box.ergo_tree)
         .ok_or(SigmaFiTxError::NotProtocolBox("bond"))?;
     let bond = parse_bond(bond_box, &asset, height)?;
+    // From the maturity height the contract takes the lender's branch;
+    // a repayment built now would be rejected.
+    if bond.blocks_remaining <= 0 {
+        return Err(SigmaFiTxError::Invalid(format!(
+            "the bond matured {} blocks ago; only the lender can spend it now",
+            -bond.blocks_remaining
+        )));
+    }
     if miner_fee <= 0 {
         return Err(SigmaFiTxError::Invalid("miner fee".into()));
     }
@@ -653,6 +661,17 @@ mod tests {
         assert_eq!(back.value, bond.value);
         assert!(same_assets(&back.assets, &bond.assets));
         assert_eq!(sum_in(&tx), sum_out(&tx));
+    }
+
+    #[test]
+    fn repay_is_refused_from_the_maturity_height() {
+        let bond = &bonds_erg()[0];
+        let parsed = parse_bond(bond, ERG, 0).unwrap();
+        let u = [utxo(1, parsed.repayment as i64 + 1_000_000_000, vec![])];
+        assert!(build_repay(bond, &u, parsed.maturity_height - 1, MINER_FEE).is_ok());
+        let at = build_repay(bond, &u, parsed.maturity_height, MINER_FEE);
+        assert!(matches!(at, Err(SigmaFiTxError::Invalid(_))));
+        assert!(build_repay(bond, &u, parsed.maturity_height + 5, MINER_FEE).is_err());
     }
 
     #[test]

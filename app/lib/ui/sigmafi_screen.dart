@@ -579,12 +579,16 @@ class _RequestTabState extends State<_RequestTab> {
         ),
         for (final t in _tokens) ...[
           const SizedBox(height: 12),
+          // Keyed by the row: removing an earlier row must not hand its
+          // form state to the next one.
           Row(
+            key: ObjectKey(t),
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
               Expanded(
                 flex: 3,
                 child: DropdownButtonFormField<String>(
+                  key: ObjectKey(t),
                   initialValue: t.token?.id,
                   isExpanded: true,
                   decoration: const InputDecoration(labelText: 'Token'),

@@ -316,6 +316,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     stealthService.reset();
     mixService.reset();
     duckpoolsService.reset();
+    sigmafiService.clearIfForeign();
     _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
   }
 
@@ -477,6 +478,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     stealthService.reset();
     mixService.reset();
     duckpoolsService.reset();
+    sigmafiService.clearIfForeign();
     unawaited(stealthService.loadAddress());
     unawaited(mixService.load());
     unawaited(duckpoolsService.load());
