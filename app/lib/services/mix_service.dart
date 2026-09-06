@@ -63,6 +63,10 @@ class MixRecord {
   Map<String, dynamic> get phase => (state['phase'] as Map).cast<String, dynamic>();
   String get phaseKind => phase['kind'] as String? ?? '';
   String? get boxId => phase['box_id'] as String?;
+
+  /// The box the latest move spent, while that move is not yet seen on
+  /// chain; the engine falls back to it if the move is lost.
+  String? get previousBoxId => ((state['previous'] as Map?)?['phase'] as Map?)?['box_id'] as String?;
   int get denomination => ((state['ring'] as Map)['value'] as num).toInt();
   String? get ringTokenId => (state['ring'] as Map)['token_id'] as String?;
   int get roundsDone => (state['rounds_done'] as num?)?.toInt() ?? 0;
@@ -497,8 +501,12 @@ class MixService extends ChangeNotifier {
   /// Box ids of the mixes in the pool. A record whose phase somehow lacks
   /// one is left out rather than allowed to stop every other mix.
   List<String> get _activeBoxIds => [
-        for (final r in active)
+        for (final r in active) ...[
           if (r.boxId != null) r.boxId!,
+          // The engine needs to see whether the box a pending move spent is
+          // still unspent, to tell a lost move from a slow one.
+          if (r.previousBoxId != null) r.previousBoxId!,
+        ],
       ];
 
   int get _now => _clock().millisecondsSinceEpoch ~/ 1000;
@@ -1151,6 +1159,24 @@ class MixService extends ChangeNotifier {
     await _persist();
   }
 
+  /// Forget a staged entry that provably never went out.
+  Future<void> clearEntryAttempt(MixRecord record, {String? error}) async {
+    record.entryAttempt = null;
+    record.lastError = error;
+    await _persist();
+    notifyListeners();
+  }
+
+  /// Whether the chain (node or explorer) knows a box by id, spent or not.
+  Future<bool> boxOnChain(String boxId) async {
+    try {
+      final b = await _boxById(_explorerBase, boxId);
+      return b['boxId'] == boxId;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Record that a prepared entry was broadcast as `txId` (empty when the
   /// id was lost with a crash; the next check reads the box from chain).
   Future<void> commitEntry(MixRecord record, Map<String, dynamic> nextState, String txId) async {
@@ -1341,7 +1367,9 @@ class MixService extends ChangeNotifier {
       if (targets.isEmpty) continue;
       MixSnapshot snap;
       try {
-        snap = await snapshot(ownBoxIds: [for (final r in targets) r.boxId!]);
+        snap = await snapshot(ownBoxIds: [
+          for (final r in targets) ...[r.boxId!, if (r.previousBoxId != null) r.previousBoxId!],
+        ]);
       } catch (_) {
         continue;
       }
@@ -1420,10 +1448,11 @@ class MixService extends ChangeNotifier {
         final have = known[f.mixId];
         if (have == null) {
           fresh.add(f);
-        } else if (have.pending) {
+        } else if (have.pending || (have.inPool && f.boxId != null && f.boxId == have.previousBoxId)) {
           // The chain knows more than we do: the entry went out and the
-          // record never heard. Take the chain's phase, keep what only we
-          // know (destination, rounds wanted).
+          // record never heard, or a move the record believes in never
+          // confirmed and the box it spent is still ours. Take the chain's
+          // phase, keep what only we know (destination, rounds wanted).
           have.state = {
             ...f.state,
             'destination_ergo_tree': have.destinationErgoTree,

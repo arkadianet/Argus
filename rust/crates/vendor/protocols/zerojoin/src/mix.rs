@@ -119,6 +119,28 @@ pub struct MixEvent {
     pub tx_id: Option<String>,
 }
 
+/// Where the mix stood before its latest broadcast move, kept until the
+/// move's box is seen on chain. A move whose transaction never confirms
+/// (the counterpart reclaimed first, the node dropped it, the fee box
+/// copy was taken) leaves the old box ours and unspent; after
+/// [`LOST_MOVE_GRACE_SECS`] with the new box unseen and the old one still
+/// unspent, [`observe`] rolls the state back here so the next plan
+/// rebuilds the move.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviousStep {
+    pub phase: MixPhase,
+    pub round: u32,
+    pub rounds_done: u32,
+    /// When the move was broadcast.
+    pub at: i64,
+}
+
+/// How long a broadcast move may stay unseen before it counts as lost:
+/// long enough for a mempool transaction to confirm or be dropped.
+/// Rolling back sooner would double-spend our own box while the move is
+/// still in the mempool.
+pub const LOST_MOVE_GRACE_SECS: i64 = 30 * 60;
+
 /// Everything the wallet persists about one mix. No secrets: see the
 /// module documentation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,6 +162,9 @@ pub struct MixState {
     pub created_at: i64,
     pub updated_at: i64,
     pub events: Vec<MixEvent>,
+    /// The step before the latest broadcast move, until its box is seen.
+    #[serde(default)]
+    pub previous: Option<PreviousStep>,
 }
 
 impl MixState {
@@ -163,6 +188,7 @@ impl MixState {
             created_at: now,
             updated_at: now,
             events: Vec::new(),
+            previous: None,
         }
     }
 
@@ -177,6 +203,20 @@ impl MixState {
     /// Record a transaction of ours and move to the phase it creates.
     pub fn after(mut self, applied: Applied, tx_id: &str, now: i64) -> Self {
         let action = applied.name();
+        let before = PreviousStep {
+            phase: self.phase.clone(),
+            round: self.round,
+            rounds_done: self.rounds_done,
+            at: now,
+        };
+        // A move out of the pool has no box to wait for, and an entry has
+        // no box to fall back to; a move within the pool keeps the box it
+        // spent until the new one is seen.
+        self.previous = match applied {
+            Applied::Withdrawn | Applied::Reclaimed => None,
+            _ if before.phase.box_id().is_none() => None,
+            _ => Some(before),
+        };
         match applied {
             Applied::EnteredAsAlice { half_box_id } => {
                 self.phase = MixPhase::HalfPosted {
@@ -225,6 +265,24 @@ impl MixState {
         self
     }
 
+    /// Undo the latest move: back to the box it spent, which is still ours.
+    fn rolled_back(mut self, now: i64) -> Self {
+        let Some(prev) = self.previous.take() else {
+            return self;
+        };
+        self.phase = prev.phase;
+        self.round = prev.round;
+        self.rounds_done = prev.rounds_done;
+        self.updated_at = now;
+        self.events.push(MixEvent {
+            at: now,
+            action: "rolled_back".to_string(),
+            round: self.round,
+            tx_id: None,
+        });
+        self
+    }
+
     /// Someone spent our half-mix box as Bob: the full-mix box holding our
     /// `gX` is now ours as Alice, and a round is done.
     pub fn joined_as_alice(mut self, full_box_id: String, now: i64) -> Self {
@@ -232,6 +290,7 @@ impl MixState {
             box_id: full_box_id,
             role: Role::Alice,
         };
+        self.previous = None;
         self.rounds_done += 1;
         self.updated_at = now;
         self.events.push(MixEvent {
@@ -449,7 +508,17 @@ pub enum Plan {
 /// Ownership is proved, not inferred from `gX`: both boxes of a round
 /// carry our `gX` (and anyone can mint a box that does, since `gX` is
 /// public in our half box), so only the box whose `c2 == c1^x` is ours.
-pub fn observe(state: MixState, view: &ChainView, secret: &MixSecret, now: i64) -> MixState {
+pub fn observe(mut state: MixState, view: &ChainView, secret: &MixSecret, now: i64) -> MixState {
+    // A broadcast move: confirmed (its box seen), lost (the box it spent
+    // still unspent after the grace), or not known yet.
+    let seen = |id: &str| view.half_by_id(id).is_some() || view.full_by_id(id).is_some();
+    if let (Some(prev), Some(current)) = (&state.previous, state.phase.box_id()) {
+        if seen(current) {
+            state.previous = None;
+        } else if now - prev.at >= LOST_MOVE_GRACE_SECS && prev.phase.box_id().is_some_and(seen) {
+            return state.rolled_back(now);
+        }
+    }
     let MixPhase::HalfPosted { box_id } = &state.phase else {
         return state;
     };
@@ -581,6 +650,7 @@ pub fn recover(
                         round,
                         tx_id: None,
                     }],
+                    previous: None,
                 });
                 continue;
             }
@@ -609,6 +679,7 @@ pub fn recover(
                         round,
                         tx_id: None,
                     }],
+                    previous: None,
                 });
             }
         }
@@ -786,6 +857,64 @@ mod tests {
                 role: Role::Alice
             }
         );
+    }
+
+    #[test]
+    fn a_move_whose_box_never_appears_is_rolled_back_after_the_grace() {
+        let x = test_secret(0, 0);
+        let bob = test_secret(91, 0);
+        let [_, ours] = synthetic_round(x.public_key(), &bob, PairOrder::BobFirst, RING, 19);
+        let full_id = ours.input.box_id.clone();
+        let owned = pending(20, 3)
+            .after(Applied::EnteredAsAlice { half_box_id: hex::encode([7u8; 32]) }, "tx1", NOW)
+            .joined_as_alice(full_id.clone(), NOW + 1);
+        assert_eq!(owned.previous, None);
+
+        // A remix as Alice is broadcast: the new half box is not seen yet.
+        let remixed = owned.clone().after(
+            Applied::RemixedAsAlice { half_box_id: hex::encode([8u8; 32]) },
+            "tx2",
+            NOW + 10,
+        );
+        assert_eq!(remixed.round, 1);
+        assert_eq!(remixed.previous.as_ref().map(|p| p.round), Some(0));
+        let x1 = test_secret(0, 1);
+        let old_still_there = view_with(vec![], vec![ours.clone()]);
+
+        // Within the grace: still in the mempool for all we know.
+        let soon = observe(remixed.clone(), &old_still_there, &x1, NOW + 10 + LOST_MOVE_GRACE_SECS - 1);
+        assert_eq!(soon, remixed);
+
+        // After the grace, the old box unspent: the move was lost.
+        let back = observe(remixed.clone(), &old_still_there, &x1, NOW + 10 + LOST_MOVE_GRACE_SECS);
+        assert_eq!(back.phase, owned.phase);
+        assert_eq!(back.round, 0);
+        assert_eq!(back.rounds_done, owned.rounds_done);
+        assert_eq!(back.previous, None);
+        assert_eq!(back.events.last().unwrap().action, "rolled_back");
+        assert!(matches!(plan(&back, &old_still_there, &[]), Plan::RemixAsAlice | Plan::Wait { .. }));
+
+        // After the grace but the old box spent (our move went through and
+        // the snapshot is just late): wait, never roll back.
+        let old_gone = view_with(vec![], vec![]);
+        let late = observe(remixed.clone(), &old_gone, &x1, NOW + 10 + LOST_MOVE_GRACE_SECS);
+        assert_eq!(late, remixed);
+
+        // The new box seen: the fallback is dropped.
+        let new_half = half(8, &x1, 19);
+        let new_seen = view_with(vec![new_half], vec![ours]);
+        let confirmed = observe(remixed, &new_seen, &x1, NOW + 20);
+        assert_eq!(confirmed.previous, None);
+        assert_eq!(confirmed.round, 1);
+    }
+
+    #[test]
+    fn states_without_a_previous_step_still_load() {
+        let v: serde_json::Value = serde_json::to_value(pending(20, 3)).unwrap();
+        let mut m = v.as_object().unwrap().clone();
+        m.remove("previous");
+        let s: MixState = serde_json::from_value(serde_json::Value::Object(m)).unwrap();
+        assert_eq!(s.previous, None);
     }
 
     #[test]
