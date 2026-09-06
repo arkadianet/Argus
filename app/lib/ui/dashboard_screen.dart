@@ -1394,6 +1394,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                     subtitle: 'Open any Ergo dApp with this wallet standing in for Nautilus.',
                     icon: Icons.language,
                     onTap: () => _go('/dapps'),
+                  ),
+                  _discoverCard(
                     title: 'Rosen bridge',
                     onLearn: () => _go('/rosen'),
                     subtitle: 'Send ERG and tokens to Cardano, Bitcoin, Ethereum and more.',

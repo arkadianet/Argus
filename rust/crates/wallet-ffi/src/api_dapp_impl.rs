@@ -32,7 +32,30 @@ pub fn parse_unsigned(tx_json: &str) -> Result<Eip12UnsignedTx, String> {
             input["extension"] = unwrapped;
         }
     }
-    serde_json::from_value(v).map_err(|e| ser_err(format!("unsigned transaction: {e}")))
+    let tx: Eip12UnsignedTx =
+        serde_json::from_value(v).map_err(|e| ser_err(format!("unsigned transaction: {e}")))?;
+    // Fail closed on a context extension the reducer would silently drop:
+    // a transaction signed without it would differ from the one the page
+    // built and computed its id from.
+    for input in &tx.inputs {
+        for (key, value) in &input.extension {
+            let bad = |why: &str| {
+                ArgusError::TxBuildFailed(format!(
+                    "input {} context extension {key:?} {why}",
+                    input.box_id
+                ))
+                .to_json_string()
+            };
+            if key.parse::<u8>().is_err() {
+                return Err(bad("is not a variable index (0-255)"));
+            }
+            let bytes = hex::decode(value).map_err(|_| bad("is not hex"))?;
+            use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
+            ergo_lib::ergotree_ir::mir::constant::Constant::sigma_parse_bytes(&bytes)
+                .map_err(|_| bad("is not a serialized constant"))?;
+        }
+    }
+    Ok(tx)
 }
 
 /// A data input as the reducer needs it, checked to hash back to its id.
@@ -56,8 +79,10 @@ pub fn node_json(b: &ErgoBox) -> Option<serde_json::Value> {
     serde_json::to_value(b).ok()
 }
 
-/// A wallet box in the shape `ergo.get_utxos()` returns.
-pub fn utxo_json(b: &Eip12InputBox) -> serde_json::Value {
+/// A wallet box in the shape `ergo.get_utxos()` returns. `confirmed` is
+/// false for an output of a transaction still in the mempool, which the
+/// wallet's box gathering includes for 0-conf chaining.
+pub fn utxo_json(b: &Eip12InputBox, confirmed: bool) -> serde_json::Value {
     serde_json::json!({
         "boxId": b.box_id,
         "transactionId": b.transaction_id,
@@ -70,7 +95,7 @@ pub fn utxo_json(b: &Eip12InputBox) -> serde_json::Value {
             "amount": a.amount,
         })).collect::<Vec<_>>(),
         "additionalRegisters": b.additional_registers,
-        "confirmed": true,
+        "confirmed": confirmed,
     })
 }
 
@@ -124,6 +149,11 @@ mod tests {
         assert_eq!(parse_unsigned(&flat).unwrap().inputs[0].extension["0"], "0400");
         let none = TX.replace(r#""extension": {"values": {"0": "0400"}}"#, r#""extension": null"#);
         assert!(parse_unsigned(&none).unwrap().inputs[0].extension.is_empty());
+        // Fail closed: a page's extension the reducer could not encode.
+        for bad in [r#"{"1": "zz"}"#, r#"{"x": "0400"}"#, r#"{"300": "0400"}"#, r#"{"0": "ff"}"#] {
+            let tx = TX.replace(r#"{"values": {"0": "0400"}}"#, bad);
+            assert!(parse_unsigned(&tx).is_err(), "{bad}");
+        }
         assert!(parse_unsigned("[]").is_err());
         assert!(parse_unsigned(r#"{"inputs": [{"boxId": 1}], "outputs": []}"#).is_err());
     }
@@ -131,10 +161,11 @@ mod tests {
     #[test]
     fn utxo_json_is_the_connector_shape() {
         let tx = parse_unsigned(TX).unwrap();
-        let j = utxo_json(&tx.inputs[0]);
+        let j = utxo_json(&tx.inputs[0], true);
         assert_eq!(j["boxId"], tx.inputs[0].box_id);
         assert_eq!(j["value"], "1000000000");
         assert_eq!(j["confirmed"], true);
+        assert_eq!(utxo_json(&tx.inputs[0], false)["confirmed"], false);
         assert!(j.get("extension").is_none());
     }
 }

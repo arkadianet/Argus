@@ -4236,6 +4236,61 @@ mod tests {
     }
 
     #[test]
+    fn dapp_prepare_sign_refuses_empty_and_foreign_transactions() {
+        let session: serde_json::Value =
+            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into()).unwrap()).unwrap();
+        let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
+        let own_tree = address_to_ergo_tree(&derive_address(handle_id, 0).unwrap()).unwrap();
+        let foreign_tree = "0008cd03a11d3028b9bc57b6ac724485e99960b89c278db6bab5d2b961b01aee29405a02";
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let tx_with = |tree: &str| {
+            let input = ergo_tx::Eip12InputBox {
+                box_id: String::new(),
+                transaction_id: "91".repeat(32),
+                index: 0,
+                value: "1000000000".into(),
+                ergo_tree: tree.into(),
+                assets: vec![],
+                creation_height: 1000,
+                additional_registers: Default::default(),
+                extension: Default::default(),
+            };
+            serde_json::json!({
+                "inputs": [{
+                    "boxId": box_id_of(&input),
+                    "transactionId": input.transaction_id, "index": 0, "value": input.value,
+                    "ergoTree": input.ergo_tree, "creationHeight": 1000, "assets": [], "additionalRegisters": {}
+                }],
+                "outputs": [{"value": "998900000", "ergoTree": tree, "creationHeight": 1000, "assets": [], "additionalRegisters": {}},
+                            {"value": "1100000", "ergoTree": citadel_core::constants::MINER_FEE_ERGO_TREE, "creationHeight": 1000, "assets": [], "additionalRegisters": {}}]
+            })
+            .to_string()
+        };
+        let err = |r: Result<String, String>| r.unwrap_err();
+        assert!(err(rt.block_on(dapp_prepare_sign(handle_id, r#"{"inputs": [], "outputs": []}"#.into(), None))).contains("no inputs"));
+        assert!(err(rt.block_on(dapp_prepare_sign(handle_id, tx_with(foreign_tree), None))).contains("another wallet"));
+        let ok: serde_json::Value = serde_json::from_str(&rt.block_on(dapp_prepare_sign(handle_id, tx_with(&own_tree), None)).unwrap()).unwrap();
+        assert!(ok["preparation_id"].as_u64().unwrap() > 0);
+        assert_eq!(ok["miner_fee"], 1_100_000);
+        assert_eq!(ok["summary"]["all_inputs_owned"], true);
+    }
+
+    /// The id ergo-lib gives a box with these fields: its JSON parser
+    /// checks the id and names the computed one when it differs.
+    fn box_id_of(input: &ergo_tx::Eip12InputBox) -> String {
+        let node = serde_json::json!({
+            "boxId": "00".repeat(32), "transactionId": input.transaction_id, "index": input.index,
+            "value": input.value.parse::<i64>().unwrap(), "ergoTree": input.ergo_tree,
+            "creationHeight": input.creation_height, "assets": [], "additionalRegisters": {},
+        });
+        let err = serde_json::from_value::<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>(node)
+            .err()
+            .expect("a zero id never matches")
+            .to_string();
+        err.rsplit(' ').next().unwrap().to_string()
+    }
+
+    #[test]
     fn create_restore_lock() {
         let session: serde_json::Value =
             serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into()).unwrap()).unwrap();
@@ -5502,6 +5557,17 @@ pub async fn dapp_utxos(
 ) -> Result<String, String> {
     let client = node_client(node_url).await?;
     let (_, eip12) = gather_unspent(handle_id, &client, &addresses).await?;
-    let list: Vec<serde_json::Value> = eip12.iter().map(crate::api_dapp_impl::utxo_json).collect();
+    // Which of them are in a block: the gathered set also holds this
+    // wallet's mempool outputs, and a page must not take those as settled.
+    let mut confirmed = std::collections::HashSet::new();
+    for addr in &addresses {
+        if let Ok(boxes) = client.get_unspent(addr).await {
+            confirmed.extend(boxes.1.into_iter().map(|b| b.box_id));
+        }
+    }
+    let list: Vec<serde_json::Value> = eip12
+        .iter()
+        .map(|b| crate::api_dapp_impl::utxo_json(b, confirmed.contains(&b.box_id)))
+        .collect();
     Ok(serde_json::Value::Array(list).to_string())
 }

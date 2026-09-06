@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -10,11 +11,29 @@ import '../services/ergopay_summary.dart';
 import '../services/network_controller.dart';
 import '../services/session_lock.dart';
 import '../services/wallet_service.dart';
+import '../services/wallet_sync_controller.dart';
+import 'widgets/error_sheet.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
 import 'widgets/soft_card.dart';
 
 /// A known dApp on the start page.
+/// Addresses a page may use as fresh ones: derived addresses without
+/// history, the receive address included when it has none.
+List<String> unusedAddressesOf({
+  required List<Map<String, dynamic>> used,
+  required List<String> frontier,
+  required String? receive,
+}) {
+  final withHistory = {for (final u in used) u['address']?.toString()};
+  final out = <String>[
+    for (final a in frontier)
+      if (!withHistory.contains(a)) a,
+  ];
+  if (receive != null && receive.isNotEmpty && !withHistory.contains(receive) && !out.contains(receive)) out.add(receive);
+  return out;
+}
+
 class DappEntry {
   const DappEntry(this.name, this.url, this.blurb);
   final String name;
@@ -51,6 +70,11 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
   bool _showStart = true;
   WalletRouteArgs? _args;
 
+  /// The nonce of the current navigation; only the main frame's connector
+  /// script knows it, so only that frame's messages are honoured.
+  String _nonce = '';
+  String? _injectError;
+
   @override
   void initState() {
     super.initState();
@@ -59,17 +83,19 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
       ..addJavaScriptChannel('ArgusBridge', onMessageReceived: (m) => _onMessage(m.message))
       ..setNavigationDelegate(NavigationDelegate(
         onPageStarted: (u) {
-          _web.runJavaScript(dappInjectedScript);
+          _nonce = _freshNonce();
           if (mounted) {
             setState(() {
               _loading = true;
               _current = u;
               _url.text = u;
+              _injectError = null;
             });
           }
+          _inject();
         },
         onPageFinished: (u) {
-          _web.runJavaScript(dappInjectedScript);
+          _inject();
           if (mounted) setState(() => _loading = false);
         },
         onUrlChange: (c) {
@@ -92,6 +118,22 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
     super.dispose();
   }
 
+  static String _freshNonce() {
+    final r = Random.secure();
+    return List.generate(16, (_) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  /// Inject the connector into the main frame. A failure leaves the page
+  /// without `ergoConnector`, so it is shown rather than swallowed.
+  Future<void> _inject() async {
+    try {
+      await _web.runJavaScript(dappInjectedScript(_nonce));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _injectError = 'The wallet connector could not be injected into this page: $e');
+    }
+  }
+
   void _open(String text) {
     var t = text.trim();
     if (t.isEmpty) return;
@@ -102,21 +144,17 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
     _web.loadRequest(uri);
   }
 
-  String get _origin {
-    final u = Uri.tryParse(_current ?? '');
-    return u == null || u.host.isEmpty ? '' : '${u.scheme}://${u.host}${u.hasPort ? ':${u.port}' : ''}';
-  }
+  String get _origin => originOf(_current);
 
   Future<void> _onMessage(String raw) async {
-    Map<String, dynamic> req;
-    try {
-      req = (jsonDecode(raw) as Map).cast<String, dynamic>();
-    } catch (_) {
-      return;
-    }
-    final id = req['id'];
-    final method = req['method'] as String? ?? '';
-    final params = (req['params'] as List?) ?? const [];
+    // The nonce is checked before anything else: a frame that does not
+    // know it (an iframe, a page that navigated away) gets no answer.
+    final req = parseBridgeMessage(raw, _nonce);
+    if (req == null) return;
+    final id = req.id;
+    final method = req.method;
+    final params = req.params;
+    if (_origin.isEmpty) return;
     bool ok;
     Object? payload;
     try {
@@ -156,23 +194,39 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
   @override
   Future<bool> confirmSign(String origin, Map<String, dynamic> summary, int preparationId) async {
     if (!mounted) return false;
+    if (!walletService.isUnlocked) {
+      await showErrorSheet(context, title: 'Wallet locked', message: 'The wallet locked before the page\'s transaction could be signed. Unlock Argus and ask the page again.');
+      return false;
+    }
     final s = ErgoPaySummary.fromJson(summary);
+    final warning = s.warning;
     final choice = await showConfirmTransactionChoice(
       context,
       title: 'Sign for $origin',
       confirmLabel: 'Sign',
-      rows: s.confirmRows(tokens: _args?.tokens ?? const []),
+      rows: [
+        if (warning != null) ConfirmTxRow('Read first', warning, bold: true),
+        ...s.confirmRows(tokens: _args?.tokens ?? const []),
+      ],
       recipientAddress: s.recipients.isNotEmpty ? s.recipients.first.address : null,
       detail: 'The page built this transaction. Argus signs it and hands it back; the page broadcasts it.',
       preparationId: preparationId,
+      broadcasts: false,
     );
     return choice == ConfirmChoice.broadcast;
   }
 
   @override
   List<String> get usedAddresses => _args?.historyAddresses ?? const [];
+
+  /// Derived addresses with no history yet: the frontier past the used
+  /// ones, and the receive address when it has none.
   @override
-  List<String> get unusedAddresses => [if (_args?.receiveAddress case final a? when !(usedAddresses.contains(a))) a];
+  List<String> get unusedAddresses => unusedAddressesOf(
+        used: walletSyncController.usedAddresses,
+        frontier: walletSyncController.frontierAddresses,
+        receive: _args?.receiveAddress,
+      );
   @override
   String get changeAddress => _args?.changeAddress ?? '';
   @override
@@ -194,7 +248,18 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
       (jsonDecode(await walletService.dappPrepareSign(txJson, nodeUrl: networkController.activeUrl)) as Map).cast<String, dynamic>();
 
   @override
-  Future<String> sign(int preparationId) => sessionLock.run(() => walletService.signPreparation(preparationId: preparationId));
+  Future<String> sign(int preparationId) async {
+    try {
+      return await sessionLock.run(() => walletService.signPreparation(preparationId: preparationId));
+    } catch (e) {
+      // The user approved a signature: a failure must be seen here, not
+      // only by the page.
+      if (mounted) {
+        await showErrorSheet(context, title: 'Could not sign for the page', message: e is String ? DappConnector.messageOf(e) : '$e');
+      }
+      rethrow;
+    }
+  }
 
   @override
   Future<String> submit(String signedTxJson) => walletService.submitSignedTransaction(signedTxJson, nodeUrl: networkController.activeUrl);
@@ -234,7 +299,11 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
             decoration: InputDecoration(
               hintText: 'Site address',
               isDense: true,
-              prefixIcon: connected ? const Icon(Icons.link, size: 18) : const Icon(Icons.public, size: 18),
+              prefixIcon: _injectError != null
+                  ? Tooltip(message: _injectError!, child: Icon(Icons.error_outline, size: 18, color: Theme.of(context).colorScheme.error))
+                  : connected
+                      ? const Icon(Icons.link, size: 18)
+                      : const Icon(Icons.public, size: 18),
               border: const OutlineInputBorder(),
               contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
             ),

@@ -121,7 +121,11 @@ List<Map<String, dynamic>> selectUtxos(List<Map<String, dynamic>> utxos, Map<Str
 
 BigInt? _big(dynamic v) {
   if (v == null) return null;
-  if (v is num) return BigInt.from(v);
+  if (v is int) return BigInt.from(v);
+  if (v is double) {
+    if (v != v.truncateToDouble()) throw DappError(DappError.invalidRequest, 'Not a whole amount: $v');
+    return BigInt.from(v);
+  }
   final s = v.toString();
   final n = BigInt.tryParse(s);
   if (n == null) throw DappError(DappError.invalidRequest, 'Not an amount: $s');
@@ -251,6 +255,9 @@ class DappConnector {
     throw DappError(DappError.invalidRequest, 'Unknown method $method.');
   }
 
+  /// The message inside an Argus error JSON, or the error's text.
+  static String messageOf(Object e) => _message(e);
+
   static String _message(Object e) {
     if (e is String) {
       try {
@@ -264,12 +271,47 @@ class DappConnector {
   }
 }
 
-/// The script injected into every page: `ergoConnector.nautilus` (and
-/// `ergoConnector.argus`) whose methods post to the `ArgusBridge` channel
+/// One request a page posted over the bridge.
+typedef BridgeMessage = ({Object? id, String method, List<dynamic> params});
+
+/// Parse a bridge message and check its nonce. Android hands the channel
+/// to every frame of the WebView, so a cross-origin iframe can post to it
+/// directly; only the main frame, where the connector script lives, knows
+/// the nonce of the current navigation. A message without it, with a
+/// stale one, or with no recognisable shape is dropped (null).
+BridgeMessage? parseBridgeMessage(String raw, String nonce) {
+  Map<String, dynamic> m;
+  try {
+    final d = jsonDecode(raw);
+    if (d is! Map) return null;
+    m = d.cast<String, dynamic>();
+  } catch (_) {
+    return null;
+  }
+  if (nonce.isEmpty || m['nonce'] != nonce) return null;
+  final method = m['method'];
+  if (method is! String || method.isEmpty) return null;
+  final params = m['params'];
+  return (id: m['id'], method: method, params: params is List ? params : const []);
+}
+
+/// The origin a page URL belongs to, or empty for anything but http(s).
+String originOf(String? url) {
+  final u = Uri.tryParse(url ?? '');
+  if (u == null || u.host.isEmpty || (u.scheme != 'https' && u.scheme != 'http')) return '';
+  return '${u.scheme}://${u.host}${u.hasPort ? ':${u.port}' : ''}';
+}
+
+/// The script injected into the main frame of every page:
+/// `ergoConnector.nautilus` (and `ergoConnector.argus`) whose methods post
+/// to the `ArgusBridge` channel, stamped with this navigation's `nonce`,
 /// and wait for `window.__argusDapp.resolve`.
-const dappInjectedScript = r'''
+String dappInjectedScript(String nonce) => _dappInjectedTemplate.replaceAll('__NONCE__', nonce);
+
+const _dappInjectedTemplate = r'''
 (function () {
   if (window.__argusDapp) return;
+  var nonce = '__NONCE__';
   var pending = {};
   var next = 1;
   var dapp = {
@@ -286,7 +328,7 @@ const dappInjectedScript = r'''
     return new Promise(function (resolve, reject) {
       var id = next++;
       pending[id] = { resolve: resolve, reject: reject };
-      ArgusBridge.postMessage(JSON.stringify({ id: id, method: method, params: params || [] }));
+      ArgusBridge.postMessage(JSON.stringify({ id: id, nonce: nonce, method: method, params: params || [] }));
     });
   }
   function context() {

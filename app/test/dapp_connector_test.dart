@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:argus_wallet/services/dapp_connector.dart';
+import 'package:argus_wallet/ui/dapp_browser_screen.dart' show unusedAddressesOf;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -167,11 +168,65 @@ void main() {
     await expectLater(c.handle('https://a', 'nope', []), throwsA(isA<DappError>()));
   });
 
-  test('the injected script names both wallets and the bridge', () {
-    expect(dappInjectedScript, contains('connector.nautilus = api'));
-    expect(dappInjectedScript, contains('connector.argus = api'));
-    expect(dappInjectedScript, contains('ArgusBridge.postMessage'));
-    expect(dappInjectedScript, contains('__argusDapp'));
-    expect(dappInjectedScript, contains("'ergo-wallet:injected'"));
+  test('unused addresses are the frontier past the used ones, receive included when fresh', () {
+    final used = [
+      {'address': '9used1'},
+      {'address': '9used2'},
+    ];
+    expect(unusedAddressesOf(used: used, frontier: ['9used1', '9used2', '9fresh1', '9fresh2'], receive: '9fresh1'), ['9fresh1', '9fresh2']);
+    expect(unusedAddressesOf(used: used, frontier: ['9used1'], receive: '9new'), ['9new']);
+    expect(unusedAddressesOf(used: used, frontier: const [], receive: '9used1'), isEmpty, reason: 'the receive address already has history');
+    expect(unusedAddressesOf(used: const [], frontier: const [], receive: ''), isEmpty);
+  });
+
+  test('the injected script names both wallets, the bridge and the nonce', () {
+    final s = dappInjectedScript('abc123');
+    expect(s, contains('connector.nautilus = api'));
+    expect(s, contains('connector.argus = api'));
+    expect(s, contains('ArgusBridge.postMessage'));
+    expect(s, contains('__argusDapp'));
+    expect(s, contains("'ergo-wallet:injected'"));
+    expect(s, contains("var nonce = 'abc123';"));
+    expect(s, contains('nonce: nonce'));
+    expect(s, isNot(contains('__NONCE__')));
+  });
+
+  test('bridge messages need the current nonce and a method', () {
+    final ok = parseBridgeMessage('{"id":1,"nonce":"n1","method":"get_balance","params":["ERG"]}', 'n1');
+    expect(ok, isNotNull);
+    expect(ok!.id, 1);
+    expect(ok.method, 'get_balance');
+    expect(ok.params, ['ERG']);
+    // An iframe or a stale page does not know the nonce.
+    expect(parseBridgeMessage('{"id":1,"method":"get_balance","params":[]}', 'n1'), isNull);
+    expect(parseBridgeMessage('{"id":1,"nonce":"old","method":"get_balance","params":[]}', 'n1'), isNull);
+    expect(parseBridgeMessage('{"id":1,"nonce":"n1","method":"get_balance"}', ''), isNull, reason: 'no navigation yet');
+    expect(parseBridgeMessage('{"id":1,"nonce":"n1","params":[]}', 'n1'), isNull);
+    expect(parseBridgeMessage('not json', 'n1'), isNull);
+    expect(parseBridgeMessage('[1]', 'n1'), isNull);
+    expect(parseBridgeMessage('{"id":2,"nonce":"n1","method":"x","params":"no"}', 'n1')!.params, isEmpty);
+  });
+
+  test('origins are scheme, host and port of web pages only', () {
+    expect(originOf('https://sigmafi.app/orders?x=1'), 'https://sigmafi.app');
+    expect(originOf('http://localhost:8080/'), 'http://localhost:8080');
+    expect(originOf('about:blank'), '');
+    expect(originOf('file:///etc/passwd'), '');
+    expect(originOf(null), '');
+  });
+
+  test('a combined target needs both the ERG and the tokens', () {
+    final utxos = [box('a', '1000'), box('b', '2000', [('t1', '5')]), box('c', '3000')];
+    final picked = selectUtxos(utxos, {
+      'nanoErgs': '2500',
+      'tokens': [
+        {'tokenId': 't1', 'amount': '5'}
+      ]
+    });
+    // Boxes without the token are skipped while a token is wanted, so the
+    // ERG comes from the token-bearing boxes; the caller may need more.
+    expect(picked.map((b) => b['boxId']), ['b']);
+    expect(() => selectUtxos(utxos, {'nanoErgs': 1.5}), throwsA(isA<DappError>()));
   });
 }
+
