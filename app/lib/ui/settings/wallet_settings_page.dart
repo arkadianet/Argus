@@ -170,6 +170,12 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
                 onTap: unlocked ? () => Navigator.pushNamed(context, '/utxos') : null,
               ),
               SettingsRow(
+                icon: Icons.token_outlined,
+                title: 'Tokens',
+                subtitle: 'Issue a token or NFT, or burn tokens you hold.',
+                onTap: unlocked ? () => Navigator.pushNamed(context, '/tokens') : null,
+              ),
+              SettingsRow(
                 icon: Icons.blender_outlined,
                 title: 'Mix',
                 subtitle: 'Move ERG through the ErgoMixer pool to weaken the link to where it came from.',

@@ -1,0 +1,116 @@
+[
+ {
+  "boxId": "668f99aaf9e0cecd33d2d4ff456843671be5a7a475b0284dc4618bb1c2fe89e1",
+  "transactionId": "385bd95c889ce5ca2d9eca9daa17042cff899d2249510b6be841cacb250c5842",
+  "blockId": "2092f028a6ff592bbb869aefd3cb050db3dd35c1303e7f32c6fc1b4222ea098c",
+  "value": 300000,
+  "index": 0,
+  "globalIndex": 33347220,
+  "creationHeight": 1109634,
+  "settlementHeight": 1109636,
+  "ergoTree": "1012040005e80705c09a0c08cd03a11d3028b9bc57b6ac724485e99960b89c278db6bab5d2b961b01aee29405a0205a0060601000e20eccbd70bb2ed259a3f6888c4b68bbd963ff61e2d71cdfda3c7234231e1e4b76604020400043c04100400040401010402040601010101d80bd601b2a5730000d602e4c6a70408d603e4c6a70704d604e4c6a70505d605e30008d606e67205d6077301d6087302d6097303d60a957206d801d60a7e72040683024406860272099d9c7e720706720a7e7208068602e472059d9c7e730406720a7e72080683014406860272099d9c7e7207067e7204067e720806d60b730595937306cbc27201d804d60c999aa37203e4c672010704d60db2a5730700d60eb2720a730800d60f8c720e02d1ed96830b0193e4c67201040ec5a793e4c672010508720293e4c672010605e4c6a70605e6c67201080893db63087201db6308a793c17201c1a7927203730990720c730a92720c730b93c2720dd0720293c1720d7204ed9591720f720bd801d610b2a5730c009683020193c27210d08c720e01937ec1721006720f730d957206d802d610b2720a730e00d6118c72100295917211720bd801d612b2a5730f009683020193c27212d08c721001937ec17212067211731073117202",
+  "ergoTreeConstants": "[\n  0: SInt$ = 0,\n  1: SLong$ = 500,\n  2: SLong$ = 100000,\n  3: SSigmaProp = SigmaProp(ProveDlog(ECPoint(a11d30,ad476b,...))),\n  4: SLong$ = 400,\n  5: SBigInt$ = CBigInt(0),\n  6: Coll[SByte$] = Coll(-20,-53,-41,11,-78,-19,37,-102,63,104,-120,-60,-74,-117,-67,-106,63,-10,30,45,113,-51,-3,-93,-57,35,66,49,-31,-28,-73,102),\n  7: SInt$ = 1,\n  8: SInt$ = 0,\n  9: SInt$ = 30,\n  10: SInt$ = 8,\n  11: SInt$ = 0,\n  12: SInt$ = 2,\n  13: SBoolean = true,\n  14: SInt$ = 1,\n  15: SInt$ = 3,\n  16: SBoolean = true,\n  17: SBoolean = true\n]",
+  "ergoTreeScript": "Right(BlockValue(WrappedArray(ValDef(1,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(0,SInt$),None)), ValDef(2,WrappedArray(),ExtractRegisterAs(Self$(167),R4,Option[SSigmaProp]).get), ValDef(3,WrappedArray(),ExtractRegisterAs(Self$(167),R7,Option[SInt$]).get), ValDef(4,WrappedArray(),ExtractRegisterAs(Self$(167),R5,Option[SLong$]).get), ValDef(5,WrappedArray(),GetVar(0,Option[SSigmaProp])), ValDef(6,WrappedArray(),OptionIsDefined(ValUse(5,Option[SSigmaProp]))), ValDef(7,WrappedArray(),ConstantPlaceholder(1,SLong$)), ValDef(8,WrappedArray(),ConstantPlaceholder(2,SLong$)), ValDef(9,WrappedArray(),ConstantPlaceholder(3,SSigmaProp)), ValDef(10,WrappedArray(),If(ValUse(6,SBoolean),BlockValue(WrappedArray(ValDef(10,WrappedArray(),Upcast(ValUse(4,SLong$),SBigInt$))),ConcreteCollection(WrappedArray(Tuple(Vector(ValUse(9,SSigmaProp), Divide(Multiply(Upcast(ValUse(7,SLong$),SBigInt$), ValUse(10,SBigInt$)), Upcast(ValUse(8,SLong$),SBigInt$)))), Tuple(Vector(ValUse(5,Option[SSigmaProp]).get, Divide(Multiply(Upcast(ConstantPlaceholder(4,SLong$),SBigInt$), ValUse(10,SBigInt$)), Upcast(ValUse(8,SLong$),SBigInt$))))),(SSigmaProp,SBigInt$))),ConcreteCollection(WrappedArray(Tuple(Vector(ValUse(9,SSigmaProp), Divide(Multiply(Upcast(ValUse(7,SLong$),SBigInt$), Upcast(ValUse(4,SLong$),SBigInt$)), Upcast(ValUse(8,SLong$),SBigInt$))))),(SSigmaProp,SBigInt$)))), ValDef(11,WrappedArray(),ConstantPlaceholder(5,SBigInt$))),If(EQ(ConstantPlaceholder(6,Coll[SByte$]),CalcBlake2b256(ExtractScriptBytes(ValUse(1,SBox)))),BlockValue(WrappedArray(ValDef(12,WrappedArray(),Minus(Plus(Height$(163), ValUse(3,SInt$)), ExtractRegisterAs(ValUse(1,SBox),R7,Option[SInt$]).get)), ValDef(13,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(7,SInt$),None)), ValDef(14,WrappedArray(),ByIndex(ValUse(10,Coll[(SSigmaProp,SBigInt$)]),ConstantPlaceholder(8,SInt$),None)), ValDef(15,WrappedArray(),SelectField(ValUse(14,(SSigmaProp,SBigInt$)),2))),BoolToSigmaProp(BinAnd(AND(ConcreteCollection(WrappedArray(EQ(ExtractRegisterAs(ValUse(1,SBox),R4,Option[Coll[SByte$]]).get,ExtractId(Self$(167))), EQ(ExtractRegisterAs(ValUse(1,SBox),R5,Option[SSigmaProp]).get,ValUse(2,SSigmaProp)), EQ(ExtractRegisterAs(ValUse(1,SBox),R6,Option[SLong$]).get,ExtractRegisterAs(Self$(167),R6,Option[SLong$]).get), OptionIsDefined(ExtractRegisterAs(ValUse(1,SBox),R8,Option[SSigmaProp])), EQ(MethodCall(ValUse(1,SBox),SMethod(SBox,tokens,(SBox) => Coll[(Coll[SByte$],SLong$)],8,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),Secondary tokens,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map()),MethodCall(Self$(167),SMethod(SBox,tokens,(SBox) => Coll[(Coll[SByte$],SLong$)],8,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),Secondary tokens,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map())), EQ(ExtractAmount(ValUse(1,SBox)),ExtractAmount(Self$(167))), GE(ValUse(3,SInt$),ConstantPlaceholder(9,SInt$)), LE(ValUse(12,SInt$),ConstantPlaceholder(10,SInt$)), GE(ValUse(12,SInt$),ConstantPlaceholder(11,SInt$)), EQ(ExtractScriptBytes(ValUse(13,SBox)),SigmaPropBytes(ValUse(2,SSigmaProp))), EQ(ExtractAmount(ValUse(13,SBox)),ValUse(4,SLong$))),SBoolean)),BinAnd(If(GT(ValUse(15,SBigInt$),ValUse(11,SBigInt$)),BlockValue(WrappedArray(ValDef(16,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(12,SInt$),None))),AND(ConcreteCollection(WrappedArray(EQ(ExtractScriptBytes(ValUse(16,SBox)),SigmaPropBytes(SelectField(ValUse(14,(SSigmaProp,SBigInt$)),1))), EQ(Upcast(ExtractAmount(ValUse(16,SBox)),SBigInt$),ValUse(15,SBigInt$))),SBoolean))),ConstantPlaceholder(13,SBoolean)),If(ValUse(6,SBoolean),BlockValue(WrappedArray(ValDef(16,WrappedArray(),ByIndex(ValUse(10,Coll[(SSigmaProp,SBigInt$)]),ConstantPlaceholder(14,SInt$),None)), ValDef(17,WrappedArray(),SelectField(ValUse(16,(SSigmaProp,SBigInt$)),2))),If(GT(ValUse(17,SBigInt$),ValUse(11,SBigInt$)),BlockValue(WrappedArray(ValDef(18,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(15,SInt$),None))),AND(ConcreteCollection(WrappedArray(EQ(ExtractScriptBytes(ValUse(18,SBox)),SigmaPropBytes(SelectField(ValUse(16,(SSigmaProp,SBigInt$)),1))), EQ(Upcast(ExtractAmount(ValUse(18,SBox)),SBigInt$),ValUse(17,SBigInt$))),SBoolean))),ConstantPlaceholder(16,SBoolean))),ConstantPlaceholder(17,SBoolean)))))),ValUse(2,SSigmaProp))))",
+  "address": "2jMoa21VMLebD9C3j1jXHBCSZitYqMdcqJt7jSKAVwAsVaKifkspA8jfSeRp2dnnQVgjdsXfRDzo4h1hmroTnPsMAB8qiBnyGjStmMxxFirroejmZFgH25zouApdAZtjTERNrvn67QFPGhGRpxopGEZYrQbpj3PmNR4UPyvKkCHzWbkM7cMA2o45RadU4gY6LAoDwvop35QmPsbP2CuETfJPWUKHgDw87wzwPfpBHYxNht3btUuaNB7ifL1To8KotbFKQyRQ3s84vsbed5abchfWhgSkU6HDvJJM9vmt2axcC5P72jEtPsdK19oGw3FsYZp5S9DpKmQRJasDStTRtgBEbD6vnP6orTrje9oJEpvarFdRE9gG1gQKoQdUn5PtssaVhWG3yX67BSyy1mQVkdPq17CrD4di6mhuakBKi9Wn6YTFCvdeLqfSTAaFJPA3uitsqpSkLxNGyqMMtHZ5oahuZ3jVtx3As5N2ZTt835XUYsFE31n3CzfZPvyHCDtahYTRqeCBvPMZw8vdh3a1XtfqNX15AmQy7Jf8W6Y7McsKQVwG5gogXu6XSSCrGn9r2j9m3DBPitUPpEdNqavvxX5Jqrrp2UNLNNfsZZRT26ifnWWa1W5LnjVQVeRFdki5Haf",
+  "assets": [
+   {
+    "tokenId": "bd0c25c373ad606d78412ae1198133f4573b4e4c2d4ed3fc4c2a4547c6c6e12e",
+    "index": 0,
+    "amount": 1302325581,
+    "name": "\ud83e\udd21",
+    "decimals": 3,
+    "type": "EIP-004"
+   }
+  ],
+  "additionalRegisters": {},
+  "spentTransactionId": null,
+  "mainChain": true
+ },
+ {
+  "boxId": "117fb5c8ac70d16dd164860a17dea8700b8aded55de041c4cfbb5565fd0f2207",
+  "transactionId": "d4ad55a95a4431042851a3f14cd177054ce0118bc32788a406894d5e7ee25845",
+  "blockId": "ee8bf9de77bb0dcf1403cb65a58cb388d8c1e183253b72de921054ef97a2acb9",
+  "value": 1000000,
+  "index": 0,
+  "globalIndex": 30551621,
+  "creationHeight": 1038033,
+  "settlementHeight": 1038035,
+  "ergoTree": "1012040005e80705c09a0c08cd03a11d3028b9bc57b6ac724485e99960b89c278db6bab5d2b961b01aee29405a0205a0060601000e20eccbd70bb2ed259a3f6888c4b68bbd963ff61e2d71cdfda3c7234231e1e4b76604020400043c04100400040401010402040601010101d80bd601b2a5730000d602e4c6a70408d603e4c6a70704d604e4c6a70505d605e30008d606e67205d6077301d6087302d6097303d60a957206d801d60a7e72040683024406860272099d9c7e720706720a7e7208068602e472059d9c7e730406720a7e72080683014406860272099d9c7e7207067e7204067e720806d60b730595937306cbc27201d804d60c999aa37203e4c672010704d60db2a5730700d60eb2720a730800d60f8c720e02d1ed96830b0193e4c67201040ec5a793e4c672010508720293e4c672010605e4c6a70605e6c67201080893db63087201db6308a793c17201c1a7927203730990720c730a92720c730b93c2720dd0720293c1720d7204ed9591720f720bd801d610b2a5730c009683020193c27210d08c720e01937ec1721006720f730d957206d802d610b2720a730e00d6118c72100295917211720bd801d612b2a5730f009683020193c27212d08c721001937ec17212067211731073117202",
+  "ergoTreeConstants": "[\n  0: SInt$ = 0,\n  1: SLong$ = 500,\n  2: SLong$ = 100000,\n  3: SSigmaProp = SigmaProp(ProveDlog(ECPoint(a11d30,ad476b,...))),\n  4: SLong$ = 400,\n  5: SBigInt$ = CBigInt(0),\n  6: Coll[SByte$] = Coll(-20,-53,-41,11,-78,-19,37,-102,63,104,-120,-60,-74,-117,-67,-106,63,-10,30,45,113,-51,-3,-93,-57,35,66,49,-31,-28,-73,102),\n  7: SInt$ = 1,\n  8: SInt$ = 0,\n  9: SInt$ = 30,\n  10: SInt$ = 8,\n  11: SInt$ = 0,\n  12: SInt$ = 2,\n  13: SBoolean = true,\n  14: SInt$ = 1,\n  15: SInt$ = 3,\n  16: SBoolean = true,\n  17: SBoolean = true\n]",
+  "ergoTreeScript": "Right(BlockValue(WrappedArray(ValDef(1,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(0,SInt$),None)), ValDef(2,WrappedArray(),ExtractRegisterAs(Self$(167),R4,Option[SSigmaProp]).get), ValDef(3,WrappedArray(),ExtractRegisterAs(Self$(167),R7,Option[SInt$]).get), ValDef(4,WrappedArray(),ExtractRegisterAs(Self$(167),R5,Option[SLong$]).get), ValDef(5,WrappedArray(),GetVar(0,Option[SSigmaProp])), ValDef(6,WrappedArray(),OptionIsDefined(ValUse(5,Option[SSigmaProp]))), ValDef(7,WrappedArray(),ConstantPlaceholder(1,SLong$)), ValDef(8,WrappedArray(),ConstantPlaceholder(2,SLong$)), ValDef(9,WrappedArray(),ConstantPlaceholder(3,SSigmaProp)), ValDef(10,WrappedArray(),If(ValUse(6,SBoolean),BlockValue(WrappedArray(ValDef(10,WrappedArray(),Upcast(ValUse(4,SLong$),SBigInt$))),ConcreteCollection(WrappedArray(Tuple(Vector(ValUse(9,SSigmaProp), Divide(Multiply(Upcast(ValUse(7,SLong$),SBigInt$), ValUse(10,SBigInt$)), Upcast(ValUse(8,SLong$),SBigInt$)))), Tuple(Vector(ValUse(5,Option[SSigmaProp]).get, Divide(Multiply(Upcast(ConstantPlaceholder(4,SLong$),SBigInt$), ValUse(10,SBigInt$)), Upcast(ValUse(8,SLong$),SBigInt$))))),(SSigmaProp,SBigInt$))),ConcreteCollection(WrappedArray(Tuple(Vector(ValUse(9,SSigmaProp), Divide(Multiply(Upcast(ValUse(7,SLong$),SBigInt$), Upcast(ValUse(4,SLong$),SBigInt$)), Upcast(ValUse(8,SLong$),SBigInt$))))),(SSigmaProp,SBigInt$)))), ValDef(11,WrappedArray(),ConstantPlaceholder(5,SBigInt$))),If(EQ(ConstantPlaceholder(6,Coll[SByte$]),CalcBlake2b256(ExtractScriptBytes(ValUse(1,SBox)))),BlockValue(WrappedArray(ValDef(12,WrappedArray(),Minus(Plus(Height$(163), ValUse(3,SInt$)), ExtractRegisterAs(ValUse(1,SBox),R7,Option[SInt$]).get)), ValDef(13,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(7,SInt$),None)), ValDef(14,WrappedArray(),ByIndex(ValUse(10,Coll[(SSigmaProp,SBigInt$)]),ConstantPlaceholder(8,SInt$),None)), ValDef(15,WrappedArray(),SelectField(ValUse(14,(SSigmaProp,SBigInt$)),2))),BoolToSigmaProp(BinAnd(AND(ConcreteCollection(WrappedArray(EQ(ExtractRegisterAs(ValUse(1,SBox),R4,Option[Coll[SByte$]]).get,ExtractId(Self$(167))), EQ(ExtractRegisterAs(ValUse(1,SBox),R5,Option[SSigmaProp]).get,ValUse(2,SSigmaProp)), EQ(ExtractRegisterAs(ValUse(1,SBox),R6,Option[SLong$]).get,ExtractRegisterAs(Self$(167),R6,Option[SLong$]).get), OptionIsDefined(ExtractRegisterAs(ValUse(1,SBox),R8,Option[SSigmaProp])), EQ(MethodCall(ValUse(1,SBox),SMethod(SBox,tokens,(SBox) => Coll[(Coll[SByte$],SLong$)],8,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),Secondary tokens,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map()),MethodCall(Self$(167),SMethod(SBox,tokens,(SBox) => Coll[(Coll[SByte$],SLong$)],8,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),Secondary tokens,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map())), EQ(ExtractAmount(ValUse(1,SBox)),ExtractAmount(Self$(167))), GE(ValUse(3,SInt$),ConstantPlaceholder(9,SInt$)), LE(ValUse(12,SInt$),ConstantPlaceholder(10,SInt$)), GE(ValUse(12,SInt$),ConstantPlaceholder(11,SInt$)), EQ(ExtractScriptBytes(ValUse(13,SBox)),SigmaPropBytes(ValUse(2,SSigmaProp))), EQ(ExtractAmount(ValUse(13,SBox)),ValUse(4,SLong$))),SBoolean)),BinAnd(If(GT(ValUse(15,SBigInt$),ValUse(11,SBigInt$)),BlockValue(WrappedArray(ValDef(16,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(12,SInt$),None))),AND(ConcreteCollection(WrappedArray(EQ(ExtractScriptBytes(ValUse(16,SBox)),SigmaPropBytes(SelectField(ValUse(14,(SSigmaProp,SBigInt$)),1))), EQ(Upcast(ExtractAmount(ValUse(16,SBox)),SBigInt$),ValUse(15,SBigInt$))),SBoolean))),ConstantPlaceholder(13,SBoolean)),If(ValUse(6,SBoolean),BlockValue(WrappedArray(ValDef(16,WrappedArray(),ByIndex(ValUse(10,Coll[(SSigmaProp,SBigInt$)]),ConstantPlaceholder(14,SInt$),None)), ValDef(17,WrappedArray(),SelectField(ValUse(16,(SSigmaProp,SBigInt$)),2))),If(GT(ValUse(17,SBigInt$),ValUse(11,SBigInt$)),BlockValue(WrappedArray(ValDef(18,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(15,SInt$),None))),AND(ConcreteCollection(WrappedArray(EQ(ExtractScriptBytes(ValUse(18,SBox)),SigmaPropBytes(SelectField(ValUse(16,(SSigmaProp,SBigInt$)),1))), EQ(Upcast(ExtractAmount(ValUse(18,SBox)),SBigInt$),ValUse(17,SBigInt$))),SBoolean))),ConstantPlaceholder(16,SBoolean))),ConstantPlaceholder(17,SBoolean)))))),ValUse(2,SSigmaProp))))",
+  "address": "2jMoa21VMLebD9C3j1jXHBCSZitYqMdcqJt7jSKAVwAsVaKifkspA8jfSeRp2dnnQVgjdsXfRDzo4h1hmroTnPsMAB8qiBnyGjStmMxxFirroejmZFgH25zouApdAZtjTERNrvn67QFPGhGRpxopGEZYrQbpj3PmNR4UPyvKkCHzWbkM7cMA2o45RadU4gY6LAoDwvop35QmPsbP2CuETfJPWUKHgDw87wzwPfpBHYxNht3btUuaNB7ifL1To8KotbFKQyRQ3s84vsbed5abchfWhgSkU6HDvJJM9vmt2axcC5P72jEtPsdK19oGw3FsYZp5S9DpKmQRJasDStTRtgBEbD6vnP6orTrje9oJEpvarFdRE9gG1gQKoQdUn5PtssaVhWG3yX67BSyy1mQVkdPq17CrD4di6mhuakBKi9Wn6YTFCvdeLqfSTAaFJPA3uitsqpSkLxNGyqMMtHZ5oahuZ3jVtx3As5N2ZTt835XUYsFE31n3CzfZPvyHCDtahYTRqeCBvPMZw8vdh3a1XtfqNX15AmQy7Jf8W6Y7McsKQVwG5gogXu6XSSCrGn9r2j9m3DBPitUPpEdNqavvxX5Jqrrp2UNLNNfsZZRT26ifnWWa1W5LnjVQVeRFdki5Haf",
+  "assets": [
+   {
+    "tokenId": "d9986f2a669494501b6e5f2ee4b2f0b2544e38c887123afd4883fc42ba349749",
+    "index": 0,
+    "amount": 1,
+    "name": "Gnomekin #1998 ERGnomes Halloween '21 Special",
+    "decimals": 0,
+    "type": "EIP-004"
+   }
+  ],
+  "additionalRegisters": {
+   "R4": {
+    "serializedValue": "08cd02886aa2094623ac6deccd24dd82df93574892b9d9688816e8d8a47aaa0c58ce43",
+    "sigmaType": "SSigmaProp",
+    "renderedValue": "02886aa2094623ac6deccd24dd82df93574892b9d9688816e8d8a47aaa0c58ce43"
+   },
+   "R5": {
+    "serializedValue": "0580a0b787e905",
+    "sigmaType": "SLong",
+    "renderedValue": "100000000000"
+   },
+   "R6": {
+    "serializedValue": "0580c090ee8606",
+    "sigmaType": "SLong",
+    "renderedValue": "104000000000"
+   },
+   "R7": {
+    "serializedValue": "0480d21f",
+    "sigmaType": "SInt",
+    "renderedValue": "259200"
+   }
+  },
+  "spentTransactionId": null,
+  "mainChain": true
+ },
+ {
+  "boxId": "f2fcaa69907f0344965d4201601a49bad96804d4d4fb395cbd83cc1ac5e9ae66",
+  "transactionId": "3ba3474c6b14fc1603fd1b0267a81b55e03c795502b8c35713133b7be6e3d3ec",
+  "blockId": "68c3f79618a44fbcd16c30db05dbe2798040e888d04b99a3ca345a62db9cbc41",
+  "value": 400000000,
+  "index": 0,
+  "globalIndex": 29717049,
+  "creationHeight": 1016779,
+  "settlementHeight": 1016781,
+  "ergoTree": "1012040005e80705c09a0c08cd03a11d3028b9bc57b6ac724485e99960b89c278db6bab5d2b961b01aee29405a0205a0060601000e20eccbd70bb2ed259a3f6888c4b68bbd963ff61e2d71cdfda3c7234231e1e4b76604020400043c04100400040401010402040601010101d80bd601b2a5730000d602e4c6a70408d603e4c6a70704d604e4c6a70505d605e30008d606e67205d6077301d6087302d6097303d60a957206d801d60a7e72040683024406860272099d9c7e720706720a7e7208068602e472059d9c7e730406720a7e72080683014406860272099d9c7e7207067e7204067e720806d60b730595937306cbc27201d804d60c999aa37203e4c672010704d60db2a5730700d60eb2720a730800d60f8c720e02d1ed96830b0193e4c67201040ec5a793e4c672010508720293e4c672010605e4c6a70605e6c67201080893db63087201db6308a793c17201c1a7927203730990720c730a92720c730b93c2720dd0720293c1720d7204ed9591720f720bd801d610b2a5730c009683020193c27210d08c720e01937ec1721006720f730d957206d802d610b2720a730e00d6118c72100295917211720bd801d612b2a5730f009683020193c27212d08c721001937ec17212067211731073117202",
+  "ergoTreeConstants": "[\n  0: SInt$ = 0,\n  1: SLong$ = 500,\n  2: SLong$ = 100000,\n  3: SSigmaProp = SigmaProp(ProveDlog(ECPoint(a11d30,ad476b,...))),\n  4: SLong$ = 400,\n  5: SBigInt$ = CBigInt(0),\n  6: Coll[SByte$] = Coll(-20,-53,-41,11,-78,-19,37,-102,63,104,-120,-60,-74,-117,-67,-106,63,-10,30,45,113,-51,-3,-93,-57,35,66,49,-31,-28,-73,102),\n  7: SInt$ = 1,\n  8: SInt$ = 0,\n  9: SInt$ = 30,\n  10: SInt$ = 8,\n  11: SInt$ = 0,\n  12: SInt$ = 2,\n  13: SBoolean = true,\n  14: SInt$ = 1,\n  15: SInt$ = 3,\n  16: SBoolean = true,\n  17: SBoolean = true\n]",
+  "ergoTreeScript": "Right(BlockValue(WrappedArray(ValDef(1,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(0,SInt$),None)), ValDef(2,WrappedArray(),ExtractRegisterAs(Self$(167),R4,Option[SSigmaProp]).get), ValDef(3,WrappedArray(),ExtractRegisterAs(Self$(167),R7,Option[SInt$]).get), ValDef(4,WrappedArray(),ExtractRegisterAs(Self$(167),R5,Option[SLong$]).get), ValDef(5,WrappedArray(),GetVar(0,Option[SSigmaProp])), ValDef(6,WrappedArray(),OptionIsDefined(ValUse(5,Option[SSigmaProp]))), ValDef(7,WrappedArray(),ConstantPlaceholder(1,SLong$)), ValDef(8,WrappedArray(),ConstantPlaceholder(2,SLong$)), ValDef(9,WrappedArray(),ConstantPlaceholder(3,SSigmaProp)), ValDef(10,WrappedArray(),If(ValUse(6,SBoolean),BlockValue(WrappedArray(ValDef(10,WrappedArray(),Upcast(ValUse(4,SLong$),SBigInt$))),ConcreteCollection(WrappedArray(Tuple(Vector(ValUse(9,SSigmaProp), Divide(Multiply(Upcast(ValUse(7,SLong$),SBigInt$), ValUse(10,SBigInt$)), Upcast(ValUse(8,SLong$),SBigInt$)))), Tuple(Vector(ValUse(5,Option[SSigmaProp]).get, Divide(Multiply(Upcast(ConstantPlaceholder(4,SLong$),SBigInt$), ValUse(10,SBigInt$)), Upcast(ValUse(8,SLong$),SBigInt$))))),(SSigmaProp,SBigInt$))),ConcreteCollection(WrappedArray(Tuple(Vector(ValUse(9,SSigmaProp), Divide(Multiply(Upcast(ValUse(7,SLong$),SBigInt$), Upcast(ValUse(4,SLong$),SBigInt$)), Upcast(ValUse(8,SLong$),SBigInt$))))),(SSigmaProp,SBigInt$)))), ValDef(11,WrappedArray(),ConstantPlaceholder(5,SBigInt$))),If(EQ(ConstantPlaceholder(6,Coll[SByte$]),CalcBlake2b256(ExtractScriptBytes(ValUse(1,SBox)))),BlockValue(WrappedArray(ValDef(12,WrappedArray(),Minus(Plus(Height$(163), ValUse(3,SInt$)), ExtractRegisterAs(ValUse(1,SBox),R7,Option[SInt$]).get)), ValDef(13,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(7,SInt$),None)), ValDef(14,WrappedArray(),ByIndex(ValUse(10,Coll[(SSigmaProp,SBigInt$)]),ConstantPlaceholder(8,SInt$),None)), ValDef(15,WrappedArray(),SelectField(ValUse(14,(SSigmaProp,SBigInt$)),2))),BoolToSigmaProp(BinAnd(AND(ConcreteCollection(WrappedArray(EQ(ExtractRegisterAs(ValUse(1,SBox),R4,Option[Coll[SByte$]]).get,ExtractId(Self$(167))), EQ(ExtractRegisterAs(ValUse(1,SBox),R5,Option[SSigmaProp]).get,ValUse(2,SSigmaProp)), EQ(ExtractRegisterAs(ValUse(1,SBox),R6,Option[SLong$]).get,ExtractRegisterAs(Self$(167),R6,Option[SLong$]).get), OptionIsDefined(ExtractRegisterAs(ValUse(1,SBox),R8,Option[SSigmaProp])), EQ(MethodCall(ValUse(1,SBox),SMethod(SBox,tokens,(SBox) => Coll[(Coll[SByte$],SLong$)],8,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),Secondary tokens,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map()),MethodCall(Self$(167),SMethod(SBox,tokens,(SBox) => Coll[(Coll[SByte$],SLong$)],8,FixedCost(15),MethodIRInfo(Some(<function1>),None,None),Some(OperationInfo(Some(PropertyCall$(219)),Secondary tokens,ArrayBuffer(ArgInfo(this,this instance)))),None),WrappedArray(),Map())), EQ(ExtractAmount(ValUse(1,SBox)),ExtractAmount(Self$(167))), GE(ValUse(3,SInt$),ConstantPlaceholder(9,SInt$)), LE(ValUse(12,SInt$),ConstantPlaceholder(10,SInt$)), GE(ValUse(12,SInt$),ConstantPlaceholder(11,SInt$)), EQ(ExtractScriptBytes(ValUse(13,SBox)),SigmaPropBytes(ValUse(2,SSigmaProp))), EQ(ExtractAmount(ValUse(13,SBox)),ValUse(4,SLong$))),SBoolean)),BinAnd(If(GT(ValUse(15,SBigInt$),ValUse(11,SBigInt$)),BlockValue(WrappedArray(ValDef(16,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(12,SInt$),None))),AND(ConcreteCollection(WrappedArray(EQ(ExtractScriptBytes(ValUse(16,SBox)),SigmaPropBytes(SelectField(ValUse(14,(SSigmaProp,SBigInt$)),1))), EQ(Upcast(ExtractAmount(ValUse(16,SBox)),SBigInt$),ValUse(15,SBigInt$))),SBoolean))),ConstantPlaceholder(13,SBoolean)),If(ValUse(6,SBoolean),BlockValue(WrappedArray(ValDef(16,WrappedArray(),ByIndex(ValUse(10,Coll[(SSigmaProp,SBigInt$)]),ConstantPlaceholder(14,SInt$),None)), ValDef(17,WrappedArray(),SelectField(ValUse(16,(SSigmaProp,SBigInt$)),2))),If(GT(ValUse(17,SBigInt$),ValUse(11,SBigInt$)),BlockValue(WrappedArray(ValDef(18,WrappedArray(),ByIndex(Outputs$(165),ConstantPlaceholder(15,SInt$),None))),AND(ConcreteCollection(WrappedArray(EQ(ExtractScriptBytes(ValUse(18,SBox)),SigmaPropBytes(SelectField(ValUse(16,(SSigmaProp,SBigInt$)),1))), EQ(Upcast(ExtractAmount(ValUse(18,SBox)),SBigInt$),ValUse(17,SBigInt$))),SBoolean))),ConstantPlaceholder(16,SBoolean))),ConstantPlaceholder(17,SBoolean)))))),ValUse(2,SSigmaProp))))",
+  "address": "2jMoa21VMLebD9C3j1jXHBCSZitYqMdcqJt7jSKAVwAsVaKifkspA8jfSeRp2dnnQVgjdsXfRDzo4h1hmroTnPsMAB8qiBnyGjStmMxxFirroejmZFgH25zouApdAZtjTERNrvn67QFPGhGRpxopGEZYrQbpj3PmNR4UPyvKkCHzWbkM7cMA2o45RadU4gY6LAoDwvop35QmPsbP2CuETfJPWUKHgDw87wzwPfpBHYxNht3btUuaNB7ifL1To8KotbFKQyRQ3s84vsbed5abchfWhgSkU6HDvJJM9vmt2axcC5P72jEtPsdK19oGw3FsYZp5S9DpKmQRJasDStTRtgBEbD6vnP6orTrje9oJEpvarFdRE9gG1gQKoQdUn5PtssaVhWG3yX67BSyy1mQVkdPq17CrD4di6mhuakBKi9Wn6YTFCvdeLqfSTAaFJPA3uitsqpSkLxNGyqMMtHZ5oahuZ3jVtx3As5N2ZTt835XUYsFE31n3CzfZPvyHCDtahYTRqeCBvPMZw8vdh3a1XtfqNX15AmQy7Jf8W6Y7McsKQVwG5gogXu6XSSCrGn9r2j9m3DBPitUPpEdNqavvxX5Jqrrp2UNLNNfsZZRT26ifnWWa1W5LnjVQVeRFdki5Haf",
+  "assets": [],
+  "additionalRegisters": {
+   "R4": {
+    "serializedValue": "08cd035cdbd2972b57895f2fdf4fb5b8c8debc1323bd77214bea38d2c505119ffd054b",
+    "sigmaType": "SSigmaProp",
+    "renderedValue": "035cdbd2972b57895f2fdf4fb5b8c8debc1323bd77214bea38d2c505119ffd054b"
+   },
+   "R5": {
+    "serializedValue": "0580c0f9decfae01",
+    "sigmaType": "SLong",
+    "renderedValue": "3000000000000"
+   },
+   "R6": {
+    "serializedValue": "0580a09ff58ac001",
+    "sigmaType": "SLong",
+    "renderedValue": "3300000000000"
+   },
+   "R7": {
+    "serializedValue": "0480b0fe9b03",
+    "sigmaType": "SInt",
+    "renderedValue": "432000000"
+   }
+  },
+  "spentTransactionId": null,
+  "mainChain": true
+ }
+]

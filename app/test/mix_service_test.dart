@@ -56,15 +56,23 @@ class FakeGateway implements MixGateway {
   }
   @override
   Future<String?> loadKey({required String walletId, required int mixId}) async => keys['$walletId:$mixId'];
+
+  /// Set to make listKeys throw, as an unreadable keystore would.
+  bool keysUnreadable = false;
+
   @override
   Future<void> deleteKey({required String walletId, required int mixId}) async {
     keys.remove('$walletId:$mixId');
   }
   @override
-  Future<List<({String walletId, int mixId})>> listKeys() async => [
-        for (final k in keys.keys)
-          (walletId: k.substring(0, k.lastIndexOf(':')), mixId: int.parse(k.substring(k.lastIndexOf(':') + 1))),
-      ];
+  @override
+  Future<List<({String walletId, int mixId})>> listKeys() async {
+    if (keysUnreadable) throw StateError('keystore unavailable');
+    return [
+      for (final k in keys.keys)
+        (walletId: k.substring(0, k.lastIndexOf(':')), mixId: int.parse(k.substring(k.lastIndexOf(':') + 1))),
+    ];
+  }
 
   @override
   String contractTrees() => jsonEncode({'half': 'aa', 'full': 'bb', 'fee': 'cc', 'token': 'dd'});
@@ -702,6 +710,16 @@ void main() {
     await svc.setForeground(false);
     await Future<void>.delayed(Duration.zero);
     expect(wanted.last, isTrue, reason: 'the stored key says there is a mix to move');
+
+    // A keystore that cannot be read says nothing either way, so the job
+    // is left as it is rather than cancelled with the app in the back.
+    gw.keysUnreadable = true;
+    await svc.setForeground(true);
+    final before = wanted.length;
+    await svc.setForeground(false);
+    await Future<void>.delayed(Duration.zero);
+    expect(wanted.length, before, reason: 'a failed read neither schedules nor cancels');
+    gw.keysUnreadable = false;
 
     // With the keys gone (background mixing switched off elsewhere), the
     // job is not wanted.

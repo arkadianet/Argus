@@ -47,7 +47,32 @@ pub enum MultiSendError {
 pub struct RecipientSpec {
     pub ergo_tree: String,
     pub amount_nano_erg: i64,
-    pub token: Option<(String, u64)>,
+    /// Tokens this recipient gets, `(id, amount)`; the same id may appear
+    /// more than once and is summed into one asset.
+    pub tokens: Vec<(String, u64)>,
+}
+
+impl RecipientSpec {
+    /// One token or none, the shape most sends have.
+    pub fn with_token(ergo_tree: String, amount_nano_erg: i64, token: Option<(String, u64)>) -> Self {
+        Self {
+            ergo_tree,
+            amount_nano_erg,
+            tokens: token.into_iter().collect(),
+        }
+    }
+
+    /// This recipient's tokens summed by id, in first-seen order.
+    pub fn assets(&self) -> Vec<(String, u64)> {
+        let mut out: Vec<(String, u64)> = Vec::new();
+        for (id, amt) in &self.tokens {
+            match out.iter_mut().find(|(i, _)| i == id) {
+                Some((_, n)) => *n = n.saturating_add(*amt),
+                None => out.push((id.clone(), *amt)),
+            }
+        }
+        out
+    }
 }
 
 #[derive(Debug)]
@@ -84,7 +109,7 @@ pub fn build_multi_send_tx_with_fee(
         return Err(MultiSendError::NoRecipients);
     }
 
-    let has_sent_tokens = recipients.iter().any(|r| r.token.is_some());
+    let has_sent_tokens = recipients.iter().any(|r| !r.tokens.is_empty());
     let total_send_erg: i64 = recipients
         .iter()
         .map(|r| r.amount_nano_erg)
@@ -100,10 +125,8 @@ pub fn build_multi_send_tx_with_fee(
         if r.amount_nano_erg < MIN_BOX_VALUE {
             return Err(MultiSendError::RecipientBelowMin { min: MIN_BOX_VALUE });
         }
-        if let Some((_, amt)) = r.token {
-            if amt == 0 {
-                return Err(MultiSendError::ZeroTokenAmount);
-            }
+        if r.tokens.iter().any(|(_, amt)| *amt == 0) {
+            return Err(MultiSendError::ZeroTokenAmount);
         }
     }
 
@@ -143,11 +166,11 @@ pub fn build_multi_send_tx_with_fee(
 
     // Subtract sent tokens to compute change tokens.
     for r in recipients {
-        if let Some((id, amt)) = &r.token {
-            if let Some(balance) = input_tokens.get_mut(id) {
-                *balance = balance.saturating_sub(*amt);
+        for (id, amt) in r.assets() {
+            if let Some(balance) = input_tokens.get_mut(&id) {
+                *balance = balance.saturating_sub(amt);
                 if *balance == 0 {
-                    input_tokens.remove(id);
+                    input_tokens.remove(&id);
                 }
             }
         }
@@ -175,10 +198,11 @@ pub fn build_multi_send_tx_with_fee(
     // Recipient outputs.
     let mut outputs = Vec::with_capacity(recipients.len() + 2);
     for r in recipients {
-        let assets = match &r.token {
-            Some((id, amt)) => vec![Eip12Asset::new(id.clone(), *amt as i64)],
-            None => vec![],
-        };
+        let assets: Vec<Eip12Asset> = r
+            .assets()
+            .into_iter()
+            .map(|(id, amt)| Eip12Asset::new(id, amt as i64))
+            .collect();
         outputs.push(Eip12Output {
             value: r.amount_nano_erg.to_string(),
             ergo_tree: r.ergo_tree.clone(),
@@ -264,12 +288,12 @@ mod tests {
                 RecipientSpec {
                     ergo_tree: RECIPIENT_TREE.to_string(),
                     amount_nano_erg: 2_000_000_000,
-                    token: None,
+                    tokens: vec![],
                 },
                 RecipientSpec {
                     ergo_tree: RECIPIENT_TREE.to_string(),
                     amount_nano_erg: 1_000_000_000,
-                    token: None,
+                    tokens: vec![],
                 },
             ],
             CHANGE_TREE,
@@ -297,7 +321,7 @@ mod tests {
             &[RecipientSpec {
                 ergo_tree: RECIPIENT_TREE.to_string(),
                 amount_nano_erg: MIN_BOX_VALUE,
-                token: Some(("tok_a".to_string(), 50)),
+                tokens: vec![("tok_a".to_string(), 50)],
             }],
             CHANGE_TREE,
             fee,
@@ -318,7 +342,7 @@ mod tests {
             &[RecipientSpec {
                 ergo_tree: RECIPIENT_TREE.to_string(),
                 amount_nano_erg: 500_000,
-                token: None,
+                tokens: vec![],
             }],
             CHANGE_TREE,
             1_000_000,
@@ -338,7 +362,7 @@ mod tests {
             &[RecipientSpec {
                 ergo_tree: RECIPIENT_TREE.to_string(),
                 amount_nano_erg: send,
-                token: None,
+                tokens: vec![],
             }],
             CHANGE_TREE,
             fee,
@@ -348,5 +372,27 @@ mod tests {
         assert_eq!(result.summary.change_erg, 0);
         // recipient + fee only
         assert_eq!(result.unsigned_tx.outputs.len(), 2);
+    }
+
+    #[test]
+    fn a_recipient_can_carry_erg_and_several_tokens_in_one_box() {
+        let inputs = vec![make_box("5000000", vec![("tok_a", "100"), ("tok_b", "7")])];
+        let recipients = vec![RecipientSpec {
+            ergo_tree: "0008cd02".to_string(),
+            amount_nano_erg: 2_000_000,
+            tokens: vec![("tok_a".to_string(), 30), ("tok_b".to_string(), 7), ("tok_a".to_string(), 10)],
+        }];
+        let result = build_multi_send_tx_with_fee(&inputs, &recipients, CHANGE_TREE, 1_000_000, 100).unwrap();
+        let tx = result.unsigned_tx;
+        let out = &tx.outputs[0];
+        assert_eq!(out.value, "2000000");
+        assert_eq!(out.assets.len(), 2, "the same token twice is one asset");
+        assert_eq!(out.assets[0].amount, "40");
+        assert_eq!(out.assets[1].amount, "7");
+        // tok_a's remainder comes back as change; tok_b is spent entirely.
+        let change = &tx.outputs[1];
+        assert_eq!(change.assets.len(), 1);
+        assert_eq!(change.assets[0].token_id, "tok_a");
+        assert_eq!(change.assets[0].amount, "60");
     }
 }
