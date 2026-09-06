@@ -479,12 +479,13 @@ void main() {
       'outcome': 'filled',
       'value': 1000000000000,
       'assets': [
-        {'token_id': sigusd.lendToken, 'amount': '7'},
-        {'token_id': sigusd.currencyId, 'amount': '2500'},
+        {'tokenId': sigusd.lendToken, 'amount': '7'},
+        {'tokenId': sigusd.currencyId, 'amount': '2500'},
       ],
     };
     expect(receivedFromFill('borrow', erg, outcome), 1000000000000, reason: 'the ERG pool lends ERG: the box value');
-    expect(receivedFromFill('borrow', sigusd, outcome), 2500);
+    expect(receivedFromFill('borrow', sigusd, outcome), 2500, reason: 'the key the Rust side writes');
+    expect(receivedFromFill('borrow', sigusd, {'assets': [{'token_id': sigusd.currencyId, 'amount': '9'}]}), 9, reason: 'the older key too');
     expect(receivedFromFill('lend', sigusd, outcome), 7);
     expect(receivedFromFill('withdraw', sigusd, outcome), 1000000000000);
     expect(receivedFromFill('repay', erg, {'outcome': 'filled', 'value': 5}), 5);
