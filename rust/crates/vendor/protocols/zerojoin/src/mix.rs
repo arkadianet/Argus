@@ -13,7 +13,6 @@
 //! needed, and [`recover`] rebuilds the state of every live mix from the
 //! seed and the chain alone.
 
-use ergo_chain_types::EcPoint;
 use serde::{Deserialize, Serialize};
 
 use crate::boxes::{
@@ -353,11 +352,21 @@ impl ChainView {
         Ok(view)
     }
 
-    /// The fee emission box with the most ERG left: a remix takes at most
-    /// `max_fee` from it and the fullest one is least likely to be
-    /// contended.
+    /// The fee emission box to pay `fee` from: among those whose `maxFee`
+    /// allows it and that hold more than it, the one with the most ERG
+    /// left, as the fullest is least likely to be contended. A box with a
+    /// tiny `maxFee` (anyone may post one under the script) never stalls
+    /// a remix this way.
+    pub fn fee_box_for(&self, fee: i64) -> Option<&FeeEmissionBox> {
+        self.fee
+            .iter()
+            .filter(|f| f.max_fee >= fee && f.value > fee)
+            .max_by_key(|f| f.value)
+    }
+
+    /// A fee emission box that can pay the minimum miner fee.
     pub fn fee_box(&self) -> Option<&FeeEmissionBox> {
-        self.fee.iter().max_by_key(|f| f.value)
+        self.fee_box_for(crate::tx_builder::MIN_MINER_FEE_NANO)
     }
 
     /// The token emission box with the most mixing tokens for sale.
@@ -433,10 +442,14 @@ pub enum Plan {
 }
 
 /// Fold what the chain shows into the state: a half-mix box of ours that
-/// was spent by a Bob becomes a full-mix box of ours. `g_current` is the
-/// public key of `state.round`. Returns the state unchanged when nothing
-/// new is visible.
-pub fn observe(state: MixState, view: &ChainView, g_current: &EcPoint, now: i64) -> MixState {
+/// was spent by a Bob becomes a full-mix box of ours. `secret` is the
+/// secret of `state.round`. Returns the state unchanged when nothing new
+/// is visible.
+///
+/// Ownership is proved, not inferred from `gX`: both boxes of a round
+/// carry our `gX` (and anyone can mint a box that does, since `gX` is
+/// public in our half box), so only the box whose `c2 == c1^x` is ours.
+pub fn observe(state: MixState, view: &ChainView, secret: &MixSecret, now: i64) -> MixState {
     let MixPhase::HalfPosted { box_id } = &state.phase else {
         return state;
     };
@@ -446,7 +459,7 @@ pub fn observe(state: MixState, view: &ChainView, g_current: &EcPoint, now: i64)
     let joined = view
         .full
         .iter()
-        .find(|f| f.g_x == *g_current && state.ring.matches_full(f));
+        .find(|f| secret.owns_as_alice(f) && state.ring.matches_full(f));
     match joined {
         Some(full) => {
             let id = full.input.box_id.clone();
@@ -721,7 +734,7 @@ mod tests {
         assert_eq!(state.locked_value(), RING);
 
         let view = view_with(vec![half(7, &x, 20)], vec![]);
-        let same = observe(state.clone(), &view, x.public_key(), NOW + 1);
+        let same = observe(state.clone(), &view, &x, NOW + 1);
         assert_eq!(same, state, "still unspent: nothing to fold in");
         assert_eq!(
             plan(&same, &view, &[]),
@@ -733,7 +746,7 @@ mod tests {
         // Gone from the unspent set, and no full box carries our gX yet:
         // never guess, wait for a better snapshot.
         let empty = view_with(vec![], vec![]);
-        let still = observe(state.clone(), &empty, x.public_key(), NOW + 2);
+        let still = observe(state.clone(), &empty, &x, NOW + 2);
         assert_eq!(still, state);
         assert_eq!(
             plan(&still, &empty, &[]),
@@ -746,7 +759,7 @@ mod tests {
         let bob = test_secret(91, 0);
         let [_, alices] = synthetic_round(x.public_key(), &bob, PairOrder::BobFirst, RING, 19);
         let joined_view = view_with(vec![], vec![alices.clone()]);
-        let joined = observe(state, &joined_view, x.public_key(), NOW + 3);
+        let joined = observe(state.clone(), &joined_view, &x, NOW + 3);
         assert_eq!(
             joined.phase,
             MixPhase::FullOwned {
@@ -757,6 +770,47 @@ mod tests {
         assert_eq!(joined.rounds_done, 1);
         assert_eq!(joined.round, 0, "the same secret spends the full box");
         assert_eq!(joined.events.last().unwrap().action, "joined");
+
+        // Bob's box of the same round carries our gX too, and so would a
+        // box anyone minted with it: neither is ours, and neither may
+        // capture the record.
+        let [bobs, alices] = synthetic_round(x.public_key(), &bob, PairOrder::BobFirst, RING, 19);
+        assert_eq!(bobs.g_x, *x.public_key());
+        let forged = view_with(vec![], vec![bobs.clone()]);
+        assert_eq!(observe(state.clone(), &forged, &x, NOW + 4), state);
+        let both = view_with(vec![], vec![bobs, alices.clone()]);
+        assert_eq!(
+            observe(state, &both, &x, NOW + 5).phase,
+            MixPhase::FullOwned {
+                box_id: alices.input.box_id,
+                role: Role::Alice
+            }
+        );
+    }
+
+    #[test]
+    fn the_fee_box_must_allow_and_hold_the_fee() {
+        let mut small = fixture_fee_box();
+        small.max_fee = 1000;
+        small.value = 5_000_000_000;
+        let mut drained = fixture_fee_box();
+        drained.max_fee = 10_000_000;
+        drained.value = 1_000_000;
+        let mut fine = fixture_fee_box();
+        fine.max_fee = 10_000_000;
+        fine.value = 3_000_000_000;
+        let view = ChainView {
+            fee: vec![small.clone(), drained, fine.clone()],
+            ..view_with(vec![], vec![])
+        };
+        assert_eq!(view.fee_box_for(1_100_000).map(|f| f.value), Some(fine.value));
+        assert_eq!(view.fee_box().map(|f| f.value), Some(fine.value));
+        assert!(view.fee_box_for(20_000_000).is_none());
+        let only_small = ChainView {
+            fee: vec![small],
+            ..view_with(vec![], vec![])
+        };
+        assert!(only_small.fee_box().is_none(), "a tiny maxFee cannot pay a remix");
     }
 
     #[test]
