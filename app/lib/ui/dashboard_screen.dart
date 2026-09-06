@@ -1368,8 +1368,10 @@ class _DashboardScreenState extends State<DashboardScreen>
                   _discoverCard(
                     title: 'Duckpools',
                     onLearn: () => _go('/duckpools'),
-                    subtitle: duckpoolsService.positionLine(formatTokenAmountGrouped) ??
-                        'Lend and borrow on Ergo. Read-only for now.',
+                    subtitle: [
+                          duckpoolsService.positionLine(formatTokenAmountGrouped),
+                          duckpoolsService.loanLine(formatTokenAmountGrouped),
+                        ].whereType<String>().join(' · ').ifEmpty('Lend and borrow on Ergo against ERG collateral.'),
                     icon: Icons.water_outlined,
                     onTap: () => _go('/duckpools'),
                   ),
@@ -2107,4 +2109,8 @@ class _DashboardScreenState extends State<DashboardScreen>
       ),
     );
   }
+}
+
+extension _IfEmpty on String {
+  String ifEmpty(String fallback) => isEmpty ? fallback : this;
 }
