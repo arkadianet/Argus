@@ -121,4 +121,13 @@ void main() {
     expect(mixingTokensOn('nope', snap, 'mix'), isNull, reason: 'not in the snapshot');
     expect(mixingTokensOn(null, snap, 'mix'), isNull);
   });
+
+  test('the mixed box is the withdrawal output paying the destination', () {
+    final outs = [
+      {'boxId': 'fee', 'ergoTree': '1005...'},
+      {'boxId': 'dest', 'ergoTree': '0008CDAA'},
+    ];
+    expect(mixedOutputId(outs, '0008cdaa'), 'dest');
+    expect(mixedOutputId(outs, '0008cdbb'), isNull);
+  });
 }

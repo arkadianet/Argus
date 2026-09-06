@@ -14,7 +14,14 @@ class CoinSelection {
     required this.totalNanoErg,
     required this.tokens,
     required this.addresses,
+    this.mixedCount = 0,
   });
+
+  /// How many of the chosen boxes came out of a mix.
+  final int mixedCount;
+
+  /// True when mixed boxes would be spent next to ordinary ones.
+  bool get undoesMix => mixedCount > 0 && mixedCount < count;
 
   final List<InputBoxInput> boxes;
   final int totalNanoErg;
@@ -35,8 +42,9 @@ class CoinSelection {
 
 CoinSelection summariseSelection(
   List<InputBoxInput> all,
-  Set<String> selectedIds,
-) {
+  Set<String> selectedIds, {
+  Set<String> mixedIds = const {},
+}) {
   final chosen = [for (final b in all) if (selectedIds.contains(b.boxId)) b];
   var total = 0;
   final tokens = <String, BigInt>{};
@@ -54,6 +62,7 @@ CoinSelection summariseSelection(
     totalNanoErg: total,
     tokens: tokens,
     addresses: addresses,
+    mixedCount: chosen.where((b) => mixedIds.contains(b.boxId)).length,
   );
 }
 
@@ -91,6 +100,11 @@ CoinSelectionCheck checkSelection({
 /// One line describing the privacy cost of a selection, or null when there
 /// is nothing to warn about.
 String? selectionPrivacyNote(CoinSelection selection) {
+  if (selection.undoesMix) {
+    return '${selection.mixedCount} of these boxes came out of a mix. Spending '
+        'them with other coins ties the mixed money back to this wallet and '
+        'undoes the mix. Choose only mixed boxes, or none of them.';
+  }
   if (selection.count < 2) return null;
   if (!selection.linksAddresses) return null;
   return 'These ${selection.count} boxes sit on ${selection.addresses.length} '

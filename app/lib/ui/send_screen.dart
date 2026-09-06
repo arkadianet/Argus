@@ -16,6 +16,7 @@ import '../services/token_router.dart';
 import '../services/dexy_service.dart';
 import '../services/ergopay_service.dart';
 import '../services/coin_control.dart';
+import '../services/mix_service.dart';
 import '../services/network_controller.dart';
 import '../services/pockets.dart';
 import '../services/stealth_service.dart';
@@ -114,7 +115,8 @@ class _SendScreenState extends State<SendScreen> {
   List<InputBoxInput> _boxes = const [];
   bool _loadingBoxes = false;
 
-  CoinSelection get _selection => summariseSelection(_boxes, _chosenBoxIds);
+  CoinSelection get _selection =>
+      summariseSelection(_boxes, _chosenBoxIds, mixedIds: mixService.mixedBoxIds.toSet());
 
   /// Ids to spend. A per-box choice wins; otherwise a stealth-only send
   /// names its boxes explicitly, so ordinary coins cannot be pulled in to
@@ -1649,7 +1651,8 @@ class _InputPickerSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = ArgusColors.of(context);
-    final selection = summariseSelection(boxes, chosen);
+    final mixed = mixService.mixedBoxIds.toSet();
+    final selection = summariseSelection(boxes, chosen, mixedIds: mixed);
     final check = checkSelection(
       selection: selection,
       amountNanoErg: amountNanoErg,
@@ -1715,6 +1718,7 @@ class _InputPickerSheet extends StatelessWidget {
                           shorten(b.address!, head: 6, tail: 4)
                         else
                           'stealth',
+                        if (mixed.contains(b.boxId)) 'mixed',
                         if (tokens > 0) '$tokens token${tokens == 1 ? '' : 's'}',
                         'block ${b.creationHeight}',
                       ].join(' · '),
