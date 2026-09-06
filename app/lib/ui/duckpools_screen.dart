@@ -574,6 +574,14 @@ class _PoolCard extends StatelessWidget {
           if (market != null)
             for (final c in market!.collaterals.where((c) => c.ready))
               row('1 ${c.ticker} collateral', '${formatErg(c.unitValueNano!)} · line ${(c.threshold! / 10).toStringAsFixed(0)}%'),
+          if (market != null && market!.unpriced > 0) ...[
+            const SizedBox(height: 6),
+            SelectableText(
+              '${market!.unpriced} of your loans here could not be priced, so ${market!.unpriced == 1 ? 'it is' : 'they are'} '
+              'not listed below. Refresh once the price boxes are readable again.',
+              style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12),
+            ),
+          ],
           if (s.utilisationBps == 0) ...[
             const SizedBox(height: 6),
             Text(
