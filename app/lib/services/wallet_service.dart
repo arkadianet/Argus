@@ -1199,6 +1199,13 @@ class WalletService {
 
   /// The key for one mix, for the background job's keystore. It can spend
   /// that mix's boxes and nothing else.
+  /// Set aside the funding boxes of pending mixes so no other coin
+  /// selection spends them; an empty list frees everything.
+  void mixSetReservedFunding(String reservationsJson) {
+    if (!isUnlocked) return;
+    RustLib.instance.api.crateApiMixSetReservedFunding(handleId: _handleId!, reservationsJson: reservationsJson);
+  }
+
   Future<String> mixExportKey(int mixId) {
     _requireUnlocked();
     return RustLib.instance.api.crateApiMixExportKey(handleId: _handleId!, mixId: mixId);

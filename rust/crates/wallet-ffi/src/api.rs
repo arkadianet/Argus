@@ -1025,7 +1025,88 @@ fn resolve_spend_addresses(sender: &str, extra: &[String]) -> Vec<String> {
     spend
 }
 
+/// Boxes set aside for a pending mix: the funding box a self-send made,
+/// waiting for the entry that spends it. Anything else that selects
+/// coins (a send, a swap, another mix's funding, the UTXO tools) must
+/// leave it alone, or the entry finds no box and the mix sits pending.
+/// Keyed by wallet handle; the app keeps it current from its mix records.
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq)]
+struct FundingReservation {
+    /// Every output of the funding transaction; only the one of the
+    /// funding's exact value with no tokens is the funding box, so the
+    /// change is not held back.
+    box_ids: Vec<String>,
+    value_nano_erg: i64,
+}
+
+impl FundingReservation {
+    fn covers(&self, b: &ergo_tx::Eip12InputBox) -> bool {
+        self.box_ids.iter().any(|id| id == &b.box_id)
+            && b.assets.is_empty()
+            && b.value.parse::<i64>().ok() == Some(self.value_nano_erg)
+    }
+}
+
+static RESERVED_FUNDING: Lazy<Mutex<HashMap<u64, Vec<FundingReservation>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Set aside the funding boxes of this wallet's pending mixes. Replaces
+/// the previous set for the handle; an empty list frees everything.
+/// `reservations_json`: `[{"box_ids": [...], "value_nano_erg": 1006600000}]`.
+#[flutter_rust_bridge::frb(sync)]
+pub fn mix_set_reserved_funding(handle_id: u64, reservations_json: String) -> Result<(), String> {
+    let list: Vec<FundingReservation> = serde_json::from_str(&reservations_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let mut all = recover(RESERVED_FUNDING.lock());
+    if list.is_empty() {
+        all.remove(&handle_id);
+    } else {
+        all.insert(handle_id, list);
+    }
+    Ok(())
+}
+
+/// Drop the boxes a pending mix has set aside (see [`FundingReservation`]).
+fn without_reserved(
+    handle_id: u64,
+    boxes: Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+    eip12: Vec<ergo_tx::Eip12InputBox>,
+) -> (
+    Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+    Vec<ergo_tx::Eip12InputBox>,
+) {
+    let reserved = recover(RESERVED_FUNDING.lock())
+        .get(&handle_id)
+        .cloned()
+        .unwrap_or_default();
+    if reserved.is_empty() {
+        return (boxes, eip12);
+    }
+    boxes
+        .into_iter()
+        .zip(eip12)
+        .filter(|(_, e)| !reserved.iter().any(|r| r.covers(e)))
+        .unzip()
+}
+
+/// The wallet's unspent boxes, less what a pending mix has set aside.
 async fn gather_unspent(
+    handle_id: u64,
+    client: &ErgoNodeClient,
+    addresses: &[String],
+) -> Result<
+    (
+        Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+        Vec<ergo_tx::Eip12InputBox>,
+    ),
+    String,
+> {
+    let (boxes, eip12) = gather_unspent_all(handle_id, client, addresses).await?;
+    Ok(without_reserved(handle_id, boxes, eip12))
+}
+
+/// Every unspent box, reserved ones included: for the mix entry itself.
+async fn gather_unspent_all(
     handle_id: u64,
     client: &ErgoNodeClient,
     addresses: &[String],
@@ -3281,6 +3362,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_reserved_funding_box_is_left_out_but_its_change_is_not() {
+        fn eb(id: &str, value: i64, tokens: bool) -> ergo_tx::Eip12InputBox {
+            ergo_tx::Eip12InputBox {
+                box_id: id.into(),
+                transaction_id: "t".into(),
+                index: 0,
+                value: value.to_string(),
+                ergo_tree: "0008cd".into(),
+                assets: if tokens { vec![ergo_tx::Eip12Asset::new("aa", 1)] } else { vec![] },
+                creation_height: 1,
+                additional_registers: Default::default(),
+                extension: Default::default(),
+            }
+        }
+        let handle = 77_777;
+        mix_set_reserved_funding(
+            handle,
+            r#"[{"box_ids": ["fund", "change"], "value_nano_erg": 1006600000}]"#.into(),
+        )
+        .unwrap();
+        // Clone out of the lock: the setter below takes it again.
+        let r = recover(RESERVED_FUNDING.lock())[&handle][0].clone();
+        assert!(r.covers(&eb("fund", 1_006_600_000, false)));
+        assert!(!r.covers(&eb("change", 5_000, false)), "the change box is free");
+        assert!(!r.covers(&eb("fund", 1_006_600_000, true)), "tokens: not the funding box");
+        assert!(!r.covers(&eb("other", 1_006_600_000, false)), "another wallet box of the same size");
+        assert!(!recover(RESERVED_FUNDING.lock()).contains_key(&(handle + 1)));
+        mix_set_reserved_funding(handle, "[]".into()).unwrap();
+        assert!(!recover(RESERVED_FUNDING.lock()).contains_key(&handle));
+        assert!(mix_set_reserved_funding(handle, "nope".into()).is_err());
+    }
+
+    #[test]
     fn mix_miner_fee_defaults_and_refuses_below_the_minimum() {
         assert_eq!(mix_miner_fee(None).unwrap(), TX_FEE_NANO);
         assert_eq!(
@@ -3685,7 +3799,7 @@ pub async fn mix_prepare_entry(
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
     let miner_fee = mix_miner_fee(fee_nano)?;
     let client = node_client(node_url.clone()).await?;
-    let (_, unspent) = gather_unspent(handle_id, &client, &[funding_address]).await?;
+    let (_, unspent) = gather_unspent_all(handle_id, &client, &[funding_address]).await?;
     let funding = unspent
         .iter()
         .find(|b| b.box_id == funding_box_id)

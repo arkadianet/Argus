@@ -253,6 +253,9 @@ class _MixScreenState extends State<MixScreen> {
             content: const Text(
               'Argus will use the public ErgoMixer pool and its contracts. The '
               'operator charges a fee on every entry, shown before you confirm. '
+              'A mix is only as private as the node Argus talks to: that node '
+              'sees which pool boxes are yours and where the money ends up, so '
+              'use your own node for mixing if you can (Settings → Network). '
               'Some app stores do not allow a wallet with a built-in mixer, so '
               'this stays off unless you choose it. You can turn it off again '
               'in Settings → Security.',
@@ -304,7 +307,8 @@ class _MixScreenState extends State<MixScreen> {
                   'in the public ErgoMixer pool, so nothing on chain ties what comes '
                   'out to what went in. Entering costs an operator fee, each round '
                   'needs a counterpart, and a mix can take hours or days. It only '
-                  'moves while Argus is open and unlocked.',
+                  'moves while Argus is open and unlocked. The node Argus uses '
+                  'still sees which boxes are yours: mix through your own node.',
               actionLabel: 'Turn on mixing',
               onAction: _working ? null : _enable,
             );
@@ -317,7 +321,9 @@ class _MixScreenState extends State<MixScreen> {
                 'A mix moves a fixed amount through rounds with strangers until '
                 'nothing on chain ties what comes out to what went in. Each round '
                 'needs a counterpart, so a mix can take hours or days. The pool is '
-                'shared with ErgoMixer; today it is thin.',
+                'shared with ErgoMixer; today it is thin. The node Argus talks to '
+                'sees which pool boxes are yours and the withdrawal, so a mix is '
+                'only as private as that node: use your own where you can.',
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
               const SizedBox(height: 8),

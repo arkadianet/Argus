@@ -11,6 +11,9 @@ class FakeGateway implements MixGateway {
   String? wallet = 'w1';
   final calls = <String>[];
   final notifications = <String>[];
+  String reserved = '[]';
+  @override
+  void setReservedFunding(String reservationsJson) => reserved = reservationsJson;
 
   /// Script for `observe`, `plan`, `advance`, `leave`, `recover`, keyed by
   /// call name; each is consumed in order, the last repeats.
@@ -707,6 +710,29 @@ void main() {
     await svc.setForeground(false);
     await Future<void>.delayed(Duration.zero);
     expect(wanted.last, isFalse);
+  });
+
+  test('a pending mix sets its funding box aside until it enters the pool', () async {
+    final gw = FakeGateway();
+    SharedPreferences.setMockInitialValues({'argus_mixing_enabled': true});
+    final svc = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post);
+    await svc.load();
+    expect(gw.reserved, '[]');
+    final created = await svc.createMix(denomination: 1000000000, level: 20, rounds: 1, destinationAddress: '9a', fundingNano: 1006600000);
+    expect(gw.reserved, '[]', reason: 'no funding transaction yet');
+    await svc.recordFunding(created, txId: 'tx7', outputBoxIds: ['fund1', 'change1']);
+    expect(jsonDecode(gw.reserved), [
+      {'box_ids': ['fund1', 'change1'], 'value_nano_erg': 1006600000}
+    ]);
+    // A fresh load (a restart) sets it again from disk.
+    final again = MixService(gateway: gw, get: FakeExplorer().get, post: FakeExplorer().post);
+    gw.reserved = '[]';
+    await again.load();
+    expect(jsonDecode(gw.reserved), hasLength(1));
+    await svc.commitEntry(created, state(mixId: 0, kind: 'half_posted', boxId: 'hb', done: 0), 'tx');
+    expect(gw.reserved, '[]', reason: 'in the pool: the funding box is spent');
+    svc.reset();
+    expect(gw.reserved, '[]');
   });
 
   test('turning mixing off also turns background mixing off and deletes every key', () async {

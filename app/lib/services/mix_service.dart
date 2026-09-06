@@ -127,6 +127,10 @@ abstract class MixGateway {
   String? get nodeUrl;
   String get explorerBase;
 
+  /// Tell coin selection which boxes pending mixes have set aside:
+  /// `[{"box_ids": [...], "value_nano_erg": n}]`; `[]` frees them all.
+  void setReservedFunding(String reservationsJson);
+
   /// The chain height the wallet already knows from its node, if any.
   int? get chainHeight;
 
@@ -204,6 +208,8 @@ class LiveMixGateway implements MixGateway {
   String get explorerBase => networkController.explorer;
   @override
   int? get chainHeight => networkController.height;
+  @override
+  void setReservedFunding(String reservationsJson) => walletService.mixSetReservedFunding(reservationsJson);
 
   @override
   String contractTrees() => bridge.mixContractTrees();
@@ -548,6 +554,7 @@ class MixService extends ChangeNotifier {
         }
       }
     }
+    _syncReserved();
     _reschedule();
     notifyListeners();
   }
@@ -677,6 +684,7 @@ class MixService extends ChangeNotifier {
     _generation++;
     _walletId = null;
     records = const [];
+    _syncReserved();
     lastTickError = null;
     notifyListeners();
   }
@@ -713,8 +721,25 @@ class MixService extends ChangeNotifier {
     if (id == null) return false;
     final prefs = await SharedPreferences.getInstance();
     final ok = await prefs.setString(_recordsKey(id), jsonEncode([for (final r in records) r.toJson()]));
+    _syncReserved();
     notifyListeners();
     return ok;
+  }
+
+  /// What pending mixes have set aside, as coin selection must see it.
+  String reservedFundingJson() => jsonEncode([
+        for (final r in records)
+          if (r.pending && r.fundingNano != null && r.fundingBoxIds.isNotEmpty)
+            {'box_ids': r.fundingBoxIds, 'value_nano_erg': r.fundingNano},
+      ]);
+
+  void _syncReserved() {
+    try {
+      _gw.setReservedFunding(reservedFundingJson());
+    } catch (_) {
+      // A locked wallet has no coin selection to protect; the next load
+      // or persist while unlocked sets the reservation again.
+    }
   }
 
   Map<String, String> get _trees {
