@@ -1,0 +1,13 @@
+[package]
+name = "sigmafi"
+version = "0.1.0"
+edition = "2021"
+description = "SigmaFi peer-to-peer bonds on Ergo: contracts, the open market, and the transactions that open, fill, repay and settle a bond"
+
+[dependencies]
+ergo-chain-types = { workspace = true }
+ergo-tx = { workspace = true, features = ["ergo-lib"] }
+hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

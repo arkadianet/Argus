@@ -50,9 +50,10 @@ class FakeGateway implements DuckpoolsGateway {
   List<String>? lastLoanAddresses;
   String? lastPrepareLoanBoxes;
 
-  /// Health the fake reports for the wallet's loan, so a test can tell
-  /// one read's result from another's.
+  /// Health the fake reports for the wallet's loan, and whether it is
+  /// liquidatable; the forced height stays at 1 920 515.
   int healthBps = 18594;
+  bool liquidatable = false;
 
   @override
   Future<String> loans(String loanBoxesJson, List<String> walletAddresses, int height) async {
@@ -70,14 +71,21 @@ class FakeGateway implements DuckpoolsGateway {
               'pool': 'sigusd', 'ticker': 'SigUSD', 'decimals': 2, 'box_id': c['boxId'],
               'collateral_nano': c['value'], 'loan': 23899, 'owed': 23939, 'collateral_value': 62316,
               'threshold': 1400, 'penalty': 400, 'health_bps': healthBps, 'liquidation_value': 33514,
-              'liquidatable': false, 'forced_liquidation_height': 1920515,
+              'liquidatable': liquidatable, 'forced_liquidation_height': 1920515,
             },
       ],
       'markets': [
-        if ((root['params'] as List).isNotEmpty)
+        if ((root['params'] as List).any((b) => b['boxId'] == 'param'))
           {'pool': 'sigusd', 'ticker': 'SigUSD', 'decimals': 2, 'threshold': 1400, 'penalty': 400, 'erg_value': 25, 'loans': collateral.length}
         else
           {'pool': 'sigusd', 'ticker': 'SigUSD', 'decimals': 2, 'error': 'the SigUSD parameter box is missing'},
+        {
+          'pool': 'erg', 'ticker': 'ERG', 'decimals': 9, 'loans': 0, 'unpriced': 1,
+          'collaterals': [
+            {'asset': '03faf2', 'ticker': 'SigUSD', 'decimals': 2, 'dex_nft': 'dex-sigusd', 'threshold': 1250, 'penalty': 300, 'unit_value_nano': 3700000000, 'ready': true},
+            {'asset': '8b08cd', 'ticker': 'RSN', 'decimals': 3, 'dex_nft': 'dex-rsn', 'ready': false},
+          ],
+        },
       ],
     });
   }
@@ -89,15 +97,22 @@ class FakeGateway implements DuckpoolsGateway {
     required String poolKey,
     required String kind,
     required int amount,
-    required int collateralNano,
+    required String collateralAsset,
+    required int collateralAmount,
     required String collateralBoxId,
     required int height,
   }) =>
       jsonEncode(switch (kind) {
+        'borrow' when collateralAsset.isNotEmpty => {
+            'kind': kind, 'pool': poolKey, 'loan': amount, 'collateral_asset': collateralAsset,
+            'collateral_amount': collateralAmount, 'collateral_nano': 4000000,
+            'collateral_value': collateralAmount * 37000000, 'max_loan': collateralAmount * 29600000,
+            'threshold': 1250, 'penalty': 300, 'health_bps': 20000, 'box_value': 6000000,
+          },
         'borrow' => {
-            'kind': kind, 'pool': poolKey, 'loan': amount, 'collateral_nano': collateralNano,
-            'collateral_value': collateralNano ~/ 40000000, 'max_loan': collateralNano ~/ 56000000,
-            'threshold': 1400, 'penalty': 400, 'health_bps': 15000, 'box_value': collateralNano + 2000000,
+            'kind': kind, 'pool': poolKey, 'loan': amount, 'collateral_amount': collateralAmount, 'collateral_nano': collateralAmount,
+            'collateral_value': collateralAmount ~/ 40000000, 'max_loan': collateralAmount ~/ 56000000,
+            'threshold': 1400, 'penalty': 400, 'health_bps': 15000, 'box_value': collateralAmount + 2000000,
           },
         'repay' => {
             'kind': kind, 'pool': poolKey, 'collateral_box_id': collateralBoxId, 'owed_now': 23939,
@@ -121,7 +136,8 @@ class FakeGateway implements DuckpoolsGateway {
     required List<String> spendAddresses,
     required String changeAddress,
     String? loanBoxesJson,
-    int? collateralNano,
+    String? collateralAsset,
+    int? collateralAmount,
     String? collateralBoxId,
   }) async {
     lastPrepareLoanBoxes = loanBoxesJson;
@@ -131,7 +147,8 @@ class FakeGateway implements DuckpoolsGateway {
       'quote': loanSide
           ? jsonDecode(loanQuote(
               poolBoxesJson: poolBoxesJson, loanBoxesJson: loanBoxesJson ?? '', poolKey: poolKey, kind: kind,
-              amount: amount, collateralNano: collateralNano ?? 0, collateralBoxId: collateralBoxId ?? '', height: 1000))
+              amount: amount, collateralAsset: collateralAsset ?? '', collateralAmount: collateralAmount ?? 0,
+              collateralBoxId: collateralBoxId ?? '', height: 1000))
           : jsonDecode(quote(poolBoxesJson, poolKey, kind, amount, slippageBps, 1000 + refundAfterBlocks)),
       'proxy_box_id': 'proxy-$kind',
       'refund_height': 1000 + refundAfterBlocks,
@@ -146,6 +163,33 @@ class FakeGateway implements DuckpoolsGateway {
   @override
   String orderOutcome(String kind, String proxyBoxId, String txJson) =>
       jsonEncode(outcomes[proxyBoxId] ?? {'outcome': 'unknown'});
+  String? lastAdjustLoanBoxes;
+  @override
+  String adjustQuote(String loanBoxesJson, String poolKey, String collateralBoxId, int newAmount, int height) {
+    if (newAmount < 1338000000000) throw StateError('that leaves the loan at or below its liquidation line');
+    return jsonEncode({
+      'pool': poolKey, 'collateral_box_id': collateralBoxId, 'current_amount': 2500000000000, 'new_amount': newAmount,
+      'delta': newAmount - 2500000000000, 'owed': 23939, 'collateral_value_after': newAmount ~/ 40000000,
+      'liquidation_value': 33514, 'health_after_bps': newAmount ~/ 40000000 * 10000 ~/ 33514, 'min_amount': 1338000000000,
+    });
+  }
+  @override
+  Future<String> prepareAdjust({
+    required String loanBoxesJson,
+    required String poolKey,
+    required String collateralBoxId,
+    required int newAmount,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+  }) async {
+    lastAdjustLoanBoxes = loanBoxesJson;
+    return jsonEncode({
+      'preparation_id': 11,
+      'quote': jsonDecode(adjustQuote(loanBoxesJson, poolKey, collateralBoxId, newAmount, 1)),
+      'height': 1000, 'miner_fee': 1100000,
+    });
+  }
 
   @override
   String pools() => jsonEncode([
@@ -155,6 +199,12 @@ class FakeGateway implements DuckpoolsGateway {
           'lend_token': 'fc888e0eed50a4042324793a7894134d83c7aaf5c99f4bf643e7e2b4e71e0095',
           'borrow_token': 'd90d4000ed4b826856b93fc3d1e2c10ecb8a08dc0172fe72f58c43d28e681b49',
           'currency_id': null, 'ergo_tree': 'aa', 'interest_param_nft': 'ip-erg',
+          'param_nft': 'param-erg', 'child_nft': 'child-erg', 'parent_nft': 'parent-erg',
+          'collateral_ergo_tree': 'ce', 'erg_dex_nft': null, 'dex_nfts': ['dex-sigusd', 'dex-rsn'],
+          'token_collaterals': [
+            {'id': '03faf2', 'ticker': 'SigUSD', 'decimals': 2, 'dex_nft': 'dex-sigusd'},
+            {'id': '8b08cd', 'ticker': 'RSN', 'decimals': 3, 'dex_nft': 'dex-rsn'},
+          ],
         },
         {
           'key': 'sigusd', 'ticker': 'SigUSD', 'decimals': 2,
@@ -162,7 +212,7 @@ class FakeGateway implements DuckpoolsGateway {
           'lend_token': '99fd3c29dd4485bcb9cabd3574a66435a8c699bef8783ce71bc3edbb7b39e4cd',
           'borrow_token': '1d7857', 'currency_id': '03faf2', 'ergo_tree': 'bb', 'interest_param_nft': 'ip-sigusd',
           'param_nft': 'param-sigusd', 'child_nft': 'child-sigusd', 'parent_nft': 'parent-sigusd',
-          'collateral_ergo_tree': 'cc', 'erg_dex_nft': 'dex-sigusd',
+          'collateral_ergo_tree': 'cc', 'erg_dex_nft': 'dex-sigusd', 'dex_nfts': ['dex-sigusd'],
         },
       ]);
 
@@ -443,18 +493,27 @@ void main() {
     expect(gw.lastLoanAddresses, ['9me', '9me-2']);
     final sent = (jsonDecode(gw.lastLoanBoxes!) as Map).cast<String, dynamic>();
     expect((sent['collateral'] as List).length, 102, reason: 'Rust picks the wallet\'s among all loans');
-    expect((sent['children'] as List).single['boxId'], 'child-sigusd');
+    expect((sent['children'] as List).map((b) => b['boxId']).toSet(), {'child-sigusd', 'child-erg'});
     expect(svc.loans.single.boxId, 'loan-1');
     expect(svc.loans.single.owed, 23939);
     expect(svc.loans.single.ratioPercent, closeTo(260.3, 0.1));
     expect(svc.marketFor('sigusd')!.ready, isTrue);
     expect(svc.loanLine((a, d) => (a / 100).toStringAsFixed(2)), 'You owe 239.39 SigUSD');
+    // Every price source of every borrowing pool was asked for.
+    expect((sent['dex'] as List).map((b) => b['boxId']).toSet(), {'dex-sigusd', 'dex-rsn'});
+    final erg = svc.marketFor('erg')!;
+    expect(erg.ready, isTrue, reason: 'one priced token is enough to borrow ERG');
+    expect(erg.collaterals.where((c) => c.ready).single.ticker, 'SigUSD');
+    expect(erg.unpriced, 1, reason: 'a loan no price box covers is counted, not silently dropped');
+    expect(svc.marketFor('sigusd')!.unpriced, 0);
+    expect(svc.pools.first.collateralUnit('03faf2'), ('SigUSD', 2));
+    expect(svc.pools.first.collateralUnit(null), ('ERG', 9));
 
     // A borrow order records the collateral; a repayment names the loan.
     svc.lastPoolBoxesJson = '[]';
     final borrow = await svc.commitOrder(
       await svc.prepareOrder(
-        poolKey: 'sigusd', kind: 'borrow', amount: 1000, collateralNano: 100000000000,
+        poolKey: 'sigusd', kind: 'borrow', amount: 1000, collateralAmount: 100000000000,
         userAddress: '9me', spendAddresses: const [], changeAddress: '9me',
       ),
       'tx-b',
@@ -462,7 +521,19 @@ void main() {
     expect(gw.lastPrepareLoanBoxes, gw.lastLoanBoxes, reason: 'the loan snapshot rides along');
     expect(borrow.amount, 1000);
     expect(borrow.collateralNano, 100000000000);
+    expect(borrow.collateralAsset, isNull);
     expect(borrow.isLoanSide, isTrue);
+    // Borrowing ERG against SigUSD records the token and its amount.
+    final ergBorrow = await svc.commitOrder(
+      await svc.prepareOrder(
+        poolKey: 'erg', kind: 'borrow', amount: 1000000000000, collateralAsset: '03faf2', collateralAmount: 100000,
+        userAddress: '9me', spendAddresses: const [], changeAddress: '9me',
+      ),
+      'tx-eb',
+    );
+    expect(ergBorrow.collateralAsset, '03faf2');
+    expect(ergBorrow.collateralNano, 100000);
+    expect(ergBorrow.amount, 1000000000000);
     final repay = await svc.commitOrder(
       await svc.prepareOrder(
         poolKey: 'sigusd', kind: 'repay', amount: 0, collateralBoxId: 'loan-1',
@@ -476,6 +547,17 @@ void main() {
     final quote = svc.loanQuote(poolKey: 'sigusd', kind: 'partial_repay', amount: 5000, collateralBoxId: 'loan-1');
     expect(quote['owed_after'], 18939);
 
+    // A collateral adjustment quotes against the same snapshot and needs no order.
+    final adj = svc.adjustQuote(poolKey: 'sigusd', collateralBoxId: 'loan-1', newAmount: 1500000000000);
+    expect(adj['delta'], -1000000000000);
+    expect(() => svc.adjustQuote(poolKey: 'sigusd', collateralBoxId: 'loan-1', newAmount: 1000000000000), throwsStateError);
+    final preparedAdj = await svc.prepareAdjust(
+      poolKey: 'sigusd', collateralBoxId: 'loan-1', newAmount: 2600000000000,
+      userAddress: '9me', spendAddresses: const [], changeAddress: '9me',
+    );
+    expect(preparedAdj['preparation_id'], 11);
+    expect(gw.lastAdjustLoanBoxes, gw.lastLoanBoxes);
+    expect(svc.orders.where((o) => o.kind == 'adjust'), isEmpty);
     // A pool whose collateral boxes cannot be read says so on its market
     // rather than looking fine with the loans silently missing.
     var collateralDown = true;
@@ -541,6 +623,95 @@ void main() {
     expect(svc.marketFor('sigusd')!.ready, isFalse);
     expect(svc.marketFor('sigusd')!.error, contains('parameter box'));
     expect(svc.loans.single.boxId, 'loan-1', reason: 'positions still read from the collateral boxes');
+  });
+
+  test('loan alert levels follow the health and the deadline', () {
+    DuckLoan loan(int health, {bool liq = false, int forced = 2000000}) => DuckLoan(
+          pool: 'sigusd', ticker: 'SigUSD', decimals: 2, boxId: 'b', collateralNano: 1, loan: 1, owed: 1,
+          collateralValue: 1, threshold: 1400, penalty: 400, healthBps: health, liquidationValue: 1,
+          liquidatable: liq, forcedLiquidationHeight: forced,
+        );
+    expect(duckAlertLevel(loan(18594)), isNull);
+    expect(duckAlertLevel(loan(13000)), isNull, reason: 'the line itself is fine');
+    expect(duckAlertLevel(loan(12999)), DuckAlertLevel.watch);
+    expect(duckAlertLevel(loan(11499)), DuckAlertLevel.danger);
+    expect(duckAlertLevel(loan(20000, liq: true)), DuckAlertLevel.liquidatable);
+    expect(duckDeadlineNear(loan(1, forced: 1002160), 1000000), isTrue);
+    expect(duckDeadlineNear(loan(1, forced: 1002161), 1000000), isFalse);
+    expect(duckDeadlineNear(loan(1, forced: 1002160), null), isFalse, reason: 'no height, no claim');
+  });
+
+  test('a loan crossing a line is announced once per level, and the watch record feeds the background job', () async {
+    SharedPreferences.setMockInitialValues({});
+    final gw = FakeGateway(node: 'http://node')..height = 1866418;
+    final notified = <String>[];
+    final scheduled = <bool>[];
+    final myLoan = {'boxId': 'loan-1', 'value': 2500000000000, 'ergoTree': 'cc', 'borrower': '9me'};
+    final svc = DuckpoolsService(
+      gateway: gw,
+      get: (uri) async {
+        final p = uri.path;
+        if (p.contains('byTokenId/')) return jsonEncode([{'boxId': p.split('/').last}]);
+        throw StateError('unexpected $uri');
+      },
+      post: (uri, body) async => jsonEncode(body == '"cc"' ? [myLoan] : []),
+      notify: ({required loanId, required title, required body}) async => notified.add('$loanId $title'),
+      schedule: (wanted) async => scheduled.add(wanted),
+    );
+    await svc.load();
+    await svc.refreshLoans(const ['9me']);
+    expect(notified, isEmpty, reason: 'healthy');
+    expect(scheduled, [true], reason: 'a loan exists, so the background check is on');
+
+    gw.healthBps = 12500;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified, ['loan-1 Loan health falling']);
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.length, 1, reason: 'the same level is not repeated');
+
+    gw.healthBps = 11000;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.last, 'loan-1 Loan close to liquidation');
+    gw.healthBps = 12500;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.length, 2, reason: 'a milder level after a worse one says nothing');
+
+    // Recovery resets, so the next fall speaks again.
+    gw.healthBps = 20000;
+    await svc.refreshLoans(const ['9me']);
+    gw.healthBps = 12500;
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.length, 3);
+
+    // The deadline, once.
+    gw.height = 1920515 - 2000;
+    await svc.refreshLoans(const ['9me']);
+    await svc.refreshLoans(const ['9me']);
+    expect(notified.where((n) => n.contains('deadline')).length, 1);
+
+    // The record the background job reads.
+    final prefs = await SharedPreferences.getInstance();
+    final record = jsonDecode(prefs.getString('argus_duck_watch_v1_w1')!) as Map;
+    expect(record['addresses'], ['9me']);
+    expect((record['alerted'] as Map)['loan-1:health'], DuckAlertLevel.watch.index);
+
+    // The headless pass reads by the recorded addresses, wallet locked.
+    gw.liquidatable = true;
+    await svc.tickHeadless();
+    expect(notified.last, 'loan-1 Loan can be liquidated');
+    expect(gw.lastLoanAddresses, ['9me']);
+
+    // Another wallet with no loans must not stop watching this one's.
+    myLoan['borrower'] = '9someone';
+    gw.wallet = 'w2';
+    await svc.refreshLoans(const ['9other'], walletId: 'w2');
+    expect(svc.loans, isEmpty);
+    expect(scheduled.last, isTrue, reason: 'wallet w1 still has a loan to watch');
+    gw.wallet = 'w1';
+
+    // Once the loan is gone the job is cancelled.
+    await svc.tickHeadless();
+    expect(scheduled.last, isFalse);
   });
 
   test('a refund is prepared only for an unspent order box', () async {
