@@ -1215,6 +1215,54 @@ class WalletService {
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
+  // ── Duckpools ───────────────────────────────────────────────────────
+
+  /// Prepare a lend or withdraw order; confirm with [sendErg].
+  Future<String> duckpoolsPrepareOrder({
+    required String poolBoxesJson,
+    required String poolKey,
+    required String kind,
+    required int amount,
+    required int slippageBps,
+    required int refundAfterBlocks,
+    required String userAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    String? nodeUrl,
+    int? feeNanoErg,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiDuckpoolsPrepareOrder(
+      handleId: _handleId!,
+      poolBoxesJson: poolBoxesJson,
+      poolKey: poolKey,
+      kind: kind,
+      amount: amount,
+      slippageBps: slippageBps,
+      refundAfterBlocks: refundAfterBlocks,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
+      changeAddress: changeAddress,
+      nodeUrl: nodeUrl,
+      feeNano: feeNanoErg,
+    );
+  }
+
+  /// Prepare the refund of an unfilled order; confirm with [sendErg].
+  Future<String> duckpoolsPrepareRefund({
+    required String proxyBoxJson,
+    required String userAddress,
+    String? nodeUrl,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiDuckpoolsPrepareRefund(
+      handleId: _handleId!,
+      proxyBoxJson: proxyBoxJson,
+      userAddress: userAddress,
+      nodeUrl: nodeUrl,
+    );
+  }
+
   /// Withdraw or reclaim a mix now.
   Future<String> mixLeave({
     required String stateJson,

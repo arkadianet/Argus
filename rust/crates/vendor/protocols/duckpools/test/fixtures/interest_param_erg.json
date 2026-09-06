@@ -1,0 +1,33 @@
+{
+ "boxId": "8837a9d5d5a084f9089b37c5ef1f620aaafc870e05380d67046f02fef10ac7ef",
+ "transactionId": "76c451e9716f58b8562a224252d9b6859fbb281f40f37a803ef41e31e3764213",
+ "blockId": "c017f5c94a5b6386f6419fa042205f0b3ecc35d122f38f81233a4b191c53f1b1",
+ "value": 500000000,
+ "index": 0,
+ "globalIndex": 6452028,
+ "creationHeight": 1289951,
+ "settlementHeight": 1289953,
+ "ergoTree": "100208cd03f0dbaa5d7b67fac2130f5cb7166bcf4b19bee4ba88567830935d242b972fef300404ea027300d191a37301",
+ "ergoTreeConstants": "[\n  0: SSigmaProp = SigmaProp(ProveDlog(ECPoint(f0dbaa,8779c5,...))),\n  1: SInt$ = 2\n]",
+ "ergoTreeScript": "Right(SigmaAnd(WrappedArray(ConstantPlaceholder(0,SSigmaProp), BoolToSigmaProp(GT(Height$(163),ConstantPlaceholder(1,SInt$))))))",
+ "address": "4FC5xSYeegVB8di7x32bsivdUmRm9NaVXchDp9haCWG33xci9EEnpTd7ZXnZz2PpPs9D9dvq",
+ "assets": [
+  {
+   "tokenId": "54e175e1491af439c10652db7685651c7e57530d18a31c5b46e0b85f6bfb9b18",
+   "index": 0,
+   "amount": 1,
+   "name": "Parameter Interest ERG-0e",
+   "decimals": 0,
+   "type": "EIP-004"
+  }
+ ],
+ "additionalRegisters": {
+  "R4": {
+   "serializedValue": "1106d407c03e0000b0e702e09901",
+   "sigmaType": "Coll[SLong]",
+   "renderedValue": "[490,4000,0,0,23000,9840]"
+  }
+ },
+ "spentTransactionId": null,
+ "mainChain": true
+}
