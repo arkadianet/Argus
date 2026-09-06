@@ -32,8 +32,8 @@ pub mod state;
 pub use adjust::{build_adjust_tx, AdjustDataInputs, AdjustQuote};
 pub use interest::{InterestParams, Rates};
 pub use loans::{
-    classify_loan_spend, positions, BorrowQuote, CollateralBox, DexPrice, InterestHistory,
-    LoanParams, LoanPosition, OrderKind, PartialRepayQuote, RepayQuote,
+    classify_loan_spend, positions, unpriced_loans, BorrowQuote, CollateralBox, DexPrice,
+    InterestHistory, LoanParams, LoanPosition, OrderKind, PartialRepayQuote, RepayQuote,
 };
 pub use orders::{
     build_order_tx, build_refund_tx, classify_spend, LendQuote, OrderOutcome, ProxyBox,

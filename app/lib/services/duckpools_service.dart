@@ -74,7 +74,7 @@ class DuckPool {
     for (final c in tokenCollaterals) {
       if (c.id == asset) return (c.ticker, c.decimals);
     }
-    return (asset.substring(0, 8), 0);
+    return (asset.length > 8 ? asset.substring(0, 8) : asset, 0);
   }
 
   static DuckPool fromJson(Map<String, dynamic> m) => DuckPool(
@@ -202,6 +202,7 @@ class DuckMarket {
     this.loans,
     this.error,
     this.collaterals = const [],
+    this.unpriced = 0,
   });
 
   final String pool;
@@ -222,6 +223,10 @@ class DuckMarket {
   /// The ERG pool's token collaterals and their terms.
   final List<DuckMarketCollateral> collaterals;
 
+  /// The wallet's loans here that no price box covered, so they are not
+  /// in [DuckpoolsService.loans].
+  final int unpriced;
+
   /// Whether a borrow can be quoted: ERG terms for a token pool, or at
   /// least one token collateral with a price for the ERG pool.
   bool get ready => error == null && ((threshold != null && ergValue != null) || collaterals.any((c) => c.ready));
@@ -238,6 +243,7 @@ class DuckMarket {
         collaterals: [
           for (final c in (m['collaterals'] as List? ?? const [])) DuckMarketCollateral.fromJson((c as Map).cast()),
         ],
+        unpriced: (m['unpriced'] as num?)?.toInt() ?? 0,
       );
 }
 

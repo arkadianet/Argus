@@ -80,7 +80,7 @@ class FakeGateway implements DuckpoolsGateway {
         else
           {'pool': 'sigusd', 'ticker': 'SigUSD', 'decimals': 2, 'error': 'the SigUSD parameter box is missing'},
         {
-          'pool': 'erg', 'ticker': 'ERG', 'decimals': 9, 'loans': 0,
+          'pool': 'erg', 'ticker': 'ERG', 'decimals': 9, 'loans': 0, 'unpriced': 1,
           'collaterals': [
             {'asset': '03faf2', 'ticker': 'SigUSD', 'decimals': 2, 'dex_nft': 'dex-sigusd', 'threshold': 1250, 'penalty': 300, 'unit_value_nano': 3700000000, 'ready': true},
             {'asset': '8b08cd', 'ticker': 'RSN', 'decimals': 3, 'dex_nft': 'dex-rsn', 'ready': false},
@@ -504,6 +504,8 @@ void main() {
     final erg = svc.marketFor('erg')!;
     expect(erg.ready, isTrue, reason: 'one priced token is enough to borrow ERG');
     expect(erg.collaterals.where((c) => c.ready).single.ticker, 'SigUSD');
+    expect(erg.unpriced, 1, reason: 'a loan no price box covers is counted, not silently dropped');
+    expect(svc.marketFor('sigusd')!.unpriced, 0);
     expect(svc.pools.first.collateralUnit('03faf2'), ('SigUSD', 2));
     expect(svc.pools.first.collateralUnit(null), ('ERG', 9));
 
