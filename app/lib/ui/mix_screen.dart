@@ -813,8 +813,11 @@ class _StartMixSheetState extends State<_StartMixSheet> {
           rate: (l['rate'] as num?)?.toInt() ?? (widget.pool['token_rate'] as num?)?.toInt() ?? 0,
         ),
     ];
-    // Prefer a ring with someone waiting that the wallet can fund, and the
-    // cheapest token batch.
+    // The cheapest token batch first: what a token ring needs (ring amount
+    // plus commission) depends on the level's rate, so the level is known
+    // before any ring is judged fundable. Then prefer a fundable ring with
+    // someone waiting.
+    _level = _levels.isEmpty ? null : _levels.first.level;
     final fundable = _rings.indexed.where((e) => _held(e.$2) == null).toList();
     final waiting = fundable.where((e) => e.$2.waiting > 0).toList();
     _selected = _rings.isEmpty
@@ -824,7 +827,6 @@ class _StartMixSheetState extends State<_StartMixSheet> {
             : fundable.isNotEmpty
                 ? fundable.first.$1
                 : 0;
-    _level = _levels.isEmpty ? null : _levels.first.level;
   }
 
   _Ring? get _ring => _selected == null ? null : _rings[_selected!];
@@ -877,7 +879,10 @@ class _StartMixSheetState extends State<_StartMixSheet> {
   Widget build(BuildContext context) {
     final muted = ArgusColors.of(context).muted;
     final theme = Theme.of(context);
-    final canStart = _ring != null && _level != null;
+    // A level change can raise a token ring's commission past what the
+    // wallet holds, so the chosen ring is judged again here, not only when
+    // it was tapped.
+    final canStart = _ring != null && _level != null && _held(_ring!) == null;
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + MediaQuery.of(context).viewInsets.bottom),
