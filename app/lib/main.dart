@@ -34,6 +34,7 @@ import 'ui/liquidity_screen.dart';
 import 'ui/rosen_screen.dart';
 import 'ui/mix_screen.dart';
 import 'ui/token_tools_screen.dart';
+import 'ui/discover_screen.dart';
 import 'ui/utxo_management_screen.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
@@ -139,6 +140,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/tx' => const TransactionDetailScreen(),
               '/utxos' => const UtxoManagementScreen(),
               '/tokens' => const TokenToolsScreen(),
+              '/discover' => const DiscoverScreen(),
               '/mix' => const MixScreen(),
               '/duckpools' => const DuckpoolsScreen(),
               '/dapps' => const DappBrowserScreen(),

@@ -46,6 +46,7 @@ import 'wallet_dialogs.dart';
 import 'wallets_overview_screen.dart';
 import 'widgets/activity_tile.dart';
 import 'widgets/asset_tile.dart';
+import 'discover_screen.dart';
 import 'widgets/discover_sheet.dart';
 import 'widgets/action_row.dart';
 import 'widgets/mix_strip.dart';
@@ -1373,8 +1374,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ),
                   ),
             const SizedBox(height: 28),
-            _sectionHeader('Discover',
-                action: 'Explore all', onTap: () => _goHub(SwapVenue.dexy)),
+            _sectionHeader('Discover', action: 'Explore all', onTap: _exploreAll),
             const SizedBox(height: 10),
             SizedBox(
               height: 168,
@@ -1382,74 +1382,64 @@ class _DashboardScreenState extends State<DashboardScreen>
                 scrollDirection: Axis.horizontal,
                 children: [
                   _discoverCard(
-                    title: 'Dexy',
-                    onLearn: () => _openDiscover(SwapVenue.dexy),
+                    feature: DiscoverFeature.dexy,
                     subtitle: _positionLine(
-                          ids: [
-                            for (final v in DexyVariant.values) ...[v.tokenId, v.lpTokenId],
-                          ],
-                        ) ??
-                        'Trade, provide liquidity, and mint on Ergo.',
-                    icon: Icons.all_inclusive,
-                    onTap: () => _goHub(SwapVenue.dexy),
+                      ids: [
+                        for (final v in DexyVariant.values) ...[v.tokenId, v.lpTokenId],
+                      ],
+                    ),
                   ),
                   _discoverCard(
-                    title: 'AgeUSD',
-                    onLearn: () => _openDiscover(SwapVenue.ageusd),
-                    subtitle: _positionLine(ids: const [SigmaUsdTokens.sigUsd, SigmaUsdTokens.sigRsv]) ??
-                        'The decentralized stablecoin on Ergo.',
-                    icon: Icons.attach_money,
-                    onTap: () => _goHub(SwapVenue.ageusd),
+                    feature: DiscoverFeature.ageusd,
+                    subtitle: _positionLine(ids: const [SigmaUsdTokens.sigUsd, SigmaUsdTokens.sigRsv]),
                   ),
+                  _discoverCard(feature: DiscoverFeature.spectrum),
                   _discoverCard(
-                    title: 'DEX',
-                    onLearn: () => _openDiscover(SwapVenue.spectrum),
-                    subtitle: 'Permissionless token swaps on Ergo.',
-                    icon: Icons.swap_horiz,
-                    onTap: () => _goHub(SwapVenue.spectrum),
+                    feature: DiscoverFeature.duckpools,
+                    subtitle: switch ([
+                      duckpoolsService.positionLine(formatTokenAmountGrouped),
+                      duckpoolsService.loanLine(formatTokenAmountGrouped),
+                    ].whereType<String>().join(' · ')) {
+                      '' => null,
+                      final line => line,
+                    },
                   ),
+                  _discoverCard(feature: DiscoverFeature.sigmafi, subtitle: sigmafiService.positionLine()),
                   _discoverCard(
-                    title: 'Duckpools',
-                    onLearn: () => _go('/duckpools'),
-                    subtitle: [
-                          duckpoolsService.positionLine(formatTokenAmountGrouped),
-                          duckpoolsService.loanLine(formatTokenAmountGrouped),
-                        ].whereType<String>().join(' · ').ifEmpty('Lend and borrow on Ergo against ERG collateral.'),
-                    icon: Icons.water_outlined,
-                    onTap: () => _go('/duckpools'),
+                    feature: DiscoverFeature.mix,
+                    subtitle: mixService.enabled && mixService.active.isNotEmpty
+                        ? '${mixService.active.length} ${mixService.active.length == 1 ? 'mix' : 'mixes'} in the pool.'
+                        : null,
                   ),
-                  _discoverCard(
-                    title: 'dApp browser',
-                    onLearn: () => _go('/dapps'),
-                    subtitle: 'Open any Ergo dApp with this wallet standing in for Nautilus.',
-                    icon: Icons.language,
-                    onTap: () => _go('/dapps'),
-                  ),
-                  _discoverCard(
-                    title: 'Rosen bridge',
-                    onLearn: () => _go('/rosen'),
-                    subtitle: 'Send ERG and tokens to Cardano, Bitcoin, Ethereum and more.',
-                    icon: Icons.swap_calls,
-                    onTap: () => _go('/rosen'),
-                  ),
-                  _discoverCard(
-                    title: 'SigmaFi',
-                    onLearn: () => _go('/sigmafi'),
-                    subtitle: sigmafiService.positionLine() ?? 'Peer-to-peer loans against collateral: lend, or ask.',
-                    icon: Icons.handshake_outlined,
-                    onTap: () => _go('/sigmafi'),
-                  ),
-                  _discoverCard(
-                    title: 'Mix',
-                    onLearn: () => _go('/mix'),
-                    subtitle: mixService.enabled
-                        ? (mixService.active.isEmpty
-                            ? 'Break the link between what goes in and what comes out.'
-                            : '${mixService.active.length} ${mixService.active.length == 1 ? 'mix' : 'mixes'} in the pool.')
-                        : 'Private ERG through the ErgoMixer pool. Off until you turn it on.',
-                    icon: Icons.blender_outlined,
-                    onTap: () => _go('/mix'),
-                  ),
+                  _discoverCard(feature: DiscoverFeature.tokens),
+                  _discoverCard(feature: DiscoverFeature.utxos),
+                  _discoverCard(feature: DiscoverFeature.liquidity),
+                  _discoverCard(feature: DiscoverFeature.dapps),
+                  _discoverCard(feature: DiscoverFeature.rosen),
+                ],
+              ),
+            ),
+            const SizedBox(height: 28),
+            _sectionHeader('Tools'),
+            const SizedBox(height: 10),
+            SoftCard(
+              padding: EdgeInsets.zero,
+              child: DividedColumn(
+                children: [
+                  for (final f in const [DiscoverFeature.tokens, DiscoverFeature.utxos, DiscoverFeature.mix])
+                    ListTile(
+                      key: Key('tool-${f.name}'),
+                      leading: Icon(discoverExplainers[f]!.icon, color: accentOf(context)),
+                      title: Text(discoverExplainers[f]!.title),
+                      subtitle: Text(discoverExplainers[f]!.blurb,
+                          style: TextStyle(fontSize: 12, color: ArgusColors.of(context).muted)),
+                      trailing: IconButton(
+                        tooltip: 'What is this?',
+                        icon: const Icon(Icons.info_outline, size: 18),
+                        onPressed: () => _openDiscover(f),
+                      ),
+                      onTap: () => _openFeature(f),
+                    ),
                 ],
               ),
             ),
@@ -2054,25 +2044,45 @@ class _DashboardScreenState extends State<DashboardScreen>
     return 'You hold ${held.take(2).join(' · ')}';
   }
 
-  void _openDiscover(SwapVenue venue) {
-    showDiscoverSheet(context, venue: venue, onGo: () => _goHub(venue));
+  /// Where a feature lives: a venue in the Swap tab, or a route.
+  void _openFeature(DiscoverFeature feature) {
+    final e = discoverExplainers[feature]!;
+    if (e.venue != null) {
+      _goHub(e.venue!);
+    } else {
+      _go(e.route!);
+    }
   }
 
-  Widget _discoverCard({
-    required String title,
-    required String subtitle,
-    required IconData icon,
-    VoidCallback? onTap,
-    VoidCallback? onLearn,
-    bool comingSoon = false,
-  }) {
+  void _openDiscover(DiscoverFeature feature) {
+    showDiscoverSheet(context, feature: feature, onGo: () => _openFeature(feature));
+  }
+
+  /// The Discover page lists everything; its explainer's button comes
+  /// back here with the feature to open.
+  Future<void> _exploreAll() async {
+    final chosen = await Navigator.push<DiscoverFeature>(
+      context,
+      fadeRoute(const DiscoverScreen(), settings: RouteSettings(arguments: _args())),
+    );
+    if (chosen != null && mounted) _openFeature(chosen);
+  }
+
+  /// A card opens the feature's explainer; [subtitle] is the wallet's own
+  /// position when it has one, else the feature's blurb.
+  Widget _discoverCard({required DiscoverFeature feature, String? subtitle}) {
+    final e = discoverExplainers[feature]!;
+    final title = e.title;
+    final icon = e.icon;
+    final VoidCallback onTap = () => _openDiscover(feature);
+    final line = subtitle ?? e.blurb;
     final muted = ArgusColors.of(context).muted;
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Container(
       width: 168,
       margin: const EdgeInsets.only(right: 12),
       child: InkWell(
-        onTap: comingSoon ? null : (onLearn ?? onTap),
+        onTap: onTap,
         borderRadius: BorderRadius.circular(20),
         child: Container(
           padding: const EdgeInsets.all(14),
@@ -2105,25 +2115,11 @@ class _DashboardScreenState extends State<DashboardScreen>
               const SizedBox(height: 3),
               Expanded(
                 child: Text(
-                  subtitle,
+                  line,
                   style: TextStyle(fontSize: 12, height: 1.3, color: muted),
                 ),
               ),
-              if (comingSoon)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: dark ? watchfulSurface : bannerTint,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    'Coming soon',
-                    style: TextStyle(fontSize: 10.5, color: muted),
-                  ),
-                )
-              else
-                Row(
+              Row(
                   children: [
                     Text('What is this?', style: TextStyle(fontSize: 12, color: accentOf(context))),
                     const SizedBox(width: 4),
@@ -2174,10 +2170,6 @@ class _DashboardScreenState extends State<DashboardScreen>
       ),
     );
   }
-}
-
-extension _IfEmpty on String {
-  String ifEmpty(String fallback) => isEmpty ? fallback : this;
 }
 
 /// Whether a poll tick should refresh: always once [pollInterval] has
