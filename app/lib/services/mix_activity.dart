@@ -1,9 +1,32 @@
 import '../format.dart';
 import 'mix_service.dart';
+import 'wallet_service.dart';
+
+/// Name and decimals of a token, or null when nothing has looked it up.
+typedef TokenMetaLookup = ({String? name, int decimals})? Function(String id);
+
+({String? name, int decimals})? _cachedMeta(String id) {
+  final m = walletService.cachedTokenMeta(id);
+  return m == null ? null : (name: m.name, decimals: m.decimals);
+}
+
+/// The amount a mix moves, in words: "1 ERG", or for a token ring the ring
+/// amount in the token's own unit. A token nobody has looked up yet is
+/// named by the start of its id.
+String mixAmountText(MixRecord r, {TokenMetaLookup? meta}) =>
+    ringAmountText(r.denomination, r.ringTokenId, r.ringTokenAmount, meta: meta);
+
+/// [mixAmountText] for a ring that is not a record yet.
+String ringAmountText(int value, String? tokenId, int? tokenAmount, {TokenMetaLookup? meta}) {
+  if (tokenId == null || tokenId.isEmpty || tokenAmount == null) return formatErg(value, maxFrac: 4);
+  final m = (meta ?? _cachedMeta)(tokenId);
+  final name = (m?.name ?? '').isNotEmpty ? m!.name! : '${tokenId.substring(0, tokenId.length < 8 ? tokenId.length : 8)}…';
+  return '${formatTokenAmount(tokenAmount, m?.decimals ?? 0)} $name';
+}
 
 /// What one mix event is called in the activity list.
-String mixEventLabel(String action, {required int denomination, required int round}) {
-  final amount = formatErg(denomination, maxFrac: 4);
+String mixEventLabel(String action, {required int denomination, required int round, String? amountText}) {
+  final amount = amountText ?? formatErg(denomination, maxFrac: 4);
   return switch (action) {
     'entered_as_alice' || 'entered_as_bob' => 'Entered a mix with $amount',
     'remixed_as_bob' || 'remixed_as_alice' => 'Mix round ${round + 1}',
@@ -27,7 +50,7 @@ String mixDestinationText(MixRecord r) {
 /// The finished card's second line: where the money is now and what the
 /// card still means, so nobody goes looking for a missing balance.
 String mixFinishedText(MixRecord r) {
-  final amount = formatErg(r.denomination, maxFrac: 4);
+  final amount = mixAmountText(r);
   final where = mixDestinationText(r);
   final went = r.phaseKind == 'reclaimed'
       ? '$amount went back to $where, minus the mixing tokens.'
@@ -47,7 +70,7 @@ Map<String, dynamic>? mixFinalRow(MixRecord r) {
 /// Activity rows for every mix event with a transaction, newest first.
 /// The amount is shown as the mix's denomination leaving on entry and
 /// arriving on withdrawal or reclaim; rounds move nothing in or out.
-List<Map<String, dynamic>> mixActivityRowsFor(List<MixRecord> records) {
+List<Map<String, dynamic>> mixActivityRowsFor(List<MixRecord> records, {TokenMetaLookup? meta}) {
   final rows = <Map<String, dynamic>>[];
   for (final r in records) {
     for (final e in r.events) {
@@ -55,25 +78,31 @@ List<Map<String, dynamic>> mixActivityRowsFor(List<MixRecord> records) {
       final action = e['action']?.toString() ?? '';
       if (txId.isEmpty) continue;
       final round = (e['round'] as num?)?.toInt() ?? 0;
-      final nano = switch (action) {
-        'entered_as_alice' || 'entered_as_bob' => -r.denomination,
-        'withdrawn' || 'reclaimed' => r.denomination,
+      final sign = switch (action) {
+        'entered_as_alice' || 'entered_as_bob' => -1,
+        'withdrawn' || 'reclaimed' => 1,
         _ => 0,
       };
+      // A token ring moves its token with the sliver of ERG the box holds.
+      final token = r.isTokenRing && sign != 0
+          ? [
+              {'token_id': r.ringTokenId, 'amount': r.ringTokenAmount ?? 0}
+            ]
+          : const <Map<String, dynamic>>[];
       rows.add({
         'tx_id': txId,
         'height': (e['height'] as num?)?.toInt() ?? 0,
         'timestamp': ((e['at'] as num?)?.toInt() ?? 0) * 1000,
-        'value_nano_erg': nano,
-        'token_ids': const <String>[],
-        'tokens_received': const [],
-        'tokens_sent': const [],
+        'value_nano_erg': sign * r.denomination,
+        'token_ids': [if (token.isNotEmpty) r.ringTokenId!],
+        'tokens_received': sign > 0 ? token : const [],
+        'tokens_sent': sign < 0 ? token : const [],
         // A broadcast is not an inclusion: a row is confirmed only once a
         // snapshot has seen its box, or the transaction was looked up.
         'confirmed': ((e['height'] as num?)?.toInt() ?? 0) > 0,
         'mix': true,
         'mix_id': r.mixId,
-        'mix_label': mixEventLabel(action, denomination: r.denomination, round: round),
+        'mix_label': mixEventLabel(action, denomination: r.denomination, round: round, amountText: mixAmountText(r, meta: meta)),
       });
     }
   }
@@ -119,8 +148,8 @@ List<Map<String, dynamic>> mergeMixActivity(
     final r = unseen.first;
     return (
       text: r.phaseKind == 'withdrawn'
-          ? 'Mix finished · ${formatErg(r.denomination, maxFrac: 4)} delivered'
-          : 'Mix withdrawn early · ${formatErg(r.denomination, maxFrac: 4)} back',
+          ? 'Mix finished · ${mixAmountText(r)} delivered'
+          : 'Mix withdrawn early · ${mixAmountText(r)} back',
       finished: r,
     );
   }
@@ -128,7 +157,7 @@ List<Map<String, dynamic>> mergeMixActivity(
   if (live.isEmpty) return null;
   if (live.length == 1) {
     final r = live.single;
-    final amount = formatErg(r.denomination, maxFrac: 4);
+    final amount = mixAmountText(r);
     final what = switch (r.phaseKind) {
       'pending' => 'funded, not entered',
       'half_posted' => 'waiting for a partner',

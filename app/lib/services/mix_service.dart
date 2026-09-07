@@ -22,6 +22,7 @@ class MixRecord {
     this.lastError,
     this.lastCheckedAt,
     this.fundingNano,
+    this.fundingTokenAmount,
     this.fundingTxId,
     this.fundingBoxIds = const [],
     this.entryAttempt,
@@ -51,6 +52,10 @@ class MixRecord {
   /// What the funding box was made to hold, so a pending mix can find it
   /// again even if the operator's price has moved since.
   int? fundingNano;
+
+  /// For a token ring, the token the funding box was made to hold: the
+  /// ring amount plus the operator's commission.
+  int? fundingTokenAmount;
 
   /// The funding self-send, once broadcast, and the ids of its outputs:
   /// the funding box is one of them, found by id rather than by guessing
@@ -83,6 +88,11 @@ class MixRecord {
   String? get previousBoxId => ((state['previous'] as Map?)?['phase'] as Map?)?['box_id'] as String?;
   int get denomination => ((state['ring'] as Map)['value'] as num).toInt();
   String? get ringTokenId => (state['ring'] as Map)['token_id'] as String?;
+  int? get ringTokenAmount => ((state['ring'] as Map)['token_amount'] as num?)?.toInt();
+
+  /// A token ring: the box holds a fixed sliver of ERG and the ring amount
+  /// of one token, and it is the token that is being mixed.
+  bool get isTokenRing => ringTokenId != null && ringTokenId!.isNotEmpty;
   int get roundsDone => (state['rounds_done'] as num?)?.toInt() ?? 0;
   int get roundsTarget => (state['rounds_target'] as num?)?.toInt() ?? 0;
   int get round => (state['round'] as num?)?.toInt() ?? 0;
@@ -111,6 +121,7 @@ class MixRecord {
         if (lastError != null) 'last_error': lastError,
         if (lastCheckedAt != null) 'last_checked_at': lastCheckedAt!.millisecondsSinceEpoch,
         if (fundingNano != null) 'funding_nano': fundingNano,
+        if (fundingTokenAmount != null) 'funding_token_amount': fundingTokenAmount,
         if (fundingTxId != null) 'funding_tx_id': fundingTxId,
         if (fundingBoxIds.isNotEmpty) 'funding_box_ids': fundingBoxIds,
         if (entryAttempt != null) 'entry_attempt': entryAttempt,
@@ -124,6 +135,7 @@ class MixRecord {
         state: (m['state'] as Map).cast<String, dynamic>(),
         lastError: m['last_error'] as String?,
         fundingNano: (m['funding_nano'] as num?)?.toInt(),
+        fundingTokenAmount: (m['funding_token_amount'] as num?)?.toInt(),
         fundingTxId: m['funding_tx_id'] as String?,
         fundingBoxIds: (m['funding_box_ids'] as List?)?.cast<String>() ?? const [],
         entryAttempt: (m['entry_attempt'] as Map?)?.cast<String, dynamic>(),
@@ -168,7 +180,8 @@ abstract class MixGateway {
     required int nowUnix,
   });
   Future<String> rings(String chainJson);
-  Future<String> fundingRequirement(String chainJson, int denomination, int level, int? feeNano);
+  Future<String> fundingRequirement(String chainJson, int denomination, int level, int? feeNano,
+      {String? tokenId, int? tokenAmount});
   Future<String> plan(String stateJson, String chainJson, List<String> ownHalfBoxIds);
   Future<String> observe(String stateJson, String chainJson, int nowUnix);
   Future<String> advance(
@@ -266,12 +279,15 @@ class LiveMixGateway implements MixGateway {
   Future<String> rings(String chainJson) => bridge.mixRings(chainJson: chainJson);
 
   @override
-  Future<String> fundingRequirement(String chainJson, int denomination, int level, int? feeNano) =>
+  Future<String> fundingRequirement(String chainJson, int denomination, int level, int? feeNano,
+          {String? tokenId, int? tokenAmount}) =>
       bridge.mixFundingRequirement(
         chainJson: chainJson,
         denomination: denomination,
         level: level,
         feeNano: feeNano,
+        tokenId: tokenId,
+        tokenAmount: tokenAmount,
       );
 
   @override
@@ -1200,9 +1216,12 @@ class MixService extends ChangeNotifier {
     required int denomination,
     required int level,
     int? feeNano,
+    String? tokenId,
+    int? tokenAmount,
   }) async {
     final snap = await snapshot();
-    final raw = await _gw.fundingRequirement(snap.json, denomination, level, feeNano);
+    final raw = await _gw.fundingRequirement(snap.json, denomination, level, feeNano,
+        tokenId: tokenId, tokenAmount: tokenAmount);
     return (jsonDecode(raw) as Map).cast<String, dynamic>();
   }
 
@@ -1216,6 +1235,7 @@ class MixService extends ChangeNotifier {
     required int rounds,
     required String destinationAddress,
     int? fundingNano,
+    int? fundingTokenAmount,
   }) async {
     final id = _walletId;
     if (id == null) throw StateError('No wallet is loaded');
@@ -1238,6 +1258,7 @@ class MixService extends ChangeNotifier {
     final record = MixRecord(
       state: (jsonDecode(raw) as Map).cast<String, dynamic>(),
       fundingNano: fundingNano,
+      fundingTokenAmount: fundingTokenAmount,
     );
     records = [record, ...records];
     await _persist();

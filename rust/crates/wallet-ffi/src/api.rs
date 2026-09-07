@@ -4887,17 +4887,26 @@ pub fn mix_rings(chain_json: String) -> Result<String, String> {
     Ok(crate::api_mix_impl::rings_json(&view).to_string())
 }
 
-/// What a funding box must hold to enter `denomination` at `level`.
+/// What a funding box must hold to enter `denomination` at `level`. For a
+/// token ring, `token_id` and `token_amount` name the ring and the answer
+/// adds the token the box must carry (ring amount plus commission).
 #[flutter_rust_bridge::frb]
 pub fn mix_funding_requirement(
     chain_json: String,
     denomination: i64,
     level: i32,
     fee_nano: Option<i64>,
+    token_id: Option<String>,
+    token_amount: Option<i64>,
 ) -> Result<String, String> {
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
     let fee = mix_miner_fee(fee_nano)?;
-    Ok(crate::api_mix_impl::funding_requirement(&view, denomination, level, fee)?.to_string())
+    let ring_token = match (token_id, token_amount) {
+        (Some(id), Some(amount)) => Some((id, amount)),
+        (None, None) => None,
+        _ => return Err(crate::api_mix_impl::ring_err("a token ring needs both a token id and an amount")),
+    };
+    Ok(crate::api_mix_impl::funding_requirement_for(&view, denomination, ring_token, level, fee)?.to_string())
 }
 
 /// A fresh mix state, not yet in the pool. `destination_address` is where

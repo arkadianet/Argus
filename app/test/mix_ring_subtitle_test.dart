@@ -62,19 +62,34 @@ void main() {
     expect(ringOffered(value: 486250000, waiting: 1, recentRounds: 0), isTrue);
     expect(ringOffered(value: 9487500000, waiting: 0, recentRounds: 3), isTrue);
     expect(ringOffered(value: 10000000000, waiting: 0, recentRounds: 0), isTrue, reason: 'standard ring');
+    expect(ringOffered(value: 1000000, waiting: 0, recentRounds: 0, tokenId: 'ab' * 32), isFalse,
+        reason: 'no standard token rings: a quiet one is not offered');
+    expect(ringOffered(value: 1000000, waiting: 1, recentRounds: 0, tokenId: 'ab' * 32), isTrue);
+  });
+
+  test('a token ring fee names both the ERG and the token commission', () {
+    expect(
+      ringSubtitle(value: 1000000, waiting: 1, depth: 3, operatorFee: 120001000, tokenFee: '0.0005 rsBTC'),
+      '1 waiting · 3 boxes to hide among · fee 0.12 ERG + 0.0005 rsBTC',
+    );
+    expect(
+      ringNote(value: 1000000, waiting: 1, recentRounds: 0, operatorFee: 120001000, tokenRing: true),
+      (text: 'A partner is waiting, so your first round could start at once', warning: false),
+      reason: 'the ERG fee against a token ring\'s tiny box value is not the fee that matters',
+    );
   });
 
   test('a level line prices the tokens and estimates the wait in the chosen ring', () {
     expect(
-      levelSubtitle(price: 120000000, rounds: 30, ringValue: 1000000000, recentRounds: 2),
+      levelSubtitle(price: 120000000, rounds: 30, ringLabel: '1 ERG', recentRounds: 2),
       '0.12 ERG in mixing tokens · about 30 weeks for 30 rounds at the 1 ERG ring\'s pace',
     );
     expect(
-      levelSubtitle(price: 240000000, rounds: 60, ringValue: 100000000000, recentRounds: 28),
+      levelSubtitle(price: 240000000, rounds: 60, ringLabel: '100 ERG', recentRounds: 28),
       '0.24 ERG in mixing tokens · about 30 days for 60 rounds at the 100 ERG ring\'s pace',
     );
     expect(
-      levelSubtitle(price: 120000000, rounds: 30, ringValue: 10000000000, recentRounds: 0),
+      levelSubtitle(price: 120000000, rounds: 30, ringLabel: '10 ERG', recentRounds: 0),
       '0.12 ERG in mixing tokens · no estimate: the 10 ERG ring had no rounds in the past week',
     );
   });

@@ -5,6 +5,9 @@ import 'mix_service.dart';
 class MixStartPlan {
   const MixStartPlan({
     required this.denomination,
+    this.tokenId,
+    this.tokenAmount,
+    this.neededTokenAmount,
     required this.level,
     required this.rounds,
     required this.destinationAddress,
@@ -14,6 +17,13 @@ class MixStartPlan {
   });
 
   final int denomination;
+
+  /// A token ring: the token, the ring amount, and what the funding box
+  /// must carry of it (ring amount plus the operator's commission).
+  final String? tokenId;
+  final int? tokenAmount;
+  final int? neededTokenAmount;
+
   final int level;
   final int rounds;
   final String destinationAddress;
@@ -32,12 +42,18 @@ class MixPrepared {
     required this.amountNano,
     required this.minerFeeNano,
     this.appFeeNano = 0,
+    this.tokenId,
+    this.tokenAmount,
   });
 
   final int preparationId;
   final int amountNano;
   final int minerFeeNano;
   final int appFeeNano;
+
+  /// The token a funding transaction carries, for a token ring.
+  final String? tokenId;
+  final int? tokenAmount;
 }
 
 /// What a broadcast produced: the transaction and the ids of its outputs.
@@ -51,7 +67,7 @@ class MixBroadcast {
 enum MixStartStep { funding, entry }
 
 /// Prepare the self-send that creates the funding box.
-typedef PrepareFunding = Future<MixPrepared> Function(int neededNano);
+typedef PrepareFunding = Future<MixPrepared> Function(int neededNano, {String? tokenId, int? tokenAmount});
 
 /// Ask the user. False means stop where we are.
 typedef ConfirmStep = Future<bool> Function(MixStartStep step, MixPrepared prepared, MixRecord? record);
@@ -66,7 +82,8 @@ typedef Broadcast = Future<MixBroadcast> Function(int preparationId);
 /// `neededNano`, qualifies: an unrelated box of the same size must not be
 /// taken while the real one is still pending. With no candidates (a record
 /// from before the ids were kept) the amount is all there is to go on.
-typedef FindFundingBox = Future<String?> Function(int neededNano, List<String> candidates);
+typedef FindFundingBox = Future<String?> Function(int neededNano, List<String> candidates,
+    {String? tokenId, int? tokenAmount});
 
 /// Whether the chain knows a box by id, spent or not.
 typedef FindBox = Future<bool> Function(String boxId);
@@ -110,17 +127,20 @@ class MixStartFlow {
   /// stopped before anything was sent.
   Future<MixRecord?> start(MixStartPlan plan, {required String fundingAddress}) async {
     onStatus?.call('Preparing the funding transaction');
-    final funding = await prepareFunding(plan.neededNano);
+    final funding = await prepareFunding(plan.neededNano, tokenId: plan.tokenId, tokenAmount: plan.neededTokenAmount);
     if (!await confirm(MixStartStep.funding, funding, null)) return null;
 
     // The record exists before the money moves, so nothing sent is ever
     // unaccounted for.
     final record = await service.createMix(
       denomination: plan.denomination,
+      tokenId: plan.tokenId,
+      tokenAmount: plan.tokenAmount,
       level: plan.level,
       rounds: plan.rounds,
       destinationAddress: plan.destinationAddress,
       fundingNano: plan.neededNano,
+      fundingTokenAmount: plan.neededTokenAmount,
     );
     final MixBroadcast sent;
     try {
@@ -170,7 +190,8 @@ class MixStartFlow {
         onStatus?.call('Entry already sent; the next check confirms it');
         return record;
       }
-      final still = await findFundingBox(needed, record.fundingBoxIds);
+      final still = await findFundingBox(needed, record.fundingBoxIds,
+          tokenId: record.ringTokenId, tokenAmount: record.fundingTokenAmount);
       if (still == null) {
         const why = 'The funding box was spent, but not by this mix\'s entry: '
             'the entry box is not on chain. The staged entry was cleared; '
@@ -181,7 +202,8 @@ class MixStartFlow {
     }
 
     onStatus?.call('Waiting for the funding box to confirm');
-    final boxId = await _waitForBox(needed, record.fundingBoxIds);
+    final boxId = await _waitForBox(needed, record.fundingBoxIds,
+        tokenId: record.ringTokenId, tokenAmount: record.fundingTokenAmount);
     if (boxId == null) {
       throw StateError(
         'The funding box has not confirmed yet. The mix is saved; '
@@ -230,10 +252,11 @@ class MixStartFlow {
     return e.toString();
   }
 
-  Future<String?> _waitForBox(int neededNano, List<String> candidates) async {
+  Future<String?> _waitForBox(int neededNano, List<String> candidates,
+      {String? tokenId, int? tokenAmount}) async {
     var waited = Duration.zero;
     while (true) {
-      final id = await findFundingBox(neededNano, candidates);
+      final id = await findFundingBox(neededNano, candidates, tokenId: tokenId, tokenAmount: tokenAmount);
       if (id != null) return id;
       if (waited >= maxWait) return null;
       final remaining = maxWait - waited;

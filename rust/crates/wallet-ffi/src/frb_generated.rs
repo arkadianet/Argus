@@ -2135,6 +2135,8 @@ fn wire__crate__api__mix_funding_requirement_impl(
             let api_denomination = <i64>::sse_decode(&mut deserializer);
             let api_level = <i32>::sse_decode(&mut deserializer);
             let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
+            let api_token_id = <Option<String>>::sse_decode(&mut deserializer);
+            let api_token_amount = <Option<i64>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
@@ -2143,6 +2145,8 @@ fn wire__crate__api__mix_funding_requirement_impl(
                         api_denomination,
                         api_level,
                         api_fee_nano,
+                        api_token_id,
+                        api_token_amount,
                     )?;
                     Ok(output_ok)
                 })())
