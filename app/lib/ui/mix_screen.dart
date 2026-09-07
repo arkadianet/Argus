@@ -490,7 +490,7 @@ String ringPace(int recentRounds) {
   required int recentRounds,
   required int? operatorFee,
 }) {
-  final expensive = operatorFee != null && value > 0 && operatorFee * 20 >= value;
+  final expensive = operatorFee != null && value > 0 && operatorFee * 20 > value;
   final pace = ringPace(recentRounds);
   final movement = recentRounds == 0
       ? (waiting > 0

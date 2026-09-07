@@ -1202,7 +1202,8 @@ class _DashboardScreenState extends State<DashboardScreen>
             ),
           ),
         ],
-        if (_status.startsWith('Error') || _status.contains(':')) ...[
+        // Errors, and the reason a parked link waits ("Unlock to ...").
+        if (_status.startsWith('Error') || _status.startsWith('Unlock to') || _status.contains(':')) ...[
           const SizedBox(height: 12),
           Text(_status,
               textAlign: TextAlign.center,

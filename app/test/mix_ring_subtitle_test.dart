@@ -50,6 +50,11 @@ void main() {
       ringNote(value: 100000000000, waiting: 0, recentRounds: 28, operatorFee: 220000000),
       (text: 'About 2 rounds a day here', warning: false),
     );
+    expect(
+      ringNote(value: 1000000000, waiting: 0, recentRounds: 28, operatorFee: 50000000).warning,
+      isFalse,
+      reason: 'exactly five percent is not flagged',
+    );
   });
 
   test('dead rings are not offered: no partner, no rounds, not a standard amount', () {
