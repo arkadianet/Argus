@@ -946,17 +946,23 @@ String mixContractTrees() => RustLib.instance.api.crateApiMixContractTrees();
 Future<String> mixRings({required String chainJson}) =>
     RustLib.instance.api.crateApiMixRings(chainJson: chainJson);
 
-/// What a funding box must hold to enter `denomination` at `level`.
+/// What a funding box must hold to enter `denomination` at `level`. For a
+/// token ring, `token_id` and `token_amount` name the ring and the answer
+/// adds the token the box must carry (ring amount plus commission).
 Future<String> mixFundingRequirement({
   required String chainJson,
   required PlatformInt64 denomination,
   required int level,
   PlatformInt64? feeNano,
+  String? tokenId,
+  PlatformInt64? tokenAmount,
 }) => RustLib.instance.api.crateApiMixFundingRequirement(
   chainJson: chainJson,
   denomination: denomination,
   level: level,
   feeNano: feeNano,
+  tokenId: tokenId,
+  tokenAmount: tokenAmount,
 );
 
 /// A fresh mix state, not yet in the pool. `destination_address` is where

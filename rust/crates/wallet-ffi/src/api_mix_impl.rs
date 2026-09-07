@@ -22,6 +22,11 @@ use zerojoin::{
 
 use crate::error::ArgusError;
 
+/// An error string for the FFI layer's own argument checks.
+pub fn ring_err(e: impl std::fmt::Display) -> String {
+    err(e)
+}
+
 fn err(e: impl std::fmt::Display) -> String {
     ArgusError::TxBuildFailed(e.to_string()).to_json_string()
 }
@@ -224,10 +229,25 @@ pub fn rings_json(view: &ChainView) -> serde_json::Value {
     })
 }
 
-/// What a funding box must hold to enter `denomination` at `level`.
+/// What a funding box must hold to enter an ERG ring of `denomination`
+/// at `level`.
 pub fn funding_requirement(
     view: &ChainView,
     denomination: i64,
+    level: i32,
+    miner_fee: i64,
+) -> Result<serde_json::Value, String> {
+    funding_requirement_for(view, denomination, None, level, miner_fee)
+}
+
+/// What a funding box must hold to enter a ring: the box value, the
+/// operator's ERG fee and the miner fee; for a token ring also the ring
+/// amount of the token plus the operator's commission in it, which the
+/// entry has no change output to return.
+pub fn funding_requirement_for(
+    view: &ChainView,
+    denomination: i64,
+    ring_token: Option<(String, i64)>,
     level: i32,
     miner_fee: i64,
 ) -> Result<serde_json::Value, String> {
@@ -240,13 +260,30 @@ pub fn funding_requirement(
         .checked_add(fee.total())
         .and_then(|v| v.checked_add(miner_fee))
         .ok_or_else(|| err("funding amount overflows"))?;
-    Ok(serde_json::json!({
+    let mut out = serde_json::json!({
         "denomination": denomination,
         "level": level,
         "operator_fee_nano": fee.total(),
         "miner_fee_nano": miner_fee,
         "needed_nano_erg": needed,
-    }))
+    });
+    if let Some((id, amount)) = ring_token {
+        if amount <= 0 {
+            return Err(err("a token ring mixes a positive amount"));
+        }
+        if token.rate <= 0 {
+            return Err(err("token emission box has a non-positive rate"));
+        }
+        let commission = amount / token.rate as i64;
+        let needed_token = amount
+            .checked_add(commission)
+            .ok_or_else(|| err("ring token amount overflows"))?;
+        out["ring_token_id"] = serde_json::Value::String(id);
+        out["ring_token_amount"] = amount.into();
+        out["ring_token_commission"] = commission.into();
+        out["needed_token_amount"] = needed_token.into();
+    }
+    Ok(out)
 }
 
 /// Where a round's secret comes from: the unlocked handle in the
@@ -708,6 +745,29 @@ mod tests {
         assert!(funding_requirement(&v, denomination, 0, MINER_FEE).is_err());
         assert!(check_operator_fee(-1, denomination).is_err());
         assert!(check_operator_fee(1, 0).is_err());
+    }
+
+    /// A token ring is funded with the ring amount plus the operator's
+    /// commission in that token, on top of the ERG the box needs.
+    #[test]
+    fn funding_requirement_names_the_token_a_token_ring_needs() {
+        let v = view(HALF, vec![]);
+        let target = v
+            .half
+            .iter()
+            .find(|b| b.mixing_token.is_some())
+            .expect("a token half box");
+        let (token_id, amount) = target.mixing_token.clone().unwrap();
+        let level = v.token_box().unwrap().levels()[0];
+        let rate = v.token_box_for(level).unwrap().rate as i64;
+        let need = funding_requirement_for(&v, target.value, Some((token_id.clone(), amount)), level, MINER_FEE).unwrap();
+        assert_eq!(need["ring_token_id"].as_str().unwrap(), token_id);
+        assert_eq!(need["ring_token_amount"].as_i64().unwrap(), amount);
+        assert_eq!(need["ring_token_commission"].as_i64().unwrap(), amount / rate);
+        assert_eq!(need["needed_token_amount"].as_i64().unwrap(), amount + amount / rate);
+        let erg_only = funding_requirement(&v, target.value, level, MINER_FEE).unwrap();
+        assert_eq!(erg_only["needed_nano_erg"], need["needed_nano_erg"], "the ERG side is the same");
+        assert!(erg_only.get("ring_token_id").is_none());
     }
 
     /// Enter as Bob against a real fixture half box, then own the box the

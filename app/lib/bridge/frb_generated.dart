@@ -425,6 +425,8 @@ abstract class RustLibApi extends BaseApi {
     required PlatformInt64 denomination,
     required int level,
     PlatformInt64? feeNano,
+    String? tokenId,
+    PlatformInt64? tokenAmount,
   });
 
   Future<String> crateApiMixLeave({
@@ -2911,6 +2913,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required PlatformInt64 denomination,
     required int level,
     PlatformInt64? feeNano,
+    String? tokenId,
+    PlatformInt64? tokenAmount,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2920,6 +2924,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_i_64(denomination, serializer);
           sse_encode_i_32(level, serializer);
           sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
+          sse_encode_opt_String(tokenId, serializer);
+          sse_encode_opt_box_autoadd_i_64(tokenAmount, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2932,7 +2938,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiMixFundingRequirementConstMeta,
-        argValues: [chainJson, denomination, level, feeNano],
+        argValues: [
+          chainJson,
+          denomination,
+          level,
+          feeNano,
+          tokenId,
+          tokenAmount,
+        ],
         apiImpl: this,
       ),
     );
@@ -2941,7 +2954,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiMixFundingRequirementConstMeta =>
       const TaskConstMeta(
         debugName: "mix_funding_requirement",
-        argNames: ["chainJson", "denomination", "level", "feeNano"],
+        argNames: [
+          "chainJson",
+          "denomination",
+          "level",
+          "feeNano",
+          "tokenId",
+          "tokenAmount",
+        ],
       );
 
   @override

@@ -14,6 +14,7 @@ class ScriptedGateway implements MixGateway {
   @override
   void setMixedBoxes(List<String> boxIds) {}
   final calls = <String>[];
+  final newStates = <Map<String, dynamic>>[];
   List<Map<String, dynamic>> recovered = const [];
 
   @override
@@ -65,9 +66,10 @@ class ScriptedGateway implements MixGateway {
     required int nowUnix,
   }) async {
     calls.add('newState');
+    newStates.add({'token_id': tokenId, 'token_amount': tokenAmount});
     return jsonEncode({
       'mix_id': mixId,
-      'ring': {'value': denomination, 'token_id': null, 'token_amount': null},
+      'ring': {'value': denomination, 'token_id': tokenId, 'token_amount': tokenAmount},
       'level': level,
       'rounds_target': rounds,
       'rounds_done': 0,
@@ -107,7 +109,7 @@ class ScriptedGateway implements MixGateway {
   @override
   Future<String> rings(String c) async => '{}';
   @override
-  Future<String> fundingRequirement(String c, int d, int l, int? f) async => '{}';
+  Future<String> fundingRequirement(String c, int d, int l, int? f, {String? tokenId, int? tokenAmount}) async => '{}';
   @override
   Future<String> plan(String s, String c, List<String> o) async => '{"action":"wait"}';
   @override
@@ -173,8 +175,8 @@ void main() {
     return MixStartFlow(
       service: service,
       onStatus: log.add,
-      prepareFunding: (needed) async {
-        log.add('prepareFunding:$needed');
+      prepareFunding: (needed, {tokenId, tokenAmount}) async {
+        log.add('prepareFunding:$needed${tokenId == null ? '' : ':$tokenId=$tokenAmount'}');
         return const MixPrepared(preparationId: 7, amountNano: 1006600000, minerFeeNano: 1100000);
       },
       confirm: (step, prepared, record) async {
@@ -187,8 +189,8 @@ void main() {
         if (nodeDownIds.contains(id)) throw ArgusException(code: 'NODE_ERROR', message: 'request timed out');
         return MixBroadcast(txId: 'tx$id', outputBoxIds: id == 7 ? ['fund1', 'change1'] : []);
       },
-      findFundingBox: (needed, candidates) async {
-        log.add('find:$needed:${candidates.join(",")}');
+      findFundingBox: (needed, candidates, {tokenId, tokenAmount}) async {
+        log.add('find:$needed:${candidates.join(",")}${tokenId == null ? '' : ':$tokenId=$tokenAmount'}');
         return found.isEmpty ? null : found.removeAt(0);
       },
       findBox: (id) async {
@@ -224,6 +226,33 @@ void main() {
     ]);
     expect(gw.calls, ['newState', 'prepareEntry:fund1']);
     expect(service.records.single.inPool, isTrue);
+  });
+
+  test('a token ring funds the token plus commission and records the ring token', () async {
+    const tokenPlan = MixStartPlan(
+      denomination: 1000000,
+      tokenId: 'tok',
+      tokenAmount: 5000000,
+      neededTokenAmount: 5005000,
+      level: 20,
+      rounds: 3,
+      destinationAddress: '9dest',
+      neededNano: 122600000,
+      operatorFeeNano: 120000000,
+      minerFeeNano: 1100000,
+    );
+    final record = await flow(answers: [true, true], boxes: ['fund1']).start(tokenPlan, fundingAddress: '9me');
+    expect(record!.ringTokenId, 'tok');
+    expect(record.ringTokenAmount, 5000000);
+    expect(record.fundingTokenAmount, 5005000);
+    expect(ops().take(4), [
+      'prepareFunding:122600000:tok=5005000',
+      'confirm:funding:7',
+      'broadcast:7:records=1',
+      'find:122600000:fund1,change1:tok=5005000',
+    ]);
+    expect(gw.newStates.single['token_id'], 'tok');
+    expect(gw.newStates.single['token_amount'], 5000000);
   });
 
   test('the record is on disk before the funding broadcast', () async {

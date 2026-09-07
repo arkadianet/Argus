@@ -11,13 +11,15 @@ MixRecord rec({
   List<Map<String, dynamic>> events = const [],
   bool acknowledged = false,
   DateTime? checked,
+  String? tokenId,
+  int? tokenAmount,
 }) =>
     MixRecord(
       acknowledged: acknowledged,
       lastCheckedAt: checked,
       state: {
         'mix_id': mixId,
-        'ring': {'value': 1000000000, 'token_id': null, 'token_amount': null},
+        'ring': {'value': tokenId == null ? 1000000000 : 1000000, 'token_id': tokenId, 'token_amount': tokenAmount},
         'level': 30,
         'rounds_target': target,
         'rounds_done': done,
@@ -30,7 +32,37 @@ MixRecord rec({
       },
     );
 
+const rsbtc = 'bd1f2e3a4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7';
+
+({String? name, int decimals})? _meta(String id) => id == rsbtc ? (name: 'rsBTC', decimals: 8) : null;
+
 void main() {
+  test('a mix amount is ERG, or the ring token with its name and decimals', () {
+    expect(mixAmountText(rec(), meta: _meta), '1 ERG');
+    expect(mixAmountText(rec(tokenId: rsbtc, tokenAmount: 5000000), meta: _meta), '0.05 rsBTC');
+    expect(
+      mixAmountText(rec(tokenId: 'ab' * 32, tokenAmount: 110), meta: _meta),
+      '110 abababab…',
+      reason: 'a token nobody has looked up yet is named by its id',
+    );
+  });
+
+  test('token mix rows carry the token, and the ERG the box holds', () {
+    final r = rec(tokenId: rsbtc, tokenAmount: 5000000, events: [
+      {'action': 'entered_as_alice', 'tx_id': 'e', 'at': 1, 'round': 0},
+      {'action': 'withdrawn', 'tx_id': 'w', 'at': 2, 'round': 1},
+    ]);
+    final rows = mixActivityRowsFor([r], meta: _meta);
+    final out = rows.firstWhere((x) => x['tx_id'] == 'e');
+    expect(out['value_nano_erg'], -1000000);
+    expect(out['tokens_sent'], [{'token_id': rsbtc, 'amount': 5000000}]);
+    expect(out['token_ids'], [rsbtc]);
+    final back = rows.firstWhere((x) => x['tx_id'] == 'w');
+    expect(back['value_nano_erg'], 1000000);
+    expect(back['tokens_received'], [{'token_id': rsbtc, 'amount': 5000000}]);
+    expect(back['mix_label'], 'Mix finished: 0.05 rsBTC delivered');
+  });
+
   test('every mix event with a transaction becomes an activity row, newest first', () {
     final rows = mixActivityRowsFor([
       rec(kind: 'withdrawn', done: 3, events: [

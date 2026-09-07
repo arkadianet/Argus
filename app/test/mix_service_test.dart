@@ -98,7 +98,7 @@ class FakeGateway implements MixGateway {
   @override
   Future<String> rings(String chainJson) async => '{"rings":[]}';
   @override
-  Future<String> fundingRequirement(String chainJson, int d, int l, int? f) async =>
+  Future<String> fundingRequirement(String chainJson, int d, int l, int? f, {String? tokenId, int? tokenAmount}) async =>
       '{"needed_nano_erg":1}';
   @override
   Future<String> plan(String stateJson, String chainJson, List<String> own) async =>

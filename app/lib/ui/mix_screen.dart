@@ -63,19 +63,23 @@ class _MixScreenState extends State<MixScreen> {
         onStatus: (s) {
           if (mounted) setState(() => _status = s);
         },
-        prepareFunding: (needed) async {
+        prepareFunding: (needed, {tokenId, tokenAmount}) async {
           final p = await walletService.prepareSend(
             senderAddress: args.senderAddress,
             spendAddresses: args.historyAddresses,
             changeAddress: args.changeAddress,
             recipientAddress: args.receiveAddress,
             amountNanoErg: needed,
+            tokenId: tokenId,
+            tokenAmount: tokenAmount,
             nodeUrl: networkController.activeUrl,
           );
           return MixPrepared(
             preparationId: p.preparationId,
             amountNano: p.amountNanoErg,
             minerFeeNano: p.minerFee,
+            tokenId: tokenId,
+            tokenAmount: tokenAmount,
           );
         },
         confirm: (step, prepared, record) async {
@@ -90,6 +94,8 @@ class _MixScreenState extends State<MixScreen> {
                 rows: [
                   ConfirmTxRow('To', 'Your own address'),
                   ConfirmTxRow('Amount', formatErg(prepared.amountNano), bold: true),
+                  if (prepared.tokenId != null)
+                    ConfirmTxRow('Token', ringAmountText(prepared.amountNano, prepared.tokenId, prepared.tokenAmount), bold: true),
                   ConfirmTxRow('Miner fee', formatErg(prepared.minerFeeNano)),
                 ],
               ),
@@ -101,7 +107,7 @@ class _MixScreenState extends State<MixScreen> {
                     'From here on the rounds run on their own '
                     '${mixService.backgroundEnabled ? 'about every fifteen minutes, with Argus closed too' : 'while Argus is open and unlocked'}.',
                 rows: [
-                  ConfirmTxRow('Mixing', formatErg(prepared.amountNano), bold: true),
+                  ConfirmTxRow('Mixing', record == null ? formatErg(prepared.amountNano) : mixAmountText(record), bold: true),
                   ConfirmTxRow('Rounds', 'about ${record?.roundsTarget ?? ''}'),
                   ConfirmTxRow('Operator fee', formatErg(prepared.appFeeNano)),
                   ConfirmTxRow('Miner fee', formatErg(prepared.minerFeeNano)),
@@ -116,7 +122,7 @@ class _MixScreenState extends State<MixScreen> {
             outputBoxIds: (r['output_box_ids'] as List?)?.cast<String>() ?? const [],
           );
         },
-        findFundingBox: (needed, candidates) async {
+        findFundingBox: (needed, candidates, {tokenId, tokenAmount}) async {
           // Straight from the node, not through the wallet's coin selection:
           // once the funding is recorded, that selection hides the funding
           // box from every spend but the mix entry, and this finder is the
@@ -127,7 +133,15 @@ class _MixScreenState extends State<MixScreen> {
           );
           for (final b in boxes) {
             if (candidates.isNotEmpty && !candidates.contains(b.boxId)) continue;
-            if (b.valueNanoErg == BigInt.from(needed) && b.assets.isEmpty) return b.boxId;
+            if (b.valueNanoErg != BigInt.from(needed)) continue;
+            // An ERG mix box carries nothing else; a token mix box carries
+            // exactly the token the entry accounts for.
+            final ok = tokenId == null
+                ? b.assets.isEmpty
+                : b.assets.length == 1 &&
+                    b.assets.single.tokenId == tokenId &&
+                    b.assets.single.amount == BigInt.from(tokenAmount ?? -1);
+            if (ok) return b.boxId;
           }
           return null;
         },
@@ -143,6 +157,12 @@ class _MixScreenState extends State<MixScreen> {
             'nobody can enter the pool. Try again later.',
           );
         }
+        // Token rings are named by their token; look the names up first.
+        await walletService.prefetchTokenMeta([
+          for (final r in (pool['rings'] as List? ?? const []))
+            if ((r as Map)['token_id'] is String) r['token_id'] as String,
+        ]);
+        if (!mounted) return;
         final choice = await showModalBottomSheet<_StartChoice>(
           context: context,
           isScrollControlled: true,
@@ -151,7 +171,7 @@ class _MixScreenState extends State<MixScreen> {
           shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(top: Radius.circular(cardRadius)),
           ),
-          builder: (_) => _StartMixSheet(pool: pool),
+          builder: (_) => _StartMixSheet(pool: pool, tokens: args.tokens),
         );
         if (choice == null || !mounted) return;
 
@@ -164,9 +184,15 @@ class _MixScreenState extends State<MixScreen> {
         final need = await mixService.fundingRequirement(
           denomination: choice.denomination,
           level: choice.level,
+          tokenId: choice.tokenId,
+          tokenAmount: choice.tokenAmount,
         );
+        final neededToken = (need['needed_token_amount'] as num?)?.toInt();
         final plan = MixStartPlan(
           denomination: choice.denomination,
+          tokenId: choice.tokenId,
+          tokenAmount: choice.tokenAmount,
+          neededTokenAmount: neededToken,
           level: choice.level,
           // As ErgoMixer: the level is the number of rounds, one token each.
           rounds: choice.level,
@@ -184,6 +210,16 @@ class _MixScreenState extends State<MixScreen> {
             'transaction\'s own fee; this wallet has ${formatErg(spendable)}.',
           );
         }
+        if (choice.tokenId != null && neededToken != null) {
+          final have = args.tokens.where((t) => t.id == choice.tokenId).fold(0, (a, t) => a + t.amount);
+          if (have < neededToken) {
+            throw StateError(
+              'Entering needs ${ringAmountText(choice.denomination, choice.tokenId, neededToken)} '
+              '(${ringAmountText(choice.denomination, choice.tokenId, choice.tokenAmount)} to mix plus the '
+              'operator\'s commission); this wallet has ${ringAmountText(choice.denomination, choice.tokenId, have)}.',
+            );
+          }
+        }
         final record = await _flow(args).start(plan, fundingAddress: args.receiveAddress);
         if (record == null) return;
         _snack(record.inPool ? 'In the pool' : 'Mix saved; continue it from the list');
@@ -194,6 +230,8 @@ class _MixScreenState extends State<MixScreen> {
         final need = await mixService.fundingRequirement(
           denomination: r.denomination,
           level: (r.state['level'] as num).toInt(),
+          tokenId: r.ringTokenId,
+          tokenAmount: r.ringTokenAmount,
         );
         await _flow(args).enter(
           r,
@@ -222,7 +260,7 @@ class _MixScreenState extends State<MixScreen> {
               : 'After ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'} of about '
                   '${r.roundsTarget}. The money leaves the pool for the destination you chose.',
           rows: [
-            ConfirmTxRow('Amount', formatErg(r.denomination), bold: true),
+            ConfirmTxRow('Amount', mixAmountText(r), bold: true),
             ConfirmTxRow('Rounds done', '${r.roundsDone} of ${r.roundsTarget}'),
           ],
         );
@@ -454,10 +492,19 @@ class _ErrorLine extends StatelessWidget {
 
 /// One muted line under a ring: who is waiting, how many boxes there are
 /// to hide among, and the fee. Nothing here is a warning; [ringNote] is.
-String ringSubtitle({required int value, required int waiting, required int depth, required int? operatorFee}) {
+String ringSubtitle({
+  required int value,
+  required int waiting,
+  required int depth,
+  required int? operatorFee,
+  String? tokenFee,
+}) {
   final who = waiting == 0 ? 'Nobody waiting' : '$waiting waiting';
   final hide = depth == 0 ? 'nobody mixing here yet' : '$depth ${depth == 1 ? 'box' : 'boxes'} to hide among';
   if (operatorFee == null || value <= 0) return '$who · $hide';
+  // A token ring's ERG is a sliver; its fee is the ERG price plus a
+  // commission in the token, and a percentage of the sliver means nothing.
+  if (tokenFee != null) return '$who · $hide · fee ${formatErg(operatorFee, maxFrac: 3)} + $tokenFee';
   return '$who · $hide · fee ${formatErg(operatorFee, maxFrac: 3)} (${_pct(operatorFee, value)}%)';
 }
 
@@ -489,8 +536,9 @@ String ringPace(int recentRounds) {
   required int waiting,
   required int recentRounds,
   required int? operatorFee,
+  bool tokenRing = false,
 }) {
-  final expensive = operatorFee != null && value > 0 && operatorFee * 20 > value;
+  final expensive = !tokenRing && operatorFee != null && value > 0 && operatorFee * 20 > value;
   final pace = ringPace(recentRounds);
   final movement = recentRounds == 0
       ? (waiting > 0
@@ -505,16 +553,16 @@ String ringPace(int recentRounds) {
 /// A ring is offered when someone is waiting in it, it moved in the past
 /// week, or it is a standard amount. The pool carries old rings with
 /// hundreds of boxes and no movement; those would only mislead.
-bool ringOffered({required int value, required int waiting, required int recentRounds}) =>
-    waiting > 0 || recentRounds > 0 || defaultErgRings.contains(value);
+bool ringOffered({required int value, required int waiting, required int recentRounds, String? tokenId}) =>
+    waiting > 0 || recentRounds > 0 || (tokenId == null && defaultErgRings.contains(value));
 
 /// "Level 1 · 30 rounds": ErgoMixer's numbering, one token per round.
 String levelTitle({required int index, required int rounds}) => 'Level ${index + 1} · $rounds rounds';
 
 /// What a level costs and, at the chosen ring's pace, how long it takes.
-String levelSubtitle({required int price, required int rounds, required int ringValue, required int recentRounds}) {
+String levelSubtitle({required int price, required int rounds, required String ringLabel, required int recentRounds}) {
   final cost = '${formatErg(price, maxFrac: 4)} in mixing tokens';
-  final ring = '${formatErg(ringValue)} ring';
+  final ring = '$ringLabel ring';
   if (recentRounds == 0) return '$cost · no estimate: the $ring had no rounds in the past week';
   final days = (rounds / (recentRounds / 14)).ceil();
   final eta = days >= 60 ? 'about ${(days / 7).round()} weeks' : 'about $days ${days == 1 ? 'day' : 'days'}';
@@ -590,7 +638,7 @@ class _MixCard extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  formatErg(r.denomination),
+                  mixAmountText(r),
                   style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
                 ),
               ),
@@ -667,56 +715,94 @@ class _MixCard extends StatelessWidget {
 class _StartChoice {
   const _StartChoice({
     required this.denomination,
+    this.tokenId,
+    this.tokenAmount,
     required this.level,
     required this.toStealth,
   });
   final int denomination;
+
+  /// A token ring: the token and the ring amount.
+  final String? tokenId;
+  final int? tokenAmount;
 
   /// Mixing tokens bought, which is also the number of rounds.
   final int level;
   final bool toStealth;
 }
 
-/// Ring, token level, rounds, destination.
+/// One ring the pool offers: an ERG amount, or an amount of a token on a
+/// sliver of ERG.
+class _Ring {
+  const _Ring({
+    required this.value,
+    this.tokenId,
+    this.tokenAmount,
+    required this.waiting,
+    required this.depth,
+    required this.recentRounds,
+  });
+  final int value;
+  final String? tokenId;
+  final int? tokenAmount;
+  final int waiting;
+  final int depth;
+  final int recentRounds;
+
+  String get label => ringAmountText(value, tokenId, tokenAmount);
+}
+
+/// Ring, token level, rounds, destination. `tokens` is what the wallet
+/// holds, so a token ring it cannot fund is shown but not offered.
 class _StartMixSheet extends StatefulWidget {
-  const _StartMixSheet({required this.pool});
+  const _StartMixSheet({required this.pool, required this.tokens});
   final Map<String, dynamic> pool;
+  final List<TokenBalance> tokens;
 
   @override
   State<_StartMixSheet> createState() => _StartMixSheetState();
 }
 
 class _StartMixSheetState extends State<_StartMixSheet> {
-  late List<({int value, int waiting, int depth, int recentRounds})> _rings;
+  late List<_Ring> _rings;
   late List<({int level, int price, int rate})> _levels;
   int _hiddenRings = 0;
-  int? _denomination;
+  int? _selected;
   int? _level;
   bool _toStealth = true;
 
   @override
   void initState() {
     super.initState();
-    final seen = <int, ({int waiting, int depth, int recentRounds})>{};
+    final seen = <_Ring>[];
     for (final r in (widget.pool['rings'] as List? ?? const [])) {
       final m = r as Map;
-      if (m['token_id'] != null) continue; // token rings: not in the UI yet
-      seen[(m['value'] as num).toInt()] = (
+      seen.add(_Ring(
+        value: (m['value'] as num).toInt(),
+        tokenId: m['token_id'] as String?,
+        tokenAmount: (m['token_amount'] as num?)?.toInt(),
         waiting: (m['waiting'] as num?)?.toInt() ?? 0,
         depth: (m['depth'] as num?)?.toInt() ?? 0,
         recentRounds: (m['recent_rounds'] as num?)?.toInt() ?? 0,
-      );
+      ));
     }
     for (final d in defaultErgRings) {
-      seen.putIfAbsent(d, () => (waiting: 0, depth: 0, recentRounds: 0));
+      if (!seen.any((r) => r.tokenId == null && r.value == d)) {
+        seen.add(_Ring(value: d, waiting: 0, depth: 0, recentRounds: 0));
+      }
     }
-    final values = seen.keys.toList()..sort();
+    // ERG rings by amount, then token rings by token and amount.
+    seen.sort((a, b) {
+      final t = (a.tokenId ?? '').compareTo(b.tokenId ?? '');
+      if (t != 0) return t;
+      final v = a.value.compareTo(b.value);
+      return v != 0 ? v : (a.tokenAmount ?? 0).compareTo(b.tokenAmount ?? 0);
+    });
     _rings = [
-      for (final v in values)
-        if (ringOffered(value: v, waiting: seen[v]!.waiting, recentRounds: seen[v]!.recentRounds))
-          (value: v, waiting: seen[v]!.waiting, depth: seen[v]!.depth, recentRounds: seen[v]!.recentRounds),
+      for (final r in seen)
+        if (ringOffered(value: r.value, waiting: r.waiting, recentRounds: r.recentRounds, tokenId: r.tokenId)) r,
     ];
-    _hiddenRings = values.length - _rings.length;
+    _hiddenRings = seen.length - _rings.length;
     _levels = [
       for (final l in (widget.pool['token_levels'] as List? ?? const []))
         (
@@ -727,10 +813,52 @@ class _StartMixSheetState extends State<_StartMixSheet> {
           rate: (l['rate'] as num?)?.toInt() ?? (widget.pool['token_rate'] as num?)?.toInt() ?? 0,
         ),
     ];
-    // Prefer a ring with someone waiting, and the cheapest token batch.
-    final waiting = _rings.where((r) => r.waiting > 0).toList();
-    _denomination = (waiting.isNotEmpty ? waiting.first : _rings.first).value;
+    // Prefer a ring with someone waiting that the wallet can fund, and the
+    // cheapest token batch.
+    final fundable = _rings.indexed.where((e) => _held(e.$2) == null).toList();
+    final waiting = fundable.where((e) => e.$2.waiting > 0).toList();
+    _selected = _rings.isEmpty
+        ? null
+        : waiting.isNotEmpty
+            ? waiting.first.$1
+            : fundable.isNotEmpty
+                ? fundable.first.$1
+                : 0;
     _level = _levels.isEmpty ? null : _levels.first.level;
+  }
+
+  _Ring? get _ring => _selected == null ? null : _rings[_selected!];
+
+  /// Why the wallet cannot fund a token ring, or null when it can.
+  String? _held(_Ring r) {
+    if (r.tokenId == null) return null;
+    final have = widget.tokens.where((t) => t.id == r.tokenId).fold(0, (a, t) => a + t.amount);
+    final need = _neededToken(r) ?? r.tokenAmount ?? 0;
+    if (have <= 0) return 'You hold none of this token';
+    if (have < need) return 'You hold ${ringAmountText(r.value, r.tokenId, have)}, less than the ${ringAmountText(r.value, r.tokenId, need)} this needs';
+    return null;
+  }
+
+  /// Ring amount plus the operator's commission in the token.
+  int? _neededToken(_Ring r) {
+    final amount = r.tokenAmount;
+    if (r.tokenId == null || amount == null) return null;
+    final rate = _rate;
+    if (rate == null || rate <= 0) return null;
+    return amount + amount ~/ rate;
+  }
+
+  int? get _rate {
+    final level = _level;
+    if (level == null) return null;
+    return _levels.where((l) => l.level == level).firstOrNull?.rate;
+  }
+
+  String? _tokenFee(_Ring r) {
+    final need = _neededToken(r);
+    final amount = r.tokenAmount;
+    if (need == null || amount == null) return null;
+    return ringAmountText(r.value, r.tokenId, need - amount);
   }
 
   int get _deepest => _rings.fold(0, (m, r) => r.depth > m ? r.depth : m);
@@ -749,7 +877,7 @@ class _StartMixSheetState extends State<_StartMixSheet> {
   Widget build(BuildContext context) {
     final muted = ArgusColors.of(context).muted;
     final theme = Theme.of(context);
-    final canStart = _denomination != null && _level != null;
+    final canStart = _ring != null && _level != null;
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + MediaQuery.of(context).viewInsets.bottom),
@@ -762,19 +890,18 @@ class _StartMixSheetState extends State<_StartMixSheet> {
               const SizedBox(height: 16),
               const SectionLabel('Amount'),
               const SizedBox(height: 4),
-              for (final r in _rings)
+              for (final (i, r) in _rings.indexed)
                 ListTile(
                   dense: true,
                   contentPadding: EdgeInsets.zero,
+                  enabled: _held(r) == null,
                   leading: Icon(
-                    r.value == _denomination
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_unchecked,
-                    color: r.value == _denomination ? accentOf(context) : muted,
+                    i == _selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+                    color: i == _selected ? accentOf(context) : muted,
                   ),
-                  onTap: () => setState(() => _denomination = r.value),
+                  onTap: _held(r) == null ? () => setState(() => _selected = i) : null,
                   title: Text(
-                    r.depth == _deepest && r.depth > 0 ? '${formatErg(r.value)} · deepest ring' : formatErg(r.value),
+                    r.depth == _deepest && r.depth > 0 ? '${r.label} · deepest ring' : r.label,
                   ),
                   subtitle: Builder(builder: (context) {
                     final note = ringNote(
@@ -782,16 +909,24 @@ class _StartMixSheetState extends State<_StartMixSheet> {
                       waiting: r.waiting,
                       recentRounds: r.recentRounds,
                       operatorFee: _operatorFee(r.value),
+                      tokenRing: r.tokenId != null,
                     );
+                    final cannot = _held(r);
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          ringSubtitle(value: r.value, waiting: r.waiting, depth: r.depth, operatorFee: _operatorFee(r.value)),
+                          ringSubtitle(
+                            value: r.value,
+                            waiting: r.waiting,
+                            depth: r.depth,
+                            operatorFee: _operatorFee(r.value),
+                            tokenFee: _tokenFee(r),
+                          ),
                           style: TextStyle(color: muted, fontSize: 12),
                         ),
                         Text(
-                          note.text,
+                          cannot ?? note.text,
                           style: TextStyle(color: note.warning ? theme.colorScheme.error : muted, fontSize: 12),
                         ),
                       ],
@@ -827,8 +962,8 @@ class _StartMixSheetState extends State<_StartMixSheet> {
                       levelSubtitle(
                         price: l.price,
                         rounds: l.level,
-                        ringValue: _denomination ?? 0,
-                        recentRounds: _rings.where((r) => r.value == _denomination).firstOrNull?.recentRounds ?? 0,
+                        ringLabel: _ring?.label ?? '',
+                        recentRounds: _ring?.recentRounds ?? 0,
                       ),
                       style: TextStyle(color: muted, fontSize: 12),
                     ),
@@ -862,7 +997,9 @@ class _StartMixSheetState extends State<_StartMixSheet> {
                     ? () => Navigator.pop(
                           context,
                           _StartChoice(
-                            denomination: _denomination!,
+                            denomination: _ring!.value,
+                            tokenId: _ring!.tokenId,
+                            tokenAmount: _ring!.tokenAmount,
                             level: _level!,
                             toStealth: _toStealth,
                           ),
