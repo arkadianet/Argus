@@ -6,8 +6,8 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../bridge/api.dart' as bridge;
-import 'network_controller.dart';
 import 'mix_activity.dart';
+import 'network_controller.dart';
 import 'mix_background.dart';
 import 'notification_service.dart';
 import 'secure_storage.dart';
@@ -1446,12 +1446,14 @@ class MixService extends ChangeNotifier {
         mixId: r.mixId,
       );
 
-  /// A withdrawal delivered the money; a reclaim only took it back.
+  /// A withdrawal delivered the money; a reclaim only took it back. Both
+  /// say where, since that is the first thing the user will wonder.
   Future<void> _announceFinished(MixRecord r) => _gw.notify(
         title: 'A mix finished',
         body: r.phaseKind == 'withdrawn'
-            ? 'Delivered after ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'}.'
-            : 'Withdrawn before a partner joined.',
+            ? 'Delivered to ${mixDestinationText(r)} after ${r.roundsDone} '
+                '${r.roundsDone == 1 ? 'round' : 'rounds'}. Tap to see it.'
+            : 'Withdrawn before a partner joined; it is back at ${mixDestinationText(r)}.',
         mixId: r.mixId,
       );
 

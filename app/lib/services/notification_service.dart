@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 import '../format.dart';
+import 'deep_link_controller.dart';
 
 /// Local notifications for incoming payments. Nothing leaves the device.
 class NotificationService {
@@ -31,6 +32,8 @@ class NotificationService {
           android: AndroidInitializationSettings('@mipmap/ic_launcher'),
           iOS: DarwinInitializationSettings(requestAlertPermission: false, requestBadgePermission: false, requestSoundPermission: false),
         ),
+        // A tap while the app runs: the payload names the screen.
+        onDidReceiveNotificationResponse: (response) => _openTap(response.payload),
       );
       final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
       await android?.createNotificationChannel(_channel);
@@ -39,6 +42,25 @@ class NotificationService {
     } catch (e) {
       debugPrint('argus: notifications unavailable: $e');
     }
+  }
+
+  /// The notification that launched the app, if one did: its tap is
+  /// honoured once the home screen is up and the wallet unlocked.
+  Future<void> openLaunchTap() async {
+    if (!_ready) return;
+    try {
+      final details = await _plugin.getNotificationAppLaunchDetails();
+      if (details?.didNotificationLaunchApp == true) {
+        _openTap(details!.notificationResponse?.payload);
+      }
+    } catch (e) {
+      debugPrint('argus: launch notification unreadable: $e');
+    }
+  }
+
+  static void _openTap(String? payload) {
+    if (payload == null || payload.isEmpty) return;
+    deepLinkController.push('argus://$payload');
   }
 
   /// Asks once per launch, after the wallet is unlocked (Android 13+).
@@ -63,6 +85,7 @@ class NotificationService {
         id: ('$mixId|$title|$body').hashCode & 0x7fffffff,
         title: title,
         body: body,
+        payload: 'mix',
         notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
             _channel.id,
@@ -87,6 +110,7 @@ class NotificationService {
         id: loanId.hashCode & 0x7fffffff,
         title: title,
         body: body,
+        payload: 'loans',
         notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
             _loanChannel.id,
@@ -114,6 +138,7 @@ class NotificationService {
         id: nanoErg.hashCode & 0x7fffffff,
         title: incomingTitle(pending: pending, stealth: stealth),
         body: '${formatErg(nanoErg, maxFrac: 4)} to $walletName',
+        payload: 'activity',
         notificationDetails: NotificationDetails(
           android: AndroidNotificationDetails(
             _channel.id,
