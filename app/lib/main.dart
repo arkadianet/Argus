@@ -76,7 +76,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
     walletService.onBroadcast = (txId, delta) =>
         walletSyncController.noteBroadcast(txId, valueNano: delta);
     DeepLinkChannel.start();
-    notificationService.init();
+    notificationService.init().then((_) => notificationService.openLaunchTap());
   }
 
   @override

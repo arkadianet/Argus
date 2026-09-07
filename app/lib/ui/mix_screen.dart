@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../format.dart';
+import '../services/mix_activity.dart';
 import '../services/mix_service.dart';
 import '../services/mix_start_flow.dart';
 import '../services/network_controller.dart';
@@ -9,6 +10,7 @@ import '../services/stealth_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
+import 'transaction_detail_screen.dart';
 import 'widgets/battery_note.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/error_sheet.dart';
@@ -144,6 +146,7 @@ class _MixScreenState extends State<MixScreen> {
         final choice = await showModalBottomSheet<_StartChoice>(
           context: context,
           isScrollControlled: true,
+          useSafeArea: true,
           backgroundColor: Theme.of(context).colorScheme.surface,
           shape: const RoundedRectangleBorder(
             borderRadius: BorderRadius.vertical(top: Radius.circular(cardRadius)),
@@ -449,36 +452,73 @@ class _ErrorLine extends StatelessWidget {
   }
 }
 
-/// What the full boxes say about a ring: how many boxes there are to hide
-/// among, how fast it moved in the past week, and what that means for a
-/// mix of [rounds]. A join creates two full boxes and completes one round
-/// for each side, so joins a day is recent boxes over fourteen.
-String ringInsight({required int depth, required int recentRounds, required int? rounds}) {
-  final hide = depth == 0 ? 'Nobody mixing here' : '$depth ${depth == 1 ? 'box' : 'boxes'} to hide among';
-  if (recentRounds == 0) return '$hide · no rounds here in the past week, so a mix would wait indefinitely';
-  final joinsPerDay = recentRounds / 14;
-  final pace = joinsPerDay >= 1 ? 'about ${joinsPerDay.round()} ${joinsPerDay.round() == 1 ? 'round' : 'rounds'} a day here' : 'about ${(recentRounds / 2).round()} ${recentRounds / 2 >= 1.5 ? 'rounds' : 'round'} a week here';
-  if (rounds == null) return '$hide · $pace';
-  final days = (rounds / joinsPerDay).ceil();
-  final eta = days >= 14 ? 'about ${(days / 7).round()} weeks' : 'about $days ${days == 1 ? 'day' : 'days'}';
-  return '$hide · $pace · $eta for $rounds rounds';
+/// One muted line under a ring: who is waiting, how many boxes there are
+/// to hide among, and the fee. Nothing here is a warning; [ringNote] is.
+String ringSubtitle({required int value, required int waiting, required int depth, required int? operatorFee}) {
+  final who = waiting == 0 ? 'Nobody waiting' : '$waiting waiting';
+  final hide = depth == 0 ? 'nobody mixing here yet' : '$depth ${depth == 1 ? 'box' : 'boxes'} to hide among';
+  if (operatorFee == null || value <= 0) return '$who · $hide';
+  return '$who · $hide · fee ${formatErg(operatorFee, maxFrac: 3)} (${_pct(operatorFee, value)}%)';
 }
 
-/// "Level 1 · about 30 rounds": ErgoMixer's numbering, one token per round.
-String levelTitle({required int index, required int rounds}) => 'Level ${index + 1} · about $rounds rounds';
+String _pct(int fee, int value) {
+  final pct = fee * 100 / value;
+  return pct >= 10 ? pct.toStringAsFixed(0) : pct.toStringAsFixed(1);
+}
 
-/// One line under a ring: who is waiting, and what entering costs. Above
-/// five percent the fee is called out, because a flat batch price makes a
-/// small mix expensive and a large one cheap.
-String ringSubtitle({required int value, required int waiting, required int? operatorFee}) {
-  final who = waiting == 0
-      ? 'Nobody waiting: you would post the first box'
-      : '$waiting waiting: you could join at once';
-  if (operatorFee == null || value <= 0) return who;
-  final pct = operatorFee * 100 / value;
-  final pctText = pct >= 10 ? pct.toStringAsFixed(0) : pct.toStringAsFixed(1);
-  final cost = 'fees ${formatErg(operatorFee, maxFrac: 3)} ($pctText%)';
-  return pct >= 5 ? '$who · $cost, expensive for this amount' : '$who · $cost';
+/// How fast a ring moves, from full boxes made in the past week: a join
+/// creates two, so joins a day is recent boxes over fourteen. Empty when
+/// it did not move.
+String ringPace(int recentRounds) {
+  if (recentRounds == 0) return '';
+  final perDay = recentRounds / 14;
+  if (perDay >= 1) {
+    final n = perDay.round();
+    return 'about $n ${n == 1 ? 'round' : 'rounds'} a day';
+  }
+  final perWeek = recentRounds / 2;
+  final n = perWeek.round();
+  return 'about ${n < 1 ? 1 : n} ${perWeek >= 1.5 ? 'rounds' : 'round'} a week';
+}
+
+/// The second line under a ring, only when there is something to say: a
+/// fee above five percent (a flat batch price makes a small mix dear), a
+/// partner already waiting, a quiet ring, or its pace. Red for the fee only.
+({String text, bool warning}) ringNote({
+  required int value,
+  required int waiting,
+  required int recentRounds,
+  required int? operatorFee,
+}) {
+  final expensive = operatorFee != null && value > 0 && operatorFee * 20 >= value;
+  final pace = ringPace(recentRounds);
+  final movement = recentRounds == 0
+      ? (waiting > 0
+          ? 'A partner is waiting, so your first round could start at once'
+          : 'Quiet: no rounds here in the past week')
+      : '${pace[0].toUpperCase()}${pace.substring(1)} here';
+  if (!expensive) return (text: movement, warning: false);
+  final fee = 'Fee is ${_pct(operatorFee, value)}% of this amount';
+  return (text: '$fee · ${movement[0].toLowerCase()}${movement.substring(1)}', warning: true);
+}
+
+/// A ring is offered when someone is waiting in it, it moved in the past
+/// week, or it is a standard amount. The pool carries old rings with
+/// hundreds of boxes and no movement; those would only mislead.
+bool ringOffered({required int value, required int waiting, required int recentRounds}) =>
+    waiting > 0 || recentRounds > 0 || defaultErgRings.contains(value);
+
+/// "Level 1 · 30 rounds": ErgoMixer's numbering, one token per round.
+String levelTitle({required int index, required int rounds}) => 'Level ${index + 1} · $rounds rounds';
+
+/// What a level costs and, at the chosen ring's pace, how long it takes.
+String levelSubtitle({required int price, required int rounds, required int ringValue, required int recentRounds}) {
+  final cost = '${formatErg(price, maxFrac: 4)} in mixing tokens';
+  final ring = '${formatErg(ringValue)} ring';
+  if (recentRounds == 0) return '$cost · no estimate: the $ring had no rounds in the past week';
+  final days = (rounds / (recentRounds / 14)).ceil();
+  final eta = days >= 60 ? 'about ${(days / 7).round()} weeks' : 'about $days ${days == 1 ? 'day' : 'days'}';
+  return "$cost · $eta for $rounds rounds at the $ring's pace";
 }
 
 /// How long a half box has waited since its last event, and after two
@@ -559,6 +599,10 @@ class _MixCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(mixPhaseText(r), style: theme.textTheme.bodyMedium),
+          if (r.finished) ...[
+            const SizedBox(height: 6),
+            Text(mixFinishedText(r), style: TextStyle(color: muted, fontSize: 12.5)),
+          ],
           if (r.inPool) ...[
             const SizedBox(height: 10),
             ClipRRect(
@@ -592,6 +636,20 @@ class _MixCard extends StatelessWidget {
                 OutlinedButton(
                   onPressed: working ? null : onLeave,
                   child: Text(r.needsDestination ? 'Withdraw to…' : 'Withdraw now'),
+                ),
+              if (r.finished && mixFinalRow(r) != null)
+                FilledButton.tonal(
+                  key: const Key('mix-see-tx'),
+                  onPressed: () => Navigator.push(
+                    context,
+                    fadeRoute(
+                      const TransactionDetailScreen(),
+                      settings: RouteSettings(
+                        arguments: WalletRouteArgs.of(context).copyWith(transaction: mixFinalRow(r)),
+                      ),
+                    ),
+                  ),
+                  child: const Text('See transaction'),
                 ),
               if (r.finished || r.pending)
                 TextButton(
@@ -631,6 +689,7 @@ class _StartMixSheet extends StatefulWidget {
 class _StartMixSheetState extends State<_StartMixSheet> {
   late List<({int value, int waiting, int depth, int recentRounds})> _rings;
   late List<({int level, int price, int rate})> _levels;
+  int _hiddenRings = 0;
   int? _denomination;
   int? _level;
   bool _toStealth = true;
@@ -654,8 +713,10 @@ class _StartMixSheetState extends State<_StartMixSheet> {
     final values = seen.keys.toList()..sort();
     _rings = [
       for (final v in values)
-        (value: v, waiting: seen[v]!.waiting, depth: seen[v]!.depth, recentRounds: seen[v]!.recentRounds),
+        if (ringOffered(value: v, waiting: seen[v]!.waiting, recentRounds: seen[v]!.recentRounds))
+          (value: v, waiting: seen[v]!.waiting, depth: seen[v]!.depth, recentRounds: seen[v]!.recentRounds),
     ];
+    _hiddenRings = values.length - _rings.length;
     _levels = [
       for (final l in (widget.pool['token_levels'] as List? ?? const []))
         (
@@ -715,21 +776,35 @@ class _StartMixSheetState extends State<_StartMixSheet> {
                   title: Text(
                     r.depth == _deepest && r.depth > 0 ? '${formatErg(r.value)} · deepest ring' : formatErg(r.value),
                   ),
-                  subtitle: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        ringSubtitle(value: r.value, waiting: r.waiting, operatorFee: _operatorFee(r.value)),
-                        style: TextStyle(
-                          color: (_operatorFee(r.value) ?? 0) * 20 >= r.value ? theme.colorScheme.error : muted,
-                          fontSize: 12,
+                  subtitle: Builder(builder: (context) {
+                    final note = ringNote(
+                      value: r.value,
+                      waiting: r.waiting,
+                      recentRounds: r.recentRounds,
+                      operatorFee: _operatorFee(r.value),
+                    );
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          ringSubtitle(value: r.value, waiting: r.waiting, depth: r.depth, operatorFee: _operatorFee(r.value)),
+                          style: TextStyle(color: muted, fontSize: 12),
                         ),
-                      ),
-                      Text(
-                        ringInsight(depth: r.depth, recentRounds: r.recentRounds, rounds: _level),
-                        style: TextStyle(color: r.recentRounds == 0 ? theme.colorScheme.error : muted, fontSize: 12),
-                      ),
-                    ],
+                        Text(
+                          note.text,
+                          style: TextStyle(color: note.warning ? theme.colorScheme.error : muted, fontSize: 12),
+                        ),
+                      ],
+                    );
+                  }),
+                ),
+              if (_hiddenRings > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    '$_hiddenRings other ${_hiddenRings == 1 ? 'ring' : 'rings'} in the pool had nobody waiting '
+                    'and no rounds in the past week, so ${_hiddenRings == 1 ? 'it is' : 'they are'} not offered.',
+                    style: TextStyle(color: muted, fontSize: 12),
                   ),
                 ),
               const SizedBox(height: 12),
@@ -749,15 +824,19 @@ class _StartMixSheetState extends State<_StartMixSheet> {
                     onTap: () => setState(() => _level = l.level),
                     title: Text(levelTitle(index: i, rounds: l.level)),
                     subtitle: Text(
-                      'Cost per box ${formatErg(l.price, maxFrac: 4)}',
+                      levelSubtitle(
+                        price: l.price,
+                        rounds: l.level,
+                        ringValue: _denomination ?? 0,
+                        recentRounds: _rings.where((r) => r.value == _denomination).firstOrNull?.recentRounds ?? 0,
+                      ),
                       style: TextStyle(color: muted, fontSize: 12),
                     ),
                   ),
               Text(
-                'The level is how many rounds the mix runs, one mixing token each, '
-                'as in ErgoMixer. The count is approximate: a round with a partner '
-                'shares tokens. Each round waits for a partner and can take hours, '
-                'so a mix takes days. Withdraw now is always available.',
+                'A level is how many rounds the mix runs, one mixing token each, as in '
+                'ErgoMixer. Rounds wait for partners, so the estimate is the pool\'s pace '
+                'today. You can withdraw at any round; the mixed money is yours throughout.',
                 style: TextStyle(color: muted, fontSize: 12),
               ),
               const SizedBox(height: 12),

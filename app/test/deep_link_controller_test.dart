@@ -21,4 +21,12 @@ void main() {
     c.push('   ');
     expect(c.pending, isNull);
   });
+
+  test('a notification tap becomes an argus link with a home route', () {
+    expect(argusLinkRoute('argus://mix'), '/mix');
+    expect(argusLinkRoute('argus://loans'), '/duckpools');
+    expect(argusLinkRoute('argus://activity'), '/transactions');
+    expect(argusLinkRoute('argus://nothing'), isNull);
+    expect(argusLinkRoute('ergopay://x'), isNull);
+  });
 }

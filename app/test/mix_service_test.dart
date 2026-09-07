@@ -397,7 +397,7 @@ void main() {
     expect(first.lastError, contains('node refused'));
     expect(first.phaseKind, 'full_owned', reason: 'state untouched by a failed move');
     expect(second.finished, isTrue);
-    expect(gw.notifications.last, 'A mix finished | Delivered after 3 rounds.');
+    expect(gw.notifications.last, 'A mix finished | Delivered to your public address after 3 rounds. Tap to see it.');
     expect(gw.notificationIds.last, 1, reason: 'the mix id keeps two mixes at one step apart');
     expect(svc.lastTickError, isNull);
   });
@@ -415,7 +415,7 @@ void main() {
     final svc = await loaded(gw, ex, [state(mixId: 4, kind: 'half_posted', done: 0)]);
     await svc.tick();
     expect(svc.records.single.phaseKind, 'reclaimed');
-    expect(gw.notifications.last, 'A mix finished | Withdrawn before a partner joined.');
+    expect(gw.notifications.last, 'A mix finished | Withdrawn before a partner joined; it is back at your public address.');
     expect(gw.notificationIds.last, 4);
   });
 

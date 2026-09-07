@@ -181,8 +181,11 @@ class _DashboardScreenState extends State<DashboardScreen>
   void _onDeepLink() {
     if (!_openPendingDeepLink() && mounted) {
       // Parked until the wallet unlocks; tell the user why nothing happened.
-      if (!_walletUnlocked && deepLinkController.pending != null) {
-        setState(() => _status = 'Unlock to continue with the ErgoPay request.');
+      final link = deepLinkController.pending;
+      if (!_walletUnlocked && link != null) {
+        setState(() => _status = isErgoPayLink(link)
+            ? 'Unlock to continue with the ErgoPay request.'
+            : 'Unlock to open what the notification is about.');
       }
     }
   }
@@ -199,8 +202,19 @@ class _DashboardScreenState extends State<DashboardScreen>
       return false;
     }
     deepLinkController.take();
-    if (!isErgoPayLink(link)) return true;
-    _openErgoPay(link);
+    if (isErgoPayLink(link)) {
+      _openErgoPay(link);
+      return true;
+    }
+    final route = argusLinkRoute(link);
+    if (route == null) return true;
+    // A notification tap lands on the screen it names, over nothing else.
+    Navigator.of(context).popUntil((r) => r.isFirst);
+    if (route == '/transactions') {
+      _selectTab(1);
+    } else {
+      _go(route);
+    }
     return true;
   }
 

@@ -15,6 +15,35 @@ String mixEventLabel(String action, {required int denomination, required int rou
   };
 }
 
+/// Where a mix's money goes, from its destination tree: a pay-to-public-key
+/// tree is the wallet's public address, anything else is one of its stealth
+/// addresses. A recovered mix may not know yet.
+String mixDestinationText(MixRecord r) {
+  final tree = r.destinationErgoTree;
+  if (tree.isEmpty) return 'the destination you chose';
+  return tree.startsWith('0008cd') ? 'your public address' : 'a stealth address of yours';
+}
+
+/// The finished card's second line: where the money is now and what the
+/// card still means, so nobody goes looking for a missing balance.
+String mixFinishedText(MixRecord r) {
+  final amount = formatErg(r.denomination, maxFrac: 4);
+  final where = mixDestinationText(r);
+  final went = r.phaseKind == 'reclaimed'
+      ? '$amount went back to $where, minus the mixing tokens.'
+      : '$amount went to $where.';
+  final label = r.phaseKind == 'reclaimed' ? 'Mix reclaimed' : 'Mix finished';
+  return '$went It counts in this wallet\'s balance and shows in Activity as "$label". '
+      'Remove only clears this card.';
+}
+
+/// The activity row of a finished mix's last transaction, for the detail
+/// screen; null while the mix has no transaction to show.
+Map<String, dynamic>? mixFinalRow(MixRecord r) {
+  final rows = mixActivityRowsFor([r]);
+  return rows.isEmpty ? null : rows.first;
+}
+
 /// Activity rows for every mix event with a transaction, newest first.
 /// The amount is shown as the mix's denomination leaving on entry and
 /// arriving on withdrawal or reclaim; rounds move nothing in or out.
