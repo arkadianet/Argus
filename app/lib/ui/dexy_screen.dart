@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../features.dart';
 import '../format.dart';
 import '../bridge/argus_error.dart';
 import 'widgets/error_sheet.dart';
@@ -275,8 +276,33 @@ class _DexyScreenState extends State<DexyScreen> {
 
   // ── Layout ─────────────────────────────────────────────────────────────
 
+  /// What the screen shows while Dexy is switched off: the reason, and
+  /// nothing that could build a transaction against its contracts.
+  Widget _paused(BuildContext context) {
+    final body = ListView(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 40),
+      children: [
+        SoftCard(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.pause_circle_outline, color: ArgusColors.of(context).muted),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(dexyPausedNote, style: const TextStyle(height: 1.4)),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+    return widget.embedded ? body : Scaffold(appBar: AppBar(title: const Text('Dexy')), body: SafeArea(child: body));
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (!dexyEnabled) return _paused(context);
     final body = Column(
       children: [
         const OfflineBanner(),

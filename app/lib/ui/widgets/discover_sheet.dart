@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
 
+import '../../features.dart';
+
 import '../../theme/argus_theme.dart';
 import '../swap_hub_screen.dart';
 
 /// Everything the Discover row and page can open.
 enum DiscoverFeature { dexy, ageusd, spectrum, liquidity, duckpools, sigmafi, rosen, dapps, mix, tokens, utxos }
+
+/// Whether a feature is offered right now: a paused protocol keeps its
+/// explainer but appears on no card and in no list.
+bool discoverAvailable(DiscoverFeature f, {bool dexy = dexyEnabled}) => f != DiscoverFeature.dexy || dexy;
 
 /// What a feature is, what you can do with it, and what to watch for.
 class DiscoverExplainer {
