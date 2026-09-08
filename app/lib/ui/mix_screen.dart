@@ -589,8 +589,13 @@ String tokensLeftText(int tokens, int rounds) => rounds == 0
     ? '$tokens mixing ${tokens == 1 ? 'token' : 'tokens'} on the box · no more rounds affordable, it withdraws next'
     : '$tokens mixing tokens on the box · about $rounds more ${rounds == 1 ? 'round' : 'rounds'} affordable';
 
+/// Whether the card offers to withdraw. A withdrawal already broadcast has
+/// no box left to spend, so offering it again would only raise an error.
+bool mixCanLeave(MixRecord r) => r.inPool && !r.awaitingWithdrawal && r.boxId != null;
+
 /// What a mix is doing, in words the user can act on.
 String mixPhaseText(MixRecord r) {
+  if (r.awaitingWithdrawal) return 'Withdrawal sent. Waiting for confirmation.';
   switch (r.phaseKind) {
     case 'pending':
       return 'Funded but not in the pool yet. Continue to enter.';
@@ -680,7 +685,7 @@ class _MixCard extends StatelessWidget {
                   onPressed: working ? null : onContinue,
                   child: const Text('Continue'),
                 ),
-              if (r.inPool)
+              if (mixCanLeave(r))
                 OutlinedButton(
                   onPressed: working ? null : onLeave,
                   child: Text(r.needsDestination ? 'Withdraw to…' : 'Withdraw now'),

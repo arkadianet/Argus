@@ -1911,7 +1911,8 @@ pub async fn prepare_mint(
         .current_height()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (boxes, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (_, utxos) = apply_mixed_rule(handle_id, boxes, utxos, None)?;
     let fee_cfg = ergo_tx::resolved_dev_fee_config();
     // The token box, the change box, both fees.
     let required = (2 * MIN_BOX_VALUE_NANO + miner_fee + fee_cfg.budget()) as u64;
@@ -1994,7 +1995,8 @@ pub async fn prepare_burn(
         .current_height()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (boxes, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (_, utxos) = apply_mixed_rule(handle_id, boxes, utxos, None)?;
     // Every box carrying a token to burn must be spent (the builder burns
     // by omission, so the whole holding passes through it), plus ERG for
     // the fees and a change box from wherever.
@@ -2157,7 +2159,8 @@ pub async fn rosen_prepare_lock(
         .current_height()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (boxes, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (_, utxos) = apply_mixed_rule(handle_id, boxes, utxos, None)?;
     let fee_cfg = ergo_tx::resolved_dev_fee_config();
     let app_fee = if fee_cfg.enabled {
         Some((fee_cfg.recipient_ergo_tree.as_str(), fee_cfg.budget()))
@@ -2758,6 +2761,7 @@ pub async fn prepare_send_multi(
         eip12.push(crate::api_stealth_impl::to_input(b));
         boxes.push(crate::api_stealth_impl::to_ergo_box(b)?);
     }
+    let (mut boxes, eip12) = apply_mixed_rule(handle_id, boxes, eip12, input_box_ids.as_deref())?;
     if eip12.is_empty() {
         return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());
     }
@@ -3073,7 +3077,7 @@ async fn gather_wallet_boxes(
 > {
     let client = node_client(node_url).await?;
     let (boxes, eip12) = gather_unspent(handle_id, &client, spend_addresses).await?;
-    Ok((boxes, eip12))
+    apply_mixed_rule(handle_id, boxes, eip12, None)
 }
 
 /// Order the user's full ErgoBoxes to match input order after `protocol_count`
@@ -4800,6 +4804,95 @@ mod tests {
         assert_eq!(arr[1]["assets"][0]["amount"], "1");
     }
 
+    #[tokio::test]
+    async fn shared_gather_excludes_tracked_mixed_boxes() {
+        use std::io::{Read, Write};
+        let handle = WalletHandle::restore_from_seed(&[7; 64]).unwrap();
+        let address = handle.derive_address(0).unwrap();
+        let handle_id = register_handle(handle);
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../vendor/protocols/zerojoin/test/fixtures/half_mix_boxes.json"
+        ))
+        .unwrap();
+        let mixed = fixture["items"][0]["boxId"].as_str().unwrap().to_string();
+        let plain = fixture["items"][1]["boxId"].as_str().unwrap().to_string();
+        mix_set_mixed_boxes(handle_id, vec![mixed.clone()]).unwrap();
+        let body = serde_json::json!([fixture["items"][0], fixture["items"][1]]).to_string();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = stop.clone();
+        let server = std::thread::spawn(move || {
+            while !stopped.load(std::sync::atomic::Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    continue;
+                };
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+                    .unwrap();
+                let mut buffer = [0; 8192];
+                let n = stream.read(&mut buffer).unwrap();
+                let request = String::from_utf8_lossy(&buffer[..n]);
+                let reply = if request.contains("/info") {
+                    r#"{"fullHeight":1500000,"headersHeight":1500000}"#
+                } else if request.contains("/blockchain/box/unspent/byAddress") {
+                    &body
+                } else {
+                    "[]"
+                };
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    reply.len(),
+                    reply
+                )
+                .unwrap();
+            }
+        });
+        let result = gather_wallet_boxes(handle_id, &[address], Some(url)).await;
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        server.join().unwrap();
+        mix_set_mixed_boxes(handle_id, vec![]).unwrap();
+        wallet_lock(handle_id).unwrap();
+        let (boxes, inputs) = result.unwrap();
+        assert_eq!(
+            inputs.iter().map(|b| b.box_id.clone()).collect::<Vec<_>>(),
+            [plain]
+        );
+        assert_eq!(boxes.len(), inputs.len());
+        assert!(boxes.iter().all(|b| b.box_id().to_string() != mixed));
+    }
+
+    #[test]
+    fn withdrawal_override_is_kept_in_the_returned_state() {
+        let handle = WalletHandle::restore_from_seed(&[8; 64]).unwrap();
+        let address = handle.derive_address(0).unwrap();
+        let expected_tree = address_to_ergo_tree(&address).unwrap();
+        let mut state = zerojoin::MixState::new(
+            0,
+            zerojoin::RingSpec::erg(1_000_000_000),
+            20,
+            3,
+            "old_destination".into(),
+            1,
+        );
+        let paid_tree = mix_leave_destination(&mut state, Some(address)).unwrap();
+        assert_eq!(paid_tree, expected_tree);
+        let summary = zerojoin::MixTxSummary {
+            action: "withdraw".into(),
+            denomination: 1_000_000_000,
+            mix_level_after: 0,
+            tokens_burned: 0,
+            miner_fee_nano: 1_100_000,
+            operator_fee_nano: 0,
+        };
+        let raw = mix_move_result(state, zerojoin::Applied::Withdrawn, summary, "tx", 2).unwrap();
+        let result: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(result["state"]["destination_ergo_tree"], paid_tree);
+    }
+
     #[test]
     fn mixed_boxes_stay_out_of_automatic_selection_and_never_mix_with_others() {
         let mixed: HashSet<String> = ["m1", "m2"].iter().map(|s| s.to_string()).collect();
@@ -5286,15 +5379,10 @@ pub async fn mix_leave(
     now_unix: i64,
 ) -> Result<String, String> {
     let now = mix_now(now_unix);
-    let state = crate::api_mix_impl::parse_state(&state_json)?;
+    let mut state = crate::api_mix_impl::parse_state(&state_json)?;
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
     let miner_fee = mix_miner_fee(fee_nano)?;
-    let destination = match destination_address {
-        Some(a) => {
-            address_to_ergo_tree(&a).map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?
-        }
-        None => state.destination_ergo_tree.clone(),
-    };
+    let destination = mix_leave_destination(&mut state, destination_address)?;
     let client = node_client(node_url).await?;
     let height = client
         .current_height()
@@ -5314,6 +5402,20 @@ pub async fn mix_leave(
     let summary = built.tx.summary.clone();
     let tx_id = broadcast_mix_move(handle_id, built, &client, "mix_leave").await?;
     mix_move_result(state, applied, summary, &tx_id, now)
+}
+
+fn mix_leave_destination(
+    state: &mut zerojoin::MixState,
+    destination_address: Option<String>,
+) -> Result<String, String> {
+    let destination = match destination_address {
+        Some(a) => {
+            address_to_ergo_tree(&a).map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?
+        }
+        None => state.destination_ergo_tree.clone(),
+    };
+    state.destination_ergo_tree = destination.clone();
+    Ok(destination)
 }
 
 // ---------------------------------------------------------------------------
@@ -5541,7 +5643,8 @@ pub async fn duckpools_prepare_order(
     } else {
         spend_addresses
     };
-    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (boxes, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (_, utxos) = apply_mixed_rule(handle_id, boxes, utxos, None)?;
     let fee_cfg = ergo_tx::resolved_dev_fee_config();
     let app_fee = if fee_cfg.enabled {
         Some((fee_cfg.recipient_ergo_tree.as_str(), fee_cfg.budget()))
@@ -5719,7 +5822,8 @@ pub async fn duckpools_prepare_adjust(
     } else {
         spend_addresses
     };
-    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (boxes, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (_, utxos) = apply_mixed_rule(handle_id, boxes, utxos, None)?;
     // gather_unspent has just proved every spend address is this wallet's,
     // so the loan is ours only if its borrower is one of them. Without
     // this the wallet would build a transaction it can never sign.
@@ -5883,7 +5987,8 @@ pub async fn sigmafi_prepare_open(
     } else {
         spend_addresses
     };
-    let (_, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (boxes, utxos) = gather_unspent(handle_id, &client, &spend).await?;
+    let (_, utxos) = apply_mixed_rule(handle_id, boxes, utxos, None)?;
     let unsigned_tx = sigmafi::build_open_order(&sigmafi::OpenOrderRequest {
         borrower_tree: &user_tree,
         change_tree: Some(&change_tree),
@@ -5992,7 +6097,8 @@ pub async fn sigmafi_prepare_spend(
             spend_from.push(required.to_string());
         }
     }
-    let (_, utxos) = gather_unspent(handle_id, &client, &spend_from).await?;
+    let (boxes, utxos) = gather_unspent(handle_id, &client, &spend_from).await?;
+    let (_, utxos) = apply_mixed_rule(handle_id, boxes, utxos, None)?;
     let unsigned_tx = spend.build(&protocol_box, &user_tree, &ui_fee_tree, &utxos, height, miner_fee)?;
     let ergo_boxes = unsigned_tx
         .inputs

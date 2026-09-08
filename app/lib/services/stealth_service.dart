@@ -252,12 +252,14 @@ String mergeSelfChangeBoxes(String body, List<Map<String, dynamic>> extra) {
 /// result becomes "unknown" rather than an error: a wallet sync must never
 /// fail because the stealth lookup did.
 class StealthService extends ChangeNotifier {
-  StealthService({StealthBoxFetcher? fetcher})
-      : _fetch = fetcher ?? _httpFetchStealthBoxes;
+  StealthService({StealthBoxFetcher? fetcher, WalletService? wallet})
+      : _fetch = fetcher ?? _httpFetchStealthBoxes,
+        _wallet = wallet ?? walletService;
 
   static const _enabledKey = 'argus_stealth_scan_enabled';
 
   final StealthBoxFetcher _fetch;
+  final WalletService _wallet;
 
   /// Whether each sync queries the explorer for stealth boxes. Default on.
   bool scanEnabled = true;
@@ -364,23 +366,17 @@ class StealthService extends ChangeNotifier {
   /// Never throws: an unreachable explorer sets [lastScanFailed] and leaves
   /// the previous result in place.
   Future<StealthScanResult?> scan({String? explorerBase}) async {
-    if (!scanEnabled || !walletService.isUnlocked) return null;
+    if (!scanEnabled || !_wallet.isUnlocked) return null;
     final gen = _generation;
     try {
       final base = explorerBase ?? networkController.explorer;
-      var body = await _fetch(base);
-      // Money we sent ourselves is found by script, so it appears even if
-      // the template scan missed it.
-      body = mergeSelfChangeBoxes(
-        body,
-        await fetchSelfChangeBoxes(base, selfChangeTrees),
-      );
+      final body = await _fetch(base);
       if (isTruncatedScan(body)) {
         // Partial data would read as a smaller balance than the truth.
         throw StateError('stealth box list exceeded the scan cap');
       }
       final result =
-          StealthScanResult.fromJson(await walletService.stealthScan(body));
+          StealthScanResult.fromJson(await _wallet.stealthScan(body));
       if (gen != _generation) return null;
       _lastBoxesJson = body;
       lastScan = result;

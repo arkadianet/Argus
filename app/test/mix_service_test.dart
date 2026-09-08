@@ -301,10 +301,23 @@ void main() {
     expect(svc.records, isEmpty, reason: 'another wallet has its own list');
   });
 
-  test('snapshot pages every list and resolves own boxes through their spending tx', () async {
+  test('routine snapshots find owned boxes without disclosing their ids', () async {
+    final gw = FakeGateway()..node = 'http://node/';
+    final ex = FakeExplorer()
+      ..lists['aa'] = [{'boxId': 'ownhalf'}, {'boxId': 'otherhalf'}]
+      ..lists['bb'] = [{'boxId': 'ownfull'}, {'boxId': 'otherfull'}];
+    final svc = await loaded(gw, ex, []);
+    final snap = jsonDecode((await svc.snapshot()).json) as Map;
+    expect((snap['full_boxes'] as List).map((b) => b['boxId']), ['ownfull', 'otherfull']);
+    expect((snap['half_boxes'] as List).map((b) => b['boxId']), ['ownhalf', 'otherhalf']);
+    expect(ex.requests.where((r) => r.contains('/byId/') || RegExp(r'/boxes/(own|spent)').hasMatch(r)), isEmpty);
+  });
+
+  test('snapshot pages every contract list including both full outputs', () async {
     final gw = FakeGateway();
     final ex = FakeExplorer()
-      ..lists['aa'] = List.generate(501, (i) => {'boxId': 'h$i'})
+      ..lists['aa'] = [...List.generate(501, (i) => {'boxId': 'h$i'}), {'boxId': 'still'}]
+      ..lists['bb'] = [{'boxId': 'out0'}, {'boxId': 'out1'}]
       ..lists['cc'] = [{'boxId': 'fee'}]
       ..lists['dd'] = [{'boxId': 'tok'}]
       ..boxes['mine'] = {'boxId': 'mine', 'spentTransactionId': 'spender'}
@@ -316,17 +329,17 @@ void main() {
         ],
       };
     final svc = await loaded(gw, ex, []);
-    final snap = await svc.snapshot(ownBoxIds: ['mine', 'still', 'gone']);
+    final snap = await svc.snapshot();
     final json = jsonDecode(snap.json) as Map;
-    expect((json['half_boxes'] as List).length, 501 + 1, reason: 'two pages, plus our unspent box');
-    expect((json['full_boxes'] as List).map((b) => b['boxId']), ['out0', 'out1', 'still']);
+    expect((json['half_boxes'] as List).length, 501 + 1, reason: 'two pages include our unspent box');
+    expect((json['full_boxes'] as List).map((b) => b['boxId']), ['out0', 'out1']);
     expect((json['fee_boxes'] as List).length, 1);
     expect((json['token_boxes'] as List).length, 1);
     expect(json['height'], 1500000);
     expect(snap.truncated, isFalse);
     expect(ex.requests.where((r) => r.contains('byErgoTree/aa')).length, 2);
-    expect(ex.requests.where((r) => r.contains('byErgoTree/bb')), isEmpty,
-        reason: 'a routine tick never lists every full box');
+    expect(ex.requests.where((r) => r.contains('byErgoTree/bb')).length, 1,
+        reason: 'full boxes are discovered without naming an owned box');
   });
 
   test('tick observes, plans and advances each active mix, announcing rounds', () async {
@@ -489,6 +502,26 @@ void main() {
     expect(svc.records.map((r) => r.mixId), [5]);
   });
 
+  test('recovery repairs a remix broadcast lost before persistence only when the old box is spent', () async {
+    final old = state(mixId: 1, boxId: 'old', round: 0);
+    final next = state(mixId: 1, kind: 'half_posted', boxId: 'new', round: 1);
+    final gw = FakeGateway()
+      ..node = 'http://node/'
+      ..script['recover'] = [[next]];
+    final ex = FakeExplorer()
+      ..nodeBoxes['old'] = {'boxId': 'old'}
+      ..boxes['old'] = {'boxId': 'old', 'spentTransactionId': null};
+    final svc = await loaded(gw, ex, [old]);
+    expect(await svc.recover(), 0, reason: 'an unspent box must not be replaced');
+    ex.boxes['old'] = {'boxId': 'old', 'spentTransactionId': 'remix'};
+    expect(await svc.recover(), 1);
+    expect(svc.records.single.boxId, 'new');
+    expect(svc.records.single.roundsTarget, 3);
+    expect(svc.records.single.destinationErgoTree, old['destination_ergo_tree']);
+    await svc.load();
+    expect(svc.records.single.boxId, 'new', reason: 'the repaired round survives restart');
+  });
+
   test('recover adds only mixes the records do not know', () async {
     final gw = FakeGateway()
       ..script['recover'] = [
@@ -640,6 +673,7 @@ void main() {
     final ex = FakeExplorer()
       ..nodeLists = {
         'aa': [{'boxId': 'nh1'}],
+        'bb': [{'boxId': 'nout'}],
         'cc': [{'boxId': 'nfee'}],
         'dd': [{'boxId': 'ntok'}],
       }
@@ -653,7 +687,7 @@ void main() {
       ..lists['aa'] = [{'boxId': 'eh1'}]
       ..boxes['mine'] = {'boxId': 'mine', 'spentTransactionId': null};
     final svc = await loaded(gw, ex, []);
-    final snap = await svc.snapshot(ownBoxIds: ['mine']);
+    final snap = await svc.snapshot();
     final json = jsonDecode(snap.json) as Map;
     expect((json['half_boxes'] as List).map((b) => b['boxId']), ['nh1']);
     expect((json['full_boxes'] as List).map((b) => b['boxId']), ['nout']);
@@ -682,7 +716,7 @@ void main() {
     ex.requests.clear();
     final snap2 = await svc.snapshot();
     expect((jsonDecode(snap2.json) as Map)['half_boxes'].map((b) => b['boxId']), ['eh1']);
-    expect(ex.requests.where((r) => r.startsWith('POST')).length, 3, reason: 'tried the node once per list');
+    expect(ex.requests.where((r) => r.startsWith('POST')).length, 4, reason: 'tried the node once per list');
   });
 
   test('background mixing exports a key when a mix enters, drops it when it ends', () async {
@@ -952,6 +986,82 @@ void main() {
     expect(prefs.getString('argus_mix_lease'), isNull, reason: 'released after the pass');
   });
 
+  test('a stale background failure cannot overwrite a foreground withdrawal', () async {
+    final gw = FakeGateway()
+      ..unlocked = false
+      ..wallet = null
+      ..keys['w1:0'] = 'key-0'
+      ..script['observe'] = ['same']
+      ..script['plan'] = [{'action': 'withdraw', 'reason': 'rounds_done'}]
+      ..script['advance'] = [StateError('input already spent')];
+    SharedPreferences.setMockInitialValues({
+      'argus_mixing_enabled': true,
+      'argus_mixing_background': true,
+      'argus_mixes_v1_w1': jsonEncode([{'state': state(done: 3, target: 3)}]),
+    });
+    final finished = {'state': state(kind: 'withdrawn', done: 3, target: 3)};
+    gw.beforeAdvanceWithKey = () async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('argus_mixes_v1_w1', jsonEncode([finished]));
+    };
+    final ex = FakeExplorer();
+    await MixService(gateway: gw, get: ex.get, post: ex.post).tickHeadless();
+    final prefs = await SharedPreferences.getInstance();
+    expect(jsonDecode(prefs.getString('argus_mixes_v1_w1')!), [finished]);
+  });
+
+  test('an unconfirmed withdrawal keeps its key and can return to the live box', () async {
+    final live = state(done: 3, target: 3);
+    final withdrawing = state(kind: 'withdrawn', done: 3, target: 3)
+      ..['previous'] = {'phase': live['phase'], 'round': 0, 'rounds_done': 3, 'at': 5}
+      ..['events'] = [{'at': 5, 'action': 'withdrawn', 'round': 0, 'tx_id': 'txw'}];
+    final gw = FakeGateway()
+      ..script['leave'] = [{'state': withdrawing, 'tx_id': 'txw'}]
+      ..script['observe'] = [live]
+      ..script['plan'] = [{'action': 'wait', 'reason': 'no_fee_box'}];
+    final ex = FakeExplorer()..lists['bb'] = [{'boxId': 'box1'}];
+    final svc = await loaded(gw, ex, [live]);
+    await svc.setBackgroundEnabled(true);
+    await svc.leave(svc.records.single);
+    expect(svc.records.single.finished, isFalse);
+    expect(gw.keys, contains('w1:0'));
+    await svc.load();
+    svc.records.single.mixedBoxId = 'dropped-output';
+    await svc.tick();
+    expect(svc.records.single.readyToWithdraw, isTrue);
+    expect(svc.records.single.mixedBoxId, isNull);
+    expect(svc.records.single.finished, isFalse);
+    expect(gw.calls, contains('observe'));
+  });
+
+  test('a withdrawal finishes and drops its key only after chain inclusion', () async {
+    final live = state(done: 3, target: 3);
+    final withdrawing = state(kind: 'withdrawn', done: 3, target: 3)
+      ..['previous'] = {'phase': live['phase'], 'round': 0, 'rounds_done': 3, 'at': 5}
+      ..['events'] = [{'at': 5, 'action': 'withdrawn', 'round': 0, 'tx_id': 'txw'}];
+    final gw = FakeGateway()
+      ..script['observe'] = ['same']
+      ..script['plan'] = [{'action': 'wait', 'reason': 'finished'}];
+    final ex = FakeExplorer()..txs['txw'] = {
+      'outputs': [{'boxId': 'paid', 'ergoTree': '0008cd00'}],
+    };
+    final svc = await loaded(gw, ex, [withdrawing]);
+    await svc.setBackgroundEnabled(true);
+    await svc.tick();
+    expect(svc.records.single.finished, isFalse, reason: 'a mempool body is not confirmation');
+    expect(gw.keys, contains('w1:0'));
+    expect(gw.notifications, isEmpty);
+    ex.txs['txw'] = {
+      'inclusionHeight': 1500001,
+      'outputs': [{'boxId': 'paid', 'ergoTree': '0008cd00'}],
+    };
+    await svc.tick();
+    expect(svc.records.single.finished, isTrue);
+    expect(gw.keys, isEmpty);
+    expect(gw.notifications.single, startsWith('A mix finished'));
+    expect(svc.records.single.mixedBoxId, 'paid');
+  });
+
   test('the headless tick merges by mix id so a concurrent write is not lost', () async {
     final gw = FakeGateway()
       ..unlocked = false
@@ -1088,7 +1198,7 @@ void main() {
       ];
     final ex = FakeExplorer()..softNotFound = true;
     final svc = await loaded(gw, ex, [state(kind: 'half_posted', boxId: 'fresh', done: 1)]);
-    final snap = await svc.snapshot(ownBoxIds: ['fresh']);
+    final snap = await svc.snapshot();
     final json = jsonDecode(snap.json) as Map;
     expect(json['half_boxes'], isEmpty, reason: 'the error body is not filed as a box');
     expect(json['full_boxes'], isEmpty);

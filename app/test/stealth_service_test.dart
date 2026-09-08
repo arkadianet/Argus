@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:argus_wallet/services/stealth_service.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
@@ -12,6 +13,17 @@ void main() {
   _truncationTests();
   _stealthActivityTests();
   _walletRowTests();
+  test('a complete template scan never requests saved self-change scripts', () async {
+    final client = _RecordingHttpClient();
+    final service = StealthService(
+      wallet: _ScanWallet(),
+      fetcher: (_) async => '{"items":[{"boxId":"change","ergoTree":"privateTree"}]}',
+    )..selfChangeTrees = ['privateTree'];
+    await HttpOverrides.runZoned(() async {
+      expect(await service.scan(explorerBase: 'https://explorer'), isNotNull);
+    }, createHttpClient: (_) => client);
+    expect(client.requests, isEmpty);
+  });
   _selfChangeTests();
 }
 
@@ -310,4 +322,30 @@ void _selfChangeTests() {
     const body = '{"items":[]}';
     expect(mergeSelfChangeBoxes(body, const []), body);
   });
+}
+
+class _ScanWallet extends WalletService {
+  @override
+  bool get isUnlocked => true;
+  @override
+  Future<Map<String, dynamic>> stealthScan(String boxesJson) async => {
+    'scanned': 1,
+    'owned_count': 1,
+    'boxes': [{'box_id': 'change', 'ergo_tree': 'privateTree'}],
+  };
+}
+
+class _RecordingHttpClient implements HttpClient {
+  final requests = <Uri>[];
+  @override
+  Future<HttpClientRequest> openUrl(String method, Uri url) async {
+    requests.add(url);
+    throw StateError('unexpected network request');
+  }
+  @override
+  void close({bool force = false}) {}
+  @override
+  set autoUncompress(bool value) {}
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
