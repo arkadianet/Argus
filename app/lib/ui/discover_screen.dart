@@ -44,7 +44,7 @@ class DiscoverScreen extends StatelessWidget {
               style: Theme.of(context).textTheme.titleSmall?.copyWith(color: muted, letterSpacing: 1.2),
             ),
             const SizedBox(height: 8),
-            _list(context, features),
+            _list(context: context, features: features.where(discoverAvailable).toList()),
             const SizedBox(height: 20),
           ],
         ],
@@ -52,7 +52,7 @@ class DiscoverScreen extends StatelessWidget {
     );
   }
 
-  Widget _list(BuildContext context, List<DiscoverFeature> features) {
+  Widget _list({required BuildContext context, required List<DiscoverFeature> features}) {
     final muted = ArgusColors.of(context).muted;
     return SoftCard(
       padding: EdgeInsets.zero,

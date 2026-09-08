@@ -93,7 +93,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   /// network calls at once.
   int _tab = 0;
   final Set<int> _visitedTabs = {0};
-  SwapVenue _swapVenue = SwapVenue.dexy;
+  SwapVenue _swapVenue = enabledVenues().first;
   static const _tabTitles = ['Argus', 'Activity', 'Swap', 'Settings'];
 
   /// Poll for mempool changes (pending activity, balance, spendable UTXOs)
@@ -918,6 +918,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   /// Switches to the swap tab on [venue]; embedded screens read balances
   /// from the enclosing [WalletArgsScope].
   void _goHub(SwapVenue venue) {
+    venue = coerceVenue(venue);
     if (_swapVenue != venue) setState(() => _swapVenue = venue);
     _selectTab(2);
   }
@@ -1396,14 +1397,15 @@ class _DashboardScreenState extends State<DashboardScreen>
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 children: [
-                  _discoverCard(
-                    feature: DiscoverFeature.dexy,
-                    subtitle: _positionLine(
-                      ids: [
-                        for (final v in DexyVariant.values) ...[v.tokenId, v.lpTokenId],
-                      ],
+                  if (discoverAvailable(DiscoverFeature.dexy))
+                    _discoverCard(
+                      feature: DiscoverFeature.dexy,
+                      subtitle: _positionLine(
+                        ids: [
+                          for (final v in DexyVariant.values) ...[v.tokenId, v.lpTokenId],
+                        ],
+                      ),
                     ),
-                  ),
                   _discoverCard(
                     feature: DiscoverFeature.ageusd,
                     subtitle: _positionLine(ids: const [SigmaUsdTokens.sigUsd, SigmaUsdTokens.sigRsv]),

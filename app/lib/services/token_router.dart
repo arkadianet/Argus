@@ -1,4 +1,5 @@
 import '../bridge/argus_error.dart';
+import '../features.dart';
 import 'amm_service.dart';
 import 'app_fee.dart';
 import 'dexy_service.dart';
@@ -422,4 +423,9 @@ Future<Set<String>> spectrumPoolTokens() async {
   };
 }
 
-final tokenRouter = TokenRouter([DexyRouteProvider(), AgeUsdRouteProvider(), SpectrumRouteProvider()]);
+// A paused protocol sells nothing: its provider stays out of the router.
+final tokenRouter = TokenRouter([
+  if (dexyEnabled) DexyRouteProvider(),
+  AgeUsdRouteProvider(),
+  SpectrumRouteProvider(),
+]);
