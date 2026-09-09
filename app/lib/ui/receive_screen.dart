@@ -7,6 +7,7 @@ import '../format.dart';
 import '../services/address_label_service.dart';
 import '../services/network_controller.dart';
 import '../services/session_lock.dart';
+import '../services/privacy_service.dart';
 import '../services/stealth_service.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -32,6 +33,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   void initState() {
     super.initState();
     _amountCtrl.addListener(_updateQr);
+    privacyService.addListener(_privacyChanged);
     // The published string is derived from the seed, so it is available as
     // soon as the wallet is unlocked; no network call.
     if (stealthService.address == null) {
@@ -47,31 +49,25 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
   @override
   void dispose() {
+    privacyService.removeListener(_privacyChanged);
     _amountCtrl.removeListener(_updateQr);
     _amountCtrl.dispose();
     super.dispose();
   }
 
+  void _privacyChanged() {
+    if (mounted) setState(() {});
+  }
+
   void _updateQr() {
-    final args = WalletRouteArgs.of(context);
-    final address = args.receiveAddress;
-    final amount = _amountCtrl.text.trim();
-    String data = address;
-    String? error;
-    if (amount.isNotEmpty) {
-      final nano = parseErgToNano(amount);
-      if (nano == null) {
-        error = 'Amount must be a decimal number, like 0.001';
-      } else if (nano <= 0) {
-        error = 'Amount must be greater than zero';
-      } else {
-        data = 'ergo:$address?amount=${formatErg(nano, unit: false)}';
-      }
-    }
-    if (data != _qrData || error != _amountError) {
+    final request = receiveRequest(
+      address: WalletRouteArgs.of(context).receiveAddress,
+      amount: _amountCtrl.text,
+    );
+    if (request.payload != _qrData || request.error != _amountError) {
       setState(() {
-        _qrData = data;
-        _amountError = error;
+        _qrData = request.payload;
+        _amountError = request.error;
       });
     }
   }
@@ -294,14 +290,18 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         padding: EdgeInsets.fromLTRB(
                 28, 16, 28, 40 + MediaQuery.paddingOf(context).bottom),
         children: [
-          const SectionLabel('Unused address'),
+          SectionLabel(privacyService.useUnusedChangeAddress(walletService.activeWalletId)
+              ? 'Unused address' : 'Receive address'),
           const SizedBox(height: 8),
           Text(
-            'A new address is shown after this one is used.',
+            privacyService.useUnusedChangeAddress(walletService.activeWalletId)
+                ? 'A new address is shown after this one is used.'
+                : 'This address stays the same. Turn on Fresh addresses in Settings to use a new one after each payment.',
             style: Theme.of(context).textTheme.bodyMedium,
           ),
           const SizedBox(height: 20),
           TextField(
+            key: const Key('receive-amount'),
             controller: _amountCtrl,
             decoration: InputDecoration(
               labelText: 'Optional amount (ERG)',
@@ -388,10 +388,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
           ),
           const SizedBox(height: 12),
           OutlinedButton(
-            onPressed: address.isEmpty
+            onPressed: address.isEmpty || _amountError != null
                 ? null
                 : () => sessionLock.run(
-                      () => SharePlus.instance.share(ShareParams(text: address)),
+                      () => SharePlus.instance.share(ShareParams(text: _qrData)),
                     ),
             child: const Text('Share'),
           ),
@@ -423,4 +423,20 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       ),
     );
   }
+}
+
+/// What a receive request says: the string the QR encodes and Share sends,
+/// and why an amount was rejected. Sharing the bare address would drop the
+/// amount the payer is meant to see, so both carry the same payload.
+({String payload, String? error}) receiveRequest({required String address, required String amount}) {
+  final trimmed = amount.trim();
+  if (trimmed.isEmpty) return (payload: address, error: null);
+  final nano = parseErgToNano(trimmed);
+  if (nano == null) {
+    return (payload: address, error: 'Amount must be a decimal number, like 0.001');
+  }
+  if (nano <= 0) {
+    return (payload: address, error: 'Amount must be greater than zero');
+  }
+  return (payload: 'ergo:$address?amount=${formatErg(nano, unit: false)}', error: null);
 }

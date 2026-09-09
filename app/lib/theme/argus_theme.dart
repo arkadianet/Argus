@@ -539,6 +539,17 @@ class StepDots extends StatelessWidget {
   }
 }
 
+/// For a button that shares a line with something else.
+///
+/// The theme asks buttons to be as wide as their parent allows, which is
+/// what a page's main action wants. A Row or a Wrap offers its children
+/// unbounded width, so that minimum becomes infinite there and the line
+/// cannot be laid out; this keeps the height and lets the button be as
+/// wide as its label.
+final inlineButtonStyle = ButtonStyle(
+  minimumSize: WidgetStateProperty.all(const Size(0, 52)),
+);
+
 Route<T> fadeRoute<T>(Widget page, {RouteSettings? settings}) {
   return PageRouteBuilder<T>(
     settings: settings,

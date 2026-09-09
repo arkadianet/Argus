@@ -439,7 +439,7 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
                       Expanded(
                         child: SelectableText(
                           'Could not read the pools: ${svc.lastError}',
-                          style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
+                          style: TextStyle(color: rustFor(context), fontSize: 12),
                         ),
                       ),
                       IconButton(
@@ -485,13 +485,13 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
                   ],
                 ),
                 if (svc.scanError != null) ...[
-                  SelectableText(svc.scanError!, style: TextStyle(color: theme.colorScheme.error, fontSize: 12)),
+                  SelectableText(svc.scanError!, style: TextStyle(color: rustFor(context), fontSize: 12)),
                   const SizedBox(height: 8),
                 ],
                 if (svc.loansError != null) ...[
                   SelectableText(
                     'Could not read the loans: ${svc.loansError}',
-                    style: TextStyle(color: theme.colorScheme.error, fontSize: 12),
+                    style: TextStyle(color: rustFor(context), fontSize: 12),
                   ),
                   const SizedBox(height: 12),
                 ],
@@ -639,7 +639,7 @@ class _PoolCard extends StatelessWidget {
             const SizedBox(height: 6),
             SelectableText(
               'Borrowing unavailable: ${market!.unavailableReason}. Refresh to try again.',
-              style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12),
+              style: TextStyle(color: rustFor(context), fontSize: 12),
             ),
           ] else if (market == null && lends) ...[
             const SizedBox(height: 6),
@@ -653,7 +653,7 @@ class _PoolCard extends StatelessWidget {
             SelectableText(
               '${market!.unpriced} of your loans here could not be priced, so ${market!.unpriced == 1 ? 'it is' : 'they are'} '
               'not listed below. Refresh once the price boxes are readable again.',
-              style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12),
+              style: TextStyle(color: rustFor(context), fontSize: 12),
             ),
           ],
           if (s.utilisationBps == 0) ...[
@@ -668,9 +668,9 @@ class _PoolCard extends StatelessWidget {
             Wrap(
               spacing: 8,
               children: [
-                if (onLend != null) FilledButton.tonal(onPressed: onLend, child: const Text('Lend')),
-                if (onWithdraw != null) OutlinedButton(onPressed: onWithdraw, child: const Text('Withdraw')),
-                if (onBorrow != null) OutlinedButton(onPressed: onBorrow, child: const Text('Borrow')),
+                if (onLend != null) FilledButton.tonal(style: inlineButtonStyle, onPressed: onLend, child: const Text('Lend')),
+                if (onWithdraw != null) OutlinedButton(style: inlineButtonStyle, onPressed: onWithdraw, child: const Text('Withdraw')),
+                if (onBorrow != null) OutlinedButton(style: inlineButtonStyle, onPressed: onBorrow, child: const Text('Borrow')),
               ],
             ),
           ],
@@ -689,9 +689,9 @@ String orderStatusText(DuckOrder o, {int? height}) => switch (o.status) {
       'filled' => switch (o.kind) {
           'lend' => 'Filled: ${o.received == null ? 'lend tokens received' : '${formatTokenAmountGrouped(o.received!, o.decimals)} lend tokens received'}',
           'borrow' => 'Filled: ${o.received == null ? 'loan received' : '${formatTokenAmountGrouped(o.received!, o.decimals)} ${o.ticker} received'}',
-          'repay' => 'Filled: ${o.received == null ? 'collateral returned' : '${formatErg(o.received!)} collateral returned'}',
+          'repay' => 'Filled: ${o.received == null ? 'collateral returned' : '${_collateralText(o.pool, o.collateralAsset, o.received!)} collateral returned'}',
           'partial_repay' => 'Filled: the loan is smaller',
-          _ => 'Filled: ${o.received == null ? 'paid out' : '${formatErg(o.received!)} paid out'}',
+          _ => 'Filled: ${o.received == null ? 'paid out' : '${formatTokenAmountGrouped(o.received!, o.decimals)} ${o.ticker} paid out'}',
         },
       'refunded' => 'Refunded',
       _ => o.status,
@@ -733,7 +733,7 @@ class _OrderCard extends StatelessWidget {
             const SizedBox(height: 4),
             Row(
               children: [
-                Expanded(child: SelectableText(o.lastError!, style: TextStyle(color: theme.colorScheme.error, fontSize: 12))),
+                Expanded(child: SelectableText(o.lastError!, style: TextStyle(color: rustFor(context), fontSize: 12))),
                 IconButton(
                   iconSize: 18,
                   tooltip: 'Copy error',
@@ -747,7 +747,7 @@ class _OrderCard extends StatelessWidget {
           Wrap(
             spacing: 8,
             children: [
-              if (o.status == 'refundable') FilledButton.tonal(onPressed: working ? null : onRefund, child: const Text('Refund')),
+              if (o.status == 'refundable') FilledButton.tonal(style: inlineButtonStyle, onPressed: working ? null : onRefund, child: const Text('Refund')),
               if (!o.open) TextButton(onPressed: onRemove, child: const Text('Remove')),
             ],
           ),
@@ -806,8 +806,10 @@ class _OrderSheetState extends State<_OrderSheet> {
     String amt(num units) => '${formatTokenAmountGrouped(units.toInt(), s.decimals)} ${s.ticker}';
     final q = _quote;
     return Padding(
-      padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + MediaQuery.of(context).viewInsets.bottom),
-      child: Column(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -836,7 +838,7 @@ class _OrderSheetState extends State<_OrderSheet> {
             onChanged: (_) => _requote(),
           ),
           const SizedBox(height: 12),
-          if (_error != null) Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
+          if (_error != null) SelectableText(_error!, style: TextStyle(color: rustFor(context), fontSize: 12)),
           if (q != null) ...[
             Text(
               lend
@@ -858,7 +860,7 @@ class _OrderSheetState extends State<_OrderSheet> {
           ),
         ],
       ),
-    );
+    )));
   }
 }
 
@@ -1004,9 +1006,9 @@ class _LoanCardState extends State<_LoanCard> {
           Wrap(
             spacing: 8,
             children: [
-              FilledButton.tonal(onPressed: widget.onRepay, child: const Text('Repay')),
-              OutlinedButton(onPressed: widget.onRepayPart, child: const Text('Repay part')),
-              OutlinedButton(onPressed: widget.onAdjust, child: const Text('Collateral')),
+              FilledButton.tonal(style: inlineButtonStyle, onPressed: widget.onRepay, child: const Text('Repay')),
+              OutlinedButton(style: inlineButtonStyle, onPressed: widget.onRepayPart, child: const Text('Repay part')),
+              OutlinedButton(style: inlineButtonStyle, onPressed: widget.onAdjust, child: const Text('Collateral')),
             ],
           ),
         ],
@@ -1419,7 +1421,7 @@ class _BorrowSheetState extends State<_BorrowSheet> {
               },
             ),
             const SizedBox(height: 12),
-            if (_error != null) SelectableText(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
+            if (_error != null) SelectableText(_error!, style: TextStyle(color: rustFor(context), fontSize: 12)),
             if (q != null) _BorrowFigures(quote: q, state: s, collateralTicker: _collateralTicker, collateralDecimals: _collateralDecimals, ergPool: _ergPool),
             const SizedBox(height: 16),
             FilledButton(
@@ -1551,8 +1553,10 @@ class _PartialRepaySheetState extends State<_PartialRepaySheet> {
     String amt(num units) => '${formatTokenAmountGrouped(units.toInt(), l.decimals)} ${l.ticker}';
     final q = _quote;
     return Padding(
-      padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + MediaQuery.of(context).viewInsets.bottom),
-      child: Column(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1570,7 +1574,7 @@ class _PartialRepaySheetState extends State<_PartialRepaySheet> {
             onChanged: (_) => _requote(),
           ),
           const SizedBox(height: 12),
-          if (_error != null) Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
+          if (_error != null) SelectableText(_error!, style: TextStyle(color: rustFor(context), fontSize: 12)),
           if (q != null)
             Text(
               'Owed after: about ${amt(q['owed_after'] as num)}. The collateral stays where it is. '
@@ -1585,7 +1589,7 @@ class _PartialRepaySheetState extends State<_PartialRepaySheet> {
           ),
         ],
       ),
-    );
+    )));
   }
 }
 
@@ -1638,8 +1642,10 @@ class _AdjustSheetState extends State<_AdjustSheet> {
     final q = _quote;
     final delta = q == null ? 0 : (q['delta'] as num).toInt();
     return Padding(
-      padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + MediaQuery.of(context).viewInsets.bottom),
-      child: Column(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1661,7 +1667,7 @@ class _AdjustSheetState extends State<_AdjustSheet> {
             onChanged: (_) => _requote(),
           ),
           const SizedBox(height: 12),
-          if (_error != null) Text(_error!, style: TextStyle(color: Theme.of(context).colorScheme.error, fontSize: 12)),
+          if (_error != null) SelectableText(_error!, style: TextStyle(color: rustFor(context), fontSize: 12)),
           if (q != null)
             Text(
               '${delta > 0 ? 'Add ${c(delta)}' : 'Take out ${c(-delta)}'} · health after '
@@ -1677,6 +1683,17 @@ class _AdjustSheetState extends State<_AdjustSheet> {
           ),
         ],
       ),
-    );
+    )));
   }
 }
+
+@visibleForTesting
+Widget duckOrderSheetForTest(DuckPoolState state, String kind) =>
+    _OrderSheet(state: state, kind: kind, maxLendTokens: 1000000000);
+
+@visibleForTesting
+Widget duckRepaySheetForTest(DuckLoan loan) => _PartialRepaySheet(loan: loan, held: 1000000000);
+
+@visibleForTesting
+Widget duckAdjustSheetForTest(DuckLoan loan) =>
+    _AdjustSheet(loan: loan, ticker: 'ERG', decimals: 9, held: 1000000000);

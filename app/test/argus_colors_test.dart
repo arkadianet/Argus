@@ -1,8 +1,22 @@
+import 'package:argus_wallet/ui/widgets/activity_tile.dart';
+import 'package:argus_wallet/ui/widgets/soft_card.dart';
 import 'package:argus_wallet/theme/argus_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('Pending uses readable text gold on the Ledger surface', (tester) async {
+    await tester.pumpWidget(MaterialApp(theme: argusTheme(watchful: false),
+      home: Scaffold(body: SoftCard(child: ActivityTile(
+        tx: const {'tx_id': 'pending', 'height': 0, 'timestamp': 0}, onTap: () {},
+      ))),
+    ));
+    final label = tester.widget<Text>(find.text('Pending'));
+    final color = label.style!.color!;
+    final surface = argusTheme(watchful: false).colorScheme.surface;
+    expect((surface.computeLuminance() + .05) / (color.computeLuminance() + .05), greaterThan(4.5));
+  });
+
   testWidgets('ArgusColors follows the palette', (tester) async {
     late ArgusColors light;
     late ArgusColors dark;

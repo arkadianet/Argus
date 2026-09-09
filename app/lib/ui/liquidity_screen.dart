@@ -13,6 +13,42 @@ import 'widgets/empty_state.dart';
 import 'widgets/error_sheet.dart';
 import 'widgets/soft_card.dart';
 
+Future<bool> confirmForgetPool(BuildContext context) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete saved pool progress?'),
+        content: const Text('This removes the Finish the pool action. It does not cancel or refund the first transaction. Keep this progress if you still need to finish the pool.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep progress')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete progress')),
+        ],
+      ),
+    ) ?? false;
+
+class PoolCreationStore {
+  PoolCreationStore(this.walletId);
+  final String walletId;
+  String get _key => 'argus_pool_creation_v1_$walletId';
+
+  Future<Map<String, dynamic>?> load() async {
+    final raw = (await SharedPreferences.getInstance()).getString(_key);
+    return raw == null ? null : (jsonDecode(raw) as Map).cast<String, dynamic>();
+  }
+
+  Future<void> save(Map<String, dynamic>? record) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (record == null) {
+      await prefs.remove(_key);
+    } else {
+      await prefs.setString(_key, jsonEncode({...record, 'wallet_id': walletId}));
+    }
+  }
+
+  Future<bool> hasLegacy() async =>
+      (await SharedPreferences.getInstance()).containsKey('argus_pool_creation_v1');
+}
+
 /// A Spectrum pool as the Liquidity screen sees it.
 class LiquidityPool {
   LiquidityPool(this.raw, this.tokens);
@@ -43,7 +79,8 @@ class LiquidityPool {
 /// Spectrum liquidity: what you provide, adding and removing, and
 /// creating a pool.
 class LiquidityScreen extends StatefulWidget {
-  const LiquidityScreen({super.key});
+  const LiquidityScreen({super.key, this.readPools});
+  final Future<AmmPoolSet> Function(bool force)? readPools;
 
   @override
   State<LiquidityScreen> createState() => _LiquidityScreenState();
@@ -52,6 +89,7 @@ class LiquidityScreen extends StatefulWidget {
 class _LiquidityScreenState extends State<LiquidityScreen> {
   List<LiquidityPool> _pools = const [];
   bool _loading = true;
+  bool _truncated = false;
   String? _error;
   bool _working = false;
 
@@ -67,9 +105,12 @@ class _LiquidityScreenState extends State<LiquidityScreen> {
       _error = null;
     });
     try {
-      final set = await ammService.pools(forceRefresh: force);
+      final set = await (widget.readPools?.call(force) ?? ammService.pools(forceRefresh: force));
       if (!mounted) return;
-      setState(() => _pools = [for (final p in set.pools) LiquidityPool(p, set.tokens)]);
+      setState(() {
+        _pools = [for (final p in set.pools) LiquidityPool(p, set.tokens)];
+        _truncated = set.truncated;
+      });
     } catch (e) {
       if (mounted) setState(() => _error = '$e');
     } finally {
@@ -229,11 +270,13 @@ class _LiquidityScreenState extends State<LiquidityScreen> {
                       const SizedBox(height: 10),
                     ],
                   const SizedBox(height: 8),
-                  Text('Pools are read from chain; the list is what Spectrum has today.', style: TextStyle(color: muted, fontSize: 12)),
+                  Text(_truncated
+                      ? 'The pool search reached its limit. Some pools and your positions may be missing.'
+                      : 'Pools are read from the network.', style: TextStyle(color: muted, fontSize: 12)),
                 ],
               ),
             ),
-            _CreateTab(args: args, tokens: _pools.isEmpty ? const {} : _pools.first.tokens),
+            _CreateTab(key: ValueKey(walletService.activeWalletId), args: args, tokens: _pools.isEmpty ? const {} : _pools.first.tokens),
           ],
         ),
       ),
@@ -279,8 +322,8 @@ class _PoolCard extends StatelessWidget {
           row('Reserves', '${formatTokenAmountGrouped(p.xReserves.toInt(), p.decimals(p.xTokenId))} ${p.name(p.xTokenId)} · ${formatTokenAmountGrouped(p.yReserves.toInt(), p.decimals(p.yTokenId))} ${p.name(p.yTokenId)}'),
           const SizedBox(height: 10),
           Wrap(spacing: 8, children: [
-            FilledButton.tonal(onPressed: onAdd, child: const Text('Add')),
-            if (held > 0) OutlinedButton(onPressed: onRemove, child: const Text('Remove')),
+            FilledButton.tonal(style: inlineButtonStyle, onPressed: onAdd, child: const Text('Add')),
+            if (held > 0) OutlinedButton(style: inlineButtonStyle, onPressed: onRemove, child: const Text('Remove')),
           ]),
         ],
       ),
@@ -342,8 +385,10 @@ class _AddSheetState extends State<_AddSheet> {
     final reward = x != null && y != null ? lpReward(p.xReserves, p.yReserves, p.lpCirculating, BigInt.from(x), BigInt.from(y)) : BigInt.zero;
     final tooMuch = (x != null && x > _held(p.xTokenId)) || (y != null && y > _held(p.yTokenId));
     return Padding(
-      padding: EdgeInsets.fromLTRB(20, 16, 20, 16 + MediaQuery.of(context).viewInsets.bottom),
-      child: Column(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+        child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -386,7 +431,7 @@ class _AddSheetState extends State<_AddSheet> {
           ),
         ],
       ),
-    );
+    )));
   }
 }
 
@@ -431,7 +476,7 @@ class _RemoveSheetState extends State<_RemoveSheet> {
 /// Create a pool in two transactions; the second waits for the first to
 /// confirm, so what it needs is remembered on this device in between.
 class _CreateTab extends StatefulWidget {
-  const _CreateTab({required this.args, required this.tokens});
+  const _CreateTab({super.key, required this.args, required this.tokens});
   final WalletRouteArgs args;
   final Map<String, AmmTokenMeta> tokens;
 
@@ -440,7 +485,10 @@ class _CreateTab extends StatefulWidget {
 }
 
 class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMixin {
-  static const _pendingKey = 'argus_pool_creation_v1';
+  late final String? _walletId = walletService.activeWalletId;
+  PoolCreationStore? get _store => _walletId == null ? null : PoolCreationStore(_walletId);
+  bool _loadingPending = true;
+  String? _progressError;
   String? _xTokenId; // null = ERG
   String? _yTokenId;
   final _x = TextEditingController();
@@ -466,20 +514,36 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
   }
 
   Future<void> _loadPending() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_pendingKey);
-    if (!mounted) return;
-    setState(() => _pending = raw == null ? null : (jsonDecode(raw) as Map).cast<String, dynamic>());
+    try {
+      final pending = await _store?.load();
+      final legacy = await _store?.hasLegacy() ?? false;
+      if (!mounted) return;
+      setState(() {
+        _pending = pending;
+        _progressError = legacy
+            ? 'Saved pool progress from an older version has no wallet owner. It has been kept, but cannot safely be finished here.'
+            : null;
+      });
+    } catch (e) {
+      if (mounted) setState(() => _progressError = 'Could not read saved pool progress: $e');
+    } finally {
+      if (mounted) setState(() => _loadingPending = false);
+    }
   }
 
   Future<void> _savePending(Map<String, dynamic>? p) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (p == null) {
-      await prefs.remove(_pendingKey);
-    } else {
-      await prefs.setString(_pendingKey, jsonEncode(p));
-    }
+    await _store!.save(p);
     if (mounted) setState(() => _pending = p);
+  }
+
+  bool get _ownsWallet => _walletId != null && walletService.activeWalletId == _walletId;
+
+  Future<void> _forget() async {
+    try {
+      if (await confirmForgetPool(context) && mounted) await _savePending(null);
+    } catch (e) {
+      if (mounted) showErrorSheet(context, title: 'Could not delete progress', message: '$e');
+    }
   }
 
   int _decimals(String? id) => id == null ? 9 : (widget.tokens[id]?.decimals ?? widget.args.tokens.where((t) => t.id == id).firstOrNull?.decimals ?? 0);
@@ -489,7 +553,7 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
     final y = _yTokenId;
     final xUnits = parseDecimalToBase(_x.text, _decimals(_xTokenId));
     final yUnits = parseDecimalToBase(_y.text, _decimals(y));
-    if (y == null || xUnits == null || yUnits == null || xUnits <= 0 || yUnits <= 0 || _working) return;
+    if (!_ownsWallet || _loadingPending || y == null || xUnits == null || yUnits == null || xUnits <= 0 || yUnits <= 0 || _working) return;
     if (_xTokenId != null && _xTokenId == y) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pick two different assets')));
       return;
@@ -524,7 +588,7 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
         ],
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      if (!ok || !mounted) return;
+      if (!ok || !mounted || !_ownsWallet) return;
       // Everything step 2 needs is known before step 1 goes out, so write the
       // record first: if the app dies between the broadcast and the write, the
       // bootstrap box would otherwise be stranded with the user's reserves in it.
@@ -543,6 +607,7 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
         'sent': false,
       };
       await _savePending(record);
+      if (!_ownsWallet) return;
       final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
       await _savePending({...record, 'bootstrap_tx_id': txId, 'sent': true});
     } catch (e) {
@@ -554,7 +619,7 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
 
   Future<void> _create() async {
     final p = _pending;
-    if (p == null || _working) return;
+    if (!_ownsWallet || p == null || _working) return;
     setState(() => _working = true);
     try {
       final prepared = await ammService.buildPoolCreate(
@@ -583,7 +648,7 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
         ],
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      if (!ok || !mounted) return;
+      if (!ok || !mounted || !_ownsWallet) return;
       final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
       await _savePending(null);
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Pool created: ${shorten(txId)}')));
@@ -604,6 +669,11 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
       children: [
+        if (_loadingPending) const LinearProgressIndicator(),
+        if (_progressError != null) Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: SelectableText(_progressError!),
+        ),
         if (pending != null) ...[
           SoftCard(
             padding: const EdgeInsets.all(16),
@@ -622,8 +692,8 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
                 ),
                 const SizedBox(height: 10),
                 Wrap(spacing: 8, children: [
-                  FilledButton(onPressed: _working ? null : _create, child: const Text('Finish the pool')),
-                  TextButton(onPressed: _working ? null : () => _savePending(null), child: const Text('Forget')),
+                  FilledButton(style: inlineButtonStyle, onPressed: _working || !_ownsWallet ? null : _create, child: const Text('Finish the pool')),
+                  TextButton(onPressed: _working ? null : _forget, child: const Text('Forget')),
                 ]),
               ],
             ),
@@ -666,10 +736,14 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
         const SizedBox(height: 12),
         FilledButton(
           key: const Key('pool-start'),
-          onPressed: _working || pending != null || _yTokenId == null || _x.text.trim().isEmpty || _y.text.trim().isEmpty ? null : _bootstrap,
+          onPressed: !_ownsWallet || _loadingPending || _progressError != null || _working || pending != null || _yTokenId == null || _x.text.trim().isEmpty || _y.text.trim().isEmpty ? null : _bootstrap,
           child: Text(_working ? 'Preparing…' : 'Start the pool (step 1)'),
         ),
       ],
     );
   }
 }
+
+@visibleForTesting
+Widget liquidityAddSheetForTest(LiquidityPool pool, WalletRouteArgs args) =>
+    _AddSheet(pool: pool, args: args);

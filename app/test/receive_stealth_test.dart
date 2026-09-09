@@ -1,3 +1,5 @@
+import 'package:argus_wallet/services/privacy_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:argus_wallet/services/stealth_service.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/ui/receive_screen.dart';
@@ -32,6 +34,45 @@ void main() {
   });
 
   tearDown(() => stealthService.reset());
+
+  testWidgets('Receive explains reuse and fresh-address settings accurately', (tester) async {
+    SharedPreferences.setMockInitialValues({'argus_privacy_unused_change': false});
+    await privacyService.load();
+    await tester.pumpWidget(_wrap());
+    await tester.pump();
+    expect(find.text('RECEIVE ADDRESS'), findsOneWidget);
+    expect(find.textContaining('This address stays the same'), findsOneWidget);
+    SharedPreferences.setMockInitialValues({'argus_privacy_unused_change': true});
+    await privacyService.load();
+    await tester.pump();
+    expect(find.text('UNUSED ADDRESS'), findsOneWidget);
+    expect(find.text('A new address is shown after this one is used.'), findsOneWidget);
+    SharedPreferences.setMockInitialValues({'argus_privacy_unused_change': false});
+    await privacyService.load();
+  });
+
+  test('a receive request carries the amount, and says why one is rejected', () {
+    expect(receiveRequest(address: _receive, amount: '').payload, _receive);
+    expect(receiveRequest(address: _receive, amount: '1.25').payload, 'ergo:$_receive?amount=1.25');
+    expect(receiveRequest(address: _receive, amount: ' 1.25 ').payload, 'ergo:$_receive?amount=1.25');
+    final bad = receiveRequest(address: _receive, amount: 'abc');
+    expect(bad.payload, _receive, reason: 'an unusable amount must not be shared as a request');
+    expect(bad.error, contains('decimal number'));
+    expect(receiveRequest(address: _receive, amount: '0').error, contains('greater than zero'));
+    expect(receiveRequest(address: _receive, amount: '-1').error, contains('decimal number'));
+  });
+
+  testWidgets('Share is refused while the amount is invalid', (tester) async {
+    await tester.pumpWidget(_wrap());
+    await tester.pump();
+    await _scrollTo(tester, find.byKey(const Key('receive-amount')));
+    await tester.enterText(find.byKey(const Key('receive-amount')), '-1');
+    await tester.pump();
+    await _scrollTo(tester, find.text('Share'));
+    final button = tester.widget<OutlinedButton>(find.ancestor(
+      of: find.text('Share'), matching: find.byType(OutlinedButton)));
+    expect(button.onPressed, isNull);
+  });
 
   testWidgets('no stealth section until the address is known', (tester) async {
     await tester.pumpWidget(_wrap());

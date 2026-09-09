@@ -70,6 +70,7 @@ class _BatteryNoteState extends State<BatteryNote> with WidgetsBindingObserver {
             children: [
               if (warn)
                 OutlinedButton(
+                style: inlineButtonStyle,
                   key: const Key('battery-fix'),
                   onPressed: _fix,
                   child: const Text('Allow unrestricted battery use'),

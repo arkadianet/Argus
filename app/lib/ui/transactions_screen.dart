@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../format.dart';
+import '../services/mix_activity.dart';
 import '../services/stealth_service.dart';
+import '../services/mix_service.dart';
 import '../services/wallet_sync_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -13,8 +15,20 @@ import 'transaction_detail_screen.dart';
 import 'widgets/activity_tile.dart';
 import 'widgets/empty_state.dart';
 
+typedef ActivityPage = ({List<Map<String, dynamic>> rows, bool partial});
+typedef HistoryLoader = Future<ActivityPage> Function(List<String> addresses,
+    {required int limit, required Map<String, int> perAddressOffsets});
+
+Future<ActivityPage> _readHistory(List<String> addresses,
+    {required int limit, required Map<String, int> perAddressOffsets}) async {
+  final rows = await walletService.loadHistory(addresses, limit: limit, perAddressOffsets: perAddressOffsets);
+  return (rows: rows, partial: walletService.lastHistoryPartial);
+}
+
 class TransactionsScreen extends StatefulWidget {
-  const TransactionsScreen({super.key, this.embedded = false, this.args});
+  const TransactionsScreen({super.key, this.embedded = false, this.args, this.loadHistory = _readHistory});
+
+  final HistoryLoader loadHistory;
 
   /// Hosted inside the home tabs: no scaffold or app bar of its own, and
   /// wallet context comes from [args] rather than the route.
@@ -29,6 +43,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   bool _loading = true;
   bool _loadingMore = false;
   String? _error;
+  bool _retryMore = false;
   List<Map<String, dynamic>> _txs = [];
   static const _pageSize = 50;
   Map<String, int> _perAddressOffsets = {};
@@ -49,19 +64,29 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     super.initState();
     _syncSignature = _currentSignature();
     walletSyncController.addListener(_onSyncChanged);
+    mixService.addListener(_onSyncChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _reload());
   }
 
   @override
   void dispose() {
     walletSyncController.removeListener(_onSyncChanged);
+    mixService.removeListener(_onSyncChanged);
     super.dispose();
   }
 
-  String _currentSignature() => activitySignature([
-        ...walletSyncController.recentTxs,
-        ...walletSyncController.stealthRows,
-      ]);
+  String _currentSignature() => activitySignature(walletSyncController.displayActivity);
+
+  List<Map<String, dynamic>> _withLocal(List<Map<String, dynamic>> rows) {
+    final ids = {for (final row in rows) row['tx_id']};
+    final merged = mergeStealthActivity(mergeMixActivity([
+      ...rows,
+      for (final row in walletSyncController.recentTxs)
+        if (!ids.contains(row['tx_id'])) row,
+    ], mixService.mixActivityRows()), walletSyncController.stealthRows);
+    merged.sort(compareActivityRows);
+    return merged;
+  }
 
   void _onSyncChanged() {
     final next = _currentSignature();
@@ -101,32 +126,33 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       });
       return;
     }
+    setState(() { _error = null; _retryMore = false; });
     _perAddressOffsets.clear();
     _hasMore = false;
     _loadingMore = false;
     _loadGeneration++;
     final gen = _loadGeneration;
     try {
-      final all = await walletService.loadHistory(addresses,
+      final page = await widget.loadHistory(addresses,
           limit: _pageSize, perAddressOffsets: _perAddressOffsets);
       if (!mounted || gen != _loadGeneration) return;
-      _hasMore = all.length >= _pageSize;
+      final all = page.rows;
+      _hasMore = page.partial || all.length >= _pageSize;
       setState(() {
-        // Stealth receipts sit on one-time scripts, so the address history
-        // above cannot contain them; merge them in here as well as on home.
-        _txs = mergeStealthActivity(all, walletSyncController.stealthRows);
+        _txs = _withLocal(all);
         _loading = false;
         _loadingMore = false;
-        _error = null;
+        _error = page.partial ? 'Some addresses could not be checked. Activity is incomplete.' : null;
       });
       _prefetchNames(all);
-    } catch (_) {
+    } catch (e) {
       if (!mounted || gen != _loadGeneration) return;
       setState(() {
         _loading = false;
         _loadingMore = false;
         _hasMore = true;
-        _error = 'Could not load activity';
+        _txs = _withLocal(_txs);
+        _error = 'Could not load activity: $e';
       });
     }
   }
@@ -154,28 +180,33 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
         ? args.historyAddresses
         : [if (args.senderAddress.isNotEmpty) args.senderAddress];
     if (addresses.isEmpty) return;
-    setState(() => _loadingMore = true);
+    setState(() { _loadingMore = true; _error = null; });
     final gen = _loadGeneration;
     try {
-      final more = await walletService.loadHistory(addresses,
+      final page = await widget.loadHistory(addresses,
           limit: _pageSize, perAddressOffsets: _perAddressOffsets);
       if (!mounted || gen != _loadGeneration) return;
-      _hasMore = more.length >= _pageSize;
+      final more = page.rows;
+      _hasMore = page.partial || more.length >= _pageSize;
       final seen = _txs.map((t) => t['tx_id']?.toString() ?? '').toSet();
       final deduped = more.where((t) {
         final id = t['tx_id']?.toString() ?? '';
         return id.isNotEmpty && !seen.contains(id);
       }).toList();
       setState(() {
-        _txs = [..._txs, ...deduped];
+        _txs = _withLocal([..._txs, ...deduped]);
         _loadingMore = false;
+        _retryMore = false;
+        _error = page.partial ? 'Some addresses could not be checked. Activity is incomplete.' : null;
       });
       _prefetchNames(deduped);
-    } catch (_) {
+    } catch (e) {
       if (mounted && gen == _loadGeneration) {
         setState(() {
           _loadingMore = false;
-          _hasMore = false;
+          _hasMore = true;
+          _retryMore = true;
+          _error = 'Could not load older activity: $e';
         });
       }
     }
@@ -278,18 +309,22 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     );
   }
 
-  Widget _body(BuildContext context) {
+  Widget _body(BuildContext context) => Column(children: [
+    if (_error != null) Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(children: [
+        SelectableText(_error!),
+        TextButton(onPressed: _retryMore ? _loadMore : _reload, child: const Text('Retry')),
+      ]),
+    ),
+    Expanded(child: _listBody(context)),
+  ]);
+
+  Widget _listBody(BuildContext context) {
     return _loading && _txs.isEmpty
           ? const Center(child: CircularProgressIndicator())
           : _error != null && _txs.isEmpty
-              ? EmptyState(
-                  icon: Icons.cloud_off_outlined,
-                  tone: EmptyStateTone.error,
-                  title: 'Could not load activity',
-                  body: 'The node did not answer. Check your connection or pick another node in Settings, then try again.',
-                  actionLabel: 'Retry',
-                  onAction: _load,
-                )
+              ? const SizedBox.shrink()
           : _txs.isEmpty
               ? EmptyState(
                   icon: Icons.inbox_outlined,
@@ -302,7 +337,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   onRefresh: _reload,
                   child: ListView.builder(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-                    itemCount: _txs.length + (_loadingMore || _hasMore ? 1 : 0),
+                    itemCount: _txs.length + (_loadingMore || (_hasMore && _error == null) ? 1 : 0),
                     itemBuilder: (context, i) {
                       if (i >= _txs.length) {
                         if (!_loadingMore) {

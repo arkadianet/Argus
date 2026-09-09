@@ -5,6 +5,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../bridge/api.dart' as api;
 
+Future<({Map<String, int?> balances, String? error})> readWatchBalances(
+  List<String> addresses, Future<int> Function(String) read,
+) async {
+  final errors = <String>[];
+  final entries = await Future.wait(addresses.map((address) async {
+    try {
+      return MapEntry<String, int?>(address, await read(address));
+    } catch (e) {
+      errors.add('$address: $e');
+      return MapEntry<String, int?>(address, null);
+    }
+  }));
+  return (balances: Map.fromEntries(entries), error: errors.isEmpty ? null
+      : 'Some watched balances are unavailable.\n${errors.join('\n')}');
+}
+
 /// Stores addresses to monitor without holding a wallet seed.
 /// Watch-only addresses use getBalance/loadHistory directly — no
 /// wallet handle required.

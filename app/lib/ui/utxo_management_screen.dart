@@ -626,33 +626,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                   ],
                 ),
       bottomSheet: _selectedBoxIds.isNotEmpty
-          ? Container(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                border: Border(
-                  top: BorderSide(color: Theme.of(context).colorScheme.outline),
-                ),
-              ),
-              child: Row(
-                children: [
-                  Text(
-                    '${_selectedBoxIds.length} Selected',
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  const Spacer(),
-                  if (_selectedBoxIds.length >= 2)
-                    FilledButton(
-                      onPressed: _busy ? null : _openConsolidateFlow,
-                      child: const Text('Consolidate'),
-                    ),
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    onPressed: _busy ? null : _openSplitFlow,
-                    child: const Text('Split'),
-                  ),
-                ],
-              ),
+          ? UtxoSelectionActions(
+              count: _selectedBoxIds.length,
+              onConsolidate: _busy ? null : _openConsolidateFlow,
+              onSplit: _busy ? null : _openSplitFlow,
             )
           : null,
     );
@@ -1193,4 +1170,35 @@ class _RestructureConfigSheetState extends State<_RestructureConfigSheet> {
       ),
     );
   }
+}
+
+class UtxoSelectionActions extends StatelessWidget {
+  const UtxoSelectionActions({super.key, required this.count, this.onConsolidate, this.onSplit});
+
+  final int count;
+  final VoidCallback? onConsolidate;
+  final VoidCallback? onSplit;
+
+  @override
+  Widget build(BuildContext context) => SafeArea(
+    child: Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border(top: BorderSide(color: Theme.of(context).colorScheme.outline)),
+      ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text('$count Selected', style: const TextStyle(fontWeight: FontWeight.w600)),
+          if (count >= 2)
+            FilledButton(style: inlineButtonStyle, onPressed: onConsolidate, child: const Text('Consolidate')),
+          OutlinedButton(style: inlineButtonStyle, onPressed: onSplit, child: const Text('Split')),
+        ],
+      ),
+    ),
+  );
 }

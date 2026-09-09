@@ -29,6 +29,9 @@ String swapQuoteLabel(
 String poolTruncationNotice() =>
     'Pool list was capped — some pairs may be missing.';
 
+ConfirmTxRow swapInputRow(AmmSwapBuild build, {required String symbol, required int decimals}) =>
+    ConfirmTxRow('You pay', '${formatTokenAmount(build.inputAmount, decimals)} $symbol');
+
 /// Swap ERG and tokens directly against Spectrum AMM pools. The pool box is
 /// spent in the same signed transaction, so quotes go stale on contention —
 /// the service reports that as `POOL_MOVED` and this screen re-quotes.
@@ -361,6 +364,7 @@ class _SwapScreenState extends State<SwapScreen> {
         preparationId: build.preparationId,
         title: 'Swap ${_symbol(_fromToken)} → ${_symbol(_toToken)}',
         rows: [
+          swapInputRow(build, symbol: _symbol(_fromToken), decimals: _decimals(_fromToken)),
           ConfirmTxRow(
             'You receive',
             '${formatTokenAmount(build.outputAmount, _decimals(_toToken))} '
@@ -378,7 +382,7 @@ class _SwapScreenState extends State<SwapScreen> {
           ),
           ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
           argusFeeRow(),
-          ConfirmTxRow('Total cost', formatErg(build.totalErgCost)),
+          ConfirmTxRow('ERG cost including fees', formatErg(build.totalErgCost)),
         ],
         detail: [
           if (impactWarning(quote.priceImpactPct) case final w?) w,
@@ -396,10 +400,10 @@ class _SwapScreenState extends State<SwapScreen> {
           _snack('Pool moved — quoting against current reserves');
           await _refreshQuote();
         } else {
-          _snack('Pool moved — re-quote');
+          showErrorSheet(context, message: 'The pool changed again. Refresh the quote and review the swap.');
         }
       } else {
-        _snack('Could not prepare swap: $message');
+        showErrorSheet(context, title: 'Could not prepare swap', message: message);
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -449,7 +453,7 @@ class _SwapScreenState extends State<SwapScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text("Your node doesn't support pool discovery"),
+              const SelectableText("Your node doesn't support pool discovery"),
               const SizedBox(height: 8),
               TextButton.icon(
                 onPressed: () => Navigator.pushNamed(context, '/settings'),
@@ -466,7 +470,7 @@ class _SwapScreenState extends State<SwapScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Could not load pools. $_error',
+            SelectableText('Could not load pools. $_error',
                 textAlign: TextAlign.center),
             const SizedBox(height: 12),
             TextButton(onPressed: _loadPools, child: const Text('Retry')),
@@ -622,7 +626,7 @@ class _SwapScreenState extends State<SwapScreen> {
     if (_fromToken == null) {
       final reserve = BigInt.from(minerFeeNano + minBoxNano);
       if (raw <= reserve) {
-        _snack('Not enough ERG for fee and change');
+        showErrorSheet(context, message: 'Not enough ERG for fees and the amount kept in your wallet.');
         return;
       }
       raw -= reserve;
