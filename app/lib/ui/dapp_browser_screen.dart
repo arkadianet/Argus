@@ -361,12 +361,17 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: SoftCard(
-                        child: ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(d.name),
-                          subtitle: Text('${d.blurb} · ${Uri.parse(d.url).host}', style: TextStyle(color: muted, fontSize: 12)),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => _open(d.url),
+                        // A tile draws its tap ripple on the nearest Material
+                        // above it, and the card's own background would hide it.
+                        child: Material(
+                          type: MaterialType.transparency,
+                          child: ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(d.name),
+                            subtitle: Text('${d.blurb} · ${Uri.parse(d.url).host}', style: TextStyle(color: muted, fontSize: 12)),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => _open(d.url),
+                          ),
                         ),
                       ),
                     ),

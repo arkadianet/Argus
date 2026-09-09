@@ -1445,7 +1445,11 @@ class _DashboardScreenState extends State<DashboardScreen>
             const SizedBox(height: 10),
             SoftCard(
               padding: EdgeInsets.zero,
-              child: DividedColumn(
+              // A tile draws its tap ripple on the nearest Material above it,
+              // and the card's own background would hide it.
+              child: Material(
+                type: MaterialType.transparency,
+                child: DividedColumn(
                 children: [
                   for (final f in const [DiscoverFeature.tokens, DiscoverFeature.utxos, DiscoverFeature.mix])
                     ListTile(
@@ -1462,6 +1466,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                       onTap: () => _openFeature(f),
                     ),
                 ],
+              ),
               ),
             ),
             if (_sync.usedAddresses.isNotEmpty) ...[

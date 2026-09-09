@@ -56,7 +56,11 @@ class DiscoverScreen extends StatelessWidget {
     final muted = ArgusColors.of(context).muted;
     return SoftCard(
       padding: EdgeInsets.zero,
-      child: Column(
+      // A tile draws its tap ripple on the nearest Material above it, and
+      // the card's own background would hide it.
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
         children: [
           for (final (i, f) in features.indexed) ...[
             if (i > 0) const Divider(height: 1, indent: 16),
@@ -70,6 +74,7 @@ class DiscoverScreen extends StatelessWidget {
             ),
           ],
         ],
+        ),
       ),
     );
   }
