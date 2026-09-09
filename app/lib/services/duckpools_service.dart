@@ -432,6 +432,7 @@ class DuckOrder {
         'status': status,
         if (outcomeTxId != null) 'outcome_tx_id': outcomeTxId,
         if (received != null) 'received': received,
+        if (received != null) 'received_asset_units': true,
         if (lastError != null) 'last_error': lastError,
         if (collateralBoxId != null) 'collateral_box_id': collateralBoxId,
         if (collateralNano != null) 'collateral_nano': collateralNano,
@@ -452,7 +453,11 @@ class DuckOrder {
         createdAt: DateTime.fromMillisecondsSinceEpoch((m['created_at'] as num).toInt()),
         status: m['status'] as String? ?? 'pending',
         outcomeTxId: m['outcome_tx_id'] as String?,
-        received: (m['received'] as num?)?.toInt(),
+        // Older token payouts stored only the ERG carried by the output box.
+        received: m['received_asset_units'] != true &&
+                ((m['kind'] == 'withdraw' && m['pool'] != 'erg') ||
+                 (m['kind'] == 'repay' && m['collateral_asset'] != null))
+            ? null : (m['received'] as num?)?.toInt(),
         lastError: m['last_error'] as String?,
         collateralBoxId: m['collateral_box_id'] as String?,
         collateralNano: (m['collateral_nano'] as num?)?.toInt(),
@@ -674,8 +679,8 @@ typedef DuckNotify = Future<void> Function({required String loanId, required Str
 
 /// What a filled order delivered, in the units the order is counted in:
 /// lend tokens for a lend, the pool's asset for a borrow (ERG itself for
-/// the ERG pool, whose loan is the marked box's value), else the box's ERG.
-int? receivedFromFill(String kind, DuckPool pool, Map<String, dynamic> outcome) {
+/// the ERG pool, whose loan is the marked box's value), the pool currency for a withdrawal, or the returned collateral for a repayment.
+int? receivedFromFill(String kind, DuckPool pool, Map<String, dynamic> outcome, {String? collateralAsset}) {
   final assets = (outcome['assets'] as List? ?? const []).cast<Map>();
   // The Rust side serialises its EIP-12 assets as `tokenId`; older records
   // and the service's own JSON use `token_id`. A fill was shown as "0
@@ -684,7 +689,8 @@ int? receivedFromFill(String kind, DuckPool pool, Map<String, dynamic> outcome) 
       int.tryParse(assets.firstWhere((a) => (a['tokenId'] ?? a['token_id']) == id, orElse: () => {'amount': '0'})['amount'].toString()) ?? 0;
   return switch (kind) {
     'lend' => tokenAmount(pool.lendToken),
-    'borrow' => pool.currencyId == null ? (outcome['value'] as num?)?.toInt() : tokenAmount(pool.currencyId),
+    'borrow' || 'withdraw' => pool.currencyId == null ? (outcome['value'] as num?)?.toInt() : tokenAmount(pool.currencyId),
+    'repay' when collateralAsset != null => tokenAmount(collateralAsset),
     _ => (outcome['value'] as num?)?.toInt(),
   };
 }
@@ -1445,7 +1451,7 @@ class DuckpoolsService extends ChangeNotifier {
         if (kind == 'filled') {
           o.status = 'filled';
           o.outcomeTxId = spentBy;
-          o.received = receivedFromFill(o.kind, pools.firstWhere((p) => p.key == o.pool), outcome);
+          o.received = receivedFromFill(o.kind, pools.firstWhere((p) => p.key == o.pool), outcome, collateralAsset: o.collateralAsset);
           changed = true;
         } else if (kind == 'refunded') {
           o.status = 'refunded';

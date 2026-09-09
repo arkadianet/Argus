@@ -74,7 +74,8 @@ class _DashboardScreenState extends State<DashboardScreen>
   bool _hasPin = false;
   bool _canBiometric = false;
   bool _unlockBusy = false;
-  int _watchOnlyTotal = 0;
+  int? _watchOnlyTotal = 0;
+  String? _watchError;
   final Map<String, int?> _watchBalances = {};
 
   /// Balances of wallets other than the active one, from each wallet's first
@@ -361,28 +362,26 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (addrs.isEmpty) {
       if (mounted) setState(() {
         _watchOnlyTotal = 0;
+        _watchBalances.clear();
+        _watchError = null;
         _watchOnlyLoading = false;
       });
       return;
     }
     if (!mounted) return;
     setState(() => _watchOnlyLoading = true);
-    final futures = addrs.map((addr) async {
-      try {
-        final bal = await walletService.getBalance(addr, nodeUrl: networkController.activeUrl);
-        return (bal['balance_nano_erg'] as num?)?.toInt() ?? 0;
-      } catch (_) {
-        return 0;
-      }
-    }).toList();
-    final results = await Future.wait(futures);
+    final result = await readWatchBalances(addrs, (addr) async {
+      final bal = await walletService.getBalance(addr, nodeUrl: networkController.activeUrl);
+      return (bal['balance_nano_erg'] as num?)?.toInt() ?? 0;
+    });
     if (generation != _watchOnlyGeneration) return;
-    final total = results.fold<int>(0, (sum, bal) => sum + bal);
     if (mounted) setState(() {
-      _watchOnlyTotal = total;
+      _watchOnlyTotal = result.error == null
+          ? result.balances.values.fold<int>(0, (sum, bal) => sum + bal!) : null;
       _watchBalances
         ..clear()
-        ..addEntries([for (var i = 0; i < addrs.length; i++) MapEntry(addrs[i], results[i])]);
+        ..addAll(result.balances);
+      _watchError = result.error;
       _watchOnlyLoading = false;
     });
   }
@@ -1218,13 +1217,14 @@ class _DashboardScreenState extends State<DashboardScreen>
                 ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
                 : Column(
                     children: [
+                      if (_watchError != null) SelectableText(_watchError!),
                       Text(
                         'Watch-only balance',
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        formatErg(_watchOnlyTotal),
+                        _watchOnlyTotal == null ? 'Balance unavailable' : formatErg(_watchOnlyTotal),
                         style: const TextStyle(
                           fontFamily: 'Newsreader',
                           fontSize: 32,
@@ -1361,6 +1361,10 @@ class _DashboardScreenState extends State<DashboardScreen>
               child: DividedColumn(children: visibleAssets),
             ),
             const SizedBox(height: 28),
+            if (_watchError != null) Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: SelectableText(_watchError!),
+            ),
             _sectionHeader('Recent activity',
                 action: _sync.displayActivity.isNotEmpty ? 'View all' : null,
                 onTap: () => _selectTab(1)),
@@ -1371,7 +1375,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                       compact: true,
                       icon: Icons.inbox_outlined,
                       title: 'No activity yet',
-                      body: 'Share your address or scan a payment request to receive your first ERG.',
+                      body: 'Share your address to receive your first ERG.',
                       actionLabel: 'Show my address',
                       onAction: () => _go('/receive'),
                     ),
@@ -1441,7 +1445,11 @@ class _DashboardScreenState extends State<DashboardScreen>
             const SizedBox(height: 10),
             SoftCard(
               padding: EdgeInsets.zero,
-              child: DividedColumn(
+              // A tile draws its tap ripple on the nearest Material above it,
+              // and the card's own background would hide it.
+              child: Material(
+                type: MaterialType.transparency,
+                child: DividedColumn(
                 children: [
                   for (final f in const [DiscoverFeature.tokens, DiscoverFeature.utxos, DiscoverFeature.mix])
                     ListTile(
@@ -1458,6 +1466,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                       onTap: () => _openFeature(f),
                     ),
                 ],
+              ),
               ),
             ),
             if (_sync.usedAddresses.isNotEmpty) ...[
@@ -1567,52 +1576,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                 InkWell(
                   onTap: () => _go('/utxos'),
                   borderRadius: BorderRadius.circular(8),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.circle,
-                          size: 8,
-                          color: synced ? moss : (stale ? rust : accentOf(context))),
-                      const SizedBox(width: 6),
-                      Text(
-                        synced
-                            ? 'Synced'
-                            : (stale
-                                ? 'Out of sync'
-                                : (syncing ? 'Syncing…' : 'Offline')),
-                        style: TextStyle(
-                            fontSize: 12.5,
-                            color: muted,
-                            fontWeight: FontWeight.w500),
-                      ),
-                      _dotSep(muted),
-                      Icon(Icons.inventory_2_outlined,
-                          size: 13, color: muted),
-                      const SizedBox(width: 4),
-                      Text(
-                        networkController.height == null
-                            ? 'Block —'
-                            : 'Block ${formatWithCommas(networkController.height!)}',
-                        style: TextStyle(fontSize: 12.5, color: muted),
-                      ),
-                      _dotSep(muted),
-                      Text(
-                        '${_sync.utxoCount} UTXOs${fragmented ? ' · Fragmented' : ''}',
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          color: fragmented ? rust : muted,
-                          fontWeight:
-                              fragmented ? FontWeight.w600 : FontWeight.w400,
-                        ),
-                      ),
-                      if (!syncing && syncAge.isNotEmpty) ...[
-                        _dotSep(muted),
-                        Text(
-                          syncAge,
-                          style: TextStyle(fontSize: 12.5, color: muted),
-                        ),
-                      ],
-                    ],
+                  child: SyncStatusLine(
+                    status: synced ? 'Synced' : (stale ? 'Out of sync' : (syncing ? 'Syncing…' : 'Offline')),
+                    statusColor: synced ? moss : (stale ? rust : accentOf(context)),
+                    height: networkController.height,
+                    count: _sync.utxoCount,
+                    fragmented: fragmented,
+                    age: syncing ? '' : syncAge,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -2022,12 +1992,6 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  Widget _dotSep(Color muted) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 7),
-        child: Text('·',
-            style: TextStyle(color: muted, fontWeight: FontWeight.w700)),
-      );
-
   Widget _iconCircle(IconData icon, {VoidCallback? onTap}) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return InkWell(
@@ -2202,4 +2166,46 @@ bool shouldPoll({
   final since = now.difference(lastPollAt);
   if (since >= pollInterval) return true;
   return hasPending && since >= fastPollInterval;
+}
+
+class SyncStatusLine extends StatelessWidget {
+  const SyncStatusLine({super.key, required this.status, required this.statusColor,
+    required this.height, required this.count, required this.fragmented, required this.age});
+  final String status;
+  final Color statusColor;
+  final int? height;
+  final int count;
+  final bool fragmented;
+  final String age;
+
+  @override
+  Widget build(BuildContext context) {
+    final muted = ArgusColors.of(context).muted;
+    final style = TextStyle(fontSize: 12.5, color: muted);
+    return Wrap(
+      spacing: 10,
+      runSpacing: 4,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        // Each segment keeps its icon with its label, and the label itself
+        // gives way at large text sizes rather than running off the line.
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.circle, size: 8, color: statusColor),
+          const SizedBox(width: 6),
+          Flexible(child: Text(status, style: style.copyWith(fontWeight: FontWeight.w500))),
+        ]),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.inventory_2_outlined, size: 13, color: muted),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(height == null ? 'Block unavailable' : 'Block ${formatWithCommas(height!)}', style: style),
+          ),
+        ]),
+        Text('$count UTXOs${fragmented ? ' · Fragmented' : ''}',
+          style: style.copyWith(color: fragmented ? rustFor(context) : muted,
+            fontWeight: fragmented ? FontWeight.w600 : FontWeight.w400)),
+        if (age.isNotEmpty) Text(age, style: style),
+      ],
+    );
+  }
 }

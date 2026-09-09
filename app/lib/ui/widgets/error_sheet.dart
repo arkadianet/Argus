@@ -57,7 +57,7 @@ Future<void> showErrorSheet(
                     label: const Text('Copy'),
                   ),
                   const Spacer(),
-                  FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+                  FilledButton(style: inlineButtonStyle, onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
                 ],
               ),
             ],
@@ -99,7 +99,7 @@ TxFailure classifyTxFailure(Object error) {
   }
   return TxFailure(
     title: 'Broadcast may have failed',
-    message: 'Check Activity before retrying; the transaction may already be in the mempool.\n\n$msg',
+    message: 'Check Activity before retrying; the transaction may already be on the network.\n\n$msg',
     code: code == 'GENERIC' ? null : code,
   );
 }

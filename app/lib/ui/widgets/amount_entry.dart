@@ -120,8 +120,7 @@ class _AmountEntryState extends State<AmountEntry> {
       children: [
         Row(
           children: [
-            Text(widget.label, style: Theme.of(context).textTheme.titleSmall?.copyWith(color: colors.muted)),
-            const Spacer(),
+            Expanded(child: Text(widget.label, style: Theme.of(context).textTheme.titleSmall?.copyWith(color: colors.muted))),
             if (rate != null)
               TextButton.icon(
                 onPressed: _toggle,

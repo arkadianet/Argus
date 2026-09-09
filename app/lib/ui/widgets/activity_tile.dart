@@ -119,7 +119,7 @@ class ActivityTile extends StatelessWidget {
                   confirmed ? 'Confirmed' : 'Pending',
                   style: TextStyle(
                     fontSize: 12,
-                    color: confirmed ? moss : accentOf(context),
+                    color: confirmed ? moss : ArgusColors.of(context).accentText,
                     fontWeight: FontWeight.w500,
                   ),
                 ),

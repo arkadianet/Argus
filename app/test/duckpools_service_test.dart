@@ -1,3 +1,4 @@
+import 'package:argus_wallet/ui/duckpools_screen.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -254,6 +255,20 @@ class FakeGateway implements DuckpoolsGateway {
 }
 
 void main() {
+  test('old token payout records never relabel ERG as tokens', () {
+    final raw = {
+      'kind': 'withdraw', 'pool': 'sigusd', 'ticker': 'SigUSD', 'decimals': 2,
+      'proxy_box_id': 'p', 'tx_id': 't', 'amount': 100, 'expected': 200,
+      'min_out': 190, 'refund_height': 10, 'created_at': 0,
+      'status': 'filled', 'received': 1000000,
+    };
+    expect(DuckOrder.fromJson(raw).received, isNull);
+    final corrected = DuckOrder.fromJson({...raw, 'received': 2500, 'received_asset_units': true});
+    expect(DuckOrder.fromJson(corrected.toJson()).received, 2500);
+    expect(orderStatusText(corrected), 'Filled: 25 SigUSD paid out');
+    expect(orderStatusText(DuckOrder.fromJson(raw)), 'Filled: paid out');
+  });
+
   final ergBox = jsonDecode(File('test/fixtures/duckpools_pool_erg.json').readAsStringSync()) as Map;
   final bag = {
     'boxId': 'bag', 'value': 519000, 'ergoTree': 'aa',
@@ -488,7 +503,8 @@ void main() {
     expect(receivedFromFill('borrow', sigusd, outcome), 2500, reason: 'the key the Rust side writes');
     expect(receivedFromFill('borrow', sigusd, {'assets': [{'token_id': sigusd.currencyId, 'amount': '9'}]}), 9, reason: 'the older key too');
     expect(receivedFromFill('lend', sigusd, outcome), 7);
-    expect(receivedFromFill('withdraw', sigusd, outcome), 1000000000000);
+    expect(receivedFromFill('withdraw', sigusd, outcome), 2500);
+    expect(receivedFromFill('repay', erg, outcome, collateralAsset: sigusd.currencyId), 2500);
     expect(receivedFromFill('repay', erg, {'outcome': 'filled', 'value': 5}), 5);
   });
 

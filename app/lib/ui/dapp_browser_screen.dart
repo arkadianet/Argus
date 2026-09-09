@@ -149,6 +149,14 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
     }
   }
 
+  void _showDappList() {
+    setState(() {
+      _web = null;
+      _loading = false;
+      _showStart = true;
+    });
+  }
+
   String get _origin => originOf(_current);
 
   /// One call from the page's connector: `{ok, payload}` back to it.
@@ -286,7 +294,7 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
         if (web != null && await web.canGoBack()) {
           await web.goBack();
         } else if (mounted) {
-          setState(() => _showStart = true);
+          _showDappList();
         }
       },
       child: Scaffold(
@@ -324,7 +332,7 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
                     final u = Uri.tryParse(_current ?? '');
                     if (u != null) await launchUrl(u, mode: LaunchMode.externalApplication);
                   case 'home':
-                    setState(() => _showStart = true);
+                    _showDappList();
                 }
               },
               itemBuilder: (_) => [
@@ -344,7 +352,7 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
                 children: [
                   Text(
-                    'Ergo dApps open here with this wallet as their Nautilus. A site sees addresses and balances '
+                    'Ergo dApps open here and can connect to this wallet. A site sees addresses and balances '
                     'only after you connect it, and spends nothing without a signature you approve.',
                     style: TextStyle(color: muted),
                   ),
@@ -353,19 +361,24 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: SoftCard(
-                        child: ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(d.name),
-                          subtitle: Text('${d.blurb} · ${Uri.parse(d.url).host}', style: TextStyle(color: muted, fontSize: 12)),
-                          trailing: const Icon(Icons.chevron_right),
-                          onTap: () => _open(d.url),
+                        // A tile draws its tap ripple on the nearest Material
+                        // above it, and the card's own background would hide it.
+                        child: Material(
+                          type: MaterialType.transparency,
+                          child: ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(d.name),
+                            subtitle: Text('${d.blurb} · ${Uri.parse(d.url).host}', style: TextStyle(color: muted, fontSize: 12)),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () => _open(d.url),
+                          ),
                         ),
                       ),
                     ),
                   const SizedBox(height: 8),
                   Text('Not on the list? Type its address above.', style: TextStyle(color: muted, fontSize: 12)),
                   if (_current != null)
-                    TextButton(onPressed: () => setState(() => _showStart = false), child: Text('Back to ${shorten(_current!, head: 30, tail: 0)}')),
+                    TextButton(onPressed: () => _open(_current!), child: Text('Back to ${shorten(_current!, head: 30, tail: 0)}')),
                 ],
               )
             : InAppWebView(

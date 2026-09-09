@@ -99,8 +99,8 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
       showErrorSheet(context, code: e.code, message: e.message);
     } on SecureStorageException catch (e) {
       showErrorSheet(context, message: e.message);
-    } catch (_) {
-      _snack('Could not create the wallet');
+    } catch (e) {
+      showErrorSheet(context, title: 'Could not create the wallet', message: '$e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -108,8 +108,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
   }
 
   void _snack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    if (mounted) showErrorSheet(context, message: msg);
   }
 
   @override

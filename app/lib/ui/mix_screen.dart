@@ -21,6 +21,21 @@ import 'widgets/soft_card.dart';
 const defaultErgRings = [1000000000, 10000000000, 100000000000];
 
 /// The mixer: what is in the pool, and a way in and out.
+Future<bool> confirmRemoveMix(BuildContext context, {required bool finished}) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(finished ? 'Remove saved mix history?' : 'Remove this waiting mix?'),
+        content: Text(finished
+            ? 'Your completed transfer is unaffected. Keeping this card preserves the mix details and transaction link.'
+            : 'This mix has not entered the pool. Removing it frees its reserved funds for other payments. It does not send or refund a transaction.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Remove')),
+        ],
+      ),
+    ) ?? false;
+
 class MixScreen extends StatefulWidget {
   const MixScreen({super.key});
 
@@ -324,6 +339,7 @@ class _MixScreenState extends State<MixScreen> {
       });
 
   Future<void> _remove(MixRecord r) async {
+    if (!await confirmRemoveMix(context, finished: r.finished) || !mounted) return;
     try {
       await mixService.remove(r);
     } catch (e) {
@@ -682,16 +698,19 @@ class _MixCard extends StatelessWidget {
             children: [
               if (r.pending)
                 FilledButton.tonal(
+                  style: inlineButtonStyle,
                   onPressed: working ? null : onContinue,
                   child: const Text('Continue'),
                 ),
               if (mixCanLeave(r))
                 OutlinedButton(
+                  style: inlineButtonStyle,
                   onPressed: working ? null : onLeave,
                   child: Text(r.needsDestination ? 'Withdraw to…' : 'Withdraw now'),
                 ),
               if (r.finished && mixFinalRow(r) != null)
                 FilledButton.tonal(
+                  style: inlineButtonStyle,
                   key: const Key('mix-see-tx'),
                   onPressed: () => Navigator.push(
                     context,

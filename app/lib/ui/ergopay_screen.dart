@@ -15,6 +15,7 @@ import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
 import 'offline_banner.dart';
 import 'widgets/soft_card.dart';
+import 'widgets/error_sheet.dart';
 
 enum _Stage { loading, message, ready, signing, done, error }
 
@@ -201,17 +202,16 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> {
       }
       if (!mounted) return;
       setState(() => _stage = _Stage.done);
-    } on ArgusException catch (e) {
-      _signFailed(e.message);
     } catch (e) {
-      _signFailed(_describe(e));
+      await _signFailed(e);
     }
   }
 
-  void _signFailed(String message) {
+  Future<void> _signFailed(Object error) async {
+    if (!mounted) return;
+    await showTxFailureSheet(context, error);
     if (!mounted) return;
     setState(() => _stage = _Stage.ready);
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -398,7 +398,7 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> {
               SelectableText(_txId ?? '', style: monoStyle(context, size: 12)),
               if (_replyError != null) ...[
                 const SizedBox(height: 12),
-                Text(
+                SelectableText(
                   'The transaction is on the network, but the dApp could not be notified: $_replyError',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 12.5, color: rustFor(context)),
@@ -430,7 +430,7 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> {
             children: [
               const Icon(Icons.link_off, size: 48, color: rust),
               const SizedBox(height: 16),
-              Text(_error ?? 'Something went wrong', textAlign: TextAlign.center),
+              SelectableText(_error ?? 'Something went wrong', textAlign: TextAlign.center),
               const SizedBox(height: 24),
               FilledButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
             ],

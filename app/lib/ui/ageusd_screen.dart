@@ -171,7 +171,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     final maxBase =
         _action.isRedeem ? (_selectedBalance ?? 0) : st.maxFor(_action);
     if (maxBase <= 0) {
-      _snack('Nothing available for this action');
+      showErrorSheet(context, message: 'Nothing available for this action');
       return;
     }
     _amountCtrl.text = formatTokenAmount(maxBase, _action.decimals);
@@ -183,12 +183,12 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     if (st == null) return;
     final amount = parseDecimalToBase(_amountCtrl.text, _action.decimals);
     if (amount == null || amount <= 0) {
-      _snack('Enter an amount');
+      showErrorSheet(context, message: 'Enter an amount');
       return;
     }
     final spend = _spendAddresses;
     if (spend.isEmpty) {
-      _snack('No spendable addresses');
+      showErrorSheet(context, message: 'No spendable addresses');
       return;
     }
 
@@ -212,7 +212,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() => _busy = false);
-      _snack('Could not build transaction: $e');
+      showErrorSheet(context, title: 'Could not prepare transaction', message: '$e');
       return;
     }
     if (!mounted) return;
@@ -278,7 +278,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text(_error!, textAlign: TextAlign.center),
+                              SelectableText(_error!, textAlign: TextAlign.center),
                               const SizedBox(height: 12),
                               TextButton(
                                   onPressed: _load, child: const Text('Retry')),
@@ -477,7 +477,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
 
   Widget _previewPanel() {
     if (_previewError != null) {
-      return Text(
+      return SelectableText(
         _previewError!,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(color: rustFor(context)),
       );

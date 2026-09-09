@@ -6,10 +6,18 @@ import '../format.dart';
 import '../services/network_controller.dart';
 import '../services/rosen_service.dart';
 import '../services/wallet_service.dart';
+import '../services/app_fee.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
 import 'widgets/error_sheet.dart';
 import 'widgets/soft_card.dart';
+
+int rosenMaxAmount({required int held, required bool isErg,
+    required int availableErg, required bool hasTokens}) {
+  final reserve = txOverheadNano() + (hasTokens ? minBoxNano : 0);
+  if (isErg) return (held - reserve).clamp(0, held);
+  return availableErg >= reserve + 2000000 ? held : 0;
+}
 
 /// Rosen bridge: send ERG or a bridged token to another chain. One
 /// transaction locks the asset for the bridge; the bridge pays out on
@@ -82,11 +90,11 @@ class _RosenScreenState extends State<RosenScreen> {
     final units = _units;
     if (_working || t == null || target == null || q == null || units == null) return;
     if (_addressProblem != null || _address.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Enter a valid destination address')));
+      showErrorSheet(context, message: 'Enter a valid destination address');
       return;
     }
     if (q.receiving <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Send at least ${formatTokenAmountGrouped(q.minTransfer, t.decimals)} ${t.name}')));
+      showErrorSheet(context, message: 'Send at least ${formatTokenAmountGrouped(q.minTransfer, t.decimals)} ${t.name}');
       return;
     }
     final args = WalletRouteArgs.of(context);
@@ -244,7 +252,13 @@ class _RosenScreenState extends State<RosenScreen> {
                     suffixIcon: TextButton(
                       onPressed: () {
                         final held = holdings.where((h) => h.$1.ergoTokenId == t.ergoTokenId).firstOrNull?.$2 ?? 0;
-                        _amount.text = formatTokenAmount(held, t.decimals);
+                        final max = rosenMaxAmount(held: held, isErg: t.isErg,
+                            availableErg: args.spendableNano ?? 0, hasTokens: args.tokens.isNotEmpty);
+                        if (max <= 0) {
+                          showErrorSheet(context, message: 'There is not enough ERG to pay the transfer fees and keep your remaining tokens.');
+                          return;
+                        }
+                        _amount.text = formatTokenAmount(max, t.decimals);
                         _requote();
                       },
                       child: const Text('MAX'),
@@ -254,7 +268,7 @@ class _RosenScreenState extends State<RosenScreen> {
                   onChanged: (_) => _requote(),
                 ),
                 const SizedBox(height: 12),
-                if (_quoteError != null) Text(_quoteError!, style: TextStyle(color: theme.colorScheme.error, fontSize: 12)),
+                if (_quoteError != null) SelectableText(_quoteError!, style: TextStyle(color: theme.colorScheme.error, fontSize: 12)),
                 if (q != null && target != null)
                   SoftCard(
                     padding: const EdgeInsets.all(14),

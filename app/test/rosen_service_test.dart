@@ -1,3 +1,5 @@
+import 'package:argus_wallet/ui/rosen_screen.dart';
+import 'package:argus_wallet/services/app_fee.dart';
 import 'dart:convert';
 
 import 'package:argus_wallet/services/rosen_service.dart';
@@ -56,6 +58,16 @@ class FakeGateway implements RosenGateway {
 }
 
 void main() {
+  test('ERG MAX reserves fees and change when tokens remain', () {
+    expect(rosenMaxAmount(held: 1000000000, isErg: true, availableErg: 1000000000,
+      hasTokens: false), 1000000000 - txOverheadNano());
+    expect(rosenMaxAmount(held: 1000000000, isErg: true, availableErg: 1000000000,
+      hasTokens: true), 1000000000 - txOverheadNano() - 1000000);
+    expect(rosenMaxAmount(held: 1, isErg: true, availableErg: 1, hasTokens: false), 0);
+    expect(rosenMaxAmount(held: 500, isErg: false, availableErg: 0, hasTokens: true), 0);
+    expect(rosenMaxAmount(held: 500, isErg: false, availableErg: 1000000000, hasTokens: true), 500);
+  });
+
   test('holdings pair the vendored tokens with what the wallet holds, ERG always', () {
     final svc = RosenService(gateway: FakeGateway(), get: (_) async => '[]');
     final h = svc.holdings(5, {'sigusd': 700, 'other': 9});

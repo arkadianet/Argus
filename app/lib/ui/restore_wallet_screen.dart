@@ -88,8 +88,8 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
       showErrorSheet(context, code: e.code, message: e.message);
     } on SecureStorageException catch (e) {
       showErrorSheet(context, message: e.message);
-    } catch (_) {
-      _snack('Could not restore the wallet');
+    } catch (e) {
+      showErrorSheet(context, title: 'Could not restore the wallet', message: '$e');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -97,8 +97,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
   }
 
   void _snack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+    if (mounted) showErrorSheet(context, message: msg);
   }
 
   @override
