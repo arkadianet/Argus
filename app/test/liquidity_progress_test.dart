@@ -21,6 +21,16 @@ void main() {
     expect(prefs.getString('argus_pool_creation_v1'), '{"pair":"old"}');
   });
 
+  test('the legacy record can be discarded so pool creation is possible again', () async {
+    SharedPreferences.setMockInitialValues({'argus_pool_creation_v1': '{"pair":"old"}'});
+    final store = PoolCreationStore('a');
+    await store.save({'pair': 'A'});
+    expect(await store.hasLegacy(), isTrue);
+    await store.discardLegacy();
+    expect(await store.hasLegacy(), isFalse);
+    expect((await store.load())?['pair'], 'A', reason: 'this wallet keeps its own progress');
+  });
+
   testWidgets('capped pool discovery explains missing positions', (tester) async {
     SharedPreferences.setMockInitialValues({});
     await tester.pumpWidget(MaterialApp(home: LiquidityScreen(

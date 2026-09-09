@@ -26,6 +26,23 @@ Future<bool> confirmForgetPool(BuildContext context) async =>
       ),
     ) ?? false;
 
+Future<bool> confirmDiscardLegacyPool(BuildContext context) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Discard the older saved progress?'),
+        content: const Text(
+          'It was saved before progress recorded which wallet it belonged to, so it cannot be '
+          'finished here. Discarding it does not cancel or refund the first transaction, and it '
+          'lets you start a new pool again.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Keep it')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Discard')),
+        ],
+      ),
+    ) ?? false;
+
 class PoolCreationStore {
   PoolCreationStore(this.walletId);
   final String walletId;
@@ -46,7 +63,15 @@ class PoolCreationStore {
   }
 
   Future<bool> hasLegacy() async =>
-      (await SharedPreferences.getInstance()).containsKey('argus_pool_creation_v1');
+      (await SharedPreferences.getInstance()).containsKey(_legacyKey);
+
+  /// Throw away progress saved before records knew which wallet they
+  /// belonged to. It cannot be finished, and while it is here nobody on
+  /// this phone can start a pool.
+  Future<void> discardLegacy() async =>
+      (await SharedPreferences.getInstance()).remove(_legacyKey);
+
+  static const _legacyKey = 'argus_pool_creation_v1';
 }
 
 /// A Spectrum pool as the Liquidity screen sees it.
@@ -489,6 +514,7 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
   PoolCreationStore? get _store => _walletId == null ? null : PoolCreationStore(_walletId);
   bool _loadingPending = true;
   String? _progressError;
+  bool _legacyProgress = false;
   String? _xTokenId; // null = ERG
   String? _yTokenId;
   final _x = TextEditingController();
@@ -520,14 +546,26 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
       if (!mounted) return;
       setState(() {
         _pending = pending;
+        _legacyProgress = legacy;
         _progressError = legacy
-            ? 'Saved pool progress from an older version has no wallet owner. It has been kept, but cannot safely be finished here.'
+            ? 'Saved pool progress from an older version has no wallet owner, so it cannot be finished here. '
+                'Starting a new pool is blocked until you discard it.'
             : null;
       });
     } catch (e) {
       if (mounted) setState(() => _progressError = 'Could not read saved pool progress: $e');
     } finally {
       if (mounted) setState(() => _loadingPending = false);
+    }
+  }
+
+  Future<void> _discardLegacy() async {
+    if (!await confirmDiscardLegacyPool(context) || !mounted) return;
+    try {
+      await _store?.discardLegacy();
+      await _loadPending();
+    } catch (e) {
+      if (mounted) showErrorSheet(context, message: 'Could not discard the older progress: $e');
     }
   }
 
@@ -672,7 +710,18 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
         if (_loadingPending) const LinearProgressIndicator(),
         if (_progressError != null) Padding(
           padding: const EdgeInsets.only(bottom: 12),
-          child: SelectableText(_progressError!),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SelectableText(_progressError!),
+              if (_legacyProgress)
+                TextButton(
+                  key: const Key('discard-legacy-pool'),
+                  onPressed: _working ? null : _discardLegacy,
+                  child: const Text('Discard it'),
+                ),
+            ],
+          ),
         ),
         if (pending != null) ...[
           SoftCard(
