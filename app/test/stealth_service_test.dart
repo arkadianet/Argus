@@ -13,18 +13,17 @@ void main() {
   _truncationTests();
   _stealthActivityTests();
   _walletRowTests();
-  test('a complete template scan never requests saved self-change scripts', () async {
+  test('a template scan asks the explorer for nothing but the template list', () async {
     final client = _RecordingHttpClient();
     final service = StealthService(
       wallet: _ScanWallet(),
       fetcher: (_) async => '{"items":[{"boxId":"change","ergoTree":"privateTree"}]}',
-    )..selfChangeTrees = ['privateTree'];
+    );
     await HttpOverrides.runZoned(() async {
       expect(await service.scan(explorerBase: 'https://explorer'), isNotNull);
     }, createHttpClient: (_) => client);
     expect(client.requests, isEmpty);
   });
-  _selfChangeTests();
 }
 
 // Pagination and wallet-switch guards (CodeRabbit review on PR #58)
@@ -269,60 +268,6 @@ void _walletRowTests() {
 }
 
 // Change we send ourselves must be findable without the template scan
-void _selfChangeTests() {
-  Map<String, dynamic> box(String id, String tree) => {
-        'boxId': id,
-        'transactionId': 't',
-        'index': 0,
-        'value': 5,
-        'creationHeight': 1,
-        'ergoTree': tree,
-        'assets': const [],
-      };
-
-  test('self-change boxes are looked up by script, one request each', () async {
-    final asked = <String>[];
-    final boxes = await fetchSelfChangeBoxes('https://x', ['treeA', 'treeB'], get: (url) async {
-      asked.add(url);
-      final tree = url.split('/').last;
-      return jsonEncode({'items': [box('b-$tree', tree)]});
-    });
-    expect(asked, [
-      'https://x/api/v1/boxes/unspent/byErgoTree/treeA',
-      'https://x/api/v1/boxes/unspent/byErgoTree/treeB',
-    ]);
-    expect(boxes.map((b) => b['boxId']), ['b-treeA', 'b-treeB']);
-  });
-
-  test('one failing script does not lose the others', () async {
-    final boxes = await fetchSelfChangeBoxes('https://x', ['bad', 'good'], get: (url) async {
-      if (url.endsWith('bad')) throw StateError('boom');
-      return jsonEncode({'items': [box('ok', 'good')]});
-    });
-    expect(boxes.single['boxId'], 'ok');
-  });
-
-  test('merging adds self-change without duplicating a box already scanned', () {
-    final scanned = jsonEncode({'items': [box('shared', 'treeA')], 'total': 1});
-    final merged = jsonDecode(mergeSelfChangeBoxes(scanned, [
-      box('shared', 'treeA'),
-      box('mine', 'treeB'),
-    ]));
-    expect((merged['items'] as List).length, 2);
-    expect(merged['total'], 2);
-  });
-
-  test('merging preserves the truncated marker', () {
-    final scanned = jsonEncode({'items': const [], 'argus_truncated': true});
-    final merged = mergeSelfChangeBoxes(scanned, [box('mine', 'treeB')]);
-    expect(isTruncatedScan(merged), isTrue, reason: 'a partial scan is still partial');
-  });
-
-  test('nothing to merge leaves the body untouched', () {
-    const body = '{"items":[]}';
-    expect(mergeSelfChangeBoxes(body, const []), body);
-  });
-}
 
 class _ScanWallet extends WalletService {
   @override

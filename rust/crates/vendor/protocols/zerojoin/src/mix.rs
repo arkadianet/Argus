@@ -13,10 +13,13 @@
 //! needed, and [`recover`] rebuilds the state of every live mix from the
 //! seed and the chain alone.
 
+use std::collections::HashMap;
+
+use ergo_chain_types::EcPoint;
 use serde::{Deserialize, Serialize};
 
 use crate::boxes::{
-    parse_explorer_boxes, FeeEmissionBox, FullMixBox, HalfMixBox, TokenEmissionBox,
+    group_element_register, parse_explorer_boxes, FeeEmissionBox, FullMixBox, HalfMixBox, TokenEmissionBox,
 };
 use crate::contracts::{
     is_fee_emission_tree, is_full_mix_tree, is_half_mix_tree, is_token_emission_tree,
@@ -655,6 +658,24 @@ pub fn recover(
     secret_for: impl Fn(u32, u32) -> Option<MixSecret>,
     now: i64,
 ) -> Vec<MixState> {
+    // The scan derives thousands of secrets, so the boxes are indexed by
+    // the commitment each one would match: a linear search per derivation
+    // would multiply two large lists together for nothing. Bob's box is
+    // found by `c2`, Alice's by `g_x`, and `role_for` still decides which
+    // of the two it is, since only it does the Diffie-Hellman check.
+    let key = |p: &EcPoint| group_element_register(p).unwrap_or_default();
+    let mut halves: HashMap<String, &HalfMixBox> = HashMap::new();
+    for h in &view.half {
+        halves.entry(key(&h.g_x)).or_insert(h);
+    }
+    let mut fulls: HashMap<String, Vec<&FullMixBox>> = HashMap::new();
+    for f in &view.full {
+        fulls.entry(key(&f.c2)).or_default().push(f);
+        let g_x = key(&f.g_x);
+        if g_x != key(&f.c2) {
+            fulls.entry(g_x).or_default().push(f);
+        }
+    }
     let mut found = Vec::new();
     for mix_id in 0..RECOVERY_MAX_MIXES {
         let mut best: Option<MixState> = None;
@@ -663,7 +684,8 @@ pub fn recover(
                 break;
             };
             let pk = secret.public_key();
-            if let Some(h) = view.half.iter().find(|h| h.g_x == *pk) {
+            let commitment = key(pk);
+            if let Some(h) = halves.get(&commitment).copied() {
                 best = Some(MixState {
                     mix_id,
                     ring: RingSpec::of_half(h),
@@ -687,10 +709,11 @@ pub fn recover(
                 });
                 continue;
             }
-            if let Some((f, role)) = view
-                .full
-                .iter()
-                .find_map(|f| secret.role_for(f).map(|r| (f, r)))
+            if let Some((f, role)) = fulls
+                .get(&commitment)
+                .into_iter()
+                .flatten()
+                .find_map(|f| secret.role_for(f).map(|r| (*f, r)))
             {
                 best = Some(MixState {
                     mix_id,

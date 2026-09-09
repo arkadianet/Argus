@@ -52,7 +52,6 @@ Future<void> main() async {
     privacyService.load().catchError((_) {}),
     stealthService.load().catchError((_) {}),
     tokenPricer.load().catchError((_) {}),
-    stealthService.loadSelfChangeTrees().catchError((_) {}),
   ]);
   networkController.priceRefresher = tokenPricer.refresh;
   await MixBackground.init();

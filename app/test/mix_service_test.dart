@@ -522,6 +522,25 @@ void main() {
     expect(svc.records.single.boxId, 'new', reason: 'the repaired round survives restart');
   });
 
+  test('recovery adopts a live box when a dropped exit left nothing to roll back to', () async {
+    // A reclaim was broadcast and dropped, and a stranger joined the half
+    // box meanwhile: the engine cannot roll back to a box that is gone.
+    final half = state(mixId: 1, kind: 'half_posted', boxId: 'half', done: 0, round: 0);
+    final stuck = state(mixId: 1, kind: 'reclaimed', boxId: null, done: 0, round: 0)
+      ..['previous'] = {'phase': half['phase'], 'round': 0, 'rounds_done': 0, 'at': 5}
+      ..['events'] = [{'at': 5, 'action': 'reclaimed', 'round': 0, 'tx_id': 'txr'}];
+    final joined = state(mixId: 1, kind: 'full_owned', boxId: 'joined', done: 1, round: 1);
+    final gw = FakeGateway()..script['recover'] = [[joined]];
+    final ex = FakeExplorer()..lists['bb'] = [{'boxId': 'joined'}];
+    final svc = await loaded(gw, ex, [stuck]);
+    expect(svc.records.single.awaitingWithdrawal, isTrue);
+    expect(await svc.recover(), 1);
+    expect(svc.records.single.boxId, 'joined');
+    expect(svc.records.single.awaitingWithdrawal, isFalse,
+        reason: 'the mix is drivable again, not stuck between states');
+    expect(svc.records.single.destinationErgoTree, stuck['destination_ergo_tree']);
+  });
+
   test('recover adds only mixes the records do not know', () async {
     final gw = FakeGateway()
       ..script['recover'] = [

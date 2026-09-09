@@ -1597,6 +1597,9 @@ class MixService extends ChangeNotifier {
           fresh.add(f);
         } else if (have.pending ||
             (have.inPool && f.boxId != null && f.boxId == have.previousBoxId) ||
+            // A dropped exit whose input someone else spent has no box to
+            // roll back to, so the chain's live box is the only way out.
+            (have.awaitingWithdrawal && f.boxId != null && f.round >= have.round) ||
             (have.inPool && have.boxId != null && f.boxId != null &&
                 f.boxId != have.boxId && f.round >= have.round && await _boxIsSpent(have.boxId!))) {
           // Recovery can repair a lost broadcast result or roll back a
