@@ -13,10 +13,13 @@
 //! needed, and [`recover`] rebuilds the state of every live mix from the
 //! seed and the chain alone.
 
+use std::collections::HashMap;
+
+use ergo_chain_types::EcPoint;
 use serde::{Deserialize, Serialize};
 
 use crate::boxes::{
-    parse_explorer_boxes, FeeEmissionBox, FullMixBox, HalfMixBox, TokenEmissionBox,
+    group_element_register, parse_explorer_boxes, FeeEmissionBox, FullMixBox, HalfMixBox, TokenEmissionBox,
 };
 use crate::contracts::{
     is_fee_emission_tree, is_full_mix_tree, is_half_mix_tree, is_token_emission_tree,
@@ -209,13 +212,12 @@ impl MixState {
             rounds_done: self.rounds_done,
             at: now,
         };
-        // A move out of the pool has no box to wait for, and an entry has
-        // no box to fall back to; a move within the pool keeps the box it
-        // spent until the new one is seen.
-        self.previous = match applied {
-            Applied::Withdrawn | Applied::Reclaimed => None,
-            _ if before.phase.box_id().is_none() => None,
-            _ => Some(before),
+        // A broadcast is not confirmation, including a move out of the
+        // pool. Keep its input so a dropped withdrawal can be retried.
+        self.previous = if before.phase.box_id().is_some() {
+            Some(before)
+        } else {
+            None
         };
         match applied {
             Applied::EnteredAsAlice { half_box_id } => {
@@ -330,9 +332,9 @@ impl Applied {
 /// A snapshot of the parts of the chain a step needs.
 ///
 /// `half` is every unspent half-mix box the caller fetched (at least the
-/// mix's ring). `full` holds the full-mix boxes the caller could find for
-/// this wallet: its own by id, and the outputs of whatever spent its half
-/// box. `fee` and `token` are the operator's emission boxes.
+/// mix's ring). `full` holds the unspent full-mix contract listing, so
+/// ownership can be checked without disclosing an owned box id to the
+/// server. `fee` and `token` are the operator's emission boxes.
 #[derive(Debug, Default)]
 pub struct ChainView {
     pub half: Vec<HalfMixBox>,
@@ -548,8 +550,8 @@ pub fn observe(mut state: MixState, view: &ChainView, secret: &MixSecret, now: i
     // A broadcast move: confirmed (its box seen), lost (the box it spent
     // still unspent after the grace), or not known yet.
     let seen = |id: &str| view.half_by_id(id).is_some() || view.full_by_id(id).is_some();
-    if let (Some(prev), Some(current)) = (&state.previous, state.phase.box_id()) {
-        if seen(current) {
+    if let Some(prev) = &state.previous {
+        if state.phase.box_id().is_some_and(seen) {
             state.previous = None;
         } else if now - prev.at >= LOST_MOVE_GRACE_SECS && prev.phase.box_id().is_some_and(seen) {
             return state.rolled_back(now);
@@ -637,8 +639,8 @@ pub fn plan(state: &MixState, view: &ChainView, own_half_ids: &[String]) -> Plan
     }
 }
 
-/// How many mixes with no box on chain end a recovery scan.
-pub const RECOVERY_MIX_GAP: u32 = 5;
+/// Finished mixes leave no unspent boxes, so gaps cannot bound recovery.
+pub const RECOVERY_MAX_MIXES: u32 = 256;
 /// Rounds tried per mix during recovery. A mix past this many rounds is
 /// beyond anything the wallet offers.
 pub const RECOVERY_MAX_ROUNDS: u32 = 64;
@@ -656,17 +658,34 @@ pub fn recover(
     secret_for: impl Fn(u32, u32) -> Option<MixSecret>,
     now: i64,
 ) -> Vec<MixState> {
+    // The scan derives thousands of secrets, so the boxes are indexed by
+    // the commitment each one would match: a linear search per derivation
+    // would multiply two large lists together for nothing. Bob's box is
+    // found by `c2`, Alice's by `g_x`, and `role_for` still decides which
+    // of the two it is, since only it does the Diffie-Hellman check.
+    let key = |p: &EcPoint| group_element_register(p).unwrap_or_default();
+    let mut halves: HashMap<String, &HalfMixBox> = HashMap::new();
+    for h in &view.half {
+        halves.entry(key(&h.g_x)).or_insert(h);
+    }
+    let mut fulls: HashMap<String, Vec<&FullMixBox>> = HashMap::new();
+    for f in &view.full {
+        fulls.entry(key(&f.c2)).or_default().push(f);
+        let g_x = key(&f.g_x);
+        if g_x != key(&f.c2) {
+            fulls.entry(g_x).or_default().push(f);
+        }
+    }
     let mut found = Vec::new();
-    let mut empty_run = 0;
-    let mut mix_id = 0u32;
-    while empty_run < RECOVERY_MIX_GAP {
+    for mix_id in 0..RECOVERY_MAX_MIXES {
         let mut best: Option<MixState> = None;
         for round in 0..RECOVERY_MAX_ROUNDS {
             let Some(secret) = secret_for(mix_id, round) else {
                 break;
             };
             let pk = secret.public_key();
-            if let Some(h) = view.half.iter().find(|h| h.g_x == *pk) {
+            let commitment = key(pk);
+            if let Some(h) = halves.get(&commitment).copied() {
                 best = Some(MixState {
                     mix_id,
                     ring: RingSpec::of_half(h),
@@ -690,10 +709,11 @@ pub fn recover(
                 });
                 continue;
             }
-            if let Some((f, role)) = view
-                .full
-                .iter()
-                .find_map(|f| secret.role_for(f).map(|r| (f, r)))
+            if let Some((f, role)) = fulls
+                .get(&commitment)
+                .into_iter()
+                .flatten()
+                .find_map(|f| secret.role_for(f).map(|r| (*f, r)))
             {
                 best = Some(MixState {
                     mix_id,
@@ -719,14 +739,9 @@ pub fn recover(
                 });
             }
         }
-        match best {
-            Some(s) => {
-                found.push(s);
-                empty_run = 0;
-            }
-            None => empty_run += 1,
+        if let Some(s) = best {
+            found.push(s);
         }
-        mix_id += 1;
     }
     found
 }
@@ -945,6 +960,58 @@ mod tests {
     }
 
     #[test]
+    fn a_dropped_withdrawal_or_reclaim_rolls_back_to_its_live_box() {
+        let secret = test_secret(0, 0);
+        let h = half(7, &secret, 12);
+        let stranger = test_secret(9, 0);
+        let [full, _] = synthetic_round(
+            stranger.public_key(),
+            &secret,
+            PairOrder::BobFirst,
+            RING,
+            12,
+        );
+        for (phase, applied) in [
+            (
+                MixPhase::HalfPosted {
+                    box_id: h.input.box_id.clone(),
+                },
+                Applied::Reclaimed,
+            ),
+            (
+                MixPhase::FullOwned {
+                    box_id: full.input.box_id.clone(),
+                    role: Role::Bob,
+                },
+                Applied::Withdrawn,
+            ),
+        ] {
+            let state = MixState {
+                phase: phase.clone(),
+                ..pending(12, 3)
+            };
+            let sent = state.after(applied, "withdrawal", NOW);
+            assert!(sent.previous.is_some());
+            let view = view_with(vec![h.clone()], vec![full.clone()]);
+            let waiting = observe(sent.clone(), &view, &secret, NOW + 1);
+            assert_eq!(waiting.phase, sent.phase);
+            let restored = observe(sent.clone(), &view, &secret, NOW + LOST_MOVE_GRACE_SECS);
+            assert_eq!(restored.phase, phase);
+            assert!(restored.previous.is_none());
+            let unknown = observe(
+                sent,
+                &view_with(vec![], vec![]),
+                &secret,
+                NOW + LOST_MOVE_GRACE_SECS,
+            );
+            assert!(
+                unknown.previous.is_some(),
+                "absence cannot confirm a withdrawal"
+            );
+        }
+    }
+
+    #[test]
     fn states_without_a_previous_step_still_load() {
         let v: serde_json::Value = serde_json::to_value(pending(20, 3)).unwrap();
         let mut m = v.as_object().unwrap().clone();
@@ -1132,7 +1199,20 @@ mod tests {
     }
 
     #[test]
-    fn recovery_rebuilds_live_mixes_from_the_seed_and_stops_at_the_gap() {
+    fn recovery_finds_live_mix_after_five_completed_mixes() {
+        let live = half(6, &test_secret(5, 0), 12);
+        let states = recover(
+            &view_with(vec![live.clone()], vec![]),
+            |m, r| Some(test_secret(m, r)),
+            NOW,
+        );
+        assert!(states
+            .iter()
+            .any(|s| s.mix_id == 5 && s.phase.box_id() == Some(live.input.box_id.as_str())));
+    }
+
+    #[test]
+    fn recovery_rebuilds_live_mixes_from_the_seed_and_stops_at_the_bound() {
         // Mix 0 is waiting as Alice at round 2; mix 3 owns a full box as Bob
         // at round 1; mixes 1, 2 and everything after 3 have nothing.
         let alice_x = test_secret(0, 2);
@@ -1180,8 +1260,8 @@ mod tests {
         let last_mix_tried = *derived.borrow().iter().max().unwrap();
         assert_eq!(
             last_mix_tried,
-            3 + RECOVERY_MIX_GAP,
-            "five empty mixes after the last hit"
+            RECOVERY_MAX_MIXES - 1,
+            "the scan is bounded independently of completed mixes"
         );
         assert_eq!(next_mix_id(&states), 4);
     }

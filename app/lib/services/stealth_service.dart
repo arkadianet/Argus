@@ -183,67 +183,10 @@ Future<String> fetchAllStealthBoxes(
   });
 }
 
-/// Boxes sitting on scripts this wallet created for its own change.
-///
-/// Looked up by script rather than by the template set, so money the wallet
-/// sent itself is found even when the template scan is off, truncated, or
-/// the page containing it was never reached.
-Future<List<Map<String, dynamic>>> fetchSelfChangeBoxes(
-  String explorerBase,
-  List<String> trees, {
-  Future<String> Function(String url)? get,
-}) async {
-  if (trees.isEmpty) return const [];
-  final base = explorerBase.replaceAll(RegExp(r'/+$'), '');
-  final fetch = get ??
-      (String url) async {
-        final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 15));
-        if (res.statusCode != 200) throw StateError('HTTP ${res.statusCode}');
-        return res.body;
-      };
-  final out = <Map<String, dynamic>>[];
-  for (final tree in trees) {
-    try {
-      final body = jsonDecode(await fetch('$base/api/v1/boxes/unspent/byErgoTree/$tree'));
-      final items = body is Map ? (body['items'] as List? ?? const []) : const [];
-      for (final e in items) {
-        if (e is Map && e['boxId'] != null) out.add(e.cast<String, dynamic>());
-      }
-    } catch (_) {
-      // One missing script must not fail the whole scan.
-    }
-  }
-  return out;
-}
 
 Future<String> _httpFetchStealthBoxes(String explorerBase) =>
     fetchAllStealthBoxes(explorerBase, page: _httpFetchStealthPage);
 
-/// Adds self-change boxes to a template-scan body, without duplicates.
-String mergeSelfChangeBoxes(String body, List<Map<String, dynamic>> extra) {
-  if (extra.isEmpty) return body;
-  try {
-    final v = jsonDecode(body);
-    final items = <String, Map<String, dynamic>>{};
-    final existing = v is Map ? (v['items'] as List? ?? const []) : (v is List ? v : const []);
-    for (final e in existing) {
-      if (e is Map && e['boxId'] != null) {
-        items[e['boxId'].toString()] = e.cast<String, dynamic>();
-      }
-    }
-    for (final e in extra) {
-      items[e['boxId'].toString()] = e;
-    }
-    final truncated = v is Map && v['argus_truncated'] == true;
-    return jsonEncode({
-      'items': items.values.toList(),
-      'total': items.length,
-      if (truncated) 'argus_truncated': true,
-    });
-  } catch (_) {
-    return body;
-  }
-}
 
 /// Owns the stealth-address feature: the published string, the opt-in scan
 /// switch, and the last scan result.
@@ -252,12 +195,14 @@ String mergeSelfChangeBoxes(String body, List<Map<String, dynamic>> extra) {
 /// result becomes "unknown" rather than an error: a wallet sync must never
 /// fail because the stealth lookup did.
 class StealthService extends ChangeNotifier {
-  StealthService({StealthBoxFetcher? fetcher})
-      : _fetch = fetcher ?? _httpFetchStealthBoxes;
+  StealthService({StealthBoxFetcher? fetcher, WalletService? wallet})
+      : _fetch = fetcher ?? _httpFetchStealthBoxes,
+        _wallet = wallet ?? walletService;
 
   static const _enabledKey = 'argus_stealth_scan_enabled';
 
   final StealthBoxFetcher _fetch;
+  final WalletService _wallet;
 
   /// Whether each sync queries the explorer for stealth boxes. Default on.
   bool scanEnabled = true;
@@ -364,29 +309,21 @@ class StealthService extends ChangeNotifier {
   /// Never throws: an unreachable explorer sets [lastScanFailed] and leaves
   /// the previous result in place.
   Future<StealthScanResult?> scan({String? explorerBase}) async {
-    if (!scanEnabled || !walletService.isUnlocked) return null;
+    if (!scanEnabled || !_wallet.isUnlocked) return null;
     final gen = _generation;
     try {
       final base = explorerBase ?? networkController.explorer;
-      var body = await _fetch(base);
-      // Money we sent ourselves is found by script, so it appears even if
-      // the template scan missed it.
-      body = mergeSelfChangeBoxes(
-        body,
-        await fetchSelfChangeBoxes(base, selfChangeTrees),
-      );
+      final body = await _fetch(base);
       if (isTruncatedScan(body)) {
         // Partial data would read as a smaller balance than the truth.
         throw StateError('stealth box list exceeded the scan cap');
       }
       final result =
-          StealthScanResult.fromJson(await walletService.stealthScan(body));
+          StealthScanResult.fromJson(await _wallet.stealthScan(body));
       if (gen != _generation) return null;
       _lastBoxesJson = body;
       lastScan = result;
       lastScanFailed = false;
-      // Scripts whose change has since been spent can be forgotten.
-      await forgetSpentSelfChange(result.boxes.map((b) => b.ergoTree));
       notifyListeners();
       return result;
     } catch (_) {
@@ -446,47 +383,15 @@ class StealthService extends ChangeNotifier {
     return body;
   }
 
-  static const _selfChangeKey = 'argus_stealth_self_change_trees';
-
-  /// Scripts this wallet created for its own change. Kept locally because
-  /// the wallet built them: their funds must be spendable even when the
-  /// explorer cannot be reached, and without waiting for a scan to
-  /// rediscover money we sent ourselves.
-  List<String> selfChangeTrees = const [];
-
-  Future<void> loadSelfChangeTrees() async {
-    final prefs = await SharedPreferences.getInstance();
-    selfChangeTrees = prefs.getStringList(_selfChangeKey) ?? const [];
-  }
-
-  /// A fresh one-time address to send our own change to, recorded first so
-  /// a crash between building and broadcasting cannot lose track of it.
+  /// A fresh one-time address to send our own change to. A box paid to it
+  /// carries the stealth payment script, so the template scan finds it
+  /// like any other stealth receipt and no list of ours has to track it.
   Future<String?> newSelfChangeAddress() async {
     final mine = address;
     if (mine == null) return null;
     final raw = await walletService.stealthSelfChangeTarget(mine);
     final payTo = raw['address'] as String? ?? '';
-    final tree = raw['ergo_tree'] as String? ?? '';
-    if (payTo.isEmpty || tree.isEmpty) return null;
-    final next = [...selfChangeTrees, tree];
-    // Bounded: old scripts stay only until their box is spent, and a wallet
-    // that somehow accumulates thousands should not carry them all.
-    final trimmed = next.length > 200 ? next.sublist(next.length - 200) : next;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_selfChangeKey, trimmed);
-    selfChangeTrees = trimmed;
-    return payTo;
-  }
-
-  /// Drops scripts with nothing left in them, so the list does not grow
-  /// without bound as change is spent.
-  Future<void> forgetSpentSelfChange(Iterable<String> liveTrees) async {
-    final live = liveTrees.toSet();
-    final kept = selfChangeTrees.where(live.contains).toList();
-    if (kept.length == selfChangeTrees.length) return;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList(_selfChangeKey, kept);
-    selfChangeTrees = kept;
+    return payTo.isEmpty ? null : payTo;
   }
 
   /// Used by tests to prime the box list without a fetch.

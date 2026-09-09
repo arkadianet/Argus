@@ -11,7 +11,7 @@ use std::str::FromStr;
 
 use citadel_core::{constants, ProtocolError, TxError};
 use ergo_tx::{
-    append_change_output, append_dev_fee_output, collect_change_tokens, encode_sigma_long,
+    append_change_output, append_dev_fee_output, encode_sigma_long,
     resolved_dev_fee_config, select_inputs_for_spend, Eip12Asset, Eip12DataInputBox, Eip12InputBox,
     Eip12Output, Eip12UnsignedTx,
 };
@@ -402,7 +402,7 @@ pub fn build_redeem_sigusd_tx(
 
     let selected = select_inputs_for_spend(
         &request.user_inputs,
-        (constants::TX_FEE_NANO + citadel_fee) as u64,
+        (constants::TX_FEE_NANO + citadel_fee + constants::MIN_BOX_VALUE_NANO) as u64,
         Some((&ctx.nft_ids.sigusd_token, request.amount as u64)),
     )
     .map_err(|e| TxError::BuildFailed {
@@ -439,20 +439,16 @@ pub fn build_redeem_sigusd_tx(
         "R5" => encode_sigma_long(erg_to_receive),
     );
 
-    let user_sigusd = selected.token_amount as i64;
-    let remaining_sigusd = user_sigusd - request.amount;
-    let mut user_assets = Vec::new();
-    if remaining_sigusd > 0 {
-        user_assets.push(Eip12Asset::new(&ctx.nft_ids.sigusd_token, remaining_sigusd));
+    if erg_to_receive < constants::MIN_BOX_VALUE_NANO {
+        return Err(TxError::BuildFailed {
+            message: "Redemption proceeds are too small for the receipt box".into(),
+        });
     }
 
-    let user_output_erg =
-        selected.total_erg as i64 + erg_to_receive - constants::TX_FEE_NANO - citadel_fee;
-
     outputs.push(Eip12Output {
-        value: user_output_erg.to_string(),
+        value: erg_to_receive.to_string(),
         ergo_tree: output_ergo_tree.to_string(),
-        assets: user_assets,
+        assets: vec![],
         creation_height: request.current_height,
         additional_registers: user_registers,
     });
@@ -467,18 +463,18 @@ pub fn build_redeem_sigusd_tx(
         request.current_height,
     ));
 
-    let other_tokens = collect_change_tokens(
-        &selected.boxes,
-        Some((&ctx.nft_ids.sigusd_token, request.amount as u64)),
-    );
-    if !other_tokens.is_empty() {
-        outputs.push(Eip12Output::change(
-            constants::MIN_BOX_VALUE_NANO,
-            &request.user_ergo_tree,
-            other_tokens,
-            request.current_height,
-        ));
-    }
+    append_change_output(
+        &mut outputs,
+        &selected,
+        (constants::TX_FEE_NANO + citadel_fee) as u64,
+        &[(&ctx.nft_ids.sigusd_token, request.amount as u64)],
+        &request.user_ergo_tree,
+        request.current_height,
+        constants::MIN_BOX_VALUE_NANO as u64,
+    )
+    .map_err(|e| TxError::BuildFailed {
+        message: e.to_string(),
+    })?;
 
     let unsigned_tx = Eip12UnsignedTx {
         inputs,
@@ -656,7 +652,7 @@ pub fn build_redeem_sigrsv_tx(
 
     let selected = select_inputs_for_spend(
         &request.user_inputs,
-        (constants::TX_FEE_NANO + citadel_fee) as u64,
+        (constants::TX_FEE_NANO + citadel_fee + constants::MIN_BOX_VALUE_NANO) as u64,
         Some((&ctx.nft_ids.sigrsv_token, request.amount as u64)),
     )
     .map_err(|e| TxError::BuildFailed {
@@ -694,20 +690,16 @@ pub fn build_redeem_sigrsv_tx(
         "R5" => encode_sigma_long(erg_to_receive),
     );
 
-    let user_sigrsv = selected.token_amount as i64;
-    let remaining_sigrsv = user_sigrsv - request.amount;
-    let mut user_assets = Vec::new();
-    if remaining_sigrsv > 0 {
-        user_assets.push(Eip12Asset::new(&ctx.nft_ids.sigrsv_token, remaining_sigrsv));
+    if erg_to_receive < constants::MIN_BOX_VALUE_NANO {
+        return Err(TxError::BuildFailed {
+            message: "Redemption proceeds are too small for the receipt box".into(),
+        });
     }
 
-    let user_output_erg =
-        selected.total_erg as i64 + erg_to_receive - constants::TX_FEE_NANO - citadel_fee;
-
     outputs.push(Eip12Output {
-        value: user_output_erg.to_string(),
+        value: erg_to_receive.to_string(),
         ergo_tree: output_ergo_tree.to_string(),
-        assets: user_assets,
+        assets: vec![],
         creation_height: request.current_height,
         additional_registers: user_registers,
     });
@@ -722,18 +714,18 @@ pub fn build_redeem_sigrsv_tx(
         request.current_height,
     ));
 
-    let other_tokens = collect_change_tokens(
-        &selected.boxes,
-        Some((&ctx.nft_ids.sigrsv_token, request.amount as u64)),
-    );
-    if !other_tokens.is_empty() {
-        outputs.push(Eip12Output::change(
-            constants::MIN_BOX_VALUE_NANO,
-            &request.user_ergo_tree,
-            other_tokens,
-            request.current_height,
-        ));
-    }
+    append_change_output(
+        &mut outputs,
+        &selected,
+        (constants::TX_FEE_NANO + citadel_fee) as u64,
+        &[(&ctx.nft_ids.sigrsv_token, request.amount as u64)],
+        &request.user_ergo_tree,
+        request.current_height,
+        constants::MIN_BOX_VALUE_NANO as u64,
+    )
+    .map_err(|e| TxError::BuildFailed {
+        message: e.to_string(),
+    })?;
 
     let unsigned_tx = Eip12UnsignedTx {
         inputs,
@@ -814,6 +806,150 @@ fn build_bank_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn redemption(reserve: bool, partial: bool, unrelated: bool) -> BuildResult {
+        let ids = NftIds::for_network(citadel_core::Network::Mainnet).unwrap();
+        let input = |assets| Eip12InputBox {
+            box_id: "wallet".into(),
+            transaction_id: "tx".into(),
+            index: 0,
+            value: "1000000000".into(),
+            ergo_tree: "wallet_tree".into(),
+            assets,
+            creation_height: 100,
+            additional_registers: Default::default(),
+            extension: Default::default(),
+        };
+        let mut bank = input(vec![
+            Eip12Asset::new(&ids.bank_nft, 1),
+            Eip12Asset::new(&ids.sigusd_token, 1000000),
+            Eip12Asset::new(&ids.sigrsv_token, 1000000),
+        ]);
+        bank.value = "10000000000000".into();
+        bank.ergo_tree = "bank_tree".into();
+        let state = SigmaUsdState::from_boxes(
+            &crate::state::BankBoxData {
+                box_id: citadel_core::BoxId::new("bank"),
+                value_nano: 10000000000000,
+                sigusd_circulating: 10000,
+                sigrsv_circulating: 10000,
+            },
+            &crate::state::OracleBoxData {
+                box_id: citadel_core::BoxId::new("oracle"),
+                nanoerg_per_usd: 1000000000,
+            },
+        );
+        let ctx = TxContext {
+            bank_input: bank,
+            bank_erg_nano: state.bank_erg_nano,
+            sigusd_circulating: 10000,
+            sigrsv_circulating: 10000,
+            sigusd_in_bank: 1000000,
+            sigrsv_in_bank: 1000000,
+            oracle_data_input: Eip12DataInputBox {
+                box_id: "oracle".into(),
+                transaction_id: "tx".into(),
+                index: 0,
+                value: "1000000".into(),
+                ergo_tree: "oracle_tree".into(),
+                assets: vec![],
+                creation_height: 100,
+                additional_registers: Default::default(),
+            },
+            oracle_rate: 1000000000,
+            nft_ids: ids.clone(),
+        };
+        let token = if reserve {
+            &ids.sigrsv_token
+        } else {
+            &ids.sigusd_token
+        };
+        let mut assets = vec![Eip12Asset::new(token, if partial { 200 } else { 100 })];
+        if unrelated {
+            assets.push(Eip12Asset::new("unrelated", 7));
+        }
+        if reserve {
+            build_redeem_sigrsv_tx(
+                &RedeemSigRsvRequest {
+                    amount: 100,
+                    user_address: "wallet".into(),
+                    user_ergo_tree: "wallet_tree".into(),
+                    user_inputs: vec![input(assets)],
+                    current_height: 100,
+                    recipient_ergo_tree: Some("recipient_tree".into()),
+                },
+                &ctx,
+                &state,
+            )
+            .unwrap()
+        } else {
+            build_redeem_sigusd_tx(
+                &RedeemSigUsdRequest {
+                    amount: 100,
+                    user_address: "wallet".into(),
+                    user_ergo_tree: "wallet_tree".into(),
+                    user_inputs: vec![input(assets)],
+                    current_height: 100,
+                    recipient_ergo_tree: Some("recipient_tree".into()),
+                },
+                &ctx,
+                &state,
+            )
+            .unwrap()
+        }
+    }
+
+    #[test]
+    fn redemption_returns_wallet_erg_to_wallet() {
+        for reserve in [false, true] {
+            let result = redemption(reserve, false, false);
+            let tx = result.unsigned_tx;
+            assert_eq!(
+                tx.outputs[1].value.parse::<i64>().unwrap(),
+                result.summary.erg_amount_nano
+            );
+            assert_eq!(
+                tx.outputs
+                    .iter()
+                    .filter(|o| o.ergo_tree == "wallet_tree")
+                    .map(|o| o.value.parse::<i64>().unwrap())
+                    .sum::<i64>(),
+                1000000000 - result.summary.tx_fee_nano - result.summary.citadel_fee_nano
+            );
+        }
+    }
+
+    #[test]
+    fn redemption_conserves_erg_and_tokens() {
+        for reserve in [false, true] {
+            for (partial, unrelated) in [(true, false), (false, true), (true, true)] {
+                let tx = redemption(reserve, partial, unrelated).unsigned_tx;
+                assert_eq!(
+                    tx.inputs
+                        .iter()
+                        .map(|b| b.value.parse::<i64>().unwrap())
+                        .sum::<i64>(),
+                    tx.outputs
+                        .iter()
+                        .map(|b| b.value.parse::<i64>().unwrap())
+                        .sum::<i64>()
+                );
+                let totals = |assets: Vec<&Eip12Asset>| {
+                    let mut totals = std::collections::BTreeMap::new();
+                    for a in assets {
+                        *totals.entry(a.token_id.clone()).or_insert(0i64) +=
+                            a.amount.parse::<i64>().unwrap();
+                    }
+                    totals
+                };
+                assert_eq!(
+                    totals(tx.inputs.iter().flat_map(|b| &b.assets).collect()),
+                    totals(tx.outputs.iter().flat_map(|b| &b.assets).collect())
+                );
+                assert!(tx.outputs[1].assets.is_empty());
+            }
+        }
+    }
 
     #[test]
     fn test_action_from_str() {

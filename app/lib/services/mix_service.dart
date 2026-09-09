@@ -101,12 +101,14 @@ class MixRecord {
   int get updatedAt => (state['updated_at'] as num?)?.toInt() ?? 0;
 
   /// The mix is waiting in, or moving through, the pool.
-  bool get inPool => phaseKind == 'half_posted' || phaseKind == 'full_owned';
+  bool get inPool => phaseKind == 'half_posted' || phaseKind == 'full_owned' || awaitingWithdrawal;
   bool get pending => phaseKind == 'pending';
-  bool get finished => phaseKind == 'withdrawn' || phaseKind == 'reclaimed';
+  bool get awaitingWithdrawal =>
+      (phaseKind == 'withdrawn' || phaseKind == 'reclaimed') && previousBoxId != null;
+  bool get finished => (phaseKind == 'withdrawn' || phaseKind == 'reclaimed') && !awaitingWithdrawal;
 
   /// nanoERG this mix has in the pool right now.
-  int get lockedNano => inPool ? denomination : 0;
+  int get lockedNano => inPool && !awaitingWithdrawal ? denomination : 0;
 
   /// Rounds done and nothing left to do but leave: the money is mixed and
   /// waiting to be withdrawn.
@@ -500,9 +502,8 @@ class MixService extends ChangeNotifier {
 
   /// Whether the app is in front. While it is, the foreground tick owns
   /// the mixes and the background job is cancelled; while it is not, the
-  /// job owns them and the foreground tick stands down. One driver at a
-  /// time, so two isolates can never spend the same pool box or overwrite
-  /// each other's records.
+  /// job owns them and the foreground tick stands down. A job already
+  /// running may overlap a foreground action; its merge checks for that.
   bool foreground = true;
 
   static const _leaseKey = 'argus_mix_lease';
@@ -544,17 +545,6 @@ class MixService extends ChangeNotifier {
   List<String> get ownHalfBoxIds => [
         for (final r in records)
           if (r.phaseKind == 'half_posted' && r.boxId != null) r.boxId!,
-      ];
-
-  /// Box ids of the mixes in the pool. A record whose phase somehow lacks
-  /// one is left out rather than allowed to stop every other mix.
-  List<String> get _activeBoxIds => [
-        for (final r in active) ...[
-          if (r.boxId != null) r.boxId!,
-          // The engine needs to see whether the box a pending move spent is
-          // still unspent, to tell a lost move from a slow one.
-          if (r.previousBoxId != null) r.previousBoxId!,
-        ],
       ];
 
   int get _now => _clock().millisecondsSinceEpoch ~/ 1000;
@@ -696,9 +686,8 @@ class MixService extends ChangeNotifier {
     });
   }
 
-  /// Take the cross-isolate lease, or return false if the other driver
-  /// holds an unexpired one. Preferences are process-wide on Android, so
-  /// a reload sees the other isolate's write.
+  /// An advisory cross-isolate lease. SharedPreferences has no atomic
+  /// compare-and-set, so the background merge also checks its baseline.
   Future<bool> _acquireLease(SharedPreferences prefs, String owner) async {
     await prefs.reload();
     final raw = prefs.getString(_leaseKey);
@@ -936,6 +925,7 @@ class MixService extends ChangeNotifier {
   /// A plan that is not "box not seen" means the snapshot holds the box
   /// the newest event created, so that event is on chain.
   void _stampIfSeen(MixRecord r, Map<String, dynamic> plan) {
+    if (r.awaitingWithdrawal) return;
     final action = plan['action'] as String? ?? 'wait';
     if (action == 'wait' && plan['reason'] == 'box_not_seen') return;
     _stampHeight(r);
@@ -949,7 +939,7 @@ class MixService extends ChangeNotifier {
   static bool _awaitsHeight(MixRecord r) {
     final events = r.state['events'] as List?;
     final last = events == null || events.isEmpty ? null : events.last;
-    return r.finished && last is Map && last['height'] == null && (last['tx_id']?.toString() ?? '').isNotEmpty;
+    return (r.finished || r.awaitingWithdrawal) && last is Map && last['height'] == null && (last['tx_id']?.toString() ?? '').isNotEmpty;
   }
 
   /// A withdrawal whose delivered box is not known yet. A reclaim is not
@@ -961,7 +951,7 @@ class MixService extends ChangeNotifier {
     return last is Map && (last['tx_id']?.toString() ?? '').isNotEmpty;
   }
 
-  static bool _awaitsFinishing(MixRecord r) => _awaitsHeight(r) || _awaitsMixedBox(r);
+  static bool _awaitsFinishing(MixRecord r) => r.awaitingWithdrawal || _awaitsHeight(r) || _awaitsMixedBox(r);
 
   /// Outside a tick: give every finished mix its last height, once.
   ///
@@ -1001,7 +991,8 @@ class MixService extends ChangeNotifier {
     if (tx == null) return false;
     var changed = false;
     final h = (tx['inclusionHeight'] as num?)?.toInt();
-    if (_awaitsHeight(r) && h != null && h > 0) {
+    if (h != null && h > 0 && (_awaitsHeight(r) || r.awaitingWithdrawal)) {
+      r.state.remove('previous');
       last['height'] = h;
       changed = true;
     }
@@ -1095,81 +1086,33 @@ class MixService extends ChangeNotifier {
     return _txBody(await _get(Uri.parse('$base/api/v1/transactions/$txId')), txId)['outputs'] as List;
   }
 
-  /// Everything the engine needs: the waiting half boxes, the operator's
-  /// boxes, and the current state of each of our own boxes (unspent, or
-  /// the outputs of whatever spent it). The lists are fetched together.
-  ///
-  /// With [allFullBoxes] every unspent full-mix box is included too, which
-  /// recovery needs and a routine tick does not.
-  Future<MixSnapshot> snapshot({Iterable<String> ownBoxIds = const [], bool allFullBoxes = false}) async {
+  /// Ownership is checked locally against both contract listings, so a
+  /// routine poll never tells a remote service which output is ours.
+  Future<MixSnapshot> snapshot() async {
     final base = _gw.explorerBase.replaceAll(RegExp(r'/+$'), '');
     final trees = _trees;
     _lastListTruncated = false;
-    // Everything independent starts at once: a slow explorer fallback on
-    // one list must not hold up the own-box lookups or the height.
     final listsFuture = Future.wait<List<dynamic>>([
       _listByTree(base, trees['half']!),
-      // One fee box and one token box are enough; the fullest of the first
-      // page will do, and the operator keeps only a handful live.
       _listByTree(base, trees['fee']!, cap: 100),
       _listByTree(base, trees['token']!, cap: 100),
-      if (allFullBoxes) _listByTree(base, trees['full']!),
+      _listByTree(base, trees['full']!),
     ]);
-    final ownFuture = Future.wait<_OwnBox>([
-      for (final id in ownBoxIds) _resolveOwnBox(base, id),
-    ]);
-    final heightFuture = _height(base);
-    // One wait for all three, so a failure in one cannot leave another
-    // rejecting with nobody listening.
-    final results = await Future.wait<Object>([listsFuture, ownFuture, heightFuture]);
+    final results = await Future.wait<Object>([listsFuture, _height(base)]);
     final lists = results[0] as List<List<dynamic>>;
-    final own = results[1] as List<_OwnBox>;
-    final height = results[2] as int;
+    final height = results[1] as int;
     _lastHeight = height;
-    final half = lists[0];
-    final fee = lists[1];
-    final token = lists[2];
-    final full = allFullBoxes ? lists[3] : <dynamic>[];
-    for (final o in own) {
-      // An unspent own box goes under both lists; the engine files it by
-      // script and ignores duplicates. Outputs of its spender are full
-      // boxes, or nothing of ours.
-      if (o.unspent != null) {
-        half.add(o.unspent);
-        full.add(o.unspent);
-      }
-      full.addAll(o.spenderOutputs);
-    }
     return MixSnapshot(
       json: jsonEncode({
-        'half_boxes': half,
-        'full_boxes': full,
-        'fee_boxes': fee,
-        'token_boxes': token,
+        'half_boxes': lists[0],
+        'full_boxes': lists[3],
+        'fee_boxes': lists[1],
+        'token_boxes': lists[2],
         'height': height,
       }),
       height: height,
       truncated: _lastListTruncated,
     );
-  }
-
-  /// Our box if unspent, else the outputs of the transaction that spent
-  /// it, else nothing: the engine then reports the box as not seen and
-  /// waits, which is the safe answer.
-  Future<_OwnBox> _resolveOwnBox(String base, String id) async {
-    Map<String, dynamic> box;
-    try {
-      box = await _boxById(base, id);
-    } catch (_) {
-      return const _OwnBox();
-    }
-    final spentBy = box['spentTransactionId']?.toString();
-    if (spentBy == null || spentBy.isEmpty) return _OwnBox(unspent: box);
-    try {
-      return _OwnBox(spenderOutputs: await _txOutputs(base, spentBy));
-    } catch (_) {
-      return const _OwnBox();
-    }
   }
 
   /// The current height: from the node the wallet is already talking to,
@@ -1207,7 +1150,7 @@ class MixService extends ChangeNotifier {
   /// What the pool offers now, as the engine reports it.
   Future<Map<String, dynamic>> rings() async {
     // Every full box too: how deep each ring is and how fast it moves.
-    final snap = await snapshot(allFullBoxes: true);
+    final snap = await snapshot();
     return (jsonDecode(await _gw.rings(snap.json)) as Map).cast<String, dynamic>();
   }
 
@@ -1386,19 +1329,25 @@ class MixService extends ChangeNotifier {
     _ticking = true;
     final gen = _generation;
     try {
-      final snap = await snapshot(ownBoxIds: _activeBoxIds);
+      final snap = await snapshot();
       if (gen != _generation) return;
       lastTickError = null;
       for (final r in active) {
         await _step(r, snap);
         if (gen != _generation) return;
       }
+      final confirmed = <MixRecord>[];
       for (final r in records) {
-        if (r.finished) await _confirmFinished(_explorerBase, r);
+        final wasAwaiting = r.awaitingWithdrawal;
+        if (r.finished || r.awaitingWithdrawal) await _confirmFinished(_explorerBase, r);
+        if (wasAwaiting && r.finished) confirmed.add(r);
         if (gen != _generation) return;
       }
       lastTickAt = _clock();
-      await _persist();
+      if (!await _persist()) return;
+      for (final r in confirmed) {
+        await _announceFinished(r);
+      }
       for (final r in records) {
         if (r.finished) await _dropKey(r);
       }
@@ -1420,6 +1369,7 @@ class MixService extends ChangeNotifier {
     try {
       final observed = await _gw.observe(jsonEncode(r.state), snap.json, _now);
       r.state = (jsonDecode(observed) as Map).cast<String, dynamic>();
+      if (r.inPool && !r.awaitingWithdrawal) r.mixedBoxId = null;
       if (r.roundsDone > before) await _announceRound(r);
       final mixingToken = _trees['mixing_token_id'];
       if (mixingToken != null) {
@@ -1487,7 +1437,7 @@ class MixService extends ChangeNotifier {
     // Exclusive with the tick: both would try to spend the same box, and
     // whichever lost on the node must not be the state that survives.
     return _exclusive(() async {
-      final snap = await snapshot(ownBoxIds: [r.boxId!]);
+      final snap = await snapshot();
       final raw =
           await _gw.leave(jsonEncode(r.state), snap.json, destinationAddress, _gw.nodeUrl, _now);
       final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
@@ -1495,7 +1445,7 @@ class MixService extends ChangeNotifier {
       r.lastError = null;
       r.lastCheckedAt = _clock();
       await _persist();
-      await _dropKey(r);
+      if (r.finished) await _dropKey(r);
       _reschedule();
       return result['tx_id'] as String? ?? '';
     });
@@ -1532,17 +1482,17 @@ class MixService extends ChangeNotifier {
       final walletId = entry.key;
       final records = _decode(prefs.getString(_recordsKey(walletId)));
       if (records == null) continue;
+      final baseline = {for (final r in records) r.mixId: jsonEncode(r.toJson())};
+      final roundsBefore = {for (final r in records) r.mixId: r.roundsDone};
       final own = [
         for (final r in records)
           if (r.phaseKind == 'half_posted' && r.boxId != null) r.boxId!,
       ];
-      final targets = records.where((r) => r.inPool && r.boxId != null && entry.value.contains(r.mixId)).toList();
+      final targets = records.where((r) => r.inPool && (r.boxId != null || r.previousBoxId != null) && entry.value.contains(r.mixId)).toList();
       if (targets.isEmpty) continue;
       MixSnapshot snap;
       try {
-        snap = await snapshot(ownBoxIds: [
-          for (final r in targets) ...[r.boxId!, if (r.previousBoxId != null) r.previousBoxId!],
-        ]);
+        snap = await snapshot();
       } catch (_) {
         continue;
       }
@@ -1550,12 +1500,12 @@ class MixService extends ChangeNotifier {
       for (final r in targets) {
         final keyHex = await _gw.loadKey(walletId: walletId, mixId: r.mixId);
         if (keyHex == null) continue;
-        final before = r.roundsDone;
         r.lastCheckedAt = _clock();
         try {
           final observed = await _gw.observeWithKey(jsonEncode(r.state), snap.json, keyHex, _now);
           r.state = (jsonDecode(observed) as Map).cast<String, dynamic>();
-          if (r.roundsDone > before) await _announceRound(r);
+          if (r.inPool && !r.awaitingWithdrawal) r.mixedBoxId = null;
+          if (r.awaitingWithdrawal) await _confirmFinished(_explorerBase, r);
           final plan = (jsonDecode(await _gw.plan(jsonEncode(r.state), snap.json, own)) as Map)
               .cast<String, dynamic>();
           _stampIfSeen(r, plan);
@@ -1572,12 +1522,6 @@ class MixService extends ChangeNotifier {
             final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
             if (result['action'] != 'wait') {
               r.state = (result['state'] as Map).cast<String, dynamic>();
-              if (r.finished) {
-                await _announceFinished(r);
-                await _gw.deleteKey(walletId: walletId, mixId: r.mixId);
-              } else if (r.roundsDone > before) {
-                await _announceRound(r);
-              }
             }
           }
           r.lastError = null;
@@ -1587,18 +1531,52 @@ class MixService extends ChangeNotifier {
         changed = true;
       }
       if (changed) {
-        // Merge by mix id into whatever is stored now, so a record the
-        // other isolate changed meanwhile is not overwritten wholesale.
+        // A foreground action may have spent this record's box while
+        // the job was awaiting the node. Only merge onto what we read.
         await prefs.reload();
-        final stored = _decode(prefs.getString(_recordsKey(walletId))) ?? records;
+        final stored = _decode(prefs.getString(_recordsKey(walletId)));
+        if (stored == null) continue;
         final touched = {for (final r in targets) r.mixId: r};
-        final merged = [for (final r in stored) touched[r.mixId] ?? r];
-        for (final r in targets) {
-          if (!stored.any((s) => s.mixId == r.mixId)) merged.insert(0, r);
+        final accepted = <MixRecord>[];
+        final merged = <MixRecord>[];
+        for (final r in stored) {
+          final update = touched[r.mixId];
+          if (update != null && jsonEncode(r.toJson()) == baseline[r.mixId]) {
+            accepted.add(update);
+            merged.add(update);
+          } else {
+            merged.add(r);
+          }
         }
-        await prefs.setString(_recordsKey(walletId), jsonEncode([for (final r in merged) r.toJson()]));
+        final saved = await prefs.setString(_recordsKey(walletId), jsonEncode([for (final r in merged) r.toJson()]));
+        if (saved) {
+          for (final r in accepted) {
+            if (r.finished) {
+              await _announceFinished(r);
+              await _gw.deleteKey(walletId: walletId, mixId: r.mixId);
+            } else if (r.roundsDone > roundsBefore[r.mixId]!) {
+              await _announceRound(r);
+            }
+          }
+        }
       }
     }
+  }
+
+  Future<bool> _boxIsSpent(String id) async {
+    final node = _nodeBase;
+    for (final url in [
+      if (node != null) '$node/blockchain/box/byId/$id',
+      '$_explorerBase/api/v1/boxes/$id',
+    ]) {
+      try {
+        final box = _boxBody(await _get(Uri.parse(url)), id);
+        if ((box['spentTransactionId']?.toString() ?? '').isNotEmpty) return true;
+      } catch (_) {
+        // An unknown box or missing spend metadata cannot prove a spend.
+      }
+    }
+    return false;
   }
 
   /// Find mixes of this wallet the records do not know about, from the
@@ -1606,7 +1584,7 @@ class MixService extends ChangeNotifier {
   Future<int> recover() async {
     if (!_gw.isUnlocked || _walletId == null) return 0;
     return _exclusive(() async {
-      final snap = await snapshot(allFullBoxes: true);
+      final snap = await snapshot();
       final found = (jsonDecode(await _gw.recover(snap.json, _now)) as List)
           .map((m) => MixRecord(state: (m as Map).cast<String, dynamic>()))
           .toList();
@@ -1617,11 +1595,15 @@ class MixService extends ChangeNotifier {
         final have = known[f.mixId];
         if (have == null) {
           fresh.add(f);
-        } else if (have.pending || (have.inPool && f.boxId != null && f.boxId == have.previousBoxId)) {
-          // The chain knows more than we do: the entry went out and the
-          // record never heard, or a move the record believes in never
-          // confirmed and the box it spent is still ours. Take the chain's
-          // phase, keep what only we know (destination, rounds wanted).
+        } else if (have.pending ||
+            (have.inPool && f.boxId != null && f.boxId == have.previousBoxId) ||
+            // A dropped exit whose input someone else spent has no box to
+            // roll back to, so the chain's live box is the only way out.
+            (have.awaitingWithdrawal && f.boxId != null && f.round >= have.round) ||
+            (have.inPool && have.boxId != null && f.boxId != null &&
+                f.boxId != have.boxId && f.round >= have.round && await _boxIsSpent(have.boxId!))) {
+          // Recovery can repair a lost broadcast result or roll back a
+          // dropped move. Keep the destination and target only we know.
           have.state = {
             ...f.state,
             'destination_ergo_tree': have.destinationErgoTree,
@@ -1629,6 +1611,7 @@ class MixService extends ChangeNotifier {
             'level': have.state['level'] ?? f.state['level'],
           };
           have.entryAttempt = null;
+          have.mixedBoxId = null;
           have.lastError = null;
           reconciled++;
         }
@@ -1648,13 +1631,6 @@ class MixService extends ChangeNotifier {
 }
 
 final mixService = MixService(schedule: (wanted) => MixBackground.schedule(wanted));
-
-/// What the chain says about one of our boxes.
-class _OwnBox {
-  const _OwnBox({this.unspent, this.spenderOutputs = const []});
-  final Map<String, dynamic>? unspent;
-  final List<dynamic> spenderOutputs;
-}
 
 /// Mixing tokens on box [boxId] in a snapshot, or null when the snapshot
 /// does not hold the box. Half and full boxes carry the token first.

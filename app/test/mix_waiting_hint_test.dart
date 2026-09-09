@@ -1,7 +1,30 @@
-import 'package:argus_wallet/ui/mix_screen.dart' show waitingHint;
+import 'package:argus_wallet/services/mix_service.dart';
+import 'package:argus_wallet/ui/mix_screen.dart' show waitingHint, mixPhaseText, mixCanLeave;
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('an unconfirmed withdrawal is described as awaiting confirmation', () {
+    final record = MixRecord(state: {
+      'phase': {'kind': 'withdrawn'},
+      'previous': {'phase': {'kind': 'full_owned', 'box_id': 'live'}},
+    });
+    expect(mixPhaseText(record), 'Withdrawal sent. Waiting for confirmation.');
+    expect(mixCanLeave(record), isFalse,
+        reason: 'leave() would throw: the withdrawn phase has no box to spend');
+  });
+
+  test('a mix in the pool can be withdrawn', () {
+    final live = MixRecord(state: {
+      'phase': {'kind': 'full_owned', 'box_id': 'b'},
+    });
+    expect(mixCanLeave(live), isTrue);
+    final half = MixRecord(state: {
+      'phase': {'kind': 'half_posted', 'box_id': 'h'},
+    });
+    expect(mixCanLeave(half), isTrue);
+    expect(mixCanLeave(MixRecord(state: {'phase': {'kind': 'withdrawn'}})), isFalse);
+  });
+
   final now = DateTime.utc(2026, 9, 6, 12);
   List<Map<String, dynamic>> at(Duration ago) => [
         {'at': now.subtract(ago).millisecondsSinceEpoch ~/ 1000, 'action': 'entered_as_alice', 'round': 0},
