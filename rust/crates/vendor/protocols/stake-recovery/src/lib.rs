@@ -14,3 +14,4 @@ pub mod validation;
 pub use boxes::{PaideiaProxyBox, StakeBox, StakeStateBox};
 pub use contracts::Pool;
 pub use error::RecoveryError;
+pub mod proxy;

@@ -1512,6 +1512,35 @@ class WalletService {
     );
   }
 
+  Future<String> stakeRecoveryPrepareProxy({
+    String? refundBoxJson,
+    String? stateBoxJson,
+    String? stakeBoxJson,
+    required String userAddress,
+    required List<String> spendAddresses,
+    String? nodeUrl,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiStakeRecoveryPrepareProxy(
+      handleId: _handleId!,
+      refundBoxJson: refundBoxJson,
+      stateBoxJson: stateBoxJson,
+      stakeBoxJson: stakeBoxJson,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
+      nodeUrl: nodeUrl,
+    );
+  }
+
+  String stakeRecoveryProxyRecord(String signed, String recipient) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiStakeRecoveryProxyRecord(
+      handleId: _handleId!,
+      signedTxJson: signed,
+      recipientAddress: recipient,
+    );
+  }
+
   Future<String> stakeRecoveryPrepareDirect({
     required String stateBoxJson,
     required String stakeBoxJson,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../services/stake_recovery_service.dart';
+import '../services/stake_proxy_service.dart';
 import '../services/wallet_service.dart';
 import '../services/wallet_sync_controller.dart';
 import '../theme/argus_theme.dart';
@@ -18,6 +19,49 @@ class StakeRecoveryScreen extends StatefulWidget {
 class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
   final _service = stakeRecoveryService;
   bool _working = false;
+
+  Future<void> _refund(TrackedStakeProxy record) async {
+    if (_working) return;
+    setState(() => _working = true);
+    try {
+      final prepared = await stakeProxyService.prepareRefund(record);
+      if (!mounted) return;
+      final ok = await showConfirmTransactionSheet(
+        context,
+        title: 'Refund Paideia proxy',
+        detail:
+            'A successful unstake burns the stake key permanently. This refund '
+            'returns the key and all proxy ERG except the 0.001 ERG miner fee to '
+            'the recorded wallet recipient. It needs no pool state or working '
+            'unstake. Refund is available only while the proxy remains unspent.',
+        confirmLabel: 'Refund proxy',
+        rows: [
+          for (final row in prepared['rows'] as List)
+            ConfirmTxRow(row['label'] as String, row['value'] as String),
+        ],
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
+      if (!ok || !mounted) return;
+      final txId = await stakeProxyService.commitRefund(prepared);
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Refund submitted: $txId')));
+      }
+      await stakeProxyService.reload();
+    } catch (e) {
+      if (mounted) {
+        showErrorSheet(
+          context,
+          title: 'Refund not confirmed',
+          message:
+              '$e\nThe proxy remains tracked. Refresh to reconcile before retrying.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
 
   Future<void> _recover(StakePoolResult result, StakePosition position) async {
     if (_working) return;
@@ -70,12 +114,14 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
   void initState() {
     super.initState();
     _service.addListener(_changed);
+    stakeProxyService.addListener(_changed);
     WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
   }
 
   @override
   void dispose() {
     _service.removeListener(_changed);
+    stakeProxyService.removeListener(_changed);
     super.dispose();
   }
 
@@ -86,6 +132,8 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
   Future<void> _refresh() async {
     if (!mounted) return;
     final args = WalletRouteArgs.of(context);
+    // Refund reconciliation is independent of all pool scans.
+    final refunds = stakeProxyService.reload();
     // Every positive wallet token is a candidate, regardless of its metadata.
     // A name or an NFT label cannot establish possession of a stake key.
     await _service.refresh(
@@ -99,6 +147,7 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
           !walletSyncController.isSyncing &&
           walletSyncController.phase != SyncPhase.idle,
     );
+    await refunds;
   }
 
   @override
@@ -122,16 +171,38 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
           children: [
             const Text(
-              'Find abandoned Ergopad and Paideia v1 stakes linked to tokens in this wallet. Ergopad recovery is available. Your stake key returns to your wallet. Paideia recovery is not available yet.',
+              'Find abandoned Ergopad and Paideia v1 stakes linked to tokens in this wallet. Ergopad recovery is available. Your stake key returns to your wallet. Paideia proxy creation and unstake are disabled until the execution flow is ready. Tracked proxies can be refunded here, including from earlier sessions.',
             ),
             const SizedBox(height: 12),
             Text(
-              'Scanning is free. Recovery will pay a flat 0.0011 ERG Argus fee per transaction, plus miner and contract costs. '
-              'Paideia needs two transactions (0.0022 ERG in Argus fees), a 0.1 ERG incentive and a 0.002 ERG execution miner fee. '
-              'The 0.002 ERG executor output returns to your wallet. A refund also pays the Argus fee.',
+              'Scanning is free. Ergopad recovery and Paideia proxy creation pay a flat 0.0011 ERG Argus fee. '
+              'Paideia execution pays a 0.1 ERG incentive and 0.002 ERG miner fee; the 0.002 ERG executor output returns to your wallet. '
+              'Refund deducts only 0.001 ERG for the miner and pays no Argus fee. Successful unstake burns the key permanently.',
               style: TextStyle(color: muted, fontSize: 12, height: 1.4),
             ),
             const SizedBox(height: 16),
+            if (stakeProxyService.error != null)
+              Text(
+                'Could not load tracked proxies: ${stakeProxyService.error}',
+              ),
+            for (final proxy in stakeProxyService.records) ...[
+              SoftCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Paideia proxy · ${proxy.status.name}'),
+                    Text('Stake key ${proxy.keyId}'),
+                    if (proxy.note != null) Text(proxy.note!),
+                    if (proxy.status != ProxyStatus.spent)
+                      FilledButton(
+                        onPressed: _working ? null : () => _refund(proxy),
+                        child: const Text('Refund proxy'),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             if (_service.busy) const LinearProgressIndicator(),
             if (_service.results.isEmpty && !_service.busy)
               const Text('Scan this wallet to check for stakes.'),

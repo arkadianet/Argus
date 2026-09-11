@@ -214,6 +214,36 @@ class WalletDatabaseService {
     }
   }
 
+  /// Durable public-chain recovery records, separate from disposable balances.
+  static Future<List<Map<String, dynamic>>> loadStakeProxies(
+    String walletId,
+    String network,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('argus_stake_proxies_v1_${network}_$walletId');
+    if (raw == null) return [];
+    final decoded = _deobfuscate(raw, walletId);
+    if (decoded == null) throw StateError('Could not read proxy recovery records');
+    return [
+      for (final item in jsonDecode(decoded) as List)
+        (item as Map).cast<String, dynamic>(),
+    ];
+  }
+
+  static Future<void> saveStakeProxies(
+    String walletId,
+    String network,
+    List<Map<String, dynamic>> records,
+  ) async {
+    if (walletId.isEmpty) throw StateError('Missing proxy wallet association');
+    final prefs = await SharedPreferences.getInstance();
+    final saved = await prefs.setString(
+      'argus_stake_proxies_v1_${network}_$walletId',
+      _obfuscate(jsonEncode(records), walletId),
+    );
+    if (!saved) throw StateError('Could not persist proxy recovery records');
+  }
+
   /// Clear cached local state (e.g. on wallet reset).
   static Future<void> clearAll() async {
     final prefs = await SharedPreferences.getInstance();

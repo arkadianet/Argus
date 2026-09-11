@@ -420,3 +420,145 @@ fn direct_boundary_does_not_drop_malformed_extensions() {
         assert!(direct_input(&b.to_string()).is_err());
     }
 }
+
+pub fn prepare_proxy(
+    protocol: (&str, &str),
+    wallet: &[ergo_tx::Eip12InputBox],
+    trees: &[String],
+    recipient: &str,
+    height: i32,
+    context: &ergo_lib::chain::ergo_state_context::ErgoStateContext,
+) -> Result<ergo_tx::Eip12UnsignedTx, String> {
+    let state = direct_input(protocol.0)?;
+    let stake = direct_input(protocol.1)?;
+    let decoded = StakeBox::parse(&stake, Pool::Paideia).map_err(error)?;
+    let key_id = hex::encode(decoded.key_id());
+    let keys: Vec<_> = wallet
+        .iter()
+        .filter(|b| {
+            b.assets
+                .iter()
+                .any(|a| a.token_id.eq_ignore_ascii_case(&key_id))
+        })
+        .collect();
+    if keys.len() != 1 {
+        return Err(error("Expected exactly one wallet key box"));
+    }
+    let mut inputs = vec![keys[0].clone()];
+    let required = stake_recovery::proxy::required_funding(&stake)
+        .map_err(error)?
+        .checked_add(
+            stake_recovery::direct::APP_FEE + 1_100_000 + stake_recovery::direct::MIN_VALUE,
+        )
+        .ok_or_else(|| error("funding overflow"))?;
+    let mut available = keys[0].value.parse::<i64>().map_err(error)?;
+    for b in wallet {
+        if available >= required {
+            break;
+        }
+        if b.box_id == keys[0].box_id {
+            continue;
+        }
+        available = available
+            .checked_add(b.value.parse::<i64>().map_err(error)?)
+            .ok_or_else(|| error("funding overflow"))?;
+        inputs.push(b.clone());
+    }
+    stake_recovery::proxy::create(
+        &stake_recovery::proxy::CreationRequest {
+            state: &state,
+            stake: &stake,
+            wallet_inputs: &inputs,
+            wallet_trees: trees,
+            recipient,
+            height,
+            miner_fee: 1_100_000,
+        },
+        context,
+    )
+    .map_err(error)
+}
+
+/// The only ownership material is handle-derived. A foreign proxy that matches
+/// a caller's key or R5 hint is insufficient; its actual decoded R5 must be ours.
+pub fn prepare_refund(
+    raw: &str,
+    trees: &[String],
+    height: i32,
+) -> Result<ergo_tx::Eip12UnsignedTx, String> {
+    let proxy = direct_input(raw)?;
+    let parsed = stake_recovery::PaideiaProxyBox::parse(&proxy).map_err(error)?;
+    let recipient = hex::encode(parsed.recipient().sigma_serialize_bytes().map_err(error)?);
+    if !trees.contains(&recipient) {
+        return Err(error(
+            "Proxy refund recipient is not controlled by this wallet",
+        ));
+    }
+    stake_recovery::proxy::refund(&proxy, height).map_err(error)
+}
+
+pub fn is_refund(tx: &ergo_tx::Eip12UnsignedTx) -> bool {
+    tx.inputs
+        .first()
+        .is_some_and(|b| stake_recovery::PaideiaProxyBox::parse(b).is_ok())
+}
+pub fn is_proxy_creation(tx: &ergo_tx::Eip12UnsignedTx) -> bool {
+    ergo_tx::address_to_ergo_tree(stake_recovery::contracts::PAIDEIA_PROXY_ADDRESS)
+        .is_ok_and(|tree| tx.outputs.iter().any(|b| b.ergo_tree == tree))
+}
+
+#[cfg(test)]
+mod proxy_tests {
+    use super::*;
+    use ergo_lib::ergotree_ir::{chain::ergo_box::ErgoBox, mir::constant::Constant};
+
+    #[test]
+    fn refund_boundary_authenticates_actual_r5_and_needs_no_pool_boxes() {
+        let handle = wallet_core::wallet::WalletHandle::create(
+            wallet_core::seed::MnemonicPhrase::parse("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap(), "").unwrap();
+        let trees = owned_trees(&handle, &[handle.derive_address(0).unwrap()]).unwrap();
+        let history: Value = serde_json::from_str(include_str!(
+            "../../vendor/protocols/stake-recovery/tests/fixtures/paideia-refund.json"
+        ))
+        .unwrap();
+        let mut proxy = parse_box(&history["inputs"][0].to_string()).unwrap();
+        assert!(prepare_refund(
+            &serde_json::to_string(&proxy).unwrap(),
+            &trees,
+            proxy.creation_height
+        )
+        .is_err());
+        // Matching key and published proxy tree cannot authenticate a foreign R5.
+        let key = proxy.assets[0].token_id.clone();
+        proxy.additional_registers.insert(
+            "R5".into(),
+            hex::encode(
+                Constant::from(hex::decode(&trees[0]).unwrap())
+                    .sigma_serialize_bytes()
+                    .unwrap(),
+            ),
+        );
+        let mut json = serde_json::to_value(&proxy).unwrap();
+        json.as_object_mut().unwrap().remove("boxId");
+        let canonical: ErgoBox = serde_json::from_value(json).unwrap();
+        proxy.box_id = canonical.box_id().to_string();
+        let tx = prepare_refund(
+            &serde_json::to_string(&proxy).unwrap(),
+            &trees,
+            proxy.creation_height,
+        )
+        .unwrap();
+        assert_eq!(tx.inputs.len(), 1);
+        assert_eq!(tx.outputs.len(), 2);
+        assert_eq!(tx.outputs[0].assets[0].token_id, key);
+        assert_eq!(tx.outputs[0].ergo_tree, trees[0]);
+        assert!(owned_trees(&handle, &[crate::api::ARGUS_FEE_ADDRESS.into()]).is_err());
+        assert!(owned_trees(&handle, &[trees[0].clone()]).is_err()); // hex is not a wallet address
+        assert!(prepare_refund(
+            &serde_json::to_string(&proxy).unwrap(),
+            &[],
+            proxy.creation_height
+        )
+        .is_err());
+    }
+}

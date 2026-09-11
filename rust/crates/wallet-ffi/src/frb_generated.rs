@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.11.1";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -964949844;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1684494483;
 
 // Section: executor
 
@@ -3848,6 +3848,93 @@ fn wire__crate__api__stake_recovery_prepare_direct_impl(
         },
     )
 }
+fn wire__crate__api__stake_recovery_prepare_proxy_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_async::<flutter_rust_bridge::for_generated::SseCodec, _, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "stake_recovery_prepare_proxy",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_handle_id = <u64>::sse_decode(&mut deserializer);
+            let api_refund_box_json = <Option<String>>::sse_decode(&mut deserializer);
+            let api_state_box_json = <Option<String>>::sse_decode(&mut deserializer);
+            let api_stake_box_json = <Option<String>>::sse_decode(&mut deserializer);
+            let api_user_address = <String>::sse_decode(&mut deserializer);
+            let api_spend_addresses = <Vec<String>>::sse_decode(&mut deserializer);
+            let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
+            deserializer.end();
+            move |context| async move {
+                transform_result_sse::<_, String>(
+                    (move || async move {
+                        let output_ok = crate::api::stake_recovery_prepare_proxy(
+                            api_handle_id,
+                            api_refund_box_json,
+                            api_state_box_json,
+                            api_stake_box_json,
+                            api_user_address,
+                            api_spend_addresses,
+                            api_node_url,
+                        )
+                        .await?;
+                        Ok(output_ok)
+                    })()
+                    .await,
+                )
+            }
+        },
+    )
+}
+fn wire__crate__api__stake_recovery_proxy_record_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "stake_recovery_proxy_record",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_handle_id = <u64>::sse_decode(&mut deserializer);
+            let api_signed_tx_json = <String>::sse_decode(&mut deserializer);
+            let api_recipient_address = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, String>((move || {
+                let output_ok = crate::api::stake_recovery_proxy_record(
+                    api_handle_id,
+                    api_signed_tx_json,
+                    api_recipient_address,
+                )?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__stake_recovery_state_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -4693,20 +4780,23 @@ fn pde_ffi_dispatcher_primary_impl(
         88 => {
             wire__crate__api__stake_recovery_prepare_direct_impl(port, ptr, rust_vec_len, data_len)
         }
-        90 => wire__crate__api__stealth_address_impl(port, ptr, rust_vec_len, data_len),
-        92 => wire__crate__api__stealth_payment_address_impl(port, ptr, rust_vec_len, data_len),
-        93 => wire__crate__api__stealth_scan_impl(port, ptr, rust_vec_len, data_len),
-        94 => wire__crate__api__stealth_self_change_target_impl(port, ptr, rust_vec_len, data_len),
-        96 => wire__crate__api__submit_signed_transaction_impl(port, ptr, rust_vec_len, data_len),
-        97 => wire__crate__api__unwrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
-        98 => wire__crate__api__validate_ergo_address_impl(port, ptr, rust_vec_len, data_len),
-        100 => wire__crate__api__walk_singleton_lineage_impl(port, ptr, rust_vec_len, data_len),
-        101 => wire__crate__api__wallet_create_impl(port, ptr, rust_vec_len, data_len),
-        102 => wire__crate__api__wallet_is_unlocked_impl(port, ptr, rust_vec_len, data_len),
-        103 => wire__crate__api__wallet_lock_impl(port, ptr, rust_vec_len, data_len),
-        104 => wire__crate__api__wallet_owns_address_impl(port, ptr, rust_vec_len, data_len),
-        105 => wire__crate__api__wallet_restore_impl(port, ptr, rust_vec_len, data_len),
-        106 => wire__crate__api__wrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
+        89 => {
+            wire__crate__api__stake_recovery_prepare_proxy_impl(port, ptr, rust_vec_len, data_len)
+        }
+        92 => wire__crate__api__stealth_address_impl(port, ptr, rust_vec_len, data_len),
+        94 => wire__crate__api__stealth_payment_address_impl(port, ptr, rust_vec_len, data_len),
+        95 => wire__crate__api__stealth_scan_impl(port, ptr, rust_vec_len, data_len),
+        96 => wire__crate__api__stealth_self_change_target_impl(port, ptr, rust_vec_len, data_len),
+        98 => wire__crate__api__submit_signed_transaction_impl(port, ptr, rust_vec_len, data_len),
+        99 => wire__crate__api__unwrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
+        100 => wire__crate__api__validate_ergo_address_impl(port, ptr, rust_vec_len, data_len),
+        102 => wire__crate__api__walk_singleton_lineage_impl(port, ptr, rust_vec_len, data_len),
+        103 => wire__crate__api__wallet_create_impl(port, ptr, rust_vec_len, data_len),
+        104 => wire__crate__api__wallet_is_unlocked_impl(port, ptr, rust_vec_len, data_len),
+        105 => wire__crate__api__wallet_lock_impl(port, ptr, rust_vec_len, data_len),
+        106 => wire__crate__api__wallet_owns_address_impl(port, ptr, rust_vec_len, data_len),
+        107 => wire__crate__api__wallet_restore_impl(port, ptr, rust_vec_len, data_len),
+        108 => wire__crate__api__wrap_key_with_pin_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -4739,10 +4829,11 @@ fn pde_ffi_dispatcher_sync_impl(
         78 => wire__crate__api__sigmafi_market_impl(ptr, rust_vec_len, data_len),
         86 => wire__crate__api__stake_recovery_contracts_impl(ptr, rust_vec_len, data_len),
         87 => wire__crate__api__stake_recovery_positions_impl(ptr, rust_vec_len, data_len),
-        89 => wire__crate__api__stake_recovery_state_impl(ptr, rust_vec_len, data_len),
-        91 => wire__crate__api__stealth_derivation_path_impl(ptr, rust_vec_len, data_len),
-        95 => wire__crate__api__stealth_template_hash_impl(ptr, rust_vec_len, data_len),
-        99 => wire__crate__api__validate_stealth_address_impl(ptr, rust_vec_len, data_len),
+        90 => wire__crate__api__stake_recovery_proxy_record_impl(ptr, rust_vec_len, data_len),
+        91 => wire__crate__api__stake_recovery_state_impl(ptr, rust_vec_len, data_len),
+        93 => wire__crate__api__stealth_derivation_path_impl(ptr, rust_vec_len, data_len),
+        97 => wire__crate__api__stealth_template_hash_impl(ptr, rust_vec_len, data_len),
+        101 => wire__crate__api__validate_stealth_address_impl(ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }

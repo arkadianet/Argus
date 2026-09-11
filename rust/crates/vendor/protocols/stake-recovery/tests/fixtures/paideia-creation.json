@@ -1,0 +1,765 @@
+{
+  "explorer": {
+    "id": "f19388c137a8e39abf2cdd04e91c5fa1eca37057a4e61748aee9dbda17b75b53",
+    "blockId": "c6b2e10ddb97b95b41e54b2aaa74e17d8ca63b7898c4a5b26ac4eee8054c7db5",
+    "inclusionHeight": 1399861,
+    "timestamp": 1732110744566,
+    "index": 4,
+    "globalIndex": 1934491,
+    "numConfirmations": 471229,
+    "inputs": [
+      {
+        "boxId": "1a81051a23ba4acc0bb700819f5fc4b76472bdea33a41ce54afa82bc3bc74b1d",
+        "value": 523524793,
+        "index": 0,
+        "spendingProof": "39392192d5b02948785ea50667c5e0e8d3df89f90788212f5ae7ac76d4d2cb01aeb3f5dac93b604f1a85f690bb84d33f1d6e5876c48cfac2",
+        "outputBlockId": "a077efef168f777b0ab8c04a149e6d42e00259fd56705f36c54646dec3ca0524",
+        "outputTransactionId": "f63517a1fed69cf91cd0c32e57479da1ede51b8bf35a9bc41ae9174f028b5862",
+        "outputIndex": 86,
+        "outputGlobalIndex": 2808774,
+        "outputCreatedAt": 1209586,
+        "outputSettledAt": 1209588,
+        "ergoTree": "0008cd031980055487caf2695d09a69ca59945e5c376ee3826b61e7526b3ba20678c4ff6",
+        "ergoTreeConstants": "",
+        "ergoTreeScript": "{SigmaProp(ProveDlog(ECPoint(198005,778cb2,...)))}",
+        "address": "9gf34FJ1QnB7ELJL8pYaDEFXwHRBFn1R3VWHphtMnsPa1hxBdUu",
+        "assets": [],
+        "additionalRegisters": {}
+      },
+      {
+        "boxId": "a11f643afc7586f654f9f86bfc4fb02c0354fb59169f8cf2262a83608bd5d7ad",
+        "value": 471295605,
+        "index": 1,
+        "spendingProof": "99c90a003fc703dba0a29dcb68324d5f104653aac34b62989f0ae496a1122828c39406d2201c8263ddcf27ccf20313701c8ea11d8f4eaffc",
+        "outputBlockId": "c6b2e10ddb97b95b41e54b2aaa74e17d8ca63b7898c4a5b26ac4eee8054c7db5",
+        "outputTransactionId": "9e1071fb795d0deb36aacf33d81b33f078154063afb5fcdd81cf523561cf183c",
+        "outputIndex": 2,
+        "outputGlobalIndex": 9569762,
+        "outputCreatedAt": 1399857,
+        "outputSettledAt": 1399861,
+        "ergoTree": "0008cd031980055487caf2695d09a69ca59945e5c376ee3826b61e7526b3ba20678c4ff6",
+        "ergoTreeConstants": "",
+        "ergoTreeScript": "{SigmaProp(ProveDlog(ECPoint(198005,778cb2,...)))}",
+        "address": "9gf34FJ1QnB7ELJL8pYaDEFXwHRBFn1R3VWHphtMnsPa1hxBdUu",
+        "assets": [
+          {
+            "tokenId": "6a2c8e8bbccd89e3d1de25edfd9b7f0ba4eb585de7dbf802b26a635ee03c58ac",
+            "index": 0,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "5ec371870836e08bd0dccdb69dff880a1bdd177a02c1a60fa177b27fee75ce58",
+            "index": 1,
+            "amount": 31082300,
+            "name": "Staker Round whitelist token",
+            "decimals": 4,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "0fdb7ff8b37479b6eb7aab38d45af2cfeefabbefdc7eebc0348d25dd65bc2c91",
+            "index": 2,
+            "amount": 69,
+            "name": "$Lambo",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "cf8427d41dcdb8665572fa0bc1cfcdf7ced7ec64a00f911b0a64659760c60019",
+            "index": 3,
+            "amount": 1,
+            "name": "EGIO Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "4a9f52379ce2e7a0148cced1b8d4d55b987a8c3a557efea187a6578943d6750b",
+            "index": 4,
+            "amount": 1,
+            "name": "ErgoGames Seed Round Vesting Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "9d30b62a70efb50e45f7a2fd68a4e2b2648789f04e6a4229c9a31027b2e66ab1",
+            "index": 5,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "e22dd3e60e4992b85f87183daa5c123c307a2b300d66032503e6bda2633e9d7c",
+            "index": 6,
+            "amount": 1,
+            "name": "Paideia Strategic Round Vesting Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "0779ec04f2fae64e87418a1ad917639d4668f78484f45df962b0dec14a2591d2",
+            "index": 7,
+            "amount": 4000,
+            "name": "Mi Goreng ",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "708d76ce5d86ebfae7a3a6363cd3fee6e04c6d5b44c2faf7271c85cd7014f186",
+            "index": 8,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "83ecb7dd522bd78a0132dbd0fc329f00aa721283ea15451f31242b95aed91f1e",
+            "index": 9,
+            "amount": 1,
+            "name": "Paideia Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "b182671f800afdec4e277db1f7669502f109d1c681949e6ec61613106115b47d",
+            "index": 10,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          }
+        ],
+        "additionalRegisters": {}
+      }
+    ],
+    "dataInputs": [],
+    "outputs": [
+      {
+        "boxId": "c706c75f5104a15df35108c0a3cf030d95498ee0790143263ddb6302a1bed916",
+        "transactionId": "f19388c137a8e39abf2cdd04e91c5fa1eca37057a4e61748aee9dbda17b75b53",
+        "blockId": "c6b2e10ddb97b95b41e54b2aaa74e17d8ca63b7898c4a5b26ac4eee8054c7db5",
+        "value": 113000000,
+        "index": 0,
+        "globalIndex": 9569768,
+        "creationHeight": 1399858,
+        "settlementHeight": 1399861,
+        "ergoTree": "101b040004000e20b682ad9e8c56c5a0ba7fe2d3d9b2fbd40af989e8870628f4a03ae1022d36f0910402040004020402040204000404040204020400010104000e20f43ce986ade20af0b5cbc7efadf0dbf9d274c24cd0403065f3cfe86580c3c2ec058084af5f0406058092f4010408058092f401040a010004000580897a04040100d802d601e4c6a7050ed60295938cb2db6308b2a4730000730100017302d804d602b2a5730300d603b2e4c6a70411730400d60495918cb2db6308b2a473050073060002720373077308d605b2a59a73097204009683080193c27202720195937204730a93b2db63087202730b00b2db6308a7730c00730d938cb2db63087202730e0002720393cbc27205730f93c17205731093c1b2a59a7311720400731293c1b2a59a7313720400731493b1a59a731572047316d1ec720295ef7202d801d603b2a57317009683040193c27203720193c1720399c1a7731893db63087203db6308a793b1a57319731a",
+        "ergoTreeConstants": "0: 0\n1: 0\n2: Coll(-74,-126,-83,-98,-116,86,-59,-96,-70,127,-30,-45,-39,-78,-5,-44,10,-7,-119,-24,-121,6,40,-12,-96,58,-31,2,45,54,-16,-111)\n3: 1\n4: 0\n5: 1\n6: 1\n7: 1\n8: 0\n9: 2\n10: 1\n11: 1\n12: 0\n13: true\n14: 0\n15: Coll(-12,60,-23,-122,-83,-30,10,-16,-75,-53,-57,-17,-83,-16,-37,-7,-46,116,-62,76,-48,64,48,101,-13,-49,-24,101,-128,-61,-62,-20)\n16: 100000000\n17: 3\n18: 2000000\n19: 4\n20: 2000000\n21: 5\n22: false\n23: 0\n24: 1000000\n25: 2\n26: false",
+        "ergoTreeScript": "{\n  val coll1 = SELF.R5[Coll[Byte]].get\n  val bool2 = if (INPUTS(placeholder[Int](0)).tokens(placeholder[Int](1))._1 == placeholder[Coll[Byte]](2)) {(\n    val box2 = OUTPUTS(placeholder[Int](3))\n    val l3 = SELF.R4[Coll[Long]].get(placeholder[Int](4))\n    val i4 = if (INPUTS(placeholder[Int](5)).tokens(placeholder[Int](6))._2 > l3) { placeholder[Int](7) } else { placeholder[Int](8) }\n    val box5 = OUTPUTS(placeholder[Int](9) + i4)\n    allOf(\n      Coll[Boolean](\n        box2.propositionBytes == coll1, if (i4 == placeholder[Int](10)) { box2.tokens(placeholder[Int](11)) == SELF.tokens(placeholder[Int](12)) } else {\n          placeholder[Boolean](13)\n        }, box2.tokens(placeholder[Int](14))._2 == l3, blake2b256(box5.propositionBytes) == placeholder[Coll[Byte]](15), box5.value == placeholder[Long](\n          16\n        ), OUTPUTS(placeholder[Int](17) + i4).value == placeholder[Long](18), OUTPUTS(placeholder[Int](19) + i4).value == placeholder[Long](\n          20\n        ), OUTPUTS.size == placeholder[Int](21) + i4\n      )\n    )\n  )} else { placeholder[Boolean](22) }\n  sigmaProp(bool2 || if (!bool2) {(\n      val box3 = OUTPUTS(placeholder[Int](23))\n      allOf(Coll[Boolean](box3.propositionBytes == coll1, box3.value == SELF.value - placeholder[Long](24), box3.tokens == SELF.tokens, OUTPUTS.size == placeholder[Int](25)))\n    )} else { placeholder[Boolean](26) })\n}",
+        "address": "X2skqamNVYtSWVCEm71besi23onPaFEiDYNXnCVn85yZNzNND1o3bjZ6sptnXq2Bg8LW5pbRDPsStpc6r6uFSnxPdh2n5iddkcFVCvz9cMWaMfieTbTyhcoHibxRwTyiw3X8JWGHNZiLNCPiPko3vEthE2Wrq7wZ2utPRngyrZd9SC7gFxKU5p1iSfrfLa4ZJs2hCegzsXSK8uya2MNPyb1DV673horY4k4tynWfkZNViieJhDy8buLTNBFEU1sXFc89FGWmKz4twMiq7acJtytr1bYZA6GHuQAkJC9SLrbxMnrGueyfxYyVEeyeHBvojigudXz5upeEPQyLngcXSVqRJ2BX1ckMbEU7jnc2V2ePvHRxR5MzN2u7r9hR6se1VwyKq8E1deu8BRszHZMkGiujpqu9Up398jq8GKbSXoo4vay8w6ZqnUwttuc5CJ5AoY3hhPf5NgUjVENLjXurFMkmYNZTcVdVvTw5R6h4GTKsLdk8rrGAAPT",
+        "assets": [
+          {
+            "tokenId": "83ecb7dd522bd78a0132dbd0fc329f00aa721283ea15451f31242b95aed91f1e",
+            "index": 0,
+            "amount": 1,
+            "name": "Paideia Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          }
+        ],
+        "additionalRegisters": {
+          "R4": {
+            "serializedValue": "1101f0a48cab06",
+            "sigmaType": "Coll[SLong]",
+            "renderedValue": "[850495800]"
+          },
+          "R5": {
+            "serializedValue": "0e240008cd031980055487caf2695d09a69ca59945e5c376ee3826b61e7526b3ba20678c4ff6",
+            "sigmaType": "Coll[SByte]",
+            "renderedValue": "0008cd031980055487caf2695d09a69ca59945e5c376ee3826b61e7526b3ba20678c4ff6"
+          }
+        },
+        "spentTransactionId": "fccb0c4979d43295a27af7be0da3aa93db840776979621bee7c13a1b51c3cf97",
+        "mainChain": true
+      },
+      {
+        "boxId": "5ccb5e70877f99f92f6131d8e5ce78fe9ad515794183c6e94571efd5255ebcb0",
+        "transactionId": "f19388c137a8e39abf2cdd04e91c5fa1eca37057a4e61748aee9dbda17b75b53",
+        "blockId": "c6b2e10ddb97b95b41e54b2aaa74e17d8ca63b7898c4a5b26ac4eee8054c7db5",
+        "value": 1000000,
+        "index": 1,
+        "globalIndex": 9569769,
+        "creationHeight": 1399858,
+        "settlementHeight": 1399861,
+        "ergoTree": "1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304",
+        "ergoTreeConstants": "0: 0\n1: 0\n2: Coll(16,2,4,-96,11,8,-51,2,121,-66,102,126,-7,-36,-69,-84,85,-96,98,-107,-50,-121,11,7,2,-101,-4,-37,45,-50,40,-39,89,-14,-127,91,22,-8,23,-104,-22,2,-47,-110,-93,-102,-116,-57,-89,1,115,0,115,1)\n3: Coll(1)\n4: 1",
+        "ergoTreeScript": "{sigmaProp(\n  allOf(\n    Coll[Boolean](\n      HEIGHT == OUTPUTS(placeholder[Int](0)).creationInfo._1, OUTPUTS(placeholder[Int](1)).propositionBytes == substConstants(\n        placeholder[Coll[Byte]](2), placeholder[Coll[Int]](3), Coll[SigmaProp](proveDlog(decodePoint(minerPubKey)))\n      ), OUTPUTS.size == placeholder[Int](4)\n    )\n  )\n)}",
+        "address": "2iHkR7CWvD1R4j1yZg5bkeDRQavjAaVPeTDFGGLZduHyfWMuYpmhHocX8GJoaieTx78FntzJbCBVL6rf96ocJoZdmWBL2fci7NqWgAirppPQmZ7fN9V6z13Ay6brPriBKYqLp1bT2Fk4FkFLCfdPpe",
+        "assets": [],
+        "additionalRegisters": {},
+        "spentTransactionId": "70fb6112b231ea6ccc258296e3650f1803995610e8baa98546d4e387a445f587",
+        "mainChain": true
+      },
+      {
+        "boxId": "2a529c72dba19f1a12ab7a52c9f2fbdd026901aec2af3c9df541ab75113f2cfc",
+        "transactionId": "f19388c137a8e39abf2cdd04e91c5fa1eca37057a4e61748aee9dbda17b75b53",
+        "blockId": "c6b2e10ddb97b95b41e54b2aaa74e17d8ca63b7898c4a5b26ac4eee8054c7db5",
+        "value": 880820398,
+        "index": 2,
+        "globalIndex": 9569770,
+        "creationHeight": 1399858,
+        "settlementHeight": 1399861,
+        "ergoTree": "0008cd031980055487caf2695d09a69ca59945e5c376ee3826b61e7526b3ba20678c4ff6",
+        "ergoTreeConstants": "",
+        "ergoTreeScript": "{SigmaProp(ProveDlog(ECPoint(198005,778cb2,...)))}",
+        "address": "9gf34FJ1QnB7ELJL8pYaDEFXwHRBFn1R3VWHphtMnsPa1hxBdUu",
+        "assets": [
+          {
+            "tokenId": "6a2c8e8bbccd89e3d1de25edfd9b7f0ba4eb585de7dbf802b26a635ee03c58ac",
+            "index": 0,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "5ec371870836e08bd0dccdb69dff880a1bdd177a02c1a60fa177b27fee75ce58",
+            "index": 1,
+            "amount": 31082300,
+            "name": "Staker Round whitelist token",
+            "decimals": 4,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "0fdb7ff8b37479b6eb7aab38d45af2cfeefabbefdc7eebc0348d25dd65bc2c91",
+            "index": 2,
+            "amount": 69,
+            "name": "$Lambo",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "cf8427d41dcdb8665572fa0bc1cfcdf7ced7ec64a00f911b0a64659760c60019",
+            "index": 3,
+            "amount": 1,
+            "name": "EGIO Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "4a9f52379ce2e7a0148cced1b8d4d55b987a8c3a557efea187a6578943d6750b",
+            "index": 4,
+            "amount": 1,
+            "name": "ErgoGames Seed Round Vesting Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "9d30b62a70efb50e45f7a2fd68a4e2b2648789f04e6a4229c9a31027b2e66ab1",
+            "index": 5,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "e22dd3e60e4992b85f87183daa5c123c307a2b300d66032503e6bda2633e9d7c",
+            "index": 6,
+            "amount": 1,
+            "name": "Paideia Strategic Round Vesting Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "0779ec04f2fae64e87418a1ad917639d4668f78484f45df962b0dec14a2591d2",
+            "index": 7,
+            "amount": 4000,
+            "name": "Mi Goreng ",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "708d76ce5d86ebfae7a3a6363cd3fee6e04c6d5b44c2faf7271c85cd7014f186",
+            "index": 8,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "b182671f800afdec4e277db1f7669502f109d1c681949e6ec61613106115b47d",
+            "index": 9,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          }
+        ],
+        "additionalRegisters": {},
+        "spentTransactionId": "c28b22886cab2af8d29cff7f14755f2d4b91ace77f4069a63350f69f62d719e6",
+        "mainChain": true
+      }
+    ],
+    "size": 1139
+  },
+  "transaction": {
+    "id": "f19388c137a8e39abf2cdd04e91c5fa1eca37057a4e61748aee9dbda17b75b53",
+    "inputs": [
+      {
+        "boxId": "1a81051a23ba4acc0bb700819f5fc4b76472bdea33a41ce54afa82bc3bc74b1d",
+        "spendingProof": {
+          "proofBytes": "39392192d5b02948785ea50667c5e0e8d3df89f90788212f5ae7ac76d4d2cb01aeb3f5dac93b604f1a85f690bb84d33f1d6e5876c48cfac2",
+          "extension": {}
+        }
+      },
+      {
+        "boxId": "a11f643afc7586f654f9f86bfc4fb02c0354fb59169f8cf2262a83608bd5d7ad",
+        "spendingProof": {
+          "proofBytes": "99c90a003fc703dba0a29dcb68324d5f104653aac34b62989f0ae496a1122828c39406d2201c8263ddcf27ccf20313701c8ea11d8f4eaffc",
+          "extension": {}
+        }
+      }
+    ],
+    "dataInputs": [],
+    "outputs": [
+      {
+        "boxId": "c706c75f5104a15df35108c0a3cf030d95498ee0790143263ddb6302a1bed916",
+        "value": 113000000,
+        "ergoTree": "101b040004000e20b682ad9e8c56c5a0ba7fe2d3d9b2fbd40af989e8870628f4a03ae1022d36f0910402040004020402040204000404040204020400010104000e20f43ce986ade20af0b5cbc7efadf0dbf9d274c24cd0403065f3cfe86580c3c2ec058084af5f0406058092f4010408058092f401040a010004000580897a04040100d802d601e4c6a7050ed60295938cb2db6308b2a4730000730100017302d804d602b2a5730300d603b2e4c6a70411730400d60495918cb2db6308b2a473050073060002720373077308d605b2a59a73097204009683080193c27202720195937204730a93b2db63087202730b00b2db6308a7730c00730d938cb2db63087202730e0002720393cbc27205730f93c17205731093c1b2a59a7311720400731293c1b2a59a7313720400731493b1a59a731572047316d1ec720295ef7202d801d603b2a57317009683040193c27203720193c1720399c1a7731893db63087203db6308a793b1a57319731a",
+        "assets": [
+          {
+            "tokenId": "83ecb7dd522bd78a0132dbd0fc329f00aa721283ea15451f31242b95aed91f1e",
+            "amount": 1
+          }
+        ],
+        "creationHeight": 1399858,
+        "additionalRegisters": {
+          "R4": "1101f0a48cab06",
+          "R5": "0e240008cd031980055487caf2695d09a69ca59945e5c376ee3826b61e7526b3ba20678c4ff6"
+        },
+        "transactionId": "f19388c137a8e39abf2cdd04e91c5fa1eca37057a4e61748aee9dbda17b75b53",
+        "index": 0
+      },
+      {
+        "boxId": "5ccb5e70877f99f92f6131d8e5ce78fe9ad515794183c6e94571efd5255ebcb0",
+        "value": 1000000,
+        "ergoTree": "1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304",
+        "assets": [],
+        "creationHeight": 1399858,
+        "additionalRegisters": {},
+        "transactionId": "f19388c137a8e39abf2cdd04e91c5fa1eca37057a4e61748aee9dbda17b75b53",
+        "index": 1
+      },
+      {
+        "boxId": "2a529c72dba19f1a12ab7a52c9f2fbdd026901aec2af3c9df541ab75113f2cfc",
+        "value": 880820398,
+        "ergoTree": "0008cd031980055487caf2695d09a69ca59945e5c376ee3826b61e7526b3ba20678c4ff6",
+        "assets": [
+          {
+            "tokenId": "6a2c8e8bbccd89e3d1de25edfd9b7f0ba4eb585de7dbf802b26a635ee03c58ac",
+            "amount": 1
+          },
+          {
+            "tokenId": "5ec371870836e08bd0dccdb69dff880a1bdd177a02c1a60fa177b27fee75ce58",
+            "amount": 31082300
+          },
+          {
+            "tokenId": "0fdb7ff8b37479b6eb7aab38d45af2cfeefabbefdc7eebc0348d25dd65bc2c91",
+            "amount": 69
+          },
+          {
+            "tokenId": "cf8427d41dcdb8665572fa0bc1cfcdf7ced7ec64a00f911b0a64659760c60019",
+            "amount": 1
+          },
+          {
+            "tokenId": "4a9f52379ce2e7a0148cced1b8d4d55b987a8c3a557efea187a6578943d6750b",
+            "amount": 1
+          },
+          {
+            "tokenId": "9d30b62a70efb50e45f7a2fd68a4e2b2648789f04e6a4229c9a31027b2e66ab1",
+            "amount": 1
+          },
+          {
+            "tokenId": "e22dd3e60e4992b85f87183daa5c123c307a2b300d66032503e6bda2633e9d7c",
+            "amount": 1
+          },
+          {
+            "tokenId": "0779ec04f2fae64e87418a1ad917639d4668f78484f45df962b0dec14a2591d2",
+            "amount": 4000
+          },
+          {
+            "tokenId": "708d76ce5d86ebfae7a3a6363cd3fee6e04c6d5b44c2faf7271c85cd7014f186",
+            "amount": 1
+          },
+          {
+            "tokenId": "b182671f800afdec4e277db1f7669502f109d1c681949e6ec61613106115b47d",
+            "amount": 1
+          }
+        ],
+        "creationHeight": 1399858,
+        "additionalRegisters": {},
+        "transactionId": "f19388c137a8e39abf2cdd04e91c5fa1eca37057a4e61748aee9dbda17b75b53",
+        "index": 2
+      }
+    ],
+    "size": 1139
+  },
+  "inputs": [
+    {
+      "globalIndex": 37277354,
+      "inclusionHeight": 1209588,
+      "address": "9gf34FJ1QnB7ELJL8pYaDEFXwHRBFn1R3VWHphtMnsPa1hxBdUu",
+      "spentTransactionId": "f19388c137a8e39abf2cdd04e91c5fa1eca37057a4e61748aee9dbda17b75b53",
+      "spendingProof": {
+        "proofBytes": "39392192d5b02948785ea50667c5e0e8d3df89f90788212f5ae7ac76d4d2cb01aeb3f5dac93b604f1a85f690bb84d33f1d6e5876c48cfac2",
+        "extension": {}
+      },
+      "boxId": "1a81051a23ba4acc0bb700819f5fc4b76472bdea33a41ce54afa82bc3bc74b1d",
+      "value": 523524793,
+      "ergoTree": "0008cd031980055487caf2695d09a69ca59945e5c376ee3826b61e7526b3ba20678c4ff6",
+      "assets": [],
+      "creationHeight": 1209586,
+      "additionalRegisters": {},
+      "transactionId": "f63517a1fed69cf91cd0c32e57479da1ede51b8bf35a9bc41ae9174f028b5862",
+      "index": 86
+    },
+    {
+      "globalIndex": 44038342,
+      "inclusionHeight": 1399861,
+      "address": "9gf34FJ1QnB7ELJL8pYaDEFXwHRBFn1R3VWHphtMnsPa1hxBdUu",
+      "spentTransactionId": "f19388c137a8e39abf2cdd04e91c5fa1eca37057a4e61748aee9dbda17b75b53",
+      "spendingProof": {
+        "proofBytes": "99c90a003fc703dba0a29dcb68324d5f104653aac34b62989f0ae496a1122828c39406d2201c8263ddcf27ccf20313701c8ea11d8f4eaffc",
+        "extension": {}
+      },
+      "boxId": "a11f643afc7586f654f9f86bfc4fb02c0354fb59169f8cf2262a83608bd5d7ad",
+      "value": 471295605,
+      "ergoTree": "0008cd031980055487caf2695d09a69ca59945e5c376ee3826b61e7526b3ba20678c4ff6",
+      "assets": [
+        {
+          "tokenId": "6a2c8e8bbccd89e3d1de25edfd9b7f0ba4eb585de7dbf802b26a635ee03c58ac",
+          "amount": 1
+        },
+        {
+          "tokenId": "5ec371870836e08bd0dccdb69dff880a1bdd177a02c1a60fa177b27fee75ce58",
+          "amount": 31082300
+        },
+        {
+          "tokenId": "0fdb7ff8b37479b6eb7aab38d45af2cfeefabbefdc7eebc0348d25dd65bc2c91",
+          "amount": 69
+        },
+        {
+          "tokenId": "cf8427d41dcdb8665572fa0bc1cfcdf7ced7ec64a00f911b0a64659760c60019",
+          "amount": 1
+        },
+        {
+          "tokenId": "4a9f52379ce2e7a0148cced1b8d4d55b987a8c3a557efea187a6578943d6750b",
+          "amount": 1
+        },
+        {
+          "tokenId": "9d30b62a70efb50e45f7a2fd68a4e2b2648789f04e6a4229c9a31027b2e66ab1",
+          "amount": 1
+        },
+        {
+          "tokenId": "e22dd3e60e4992b85f87183daa5c123c307a2b300d66032503e6bda2633e9d7c",
+          "amount": 1
+        },
+        {
+          "tokenId": "0779ec04f2fae64e87418a1ad917639d4668f78484f45df962b0dec14a2591d2",
+          "amount": 4000
+        },
+        {
+          "tokenId": "708d76ce5d86ebfae7a3a6363cd3fee6e04c6d5b44c2faf7271c85cd7014f186",
+          "amount": 1
+        },
+        {
+          "tokenId": "83ecb7dd522bd78a0132dbd0fc329f00aa721283ea15451f31242b95aed91f1e",
+          "amount": 1
+        },
+        {
+          "tokenId": "b182671f800afdec4e277db1f7669502f109d1c681949e6ec61613106115b47d",
+          "amount": 1
+        }
+      ],
+      "creationHeight": 1399857,
+      "additionalRegisters": {},
+      "transactionId": "9e1071fb795d0deb36aacf33d81b33f078154063afb5fcdd81cf523561cf183c",
+      "index": 2
+    }
+  ],
+  "dataInputBoxes": [],
+  "inclusionHeader": {
+    "extensionId": "73954942732795f2382b2c474695ccdd61d41ea91a57fe73932e7a39c293ddb5",
+    "difficulty": "1031389151494144",
+    "votes": "000000",
+    "timestamp": 1732110744566,
+    "size": 221,
+    "unparsedBytes": "",
+    "stateRoot": "551ee9933a67612535a60ee966cb81c820338e26cc8f3ecdb7ee3d5eecc6fdb319",
+    "height": 1399861,
+    "nBits": 117680651,
+    "version": 3,
+    "id": "c6b2e10ddb97b95b41e54b2aaa74e17d8ca63b7898c4a5b26ac4eee8054c7db5",
+    "adProofsRoot": "1243cc9bb07619e4f7c57faf07244de35f5de25502725ae5fac4bba8c4eac805",
+    "transactionsRoot": "f3023ea5f257a433d49fce48f4e34cc9f23c5b3b5d7a5996cd8bea24e98db79c",
+    "extensionHash": "dcd584944f35c3694c384bd913c55c319a0192183e6fb052b7e53b1520bcdf66",
+    "powSolutions": {
+      "pk": "021479afe13e3d14672ae5a98aa95bbeecb26e5bd88e3abe0a1e3ff9f43395cbb1",
+      "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "n": "930807d679cc4b8b",
+      "d": 0
+    },
+    "adProofsId": "58d0de4e041dfd564506c5c1d53114c9f3c28f89bf624c5375e40275de2a04ef",
+    "transactionsId": "95a4ad9d513381d78b9f5d28da3001ce96d4bf7d17b781dbbb9608a121730269",
+    "parentId": "ba85d157a951f82737345b18a47113f1409fa4581902de5f57e55f6a828f60b8"
+  },
+  "headers": [
+    {
+      "extensionId": "60c6f5661ec15303e79996f127e29f788d16de264ebbccd4aa60b62346545169",
+      "difficulty": "1031389151494144",
+      "votes": "000000",
+      "timestamp": 1732110470550,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "fcd0a56fbb74a4f66efe19d555021e23b9694cb3cb95518f0769fdb582e5ecfd19",
+      "height": 1399860,
+      "nBits": 117680651,
+      "version": 3,
+      "id": "ba85d157a951f82737345b18a47113f1409fa4581902de5f57e55f6a828f60b8",
+      "adProofsRoot": "365e37f22e5bcba3145c361b1fccab88c398e306ce1da52c401002b2ef2d26eb",
+      "transactionsRoot": "bdedcd125f926906b106733ccd17f6e8ab5b42b9f93041321d0821bdb5b649ea",
+      "extensionHash": "dcd584944f35c3694c384bd913c55c319a0192183e6fb052b7e53b1520bcdf66",
+      "powSolutions": {
+        "pk": "03b3fc3769bc7813f6287e130ea627b5350fd4709b359311606a1cc48d298cbfa7",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "30f30ce15053823b",
+        "d": 0
+      },
+      "adProofsId": "c7d5682e8b8657c868aa6312d8a7a4361e61af882264b6aa322dade45678a8d1",
+      "transactionsId": "cdfc16aa80466f96446253b327f1c115543c65f4d688e6361423975b8567648f",
+      "parentId": "9d24b3d610e569b1ca643dc460e0421fe6c4beb63a85a54258860b13f53a0791"
+    },
+    {
+      "extensionId": "4ed28b32e32440f016e6043e446f3f3f3bf9bebeffca7452d826bbb434f562aa",
+      "difficulty": "1031389151494144",
+      "votes": "000000",
+      "timestamp": 1732109986332,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "62c4ba79fd81d7290d59d2e22d425c892ad46794f49fc0ad6aa84ae4a515920d19",
+      "height": 1399859,
+      "nBits": 117680651,
+      "version": 3,
+      "id": "9d24b3d610e569b1ca643dc460e0421fe6c4beb63a85a54258860b13f53a0791",
+      "adProofsRoot": "0146139196fa77e12f7cf6af7dc71562192b12b136a050f6ca99346edf027915",
+      "transactionsRoot": "960e8756c880925deb3b56449b6c9bf5dda8e62198d4843aca9a9b4f13fd7d53",
+      "extensionHash": "da625e577882e4a91fab76c346b1d1590fe2aaf0704767613ef50423d337a750",
+      "powSolutions": {
+        "pk": "03677d088e4958aedcd5cd65845540e91272eba99e4d98e382f5ae2351e0dfbefd",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "60031a0139233e53",
+        "d": 0
+      },
+      "adProofsId": "7e680c16d008fb7c9647a1e242a9ebb8130b144989bfc1e0410e4e08e68e9fa1",
+      "transactionsId": "3cffe0afdf30208e7a53cde2adb1f5e62e135d84bbb13bc5f751df2269559752",
+      "parentId": "f4fc76a0ab6b570c6361d5adb731df91f08559526e7e9f4b63f9e4dcffed5a57"
+    },
+    {
+      "extensionId": "736c5586a75faa7ddcc6f0c34d75da91d35a7df0821d93fae89a23ffae02c6b1",
+      "difficulty": "1031389151494144",
+      "votes": "000000",
+      "timestamp": 1732109885612,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "159f1a4c476f3f0acd0c60c311168a8828077ddcac0f846d83bf0708fc264d9a19",
+      "height": 1399858,
+      "nBits": 117680651,
+      "version": 3,
+      "id": "f4fc76a0ab6b570c6361d5adb731df91f08559526e7e9f4b63f9e4dcffed5a57",
+      "adProofsRoot": "1a650df00ddd618fd6297efacaf7cf2bd0478eaf2b9e963a29b8e0612b433de6",
+      "transactionsRoot": "323f2c3e3cb35f208ae9cd0154ccdc753c778e308cd6aac197091b5105c53ba6",
+      "extensionHash": "5553c35161f53f552ac00bfcd2397ad081c4d0d2b6f8a3cc6cb96a0998e87fb9",
+      "powSolutions": {
+        "pk": "027c81634e461f843c436bc4267416eb60d42baf17910ad239296f38bc22afe372",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "b1f0b915ed02c71f",
+        "d": 0
+      },
+      "adProofsId": "0e284be1eca315891c8b44f2582b64f46547b32fbe169fa2b581141e1e3a50cd",
+      "transactionsId": "5c4c0d7eaa691e0cccf223fd8ea2c7cfcb89bf5da16ec690498d08702e9f9d11",
+      "parentId": "4b56f9f2dad879e047b75d0eba157b4af23292f2d4e6253d89ce5b0c46baf1df"
+    },
+    {
+      "extensionId": "6f6d95391f8dcdc55d323f9b1799b1adfb9f16fe480cfdb77ce461f79d406c7f",
+      "difficulty": "1031389151494144",
+      "votes": "000000",
+      "timestamp": 1732109855906,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "212789a00c8323de2182510da8183f68fca96bb1102f5100022a6b1525644f6c19",
+      "height": 1399857,
+      "nBits": 117680651,
+      "version": 3,
+      "id": "4b56f9f2dad879e047b75d0eba157b4af23292f2d4e6253d89ce5b0c46baf1df",
+      "adProofsRoot": "1d4369fe546425f8e0c1fe0736473b736be49771f11f1fcf3b64f30b35f94ee9",
+      "transactionsRoot": "56184c50b88b165e1308cf680c9f0f3ca7dd71aa156fd8f70d5fa4a69aeaa75d",
+      "extensionHash": "17ebc159ad83a89b68aa4fae58b315e77c1171e7cfda67873f663cc281446bd0",
+      "powSolutions": {
+        "pk": "03677d088e4958aedcd5cd65845540e91272eba99e4d98e382f5ae2351e0dfbefd",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "c9cba10011f284ce",
+        "d": 0
+      },
+      "adProofsId": "1378e3396e34d5f52f1ca31e6b97c9ccd3d484e54f5db95dd4b2f7ceccf878b5",
+      "transactionsId": "033d110f4378ea26440604e8c589ab79f51e1da560c125efe0aa682e3da840e7",
+      "parentId": "3d2b76e7858964f7f0ceadf485d934a691e615d4580308b917af9d241cff14b2"
+    },
+    {
+      "extensionId": "80b1a23d2e904fe5b46e3951c59b35d014cc741ddc27c7c08cbcbd075830b3e0",
+      "difficulty": "1031389151494144",
+      "votes": "000000",
+      "timestamp": 1732109798380,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "61e8a5c5e63fc77e3d249a94690527ebeea86fd06ce858c089d403097af66fa619",
+      "height": 1399856,
+      "nBits": 117680651,
+      "version": 3,
+      "id": "3d2b76e7858964f7f0ceadf485d934a691e615d4580308b917af9d241cff14b2",
+      "adProofsRoot": "8198644c26dcb7a7781cc217a712e532b71f1916ae7488716bd8956761dba58f",
+      "transactionsRoot": "ed420c5439704ae8be2b8e8ff25c971fd9e1dc28ae31620affe446596300dd9b",
+      "extensionHash": "698ef53557f85d295fd485b50de26dc43c44825d251881ac981b6c91c7b21976",
+      "powSolutions": {
+        "pk": "0295facb78290ac2b55f1453204d49df37be5bae9f185ed6704c1ba3ee372280c1",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "3a71d437f063901a",
+        "d": 0
+      },
+      "adProofsId": "80182a5df1e1c2c3e89f3d22916dc2671964b33b7e3cc682330a9ea237605426",
+      "transactionsId": "7df9fbcc37cd2b44d07c088072495cae2c9cec4cc4df26e6e0cd5a285e7e7be2",
+      "parentId": "b16fb378fa18e044f495934ce856531bd143fdc268b097b94d1447ca60241dc4"
+    },
+    {
+      "extensionId": "c17e48605b019d781e445cf3d68858534e42bfb416dd5879bd0e743b2bb796c5",
+      "difficulty": "1031389151494144",
+      "votes": "000000",
+      "timestamp": 1732109782482,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "eb9d105adf2bb9b1ed13a505511d143a9cc9240762a4aab860ebfb8db3dd0c9f19",
+      "height": 1399855,
+      "nBits": 117680651,
+      "version": 3,
+      "id": "b16fb378fa18e044f495934ce856531bd143fdc268b097b94d1447ca60241dc4",
+      "adProofsRoot": "90147866e5340abed3bfcc90bf649c2bd5656a18c9d73daf6ddaa709ea48bc7d",
+      "transactionsRoot": "ad0101295860c9dd87e6778725757d64f982db972e2277bcb28136dba15777d5",
+      "extensionHash": "698ef53557f85d295fd485b50de26dc43c44825d251881ac981b6c91c7b21976",
+      "powSolutions": {
+        "pk": "030ab3e89183caae079bc07685e0ac5b3adc6d40a3e9112fe56e22c655bd41d4da",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "96759f08a9ac68ef",
+        "d": 0
+      },
+      "adProofsId": "30aec862939e28b604339e9d6ddd979a9313645c3ace87fdb102cc4d201936ff",
+      "transactionsId": "33ff716d98002fa5de3a7cdadb0a1f428f590118270a8a4a282cd34083bed02a",
+      "parentId": "b8868b62b5926233f4ee3f1d6f133cc040990dd6d442406b7c958f00c9f8d612"
+    },
+    {
+      "extensionId": "f275b703f9b87fe92da7d2706735c403de1e787d45ec0863787053bd6cb07648",
+      "difficulty": "1031389151494144",
+      "votes": "000000",
+      "timestamp": 1732109734372,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "db87ce97de6f009ab036d4d309a41ee4c4ccb7dd38405e84b63f0f291d4a9be219",
+      "height": 1399854,
+      "nBits": 117680651,
+      "version": 3,
+      "id": "b8868b62b5926233f4ee3f1d6f133cc040990dd6d442406b7c958f00c9f8d612",
+      "adProofsRoot": "dcdff8d81a325c4ccd75ae7df2df1d3e06ac3e9e6ad3f08a4f17c295fa721deb",
+      "transactionsRoot": "ea587cbe6ee0a5b09a4de4c9e9e3b6df352276aa4510d9b5af30e695caf9e4e0",
+      "extensionHash": "698ef53557f85d295fd485b50de26dc43c44825d251881ac981b6c91c7b21976",
+      "powSolutions": {
+        "pk": "03677d088e4958aedcd5cd65845540e91272eba99e4d98e382f5ae2351e0dfbefd",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "db93a8001e3e159b",
+        "d": 0
+      },
+      "adProofsId": "a5322221d2b03673a0713d483f04ea0dca5e9d293f6e47663a133751e4b9e757",
+      "transactionsId": "324221fe5c2abdcdcc63cb8794edd766932bdc1ed0952605bd847beccbee84db",
+      "parentId": "5fa5b28f30ce7c93a5260c635e67ec083cb6748b4a3018be29eebaed23d31e96"
+    },
+    {
+      "extensionId": "2c234d39e24c1c0bfb819f80c6bf1758969a4139675058922387ed78bee12631",
+      "difficulty": "1031389151494144",
+      "votes": "000000",
+      "timestamp": 1732109677628,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "e36473c25bacf63bc66e990298a10d7a8ee5e06472bb4699b73598c67a7b428219",
+      "height": 1399853,
+      "nBits": 117680651,
+      "version": 3,
+      "id": "5fa5b28f30ce7c93a5260c635e67ec083cb6748b4a3018be29eebaed23d31e96",
+      "adProofsRoot": "5afb2aed2822a086cd844d061dbc95ec897a4ef345758e875d7d44b649c21d63",
+      "transactionsRoot": "4ae1c4c0e6b219e884027a1409ce0b482c771e053cc2ebe05fd8de235cc144b0",
+      "extensionHash": "698ef53557f85d295fd485b50de26dc43c44825d251881ac981b6c91c7b21976",
+      "powSolutions": {
+        "pk": "030ab3e89183caae079bc07685e0ac5b3adc6d40a3e9112fe56e22c655bd41d4da",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "abe8e5c013c31c7a",
+        "d": 0
+      },
+      "adProofsId": "4315c112c8641acc4c2bcaadc876a4c53f45acb85b98da5ef3213bd9e861a6cc",
+      "transactionsId": "9b0995d2cecde9bc57abd025db0fff5e5b313638c3e616e632d5f5fb88c5e5e8",
+      "parentId": "34fe2cf8b2b9aa8de94719c4fe09ae79fd49b37fa4f3da3e846dcefa320fc3d6"
+    },
+    {
+      "extensionId": "04d889eb32e184cd6c115300d9ab3bd019a4ace7f9d86d23d553b55ff5bc8901",
+      "difficulty": "1031389151494144",
+      "votes": "000000",
+      "timestamp": 1732109568781,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "5476b45312fc0a3d1c4bbe51de7e4da09e0f0f4979a557399b8e0e425d263c8719",
+      "height": 1399852,
+      "nBits": 117680651,
+      "version": 3,
+      "id": "34fe2cf8b2b9aa8de94719c4fe09ae79fd49b37fa4f3da3e846dcefa320fc3d6",
+      "adProofsRoot": "36adf29e80cc41c9540a7601918af0abefeb4ee79c9d5689d096e25523f88f46",
+      "transactionsRoot": "17f079dd507a2a37015567a2ebca2dee2e73ffee536ad8ac5210cc8cebc078b8",
+      "extensionHash": "4f9852acf3b9dc7c1c005176321c06b115fc17a4cda1f6de76c3854ce83d2c25",
+      "powSolutions": {
+        "pk": "03677d088e4958aedcd5cd65845540e91272eba99e4d98e382f5ae2351e0dfbefd",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "62181e004529a850",
+        "d": 0
+      },
+      "adProofsId": "3314e4c829047a6bffeabe39fd5562c493ed1811c34941427ba5592c48f9df60",
+      "transactionsId": "163745c7c744eaad60f17e4bae829c5ffe5da1109356e0a56e0beb725c7e6da8",
+      "parentId": "9dc0938b8c12370e4f259c350caabee87927130dd8e7aacd90345cd209d9b70e"
+    },
+    {
+      "extensionId": "603d0d259b3a991c2d92c8f3862894c0d5458a28dcdf249cc78cd9e2a24b1cdc",
+      "difficulty": "1031389151494144",
+      "votes": "000000",
+      "timestamp": 1732109443555,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "86e5a42f21739a2232bd7a94417abb65fa6e6a926110b982c72cc1652287dce519",
+      "height": 1399851,
+      "nBits": 117680651,
+      "version": 3,
+      "id": "9dc0938b8c12370e4f259c350caabee87927130dd8e7aacd90345cd209d9b70e",
+      "adProofsRoot": "bf8dd06fd65d12ea72191713425d1c17ef6c3df16a11928d5b132612b0e54526",
+      "transactionsRoot": "5e78e78f1f431c0b4da7f14912eef6d7be1a1362efa5b3a38ad376cb5a111545",
+      "extensionHash": "4f9852acf3b9dc7c1c005176321c06b115fc17a4cda1f6de76c3854ce83d2c25",
+      "powSolutions": {
+        "pk": "03677d088e4958aedcd5cd65845540e91272eba99e4d98e382f5ae2351e0dfbefd",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "6d9107005cb4569b",
+        "d": 0
+      },
+      "adProofsId": "b1d6abf41c8def1dd49e5eed033dbb5c4f5beaef07298d29f4644b1c66955a71",
+      "transactionsId": "2a1c0bc3656b260085f8793d66be688f0fb3cbd7575376903b1722aa046e2b20",
+      "parentId": "0b95989827a00d62a3c5cd5d5272d68b6754dab997b722c21c73c22d4dfa04c0"
+    }
+  ],
+  "sources": {
+    "explorer": "https://api.ergoplatform.com/api/v1",
+    "node": "https://ergo-node.eutxo.de"
+  },
+  "capturedOn": "2026-09-12"
+}

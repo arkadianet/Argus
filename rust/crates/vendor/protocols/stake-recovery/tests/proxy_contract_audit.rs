@@ -214,3 +214,25 @@ fn execution_also_rejects_an_added_app_fee_output() {
         SigmaBoolean::TrivialProp(false)
     );
 }
+
+#[test]
+fn execution_rejects_a_foreign_incentive_destination_with_values_unchanged() {
+    let h = Historical::load(UNSTAKE);
+    let mut outputs = h.unsigned.output_candidates.to_vec();
+    outputs[2].ergo_tree = stake_recovery::contracts::tree_from_address(APP_FEE_ADDRESS).unwrap();
+    let unsigned = ergo_lib::chain::transaction::unsigned::UnsignedTransaction::new_from_vec(
+        h.unsigned.inputs.to_vec(),
+        vec![],
+        outputs,
+    )
+    .unwrap();
+    let reduced = reduce_tx(
+        TransactionContext::new(unsigned, h.boxes, vec![]).unwrap(),
+        &h.context,
+    )
+    .unwrap();
+    assert_eq!(
+        reduced.reduced_inputs().as_slice()[2].sigma_prop,
+        SigmaBoolean::TrivialProp(false)
+    );
+}
