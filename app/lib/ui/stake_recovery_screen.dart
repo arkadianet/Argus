@@ -5,8 +5,10 @@ import '../services/wallet_service.dart';
 import '../services/wallet_sync_controller.dart';
 import '../theme/argus_theme.dart';
 import 'widgets/soft_card.dart';
+import 'confirm_transaction_sheet.dart';
+import 'widgets/error_sheet.dart';
 
-/// Discovery only. Recovery transactions arrive in later batches.
+/// Discovery and Direct Ergopad recovery.
 class StakeRecoveryScreen extends StatefulWidget {
   const StakeRecoveryScreen({super.key});
   @override
@@ -15,6 +17,54 @@ class StakeRecoveryScreen extends StatefulWidget {
 
 class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
   final _service = stakeRecoveryService;
+  bool _working = false;
+
+  Future<void> _recover(StakePoolResult result, StakePosition position) async {
+    if (_working) return;
+    final args = WalletRouteArgs.of(context);
+    setState(() => _working = true);
+    try {
+      final prepared = await _service.prepareDirect(
+        result: result,
+        position: position,
+        userAddress: args.receiveAddress,
+        spendAddresses: args.historyAddresses,
+      );
+      if (!mounted) return;
+      final ok = await showConfirmTransactionSheet(
+        context,
+        title: 'Recover Ergopad stake',
+        detail:
+            'Receive your full stake. Your stake key returns to your wallet.',
+        confirmLabel: 'Recover stake',
+        rows: [
+          for (final row in prepared['rows'] as List)
+            ConfirmTxRow(row['label'] as String, row['value'] as String),
+        ],
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
+      if (!ok || !mounted) return;
+      await _service.revalidateCommit(prepared);
+      if (!mounted || !_service.canCommit(prepared)) return;
+      final txId = await walletService.sendErg(
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Recovery submitted: $txId')));
+      await _refresh();
+    } catch (e) {
+      if (mounted)
+        showErrorSheet(
+          context,
+          title: 'Could not recover stake',
+          message: '$e',
+        );
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
 
   @override
   void initState() {
@@ -60,7 +110,7 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
         actions: [
           IconButton(
             tooltip: 'Scan again',
-            onPressed: _service.busy ? null : _refresh,
+            onPressed: _service.busy || _working ? null : _refresh,
             icon: const Icon(Icons.refresh),
           ),
         ],
@@ -72,7 +122,7 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
           padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
           children: [
             const Text(
-              'Find abandoned Ergopad and Paideia v1 stakes linked to tokens in this wallet. This screen is read-only; recovery is not available yet.',
+              'Find abandoned Ergopad and Paideia v1 stakes linked to tokens in this wallet. Ergopad recovery is available. Your stake key returns to your wallet. Paideia recovery is not available yet.',
             ),
             const SizedBox(height: 12),
             Text(
@@ -143,6 +193,17 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
                             ? 'Not currently recoverable: ${position.eligibilityError}'
                             : 'Recovery eligibility unknown until the pool state can be read',
                       ),
+                      if (result.pool.id == 'ergopad' &&
+                          position.eligible == true &&
+                          result.status == StakeScanStatus.complete)
+                        FilledButton(
+                          onPressed: _working || _service.busy
+                              ? null
+                              : () => _recover(result, position),
+                          child: Text(
+                            _working ? 'Preparing…' : 'Recover stake',
+                          ),
+                        ),
                     ],
                   ],
                 ),

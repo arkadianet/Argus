@@ -466,6 +466,125 @@ class StakeRecoveryService extends ChangeNotifier {
     }
   }
 
+  bool canCommit(Map<String, dynamic> prepared) =>
+      prepared['wallet_id'] != null &&
+      prepared['wallet_id'] == _gw.walletId &&
+      prepared['network'] == _gw.network &&
+      prepared['node'] == _gw.nodeUrl &&
+      prepared['explorer'] == _gw.explorerBase;
+
+  Future<Map<String, dynamic>> prepareDirect({
+    required StakePoolResult result,
+    required StakePosition position,
+    required String userAddress,
+    required List<String> spendAddresses,
+    Future<String> Function(String state, String stake, String key)? prepare,
+  }) async {
+    final scope = _scope;
+    if (scope.wallet == null ||
+        scope.network != 'mainnet' ||
+        !results.contains(result) ||
+        result.pool.id != 'ergopad' ||
+        result.status != StakeScanStatus.complete ||
+        position.eligible != true ||
+        result.positions.where((p) => p.keyId == position.keyId).length != 1 ||
+        !result.positions.contains(position) ||
+        result.state == null) {
+      throw StateError(
+        'Scan this wallet again for an unambiguous recoverable Ergopad position',
+      );
+    }
+    final stateId = result.state!['box_id'] as String;
+    final node = await _indexedNode(scope);
+    Future<dynamic> read(String id) => _request(
+      Uri.parse(
+        node == null
+            ? '${_base(scope.explorer)}/api/v1/boxes/unspent/byBoxId/$id'
+            : '$node/utxo/byId/$id',
+      ),
+      missingAllowed: true,
+    );
+    final stake = await read(position.boxId);
+    if (stake == null)
+      throw StateError(
+        'StakeBox moved since the scan. Scan again; nothing was sent.',
+      );
+    final state = await read(stateId);
+    if (state == null)
+      throw StateError(
+        'Pool state moved since the scan. Scan again; nothing was sent.',
+      );
+    final decoded =
+        jsonDecode(
+              _gw.positions(
+                'ergopad',
+                jsonEncode([stake]),
+                jsonEncode([position.keyId]),
+                jsonEncode(state),
+              ),
+            )
+            as Map;
+    final positions = decoded['positions'] as List;
+    if ((decoded['rejected'] as List).isNotEmpty ||
+        (decoded['ambiguous_keys'] as List).isNotEmpty ||
+        positions.length != 1 ||
+        positions.single['box_id'] != position.boxId ||
+        positions.single['key_id'] != position.keyId ||
+        positions.single['eligible'] != true) {
+      throw StateError(
+        'Recovery inputs no longer match. Scan again; nothing was sent.',
+      );
+    }
+    if (scope != _scope)
+      throw StateError('The wallet or network changed; nothing was sent');
+    final raw = await (prepare != null
+        ? prepare(jsonEncode(state), jsonEncode(stake), position.keyId)
+        : walletService.stakeRecoveryPrepareDirect(
+            stateBoxJson: jsonEncode(state),
+            stakeBoxJson: jsonEncode(stake),
+            keyId: position.keyId,
+            userAddress: userAddress,
+            spendAddresses: spendAddresses,
+            nodeUrl: scope.node,
+          ));
+    final prepared = (jsonDecode(raw) as Map).cast<String, dynamic>()
+      ..['wallet_id'] = scope.wallet
+      ..['network'] = scope.network
+      ..['node'] = scope.node
+      ..['explorer'] = scope.explorer;
+    if (!canCommit(prepared))
+      throw StateError('The wallet or network changed; nothing was sent');
+    return prepared;
+  }
+
+  /// Called after confirmation, immediately before native signing. Native
+  /// commit repeats UTXO checks and runs transactions/check before broadcast.
+  Future<void> revalidateCommit(Map<String, dynamic> prepared) async {
+    if (!canCommit(prepared))
+      throw StateError('The wallet or network changed; nothing was sent');
+    final scope = _scope;
+    final node = await _indexedNode(scope);
+    final inputs = (prepared['unsigned_tx'] as Map)['inputs'] as List;
+    for (var i = 0; i < inputs.length; i++) {
+      final id = inputs[i]['boxId'] as String;
+      final box = await _request(
+        Uri.parse(
+          node == null
+              ? '${_base(scope.explorer)}/api/v1/boxes/unspent/byBoxId/$id'
+              : '$node/utxo/byId/$id',
+        ),
+        missingAllowed: true,
+      );
+      if (box == null || box['boxId'] != id) {
+        throw StateError(
+          '${i == 1 ? 'StakeBox' : 'Recovery input'} moved since preparation. Scan again; nothing was sent.',
+        );
+      }
+    }
+    if (!canCommit(prepared))
+      throw StateError('The wallet or network changed; nothing was sent');
+  }
+
   @override
   void dispose() {
     ++_generation;

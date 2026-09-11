@@ -2473,6 +2473,9 @@ async fn sign_prepared_tx(
     client: &ErgoNodeClient,
     op: &'static str,
 ) -> Result<serde_json::Value, String> {
+    if crate::api_stake_recovery_impl::is_direct(&prep.unsigned_tx) {
+        revalidate_stake_recovery(&prep.unsigned_tx, client).await?;
+    }
     let state_context = client
         .get_state_context()
         .await
@@ -2513,6 +2516,14 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
     let prep = take_preparation(handle_id, preparation_id)?;
     let client = node_client(prep.node_url.clone()).await?;
     let tx_json = sign_prepared_tx(handle_id, &prep, &client, "send_erg").await?;
+    if crate::api_stake_recovery_impl::is_direct(&prep.unsigned_tx) {
+        client.check_transaction(&tx_json).await.map_err(|e| {
+            ArgusError::TxBuildFailed(format!(
+                "Recovery inputs are no longer spendable; scan again: {e}"
+            ))
+            .to_json_string()
+        })?;
+    }
 
     let tx_id = client
         .submit_transaction(&tx_json)
@@ -6289,4 +6300,126 @@ pub fn stake_recovery_positions(
         &keys_json,
         &state_box_json,
     )
+}
+
+/// Prepare Ergopad recovery using the wallet handle to establish ownership.
+/// The immutable cached transaction is confirmed and committed via send_erg.
+#[flutter_rust_bridge::frb]
+pub async fn stake_recovery_prepare_direct(
+    handle_id: u64,
+    state_box_json: String,
+    stake_box_json: String,
+    key_id: String,
+    user_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let miner_fee = mix_miner_fee(None)?;
+    let mut addresses = spend_addresses;
+    if !addresses.contains(&user_address) {
+        addresses.push(user_address.clone());
+    }
+    let trees = with_handle(handle_id, "stake_recovery_prepare_direct", |h| {
+        crate::api_stake_recovery_impl::owned_trees(h, &addresses)
+    })?;
+    let recipient = address_to_ergo_tree(&user_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    let client = node_client(node_url.clone()).await?;
+    let height = i32::try_from(
+        client
+            .current_height()
+            .await
+            .map_err(|e| ArgusError::NodeError(e).to_json_string())?,
+    )
+    .map_err(|_| ArgusError::TxBuildFailed("height overflow".into()).to_json_string())?;
+    let (boxes, wallet) = gather_unspent(handle_id, &client, &addresses).await?;
+    let (_, wallet) = apply_mixed_rule(handle_id, boxes, wallet, None)?;
+    let unsigned_tx = crate::api_stake_recovery_impl::prepare_direct(
+        (&state_box_json, &stake_box_json),
+        &key_id,
+        &wallet,
+        &trees,
+        &recipient,
+        height,
+        miner_fee,
+    )?;
+    revalidate_stake_recovery(&unsigned_tx, &client).await?;
+    let context = client
+        .get_state_context()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    stake_recovery::direct::reduce(&unsigned_tx, &context)
+        .map_err(|e| ArgusError::TxReductionFailed(e.to_string()).to_json_string())?;
+    let ergo_boxes = unsigned_tx
+        .inputs
+        .iter()
+        .map(stake_recovery::boxes::canonical_box)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let payout = &unsigned_tx.outputs[1].assets[0].amount;
+    let decimals = stake_recovery::Pool::Ergopad.contracts().reward_decimals as usize;
+    let digits = format!("{:0>width$}", payout, width = decimals + 1);
+    let amount = format!(
+        "{}.{} Ergopad",
+        &digits[..digits.len() - decimals],
+        &digits[digits.len() - decimals..]
+    );
+    let rows = serde_json::json!([
+        {"label": "You receive", "value": amount},
+        {"label": "Stake key", "value": "Returns to your wallet (not burned)"},
+        {"label": "Argus fee", "value": "0.0011 ERG (flat)"},
+        {"label": "Miner fee", "value": format!("{:.9} ERG", miner_fee as f64 / 1_000_000_000.0)},
+        {"label": "Payout and key return", "value": "At least 0.001 ERG in each output; remains yours"}
+    ]);
+    let input_boxes = input_boxes_json(&unsigned_tx.inputs);
+    let unsigned_json = serde_json::to_value(&unsigned_tx)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let change_erg = unsigned_tx.outputs[2]
+        .value
+        .parse::<i64>()
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        data_input_boxes: Vec::new(),
+        unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: stake_recovery::direct::MIN_VALUE,
+        node_url,
+    });
+    Ok(serde_json::json!({"preparation_id": preparation_id, "unsigned_tx": unsigned_json, "rows": rows, "input_boxes": input_boxes, "miner_fee": miner_fee, "app_fee": ARGUS_FEE_NANO}).to_string())
+}
+
+async fn revalidate_stake_recovery(
+    tx: &ergo_tx::Eip12UnsignedTx,
+    client: &ErgoNodeClient,
+) -> Result<(), String> {
+    for (i, input) in tx.inputs.iter().enumerate() {
+        let current = client
+            .recovery_unspent_box(&input.box_id)
+            .await
+            .map_err(|e| {
+                ArgusError::TxBuildFailed(format!(
+                    "{} moved or is unavailable; scan again before recovering: {e}",
+                    if i == 1 { "StakeBox" } else { "Recovery input" }
+                ))
+                .to_json_string()
+            })?;
+        let expected = stake_recovery::boxes::canonical_box(input)
+            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        let actual = stake_recovery::boxes::canonical_box(&crate::api_sigmafi_impl::parse_box(
+            &current.to_string(),
+        )?)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        if expected != actual {
+            return Err(
+                ArgusError::TxBuildFailed("Recovery input changed; scan again".into())
+                    .to_json_string(),
+            );
+        }
+    }
+    Ok(())
 }

@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `apply_mixed_rule`, `babel_json`, `broadcast_mix_move_with`, `broadcast_mix_move`, `clear_node_clients`, `covers`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent_all`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_leave_destination`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `mixed_rule`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `wallet_delta_nano_erg`, `with_handle`, `without_reserved`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `apply_mixed_rule`, `babel_json`, `broadcast_mix_move_with`, `broadcast_mix_move`, `clear_node_clients`, `covers`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent_all`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_leave_destination`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `mixed_rule`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `revalidate_stake_recovery`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `wallet_delta_nano_erg`, `with_handle`, `without_reserved`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `BabelPick`, `CachedPreparation`, `FundingReservation`, `ManagementBuild`, `ParsedRecipient`, `PreparedManagement`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`
 
@@ -1464,4 +1464,24 @@ String stakeRecoveryPositions({
   boxesJson: boxesJson,
   keysJson: keysJson,
   stateBoxJson: stateBoxJson,
+);
+
+/// Prepare Ergopad recovery using the wallet handle to establish ownership.
+/// The immutable cached transaction is confirmed and committed via send_erg.
+Future<String> stakeRecoveryPrepareDirect({
+  required BigInt handleId,
+  required String stateBoxJson,
+  required String stakeBoxJson,
+  required String keyId,
+  required String userAddress,
+  required List<String> spendAddresses,
+  String? nodeUrl,
+}) => RustLib.instance.api.crateApiStakeRecoveryPrepareDirect(
+  handleId: handleId,
+  stateBoxJson: stateBoxJson,
+  stakeBoxJson: stakeBoxJson,
+  keyId: keyId,
+  userAddress: userAddress,
+  spendAddresses: spendAddresses,
+  nodeUrl: nodeUrl,
 );

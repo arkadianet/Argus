@@ -1,4 +1,4 @@
-//! Read-only stake recovery boundary. HTTP and wallet ownership stay in Dart.
+//! Stake recovery parsing and wallet ownership boundary.
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
 use serde_json::{json, Value};
 use stake_recovery::{contracts::Pool, validation, StakeBox, StakeStateBox};
@@ -241,4 +241,182 @@ fn json_bridge_cli() {
         result.unwrap(),
     )
     .unwrap();
+}
+
+/// Wallet-authenticated trees are supplied only by the handle integration.
+/// Refuse ambiguous key boxes before selecting any funding.
+pub fn prepare_direct(
+    protocol: (&str, &str),
+    key_id: &str,
+    wallet: &[ergo_tx::Eip12InputBox],
+    trees: &[String],
+    recipient: &str,
+    height: i32,
+    miner_fee: i64,
+) -> Result<ergo_tx::Eip12UnsignedTx, String> {
+    let key: [u8; 32] = hex::decode(key_id)
+        .map_err(error)?
+        .try_into()
+        .map_err(|_| error("key must be 32 bytes"))?;
+    let keys: Vec<_> = wallet
+        .iter()
+        .filter(|b| {
+            b.assets
+                .iter()
+                .any(|a| a.token_id.eq_ignore_ascii_case(key_id))
+        })
+        .collect();
+    if keys.len() != 1 {
+        return Err(error(
+            "Expected exactly one wallet box containing the stake key",
+        ));
+    }
+    let mut inputs = vec![
+        direct_input(protocol.0)?,
+        direct_input(protocol.1)?,
+        keys[0].clone(),
+    ];
+    let required = stake_recovery::direct::APP_FEE
+        .checked_add(miner_fee)
+        .and_then(|n| n.checked_add(2 * stake_recovery::direct::MIN_VALUE))
+        .ok_or_else(|| error("fee overflow"))?;
+    let mut available = inputs[1..].iter().try_fold(0i64, |sum, b| {
+        sum.checked_add(b.value.parse::<i64>().map_err(error)?)
+            .ok_or_else(|| error("funding overflow"))
+    })?;
+    for input in wallet {
+        if available >= required {
+            break;
+        }
+        if input.box_id == keys[0].box_id {
+            continue;
+        }
+        // The builder preserves every asset in selected wallet funding.
+        available = available
+            .checked_add(input.value.parse::<i64>().map_err(error)?)
+            .ok_or_else(|| error("funding overflow"))?;
+        inputs.push(input.clone());
+    }
+    stake_recovery::direct::build(&stake_recovery::direct::DirectRequest {
+        inputs: &inputs,
+        key: &key,
+        recipient,
+        wallet_trees: trees,
+        height,
+        miner_fee,
+    })
+    .map_err(error)
+}
+
+/// The discovery adapter intentionally ignores spending extensions. A spend
+/// must instead refuse supplied nonempty/malformed extensions, never drop them.
+fn direct_input(raw: &str) -> Result<ergo_tx::Eip12InputBox, String> {
+    let value: Value = serde_json::from_str(raw).map_err(error)?;
+    for extension in [
+        value.get("extension"),
+        value.get("spendingProof").and_then(|p| p.get("extension")),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if extension.as_object().is_none_or(|m| !m.is_empty()) {
+            return Err(error("Direct recovery requires empty context extensions"));
+        }
+    }
+    let input = parse_box(raw)?;
+    stake_recovery::boxes::canonical_box(&input).map_err(error)?;
+    Ok(input)
+}
+
+pub fn is_direct(tx: &ergo_tx::Eip12UnsignedTx) -> bool {
+    tx.inputs.first().is_some_and(|b| {
+        b.assets.iter().any(|a| {
+            a.token_id
+                .eq_ignore_ascii_case(Pool::Ergopad.contracts().state_nft)
+        })
+    })
+}
+
+pub fn owned_trees(
+    handle: &wallet_core::wallet::WalletHandle,
+    addresses: &[String],
+) -> Result<Vec<String>, String> {
+    addresses
+        .iter()
+        .map(|address| {
+            if !handle.owns_address(address).map_err(error)? {
+                return Err(error("recovery address must belong to this wallet"));
+            }
+            ergo_tx::address_to_ergo_tree(address).map_err(error)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod direct_tests {
+    use super::*;
+    #[test]
+    fn wallet_handle_refuses_foreign_addresses_and_fee_matches_argus() {
+        let handle = wallet_core::wallet::WalletHandle::create(
+            wallet_core::seed::MnemonicPhrase::parse("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap(), "").unwrap();
+        let address = handle.derive_address(0).unwrap();
+        assert!(owned_trees(&handle, &[address]).is_ok());
+        assert!(owned_trees(&handle, &[crate::api::ARGUS_FEE_ADDRESS.into()]).is_err());
+        assert_eq!(stake_recovery::direct::APP_FEE, crate::api::ARGUS_FEE_NANO);
+        assert_eq!(
+            stake_recovery::direct::APP_FEE_ADDRESS,
+            crate::api::ARGUS_FEE_ADDRESS
+        );
+    }
+
+    #[test]
+    fn boundary_refuses_ambiguous_keys_and_preserves_historical_wallet_assets() {
+        let h: Value = serde_json::from_str(include_str!(
+            "../../vendor/protocols/stake-recovery/tests/fixtures/ergopad.json"
+        ))
+        .unwrap();
+        let state = h["inputs"][0].to_string();
+        let stake = h["inputs"][1].to_string();
+        let wallet = parse_box(&h["inputs"][2].to_string()).unwrap();
+        let key = hex::encode(
+            StakeBox::parse(&parse_box(&stake).unwrap(), Pool::Ergopad)
+                .unwrap()
+                .key_id(),
+        );
+        let trees = vec![wallet.ergo_tree.clone()];
+        let build = |boxes: &[ergo_tx::Eip12InputBox]| {
+            prepare_direct(
+                (&state, &stake),
+                &key,
+                boxes,
+                &trees,
+                &trees[0],
+                1765291,
+                1_100_000,
+            )
+        };
+        let tx = build(std::slice::from_ref(&wallet)).unwrap();
+        assert_eq!(tx.inputs[2].box_id, wallet.box_id);
+        assert!(build(&[wallet.clone(), wallet]).is_err());
+        assert!(build(&[]).is_err());
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn direct_boundary_does_not_drop_malformed_extensions() {
+    let h: Value = serde_json::from_str(include_str!(
+        "../../vendor/protocols/stake-recovery/tests/fixtures/ergopad.json"
+    ))
+    .unwrap();
+    for extension in [
+        json!({"256": "0502"}),
+        json!({"0": "zz"}),
+        json!(null),
+        json!({"0": "0502"}),
+    ] {
+        let mut b = h["inputs"][1].clone();
+        b["extension"] = extension;
+        assert!(direct_input(&b.to_string()).is_err());
+    }
 }

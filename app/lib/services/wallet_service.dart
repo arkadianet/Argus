@@ -1512,6 +1512,26 @@ class WalletService {
     );
   }
 
+  Future<String> stakeRecoveryPrepareDirect({
+    required String stateBoxJson,
+    required String stakeBoxJson,
+    required String keyId,
+    required String userAddress,
+    required List<String> spendAddresses,
+    String? nodeUrl,
+  }) {
+    _requireUnlocked();
+    return RustLib.instance.api.crateApiStakeRecoveryPrepareDirect(
+      handleId: _handleId!,
+      stateBoxJson: stateBoxJson,
+      stakeBoxJson: stakeBoxJson,
+      keyId: keyId,
+      userAddress: userAddress,
+      spendAddresses: spendAddresses,
+      nodeUrl: nodeUrl,
+    );
+  }
+
   /// Prepare a cancel, close, repay or liquidate of a SigmaFi box;
   /// confirm with [sendErg].
   Future<String> sigmafiPrepareSpend({
