@@ -37,7 +37,7 @@ class DiscoverScreen extends StatelessWidget {
                 DiscoverFeature.dapps,
               ],
             ),
-            ('Tools', [DiscoverFeature.mix, DiscoverFeature.tokens, DiscoverFeature.utxos]),
+            ('Tools', [DiscoverFeature.mix, DiscoverFeature.tokens, DiscoverFeature.utxos, DiscoverFeature.stakes]),
           ]) ...[
             Text(
               label.toUpperCase(),

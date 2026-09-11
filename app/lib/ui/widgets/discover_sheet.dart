@@ -6,7 +6,7 @@ import '../../theme/argus_theme.dart';
 import '../swap_hub_screen.dart';
 
 /// Everything the Discover row and page can open.
-enum DiscoverFeature { dexy, ageusd, spectrum, liquidity, duckpools, sigmafi, rosen, dapps, mix, tokens, utxos }
+enum DiscoverFeature { dexy, ageusd, spectrum, liquidity, duckpools, sigmafi, rosen, dapps, mix, tokens, utxos, stakes }
 
 /// Whether a feature is offered right now: a paused protocol keeps its
 /// explainer but appears on no card and in no list.
@@ -226,6 +226,25 @@ const discoverExplainers = <DiscoverFeature, DiscoverExplainer>{
       'Issuing costs a miner fee and locks the minimum box value with the token',
     ],
     go: 'Open tokens',
+  ),
+  DiscoverFeature.stakes: DiscoverExplainer(
+    title: 'Stake recovery',
+    blurb: 'Find abandoned Ergopad and Paideia stakes linked to your wallet.',
+    icon: Icons.savings_outlined,
+    route: '/stakes',
+    what:
+        'Old Ergopad and Paideia staking pools still hold tokens for people who kept their Stake Key. The key links your wallet to a position in the pool, even though its operator is gone.',
+    can: [
+      'Scan both pools for positions linked to tokens in this wallet',
+      'See the reward balance and whether each pool could be checked',
+      'View positions only; recovery transactions are not available yet',
+    ],
+    risks: [
+      'An incomplete scan cannot tell you that there is nothing to recover',
+      'Keep your Stake Key; transferring it transfers access to the position',
+      'Scanning is free; recovery will pay miner and contract costs plus a flat 0.0011 ERG Argus fee per transaction',
+    ],
+    go: 'Open stake recovery',
   ),
   DiscoverFeature.utxos: DiscoverExplainer(
     title: 'UTXO management',

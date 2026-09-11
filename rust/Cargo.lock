@@ -3130,6 +3130,7 @@ dependencies = [
  "serde_json",
  "sigmafi",
  "sigmausd",
+ "stake-recovery",
  "stealth",
  "thiserror 1.0.69",
  "tokio",

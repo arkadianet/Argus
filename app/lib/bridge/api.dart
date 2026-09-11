@@ -1441,3 +1441,27 @@ String duckpoolsDiscoverOrders({
   boxesJson: boxesJson,
   addresses: addresses,
 );
+
+/// Deployed staking pools with full address-derived trees. Pure.
+String stakeRecoveryContracts() =>
+    RustLib.instance.api.crateApiStakeRecoveryContracts();
+
+/// Decode and validate one state-NFT box. Pure.
+String stakeRecoveryState({required String poolId, required String boxJson}) =>
+    RustLib.instance.api.crateApiStakeRecoveryState(
+      poolId: poolId,
+      boxJson: boxJson,
+    );
+
+/// Decode a page for the wallet's candidate token ids, optionally against state. Pure.
+String stakeRecoveryPositions({
+  required String poolId,
+  required String boxesJson,
+  required String keysJson,
+  required String stateBoxJson,
+}) => RustLib.instance.api.crateApiStakeRecoveryPositions(
+  poolId: poolId,
+  boxesJson: boxesJson,
+  keysJson: keysJson,
+  stateBoxJson: stateBoxJson,
+);

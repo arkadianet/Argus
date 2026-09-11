@@ -25,6 +25,7 @@ zerojoin = { workspace = true }
 duckpools = { workspace = true }
 rosen = { workspace = true }
 sigmafi = { workspace = true }
+stake-recovery = { workspace = true }
 rand = { workspace = true }
 flutter_rust_bridge = "=2.11.1"
 once_cell = "1"

@@ -6260,3 +6260,33 @@ pub fn duckpools_discover_orders(boxes_json: String, addresses: Vec<String>) -> 
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
     serde_json::to_string(&found).map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
+
+// ── Stake recovery (read-only) ───────────────────────────────────────────
+
+/// Deployed staking pools with full address-derived trees. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stake_recovery_contracts() -> Result<String, String> {
+    crate::api_stake_recovery_impl::contracts_json()
+}
+
+/// Decode and validate one state-NFT box. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stake_recovery_state(pool_id: String, box_json: String) -> Result<String, String> {
+    crate::api_stake_recovery_impl::state_json(&pool_id, &box_json)
+}
+
+/// Decode a page for the wallet's candidate token ids, optionally against state. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stake_recovery_positions(
+    pool_id: String,
+    boxes_json: String,
+    keys_json: String,
+    state_box_json: String,
+) -> Result<String, String> {
+    crate::api_stake_recovery_impl::positions_json(
+        &pool_id,
+        &boxes_json,
+        &keys_json,
+        &state_box_json,
+    )
+}
