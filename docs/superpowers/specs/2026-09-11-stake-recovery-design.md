@@ -156,12 +156,24 @@ signing. Per-pool incomplete/unavailable status — an Ergopad failure must not 
 results or refunds. Persistent access to pending proxies and refunds. Confirmation
 explicitly displays the Paideia key burn and the costs.
 
-### D10 — No dev fee
-Argus takes **no** dev fee on stake recovery. It recovers stranded funds; a percentage cut
-reads badly. Contract-mandated costs remain and are not an Argus fee: Paideia's fixed
-executor layout requires a 0.1 ERG incentive output, 0.002 ERG executor output and 0.002 ERG
-miner fee. The freely selectable executor destination routes to the user's own wallet when
-Argus executes.
+### D10 — Standard Argus fee, as on every other built transaction
+Stake recovery pays the ordinary Argus app fee: a **flat 0.0011 ERG**
+(`argusFeeNano = 1_100_000`, `app_fee.dart:7`), the same as sends, UTXO tools, swaps and
+mints. It is not proportional and does not scale with what is recovered, so it carries none
+of the "taking a cut of stranded funds" problem a percentage fee would. Exempting recovery
+would be the anomaly, not charging it.
+
+Two consequences to be explicit about in the UI:
+
+- **Paideia costs the fee twice** — proxy creation and execution are two Argus-built
+  transactions, so 0.0022 ERG across the full unstake. The confirm sheet shows the fee on
+  each, and the screen states the total before the user starts.
+- **The refund path also pays it**, since it is likewise an Argus-built transaction.
+
+Contract-mandated costs are separate and are not an Argus fee: Paideia's fixed executor
+layout requires a 0.1 ERG incentive output, 0.002 ERG executor output and 0.002 ERG miner
+fee. The freely selectable executor destination routes to the user's own wallet when Argus
+executes, so that 0.002 ERG returns to them.
 
 ## Batches (stacked PRs)
 
