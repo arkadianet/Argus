@@ -156,24 +156,38 @@ signing. Per-pool incomplete/unavailable status — an Ergopad failure must not 
 results or refunds. Persistent access to pending proxies and refunds. Confirmation
 explicitly displays the Paideia key burn and the costs.
 
-### D10 — Standard Argus fee, as on every other built transaction
+### D10 — Standard Argus fee where the layout is ours to choose
 Stake recovery pays the ordinary Argus app fee: a **flat 0.0011 ERG**
 (`argusFeeNano = 1_100_000`, `app_fee.dart:7`), the same as sends, UTXO tools, swaps and
 mints. It is not proportional and does not scale with what is recovered, so it carries none
-of the "taking a cut of stranded funds" problem a percentage fee would. Exempting recovery
-would be the anomaly, not charging it.
+of the "taking a cut of stranded funds" problem a percentage fee would.
 
-Two consequences to be explicit about in the UI:
+It applies to every recovery transaction whose output layout Argus controls:
 
-- **Paideia costs the fee twice** — proxy creation and execution are two Argus-built
-  transactions, so 0.0022 ERG across the full unstake. The confirm sheet shows the fee on
-  each, and the screen states the total before the user starts.
-- **The refund path also pays it**, since it is likewise an Argus-built transaction.
+- **Ergopad recovery** — one transaction, pays the fee.
+- **Paideia proxy creation** — an ordinary wallet-built transaction, pays the fee.
 
-Contract-mandated costs are separate and are not an Argus fee: Paideia's fixed executor
-layout requires a 0.1 ERG incentive output, 0.002 ERG executor output and 0.002 ERG miner
-fee. The freely selectable executor destination routes to the user's own wallet when Argus
-executes, so that 0.002 ERG returns to them.
+It **cannot** apply to the two transactions whose layout the deployed Paideia contract
+pins, and those are exempt:
+
+- **Paideia refund.** The proxy's refund branch requires `OUTPUTS.size == 2`,
+  `OUTPUTS(0).propositionBytes == SELF.R5`, `OUTPUTS(0).tokens == SELF.tokens` and
+  `OUTPUTS(0).value == SELF.value - 1_000_000` — an equality, not a floor. With the proxy
+  as the sole input, conservation leaves exactly 0.001 ERG for the second output, the miner
+  fee. A third output fails the script, a larger deduction fails, and overfunding the proxy
+  raises the required recipient output by the same amount, so it cannot buy room.
+- **Paideia unstake execution.** The full-unstake branch requires exactly five outputs,
+  with three of their values pinned. Adding a fee output makes the proposition false.
+
+This is proven, not argued: `tests/proxy_contract_audit.rs` reduces each variant under the
+pinned interpreter and asserts `TrivialProp(false)` for the fee-bearing forms, while an
+independently assembled two-output refund reduces to `true`.
+
+So a Paideia recovery pays the Argus fee **once**, at proxy creation. Contract-mandated
+costs are separate and are not an Argus fee: 0.1 ERG incentive output, 0.002 ERG executor
+output and 0.002 ERG miner fee on execution, and 0.001 ERG deducted on refund. The freely
+selectable executor destination routes to the user's own wallet when Argus executes, so
+that 0.002 ERG returns to them.
 
 ## Batches (stacked PRs)
 
