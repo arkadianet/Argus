@@ -180,7 +180,7 @@ const discoverExplainers = <DiscoverFeature, DiscoverExplainer>{
     route: '/dapps',
     what: 'Ergo dApps talk to a wallet through the EIP-12 connector that Nautilus made standard. Argus answers the same calls, so a site sees a connected wallet, reads your addresses and boxes, and asks you to sign what it builds.',
     can: [
-      'Connect to SigmaFi, Duckpools, ErgoDEX, Rosen and any other EIP-12 site',
+      'Connect to SigmaFi, Duckpools, Crux Finance, Rosen and any other EIP-12 site',
       'Review every transaction a site proposes before signing it',
       'Switch between a desktop and a mobile view of the site',
     ],
