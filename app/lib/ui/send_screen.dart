@@ -1,4 +1,5 @@
 import 'widgets/error_sheet.dart';
+import 'widgets/tx_result_view.dart';
 import '../services/app_fee.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -6,7 +7,6 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart' show SharePlus, ShareParams, XFile;
-import 'package:url_launcher/url_launcher.dart';
 
 import '../format.dart';
 import '../services/contacts_service.dart';
@@ -1186,33 +1186,10 @@ class _SendScreenState extends State<SendScreen> {
       ),
       body: _resultTxId != null
           ? Center(
-              child: Padding(
-                padding: const EdgeInsets.all(28),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.check_circle, size: 64, color: Color(0xFF5B9E6D)),
-                    const SizedBox(height: 20),
-                    Text('Sent!', style: Theme.of(context).textTheme.headlineSmall),                    const SizedBox(height: 8),
-                    const SizedBox(width: 48, child: Hairline(gold: true)),
-                    const SizedBox(height: 16),
-                    SelectableText(_resultTxId!, style: monoStyle(context, size: 12)),
-                    const SizedBox(height: 12),
-                    TextButton.icon(
-                      onPressed: () {
-                        final url = networkController.explorerTx(_resultTxId!);
-                        launchUrl(Uri.parse(url));
-                      },
-                      icon: const Icon(Icons.open_in_browser, size: 16),
-                      label: const Text('View on explorer'),
-                    ),
-                    const SizedBox(height: 20),
-                    FilledButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Done'),
-                    ),
-                  ],
-                ),
+              child: TxResultView(
+                txId: _resultTxId!,
+                headline: 'Sent!',
+                onDismiss: () => Navigator.pop(context),
               ),
             )
           : Padding(
