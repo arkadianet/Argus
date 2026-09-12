@@ -155,7 +155,9 @@ void main() {
     await next;
     gate.complete({'balance_nano_erg': 999, 'tokens': []});
     await old;
-    expect(c.balanceNano, 8);
+    // B has no remembered addresses: A's address must not be queried for B.
+    expect(c.balanceNano, isNull);
+    expect(c.receiveAddress, isNull);
   });
 
   test('BATCH A: late discovery cannot replace a new wallet address', () async {

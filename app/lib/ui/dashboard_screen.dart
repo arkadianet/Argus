@@ -1,4 +1,6 @@
+import '../services/public_wallet_sync.dart';
 import 'widgets/error_sheet.dart';
+import 'widgets/wallet_view_boundary.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -99,8 +101,8 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   /// Poll for mempool changes (pending activity, balance, spendable UTXOs)
   /// while the dashboard is open. A tick is a light refresh on the known
-  /// addresses; discovery and node probing only run on unlock and pull to
-  /// refresh, plus the slower probe timer. Paused while backgrounded; a
+  /// addresses; discovery also runs when its freshness interval expires.
+  /// Manual refresh forces discovery; the probe timer remains separate. Paused while backgrounded; a
   /// tick is skipped if the previous refresh is still in flight.
   Timer? _pollTimer;
   Timer? _probeTimer;
@@ -264,6 +266,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         return;
       }
     }
+    if (!_pollBackgrounded && publicWalletSync.isDue()) {
+      unawaited(_refreshOtherBalances());
+    }
     final now = DateTime.now();
     if (!shouldPoll(
       now: now,
@@ -310,6 +315,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    publicWalletSync.setForeground(state == AppLifecycleState.resumed);
     // Pause mempool polling while backgrounded; resume on return.
     final backgrounded =
         state == AppLifecycleState.paused || state == AppLifecycleState.hidden;
@@ -348,7 +354,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     _visitedTabs
       ..clear()
       ..add(0);
-    _sync.reset();
+    _sync.deactivate();
     stealthService.reset();
     mixService.reset();
     duckpoolsService.reset();
@@ -395,31 +401,28 @@ class _DashboardScreenState extends State<DashboardScreen>
     // addresses does.
     for (final w in others) {
       final known = await WalletDatabaseService.lastKnownBalance(w.walletId);
-      if (known != null) _lastKnown[w.walletId] = known;
+      if (known != null) {
+        _lastKnown[w.walletId] = known;
+        _otherBalances[w.walletId] = known.balanceNano;
+      }
     }
     if (mounted) setState(() {});
-    final results = await Future.wait(others.map((w) async {
-      final addresses = lockedWalletAddresses(
-        knownAddresses: _lastKnown[w.walletId]?.addresses ?? const [],
-        displayAddress: w.displayAddress,
-      );
-      if (addresses.isEmpty) return null;
-      try {
-        final each = await Future.wait(addresses.map((a) =>
-            walletService.getBalanceNano(a, nodeUrl: networkController.activeUrl)));
-        return each.fold<int>(0, (sum, v) => sum + v);
-      } catch (_) {
-        // Keep the snapshot rather than showing a wrong zero.
-        return null;
-      }
-    }));
+    await publicWalletSync.tick(
+      wallets: {for (final w in _wallets) w.walletId: w.displayAddress},
+      controller: _sync,
+      activeId: walletService.activeWalletId,
+      unlocked: () => walletService.isUnlocked,
+    );
     if (gen != _otherGeneration || !mounted) return;
-    setState(() {
-      _otherBalances.clear();
-      for (var i = 0; i < others.length; i++) {
-        _otherBalances[others[i].walletId] = results[i];
+    for (final w in others) {
+      final known = await WalletDatabaseService.lastKnownBalance(w.walletId);
+      if (gen != _otherGeneration || !mounted) return;
+      if (known != null) {
+        _lastKnown[w.walletId] = known;
+        _otherBalances[w.walletId] = known.balanceNano;
       }
-    });
+    }
+    setState(() {});
   }
 
   Future<void> _init() async {
@@ -480,19 +483,41 @@ class _DashboardScreenState extends State<DashboardScreen>
       setState(_resetLocked);
       return;
     }
+    final walletId = walletService.activeWalletId;
+    if (walletId == null || walletId != _walletId) return;
+    _incoming.reset();
+    stealthService.reset();
+    mixService.reset();
+    duckpoolsService.reset();
+    sigmafiService.clearIfForeign();
+    _sync.activateWallet(walletId);
+    if (_sync.receiveAddress != null) {
+      setState(() {
+        _walletUnlocked = true;
+        _status = 'Unlocked';
+      });
+    }
     // Record the pinned address if only its index was ever stored, so the
     // wallet list shows the pinned address rather than index 0 once this
     // wallet is locked again.
     await walletService.backfillPinnedAddress().catchError((_) {});
     // 1. Derive the main address locally and paint from the cache (instant).
+    if (walletService.activeWalletId != walletId || _walletId != walletId)
+      return;
     final ok = await _sync.hydrateAfterUnlock();
-    if (!mounted) return;
+    if (!mounted ||
+        walletService.activeWalletId != walletId ||
+        _walletId != walletId)
+      return;
     if (!walletService.isUnlocked) {
       setState(_resetLocked);
       return;
     }
     await _loadWallets();
-    if (!mounted) return;
+    if (!mounted ||
+        walletService.activeWalletId != walletId ||
+        _walletId != walletId)
+      return;
     if (!ok) {
       debugPrint('argus: address derivation failed after unlock');
       setState(() {
@@ -505,20 +530,15 @@ class _DashboardScreenState extends State<DashboardScreen>
       _walletUnlocked = true;
       _status = 'Unlocked';
     });
-    _incoming.reset();
     // The published stealth string comes straight from the seed, so it can
     // be shown before any network call. Restoring a wallet lands here too,
     // and the refresh below runs the first stealth scan.
-    stealthService.reset();
-    mixService.reset();
-    duckpoolsService.reset();
-    sigmafiService.clearIfForeign();
     unawaited(stealthService.loadAddress());
     unawaited(mixService.load());
     unawaited(duckpoolsService.load());
     notificationService.requestPermission();
-    // 2. Full sync (discovery + balances + activity) in the background.
-    await _sync.refresh(discover: true);
+    // 2. Refresh known addresses; rescan only when discovery is due.
+    await _sync.refresh(discover: true, forceDiscovery: false);
   }
 
   Future<bool> _pinAllowed() async {
@@ -709,7 +729,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     setState(() => _status = 'Switching wallet…');
     try {
       if (walletService.isUnlocked && walletService.activeWalletId != walletId) {
-        await walletService.lock();
+        await walletService.lockForSwitch();
       }
       _walletId = walletId;
       await _refreshUnlockMethods();
@@ -967,7 +987,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         _walletId = switchedTo;
         // Nothing of the previous wallet may carry over: its rows, its
         // figures, or a broadcast it made moments ago.
-        _sync.reset();
+        _sync.deactivate();
         await sessionLock.run(() async {
           await _refreshUnlockMethods();
           await _afterUnlock();
@@ -993,7 +1013,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget build(BuildContext context) {
     if (_loading) return _splash();
 
-    final showTabs = _walletUnlocked;
+    final showTabs = _walletUnlocked && _sync.ownsWallet(_walletId);
     return PopScope(
       canPop: !showTabs || _tab == 0,
       onPopInvokedWithResult: (didPop, _) {
@@ -1031,11 +1051,12 @@ class _DashboardScreenState extends State<DashboardScreen>
           children: [
             const WarningStrip(),
             Expanded(
-              child: AnimatedSwitcher(
-                duration: const Duration(milliseconds: 280),
-                switchInCurve: Curves.easeOut,
-                switchOutCurve: Curves.easeIn,
-                child: showTabs ? _tabs() : _gate(),
+              child: WalletViewBoundary(
+                controller: _sync,
+                walletId: _walletId,
+                unlocked: _walletUnlocked,
+                ledger: (_) => _tabs(),
+                gate: (_) => _gate(),
               ),
             ),
           ],
@@ -1778,8 +1799,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     final balance = display.balanceNano;
     final stealthNote = display.note;
     final addr = isActive ? (_sync.receiveAddress ?? w.displayAddress) : w.displayAddress;
-    // Only a figure that could not be refreshed is dated.
-    final asOf = !isActive && live == null && known != null
+    // Public snapshots always carry their age, even after a successful read.
+    final asOf = !isActive && known != null
         ? formatSyncAge(DateTime.now().subtract(known.age))
         : null;
     return InkWell(
@@ -1862,7 +1883,12 @@ class _DashboardScreenState extends State<DashboardScreen>
                 balance,
                 isActive ? _sync.isSyncing : false,
                 asOf: asOf,
-                note: stealthNote ?? lockedStealthNote,
+                note: isActive
+                    ? stealthNote
+                    : [
+                        publicSnapshotNote,
+                        if (lockedStealthNote != null) lockedStealthNote,
+                      ].join(' · '),
                 tokens: isActive
                     ? [
                         for (final t in _sync.displayTokens)

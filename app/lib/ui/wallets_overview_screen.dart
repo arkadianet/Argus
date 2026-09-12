@@ -1,3 +1,5 @@
+import '../services/public_wallet_sync.dart';
+import '../services/wallet_sync_controller.dart';
 import 'package:flutter/material.dart';
 
 import '../format.dart';
@@ -23,18 +25,41 @@ String overviewHeadline({required int wallets, required int watchOnly}) {
 String overviewTotalLine({required int known, required int total}) =>
     known == 0 ? 'Total balance unavailable' : 'Visible total  ${formatErg(total)}';
 
+/// Returns the balance to show for [w]. `null` means "unknown".
+Future<int?> overviewWalletBalance(
+  WalletInfo w, {
+  String? selectedWalletId,
+  int? activeBalanceNano,
+}) {
+  final isActiveUnlocked =
+      w.walletId == walletService.activeWalletId &&
+      w.walletId == selectedWalletId &&
+      walletService.isUnlocked;
+  if (isActiveUnlocked) {
+    return Future.value(activeBalanceNano);
+  }
+  return WalletDatabaseService.lastKnownBalance(w.walletId).then((known) {
+    if (known != null) return Future<int?>.value(known.balanceNano);
+    return Future<int?>.value(null);
+  });
+}
+
 /// Full-wallet overview with balances visible without unlocking.
 ///
-/// For wallets other than the active one the balance is fetched from the node
-/// using the wallet's first public address (the same as watch-only) — no seed
-/// material is touched. The active unlocked wallet shows its live synced
+/// Non-active wallets read the same known-address public snapshots as the
+/// dashboard. The active unlocked wallet shows its live synced
 /// balance instead. Selecting another wallet returns its id for a switch.
 class WalletOverviewScreen extends StatefulWidget {
   const WalletOverviewScreen({
     super.key,
     this.selectedWalletId,
     this.activeBalanceNano,
+    this.initializeWalletService,
   });
+
+  /// Allows widget tests to use the mock bridge without native initialization.
+  @visibleForTesting
+  final Future<void> Function()? initializeWalletService;
 
   /// The wallet currently selected on the dashboard (may be locked).
   final String? selectedWalletId;
@@ -57,12 +82,14 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
   void initState() {
     super.initState();
     watchOnlyService.addListener(_onWatchChanged);
+    publicWalletSync.addListener(_onPublicChanged);
     _load();
   }
 
   @override
   void dispose() {
     watchOnlyService.removeListener(_onWatchChanged);
+    publicWalletSync.removeListener(_onPublicChanged);
     super.dispose();
   }
 
@@ -70,9 +97,30 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
     if (mounted) _refreshBalances();
   }
 
+  Future<void> _onPublicChanged() async {
+    final results = await Future.wait(
+      _wallets.map(
+        (w) async => (
+          w.walletId,
+          await overviewWalletBalance(
+            w,
+            selectedWalletId: widget.selectedWalletId,
+            activeBalanceNano: widget.activeBalanceNano,
+          ),
+        ),
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      for (final (id, balance) in results) {
+        _balances[id] = balance;
+      }
+    });
+  }
+
   Future<void> _load() async {
     try {
-      await walletService.init();
+      await (widget.initializeWalletService ?? walletService.init)();
       final wallets = await walletService.listWallets();
       if (!mounted) return;
       setState(() {
@@ -91,9 +139,26 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
     if (_refreshing) return;
     setState(() => _refreshing = true);
     try {
-      final futures = _wallets.map((w) async => (w, await _walletBalance(w)));
+      await publicWalletSync.tick(
+        wallets: {for (final w in _wallets) w.walletId: w.displayAddress},
+        controller: walletSyncController,
+        activeId: walletService.activeWalletId,
+        unlocked: () => walletService.isUnlocked,
+      );
+      final futures = _wallets.map(
+        (w) async => (
+          w,
+          await overviewWalletBalance(
+            w,
+            selectedWalletId: widget.selectedWalletId,
+            activeBalanceNano: widget.activeBalanceNano,
+          ),
+        ),
+      );
       final watchAddrs = watchOnlyService.addresses;
-      final watchFutures = watchAddrs.map((a) async => (a, await _addressBalance(a)));
+      final watchFutures = watchAddrs.map(
+        (a) async => (a, await _addressBalance(a)),
+      );
       final results = await Future.wait(futures);
       final watchResults = await Future.wait(watchFutures);
       if (!mounted) return;
@@ -115,25 +180,6 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
       .getBalanceNano(addr, nodeUrl: networkController.activeUrl)
       .then<int?>((n) => n)
       .catchError((Object _) => null);
-
-  /// Returns the balance to show for [w]. `null` means "unknown".
-  Future<int?> _walletBalance(WalletInfo w) {
-    final isActiveUnlocked = w.walletId == walletService.activeWalletId &&
-        w.walletId == widget.selectedWalletId &&
-        walletService.isUnlocked;
-    if (isActiveUnlocked) {
-      return Future.value(widget.activeBalanceNano);
-    }
-    return WalletDatabaseService.lastKnownBalance(w.walletId).then((known) {
-      if (known != null) return Future<int?>.value(known.balanceNano);
-      final addr = w.displayAddress;
-      if (addr == null || addr.isEmpty) return Future<int?>.value(null);
-      return walletService
-          .getBalanceNano(addr, nodeUrl: networkController.activeUrl)
-          .then<int?>((n) => n)
-          .catchError((Object _) => null);
-    });
-  }
 
   void _snack(String msg) {
     if (!mounted) return;
@@ -335,6 +381,12 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                           : 'wallet_id: ${w.walletId.length >= 8 ? w.walletId.substring(0, 8) : w.walletId}\u2026',
                       style: monoStyle(context, size: 11),
                     ),
+                    if (!isActiveUnlocked)
+                      Text(
+                        publicSnapshotNote,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+
                   ],
                 ),
               ),
