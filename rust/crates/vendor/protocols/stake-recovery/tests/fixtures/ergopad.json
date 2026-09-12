@@ -1,0 +1,774 @@
+{
+  "explorer": {
+    "id": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+    "blockId": "4b6dafc4a6afdcdb4b1ae94df99c6036c98b98330b11fc66afedf278dd29372b",
+    "inclusionHeight": 1765293,
+    "timestamp": 1776346927121,
+    "index": 1,
+    "globalIndex": 4453279,
+    "numConfirmations": 105544,
+    "inputs": [
+      {
+        "boxId": "1449644d3ef93a4a0266b497ab448f4dd176171ebdcd99af4f6b761e2f122619",
+        "value": 1000000,
+        "index": 0,
+        "spendingProof": null,
+        "outputBlockId": "7ba1d8a922a2b824e361d647412cf56dbd62e17e69a9f7545ed50a8b22e9a1ae",
+        "outputTransactionId": "2b87242b9ca77acfc4ac0c94cea8f85b20196e0525982b335cc545379eddbe55",
+        "outputIndex": 0,
+        "outputGlobalIndex": 20264869,
+        "outputCreatedAt": 1764120,
+        "outputSettledAt": 1764121,
+        "ergoTree": "1063040204000402040004020e20d71693c49a84fbbecd4908c94813b46514b18b67a99952dc1e6e4791556de4130400040004080408040404020402040404000400040004020404040405020406040605020e2025b7486b1a78647ad7d50a287e5e958b4e452a4bc86938c94218d706bc377ff0040004020580dddb01050205d00f04020502040204000e200d01f2f0b3254b4a1731e1b61ad77641fe54de2bd68d1c6fc1ae4e7e9ddfb212040604040402040604000e200549ea3374a36b7a22a803766af732e61798463c3332c5f6d86c8ab9195eed590402050204040500040205020404040404060400040004060500040004020400040005fdbfa8ca9a3a0402048090e4c00405100500050c050a05c801050805fa0105d00f0504052805c801053205c8010404040004020402050005000500040204040404050205000406040605020500050004040400040205d00f0400040201010100d816d601b2a5730000d602db63087201d603b27202730100d6048c720301d605db6308a7d606b27205730200d6078c720601d6089372047207d609b2a5730300d60ae4c672090411d60be4c6a70411d60c8c720602d60ddb63087209d60eb2720d730400d60f8c720e02d610db6903db6503fed6118c720302d6127305d613b2720d730600d614b27205730700d615b2720b730800d6169683070193c27209c2a793c17209c1a7938c7213018c721401938c7213028c721402938c720e01720793b2720a730900721593b1720d730a957208d807d617b27202730b00d6188c721702d619b2720b730c00d61ae4c672010411d61be4c67201050ed61cb2a5730d00d61db2db6308721c730e00d196831101721693b2720a730f009ab2720b731000721893b2720a731100721993b2720a7312009ab2720b731300731493b2720a731500b2720b73160093720f99720c731793cbc27201731893b2721a731900721992b2721a731a00997210731b93721bc5a77208937211731c938c7217017212927218731d93c2721cc2b2a4731e00938c721d01721b938c721d02731fd804d617b2a4732000d618db63087217d619b27218732100d61a8c72190195ed93721a732292b1a47323d804d61bb2a4732400d61ce4c6721b0411d61db2720b732500d61eb2720a732600d1968309017216938cb2db6308721b73270001732893b2721c73290099721d732a93b2721c732b00732c93b2720a732d009a721d732e93b2720a732f00b2720b73300093721e9ab2720b73310072158f721e721093720f720cd802d61bb2720b733200d61cb2720a73330095ed91721b721c92b1a47334d80fd61dd9011d0c63b0721d7335d9011f4163d802d621db63088c721f02d6228c721f019593b1722173367222d802d623b57221d901234d0e938c7223017212d624b172239593722473379a72228cb27223733800029593722473397222733ad61eda721d01a4d61fda721d01a5d620e4c672170411d621b27220733b00d6229d99721072217e733c05d62399721b721cd62495927222733d733e95927222733f9d9c7223734073419592722273429d9c7223734373449592722273459d9c7223734673479d9c722373487349d625b2a4734a00d626b27220734b00d627b2720b734c00d628b27218734d00d629998c7228027223d62a937229734ed62b8c722801d196830f0191721e734f91721f73509399721e721f72247216aedb63087225d9012c4d0e938c722c01e4c67217050e937226722793721c99721b722393b2720a735100722793b2720a73520099b2720b73530095722a7354735593b2720a735600b2720b73570093720f9a720c95722a7358735993c27201c27225937204722b937211997223722495917229735ad805d62cb2a5735b00d62ddb6308722cd62eb2722d735c00d62fb2722d735d00d630e4c6722c04119683080193c1722cc17217938c722e01721a938c722e028c721902938c722f01722b938c722f027229927229735e93b27230735f00722693b2723073600072217361d17362",
+        "ergoTreeConstants": "0: 1\n1: 0\n2: 1\n3: 0\n4: 1\n5: Coll(-41,22,-109,-60,-102,-124,-5,-66,-51,73,8,-55,72,19,-76,101,20,-79,-117,103,-87,-103,82,-36,30,110,71,-111,85,109,-28,19)\n6: 0\n7: 0\n8: 4\n9: 4\n10: 2\n11: 1\n12: 1\n13: 2\n14: 0\n15: 0\n16: 0\n17: 1\n18: 2\n19: 2\n20: 1\n21: 3\n22: 3\n23: 1\n24: Coll(37,-73,72,107,26,120,100,122,-41,-43,10,40,126,94,-107,-117,78,69,42,75,-56,105,56,-55,66,24,-41,6,-68,55,127,-16)\n25: 0\n26: 1\n27: 1800000\n28: 1\n29: 1000\n30: 1\n31: 1\n32: 1\n33: 0\n34: Coll(13,1,-14,-16,-77,37,75,74,23,49,-31,-74,26,-41,118,65,-2,84,-34,43,-42,-115,28,111,-63,-82,78,126,-99,-33,-78,18)\n35: 3\n36: 2\n37: 1\n38: 3\n39: 0\n40: Coll(5,73,-22,51,116,-93,107,122,34,-88,3,118,106,-9,50,-26,23,-104,70,60,51,50,-59,-10,-40,108,-118,-71,25,94,-19,89)\n41: 1\n42: 1\n43: 2\n44: 0\n45: 1\n46: 1\n47: 2\n48: 2\n49: 3\n50: 0\n51: 0\n52: 3\n53: 0\n54: 0\n55: 1\n56: 0\n57: 0\n58: -999999999999\n59: 1\n60: 604800000\n61: 8\n62: 0\n63: 6\n64: 5\n65: 100\n66: 4\n67: 125\n68: 1000\n69: 2\n70: 20\n71: 100\n72: 25\n73: 100\n74: 2\n75: 0\n76: 1\n77: 1\n78: 0\n79: 0\n80: 0\n81: 1\n82: 2\n83: 2\n84: 1\n85: 0\n86: 3\n87: 3\n88: 1\n89: 0\n90: 0\n91: 2\n92: 0\n93: 1\n94: 1000\n95: 0\n96: 1\n97: true\n98: false",
+        "ergoTreeScript": "{\n  val box1 = OUTPUTS(placeholder[Int](0))\n  val coll2 = box1.tokens\n  val tuple3 = coll2(placeholder[Int](1))\n  val coll4 = tuple3._1\n  val coll5 = SELF.tokens\n  val tuple6 = coll5(placeholder[Int](2))\n  val coll7 = tuple6._1\n  val bool8 = coll4 == coll7\n  val box9 = OUTPUTS(placeholder[Int](3))\n  val coll10 = box9.R4[Coll[Long]].get\n  val coll11 = SELF.R4[Coll[Long]].get\n  val l12 = tuple6._2\n  val coll13 = box9.tokens\n  val tuple14 = coll13(placeholder[Int](4))\n  val l15 = tuple14._2\n  val l16 = CONTEXT.preHeader.timestamp\n  val l17 = tuple3._2\n  val coll18 = placeholder[Coll[Byte]](5)\n  val tuple19 = coll13(placeholder[Int](6))\n  val tuple20 = coll5(placeholder[Int](7))\n  val l21 = coll11(placeholder[Int](8))\n  val bool22 = allOf(\n    Coll[Boolean](\n      box9.propositionBytes == SELF.propositionBytes, box9.value == SELF.value, tuple19._1 == tuple20._1, tuple19._2 == tuple20._2, tuple14._1 == coll7, coll10(\n        placeholder[Int](9)\n      ) == l21, coll13.size == placeholder[Int](10)\n    )\n  )\n  if (bool8) {(\n    val tuple23 = coll2(placeholder[Int](11))\n    val l24 = tuple23._2\n    val l25 = coll11(placeholder[Int](12))\n    val coll26 = box1.R4[Coll[Long]].get\n    val coll27 = box1.R5[Coll[Byte]].get\n    val box28 = OUTPUTS(placeholder[Int](13))\n    val tuple29 = box28.tokens(placeholder[Int](14))\n    sigmaProp(\n      allOf(\n        Coll[Boolean](\n          bool22, coll10(placeholder[Int](15)) == coll11(placeholder[Int](16)) + l24, coll10(placeholder[Int](17)) == l25, coll10(\n            placeholder[Int](18)\n          ) == coll11(placeholder[Int](19)) + placeholder[Long](20), coll10(placeholder[Int](21)) == coll11(placeholder[Int](22)), l15 == l12 - placeholder[\n            Long\n          ](23), blake2b256(box1.propositionBytes) == placeholder[Coll[Byte]](24), coll26(placeholder[Int](25)) == l25, coll26(\n            placeholder[Int](26)\n          ) >= l16 - placeholder[Long](27), coll27 == SELF.id, bool8, l17 == placeholder[Long](28), tuple23._1 == coll18, l24 >= placeholder[Long](\n            29\n          ), box28.propositionBytes == INPUTS(placeholder[Int](30)).propositionBytes, tuple29._1 == coll27, tuple29._2 == placeholder[Long](31)\n        )\n      )\n    )\n  )} else {(\n    val box23 = INPUTS(placeholder[Int](32))\n    val coll24 = box23.tokens\n    val tuple25 = coll24(placeholder[Int](33))\n    val coll26 = tuple25._1\n    if ((coll26 == placeholder[Coll[Byte]](34)) && (INPUTS.size >= placeholder[Int](35))) {(\n      val box27 = INPUTS(placeholder[Int](36))\n      val coll28 = box27.R4[Coll[Long]].get\n      val l29 = coll11(placeholder[Int](37))\n      val l30 = coll10(placeholder[Int](38))\n      sigmaProp(\n        allOf(\n          Coll[Boolean](\n            bool22, box27.tokens(placeholder[Int](39))._1 == placeholder[Coll[Byte]](40), coll28(placeholder[Int](41)) == l29 - placeholder[Long](42), coll28(\n              placeholder[Int](43)\n            ) == placeholder[Long](44), coll10(placeholder[Int](45)) == l29 + placeholder[Long](46), coll10(placeholder[Int](47)) == coll11(\n              placeholder[Int](48)\n            ), l30 == coll11(placeholder[Int](49)) + l21, l30 < l16, l15 == l12\n          )\n        )\n      )\n    )} else {(\n      val l27 = coll11(placeholder[Int](50))\n      val l28 = coll10(placeholder[Int](51))\n      if ((l27 > l28) && (INPUTS.size >= placeholder[Int](52))) {(\n        val func29 = {(coll29: Coll[Box]) => coll29.fold(placeholder[Long](53), {(tuple31: (Long, Box)) =>\n              val coll33 = tuple31._2.tokens\n              val l34 = tuple31._1\n              if (coll33.size == placeholder[Int](54)) { l34 } else {(\n                val coll35 = coll33.filter({(tuple35: (Coll[Byte], Long)) => tuple35._1 == coll18 })\n                val i36 = coll35.size\n                if (i36 == placeholder[Int](55)) { l34 + coll35(placeholder[Int](56))._2 } else { if (i36 == placeholder[Int](57)) { l34 } else { placeholder[Long](58) } }\n              )}\n            }) }\n        val l30 = func29(INPUTS)\n        val l31 = func29(OUTPUTS)\n        val coll32 = box23.R4[Coll[Long]].get\n        val l33 = coll32(placeholder[Int](59))\n        val l34 = l16 - l33 / placeholder[Int](60).toLong\n        val l35 = l27 - l28\n        val l36 = if (l34 >= placeholder[Long](61)) { placeholder[Long](62) } else {\n          if (l34 >= placeholder[Long](63)) { l35 * placeholder[Long](64) / placeholder[Long](65) } else {\n            if (l34 >= placeholder[Long](66)) { l35 * placeholder[Long](67) / placeholder[Long](68) } else {\n              if (l34 >= placeholder[Long](69)) { l35 * placeholder[Long](70) / placeholder[Long](71) } else {\n                l35 * placeholder[Long](72) / placeholder[Long](73)\n              }\n            }\n          }\n        }\n        val box37 = INPUTS(placeholder[Int](74))\n        val l38 = coll32(placeholder[Int](75))\n        val l39 = coll11(placeholder[Int](76))\n        val tuple40 = coll24(placeholder[Int](77))\n        val l41 = tuple40._2 - l35\n        val bool42 = l41 == placeholder[Long](78)\n        val coll43 = tuple40._1\n        sigmaProp(\n          allOf(\n            Coll[Boolean](\n              l30 > placeholder[Long](79), l31 > placeholder[Long](80), l30 - l31 == l36, bool22, box37.tokens.exists(\n                {(tuple44: (Coll[Byte], Long)) => tuple44._1 == box23.R5[Coll[Byte]].get }\n              ), l38 == l39, l28 == l27 - l35, coll10(placeholder[Int](81)) == l39, coll10(placeholder[Int](82)) == coll11(placeholder[Int](83)) - if (bool42) {\n                placeholder[Long](84)\n              } else { placeholder[Long](85) }, coll10(placeholder[Int](86)) == coll11(placeholder[Int](87)), l15 == l12 + if (bool42) {\n                placeholder[Long](88)\n              } else { placeholder[Long](89) }, box1.propositionBytes == box37.propositionBytes, coll4 == coll43, l17 == l35 - l36, if (l41 > placeholder[Long](\n                90\n              )) {(\n                val box44 = OUTPUTS(placeholder[Int](91))\n                val coll45 = box44.tokens\n                val tuple46 = coll45(placeholder[Int](92))\n                val tuple47 = coll45(placeholder[Int](93))\n                val coll48 = box44.R4[Coll[Long]].get\n                allOf(\n                  Coll[Boolean](\n                    box44.value == box23.value, tuple46._1 == coll26, tuple46._2 == tuple25._2, tuple47._1 == coll43, tuple47._2 == l41, l41 >= placeholder[\n                      Long\n                    ](94), coll48(placeholder[Int](95)) == l38, coll48(placeholder[Int](96)) == l33\n                  )\n                )\n              )} else { placeholder[Boolean](97) }\n            )\n          )\n        )\n      )} else { sigmaProp(placeholder[Boolean](98)) }\n    )}\n  )}\n}",
+        "address": "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",
+        "assets": [
+          {
+            "tokenId": "05cde13424a7972fbcd0b43fccbb5e501b1f75302175178fc86d8f243f3f3125",
+            "index": 0,
+            "amount": 1,
+            "name": "ergopad Stake State",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "1028de73d018f0c9a374b71555c5b8f1390994f2f41633e7b9d68f77735782ee",
+            "index": 1,
+            "amount": 999998018,
+            "name": "ergopad Stake Token",
+            "decimals": 0,
+            "type": "EIP-004"
+          }
+        ],
+        "additionalRegisters": {
+          "R4": {
+            "serializedValue": "1105929ae481b9018e11fc1ec8d6c8b9a86580f0b252",
+            "sigmaType": "Coll[SLong]",
+            "renderedValue": "[24832149129,1095,1982,1740595860900,86400000]"
+          }
+        }
+      },
+      {
+        "boxId": "366b60da2220fbe9703bad17e6cd632debdf1a4b73cc6d31f2b92790e7d6eccc",
+        "value": 1000000,
+        "index": 1,
+        "spendingProof": null,
+        "outputBlockId": "86ceba1fffc71b3e7e820e0bb2a2c96214e9c5b321aede948afc9c8654d3a769",
+        "outputTransactionId": "6ebabcd162766cadd31e388eba9849bad4e84197155128debd3e600794b14f74",
+        "outputIndex": 14,
+        "outputGlobalIndex": 12111521,
+        "outputCreatedAt": 1471942,
+        "outputSettledAt": 1471945,
+        "ergoTree": "1017040004000e200549ea3374a36b7a22a803766af732e61798463c3332c5f6d86c8ab9195eed59040204000400040204020400040005020402040204060400040204040e2005cde13424a7972fbcd0b43fccbb5e501b1f75302175178fc86d8f243f3f312504020402010001010100d802d601b2a4730000d6028cb2db6308720173010001959372027302d80bd603b2a5dc0c1aa402a7730300d604e4c672030411d605e4c6a70411d606db63087203d607b27206730400d608db6308a7d609b27208730500d60ab27206730600d60bb27208730700d60c8c720b02d60de4c672010411d19683090193c17203c1a793c27203c2a793b272047308009ab27205730900730a93e4c67203050ee4c6a7050e93b27204730b00b27205730c00938c7207018c720901938c7207028c720902938c720a018c720b01938c720a029a720c9d9cb2720d730d00720cb2720d730e00d801d603b2a4730f009593c57203c5a7d801d604b2a5731000d1ed93720273119593c27204c2a7d801d605c67204050e95e67205ed93e47205e4c6a7050e938cb2db6308b2a573120073130001e4c67203050e73147315d17316",
+        "ergoTreeConstants": "0: 0\n1: 0\n2: Coll(5,73,-22,51,116,-93,107,122,34,-88,3,118,106,-9,50,-26,23,-104,70,60,51,50,-59,-10,-40,108,-118,-71,25,94,-19,89)\n3: 1\n4: 0\n5: 0\n6: 1\n7: 1\n8: 0\n9: 0\n10: 1\n11: 1\n12: 1\n13: 3\n14: 0\n15: 1\n16: 2\n17: Coll(5,-51,-31,52,36,-89,-105,47,-68,-48,-76,63,-52,-69,94,80,27,31,117,48,33,117,23,-113,-56,109,-113,36,63,63,49,37)\n18: 1\n19: 1\n20: false\n21: true\n22: false",
+        "ergoTreeScript": "{\n  val box1 = INPUTS(placeholder[Int](0))\n  val coll2 = box1.tokens(placeholder[Int](1))._1\n  if (coll2 == placeholder[Coll[Byte]](2)) {(\n    val box3 = OUTPUTS(INPUTS.indexOf(SELF, placeholder[Int](3)))\n    val coll4 = box3.R4[Coll[Long]].get\n    val coll5 = SELF.R4[Coll[Long]].get\n    val coll6 = box3.tokens\n    val tuple7 = coll6(placeholder[Int](4))\n    val coll8 = SELF.tokens\n    val tuple9 = coll8(placeholder[Int](5))\n    val tuple10 = coll6(placeholder[Int](6))\n    val tuple11 = coll8(placeholder[Int](7))\n    val l12 = tuple11._2\n    val coll13 = box1.R4[Coll[Long]].get\n    sigmaProp(\n      allOf(\n        Coll[Boolean](\n          box3.value == SELF.value, box3.propositionBytes == SELF.propositionBytes, coll4(placeholder[Int](8)) == coll5(placeholder[Int](9)) + placeholder[\n            Long\n          ](10), box3.R5[Coll[Byte]].get == SELF.R5[Coll[Byte]].get, coll4(placeholder[Int](11)) == coll5(\n            placeholder[Int](12)\n          ), tuple7._1 == tuple9._1, tuple7._2 == tuple9._2, tuple10._1 == tuple11._1, tuple10._2 == l12 + coll13(placeholder[Int](13)) * l12 / coll13(\n            placeholder[Int](14)\n          )\n        )\n      )\n    )\n  )} else {(\n    val box3 = INPUTS(placeholder[Int](15))\n    if (box3.id == SELF.id) {(\n      val box4 = OUTPUTS(placeholder[Int](16))\n      sigmaProp((coll2 == placeholder[Coll[Byte]](17)) && if (box4.propositionBytes == SELF.propositionBytes) {(\n          val opt5 = box4.R5[Coll[Byte]]\n          if (opt5.isDefined) { (opt5.get == SELF.R5[Coll[Byte]].get) && (OUTPUTS(placeholder[Int](18)).tokens(placeholder[Int](19))._1 == box3.R5[Coll[Byte]].get) } else { placeholder[Boolean](20) }\n        )} else { placeholder[Boolean](21) })\n    )} else { sigmaProp(placeholder[Boolean](22)) }\n  )}\n}",
+        "address": "3eiC8caSy3jiCxCmdsiFNFJ1Ykppmsmff2TEpSsXY1Ha7xbpB923Uv2midKVVkxL3CzGbSS2QURhbHMzP9b9rQUKapP1wpUQYPpH8UebbqVFHJYrSwM3zaNEkBkM9RjjPxHCeHtTnmoun7wzjajrikVFZiWurGTPqNnd1prXnASYh7fd9E2Limc2Zeux4UxjPsLc1i3F9gSjMeSJGZv3SNxrtV14dgPGB9mY1YdziKaaqDVV2Lgq3BJC9eH8a3kqu7kmDygFomy3DiM2hYkippsoAW6bYXL73JMx1tgr462C4d2PE7t83QmNMPzQrD826NZWM2c1kehWB6Y1twd5F9JzEs4Lmd2qJhjQgGg4yyaEG9irTC79pBeGUj98frZv1Aaj6xDmZvM22RtGX5eDBBu2C8GgJw3pUYr3fQuGZj7HKPXFVuk3pSTQRqkWtJvnpc4rfiPYYNpM5wkx6CPenQ39vsdeEi36mDL8Eww6XvyN4cQxzJFcSymATDbQZ1z8yqYSQeeDKF6qCM7ddPr5g5fUzcApepqFrGNg7MqGAs1euvLGHhRk7UoeEpofFfwp3Km5FABdzAsdFR9",
+        "assets": [
+          {
+            "tokenId": "1028de73d018f0c9a374b71555c5b8f1390994f2f41633e7b9d68f77735782ee",
+            "index": 0,
+            "amount": 1,
+            "name": "ergopad Stake Token",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "d71693c49a84fbbecd4908c94813b46514b18b67a99952dc1e6e4791556de413",
+            "index": 1,
+            "amount": 614682,
+            "name": "ergopad",
+            "decimals": 2,
+            "type": "EIP-004"
+          }
+        ],
+        "additionalRegisters": {
+          "R4": {
+            "serializedValue": "11028e11f0958b9ae95f",
+            "sigmaType": "Coll[SLong]",
+            "renderedValue": "[1095,1646207788408]"
+          },
+          "R5": {
+            "serializedValue": "0e2076eedc3dedc2ed4385eded0459e0a0ede534b1a6b8dc3f9f307460f09d607ded",
+            "sigmaType": "Coll[SByte]",
+            "renderedValue": "76eedc3dedc2ed4385eded0459e0a0ede534b1a6b8dc3f9f307460f09d607ded"
+          }
+        }
+      },
+      {
+        "boxId": "c5d27661fb377f6d28077917b13dae3469bba5590c0469d8202844cae5ebb3fa",
+        "value": 1330440000,
+        "index": 2,
+        "spendingProof": "572941fa8f6b9231ab381285dbfd2c751dbd58da54299ca30a8f8fb74cb64850a926cf1c7a9921907f63b567fc15ad88325e0894efc3cb2d",
+        "outputBlockId": "fec8011bf042f3101a1009e0c5964183b63a73b92c0db35dd45fcf7ae4d74c20",
+        "outputTransactionId": "204cac958da5f106342df22a36a3996ce5f2b8f752c46b55368c669c0921ae22",
+        "outputIndex": 1,
+        "outputGlobalIndex": 20282232,
+        "outputCreatedAt": 1764786,
+        "outputSettledAt": 1764788,
+        "ergoTree": "0008cd02780cf1a6875c1e9d3b608d21f0e555c618f05d863c1817f2877f05468ec5c38f",
+        "ergoTreeConstants": "",
+        "ergoTreeScript": "{SigmaProp(ProveDlog(ECPoint(780cf1,a4b575,...)))}",
+        "address": "9fRw3bMzSNBuZNmBJd3VAJGf7XQmFfeiebJ989LvTNdxmcz3vEd",
+        "assets": [
+          {
+            "tokenId": "b5a117622d6008b5a971dcb442d275361f5d8dab1a2e29074c4af3b33de961c7",
+            "index": 0,
+            "amount": 125000000,
+            "name": "Ershiba",
+            "decimals": 3,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "76eedc3dedc2ed4385eded0459e0a0ede534b1a6b8dc3f9f307460f09d607ded",
+            "index": 1,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "6536d59bd48eed2649a09f600d59a33d3d314890968165f8fd62763733ae50aa",
+            "index": 2,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "2be94e7f03e37811d1bcf0e64d799b4dc22a9a540a9cc12d004022667fd1a2dc",
+            "index": 3,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          }
+        ],
+        "additionalRegisters": {}
+      }
+    ],
+    "dataInputs": [],
+    "outputs": [
+      {
+        "boxId": "ec9cdc46796ec6952cd0da7ada225773795711bf14abd6d80b5978b90d8df704",
+        "transactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+        "blockId": "4b6dafc4a6afdcdb4b1ae94df99c6036c98b98330b11fc66afedf278dd29372b",
+        "value": 1000000,
+        "index": 0,
+        "globalIndex": 20294978,
+        "creationHeight": 1765291,
+        "settlementHeight": 1765293,
+        "ergoTree": "1063040204000402040004020e20d71693c49a84fbbecd4908c94813b46514b18b67a99952dc1e6e4791556de4130400040004080408040404020402040404000400040004020404040405020406040605020e2025b7486b1a78647ad7d50a287e5e958b4e452a4bc86938c94218d706bc377ff0040004020580dddb01050205d00f04020502040204000e200d01f2f0b3254b4a1731e1b61ad77641fe54de2bd68d1c6fc1ae4e7e9ddfb212040604040402040604000e200549ea3374a36b7a22a803766af732e61798463c3332c5f6d86c8ab9195eed590402050204040500040205020404040404060400040004060500040004020400040005fdbfa8ca9a3a0402048090e4c00405100500050c050a05c801050805fa0105d00f0504052805c801053205c8010404040004020402050005000500040204040404050205000406040605020500050004040400040205d00f0400040201010100d816d601b2a5730000d602db63087201d603b27202730100d6048c720301d605db6308a7d606b27205730200d6078c720601d6089372047207d609b2a5730300d60ae4c672090411d60be4c6a70411d60c8c720602d60ddb63087209d60eb2720d730400d60f8c720e02d610db6903db6503fed6118c720302d6127305d613b2720d730600d614b27205730700d615b2720b730800d6169683070193c27209c2a793c17209c1a7938c7213018c721401938c7213028c721402938c720e01720793b2720a730900721593b1720d730a957208d807d617b27202730b00d6188c721702d619b2720b730c00d61ae4c672010411d61be4c67201050ed61cb2a5730d00d61db2db6308721c730e00d196831101721693b2720a730f009ab2720b731000721893b2720a731100721993b2720a7312009ab2720b731300731493b2720a731500b2720b73160093720f99720c731793cbc27201731893b2721a731900721992b2721a731a00997210731b93721bc5a77208937211731c938c7217017212927218731d93c2721cc2b2a4731e00938c721d01721b938c721d02731fd804d617b2a4732000d618db63087217d619b27218732100d61a8c72190195ed93721a732292b1a47323d804d61bb2a4732400d61ce4c6721b0411d61db2720b732500d61eb2720a732600d1968309017216938cb2db6308721b73270001732893b2721c73290099721d732a93b2721c732b00732c93b2720a732d009a721d732e93b2720a732f00b2720b73300093721e9ab2720b73310072158f721e721093720f720cd802d61bb2720b733200d61cb2720a73330095ed91721b721c92b1a47334d80fd61dd9011d0c63b0721d7335d9011f4163d802d621db63088c721f02d6228c721f019593b1722173367222d802d623b57221d901234d0e938c7223017212d624b172239593722473379a72228cb27223733800029593722473397222733ad61eda721d01a4d61fda721d01a5d620e4c672170411d621b27220733b00d6229d99721072217e733c05d62399721b721cd62495927222733d733e95927222733f9d9c7223734073419592722273429d9c7223734373449592722273459d9c7223734673479d9c722373487349d625b2a4734a00d626b27220734b00d627b2720b734c00d628b27218734d00d629998c7228027223d62a937229734ed62b8c722801d196830f0191721e734f91721f73509399721e721f72247216aedb63087225d9012c4d0e938c722c01e4c67217050e937226722793721c99721b722393b2720a735100722793b2720a73520099b2720b73530095722a7354735593b2720a735600b2720b73570093720f9a720c95722a7358735993c27201c27225937204722b937211997223722495917229735ad805d62cb2a5735b00d62ddb6308722cd62eb2722d735c00d62fb2722d735d00d630e4c6722c04119683080193c1722cc17217938c722e01721a938c722e028c721902938c722f01722b938c722f027229927229735e93b27230735f00722693b2723073600072217361d17362",
+        "ergoTreeConstants": "0: 1\n1: 0\n2: 1\n3: 0\n4: 1\n5: Coll(-41,22,-109,-60,-102,-124,-5,-66,-51,73,8,-55,72,19,-76,101,20,-79,-117,103,-87,-103,82,-36,30,110,71,-111,85,109,-28,19)\n6: 0\n7: 0\n8: 4\n9: 4\n10: 2\n11: 1\n12: 1\n13: 2\n14: 0\n15: 0\n16: 0\n17: 1\n18: 2\n19: 2\n20: 1\n21: 3\n22: 3\n23: 1\n24: Coll(37,-73,72,107,26,120,100,122,-41,-43,10,40,126,94,-107,-117,78,69,42,75,-56,105,56,-55,66,24,-41,6,-68,55,127,-16)\n25: 0\n26: 1\n27: 1800000\n28: 1\n29: 1000\n30: 1\n31: 1\n32: 1\n33: 0\n34: Coll(13,1,-14,-16,-77,37,75,74,23,49,-31,-74,26,-41,118,65,-2,84,-34,43,-42,-115,28,111,-63,-82,78,126,-99,-33,-78,18)\n35: 3\n36: 2\n37: 1\n38: 3\n39: 0\n40: Coll(5,73,-22,51,116,-93,107,122,34,-88,3,118,106,-9,50,-26,23,-104,70,60,51,50,-59,-10,-40,108,-118,-71,25,94,-19,89)\n41: 1\n42: 1\n43: 2\n44: 0\n45: 1\n46: 1\n47: 2\n48: 2\n49: 3\n50: 0\n51: 0\n52: 3\n53: 0\n54: 0\n55: 1\n56: 0\n57: 0\n58: -999999999999\n59: 1\n60: 604800000\n61: 8\n62: 0\n63: 6\n64: 5\n65: 100\n66: 4\n67: 125\n68: 1000\n69: 2\n70: 20\n71: 100\n72: 25\n73: 100\n74: 2\n75: 0\n76: 1\n77: 1\n78: 0\n79: 0\n80: 0\n81: 1\n82: 2\n83: 2\n84: 1\n85: 0\n86: 3\n87: 3\n88: 1\n89: 0\n90: 0\n91: 2\n92: 0\n93: 1\n94: 1000\n95: 0\n96: 1\n97: true\n98: false",
+        "ergoTreeScript": "{\n  val box1 = OUTPUTS(placeholder[Int](0))\n  val coll2 = box1.tokens\n  val tuple3 = coll2(placeholder[Int](1))\n  val coll4 = tuple3._1\n  val coll5 = SELF.tokens\n  val tuple6 = coll5(placeholder[Int](2))\n  val coll7 = tuple6._1\n  val bool8 = coll4 == coll7\n  val box9 = OUTPUTS(placeholder[Int](3))\n  val coll10 = box9.R4[Coll[Long]].get\n  val coll11 = SELF.R4[Coll[Long]].get\n  val l12 = tuple6._2\n  val coll13 = box9.tokens\n  val tuple14 = coll13(placeholder[Int](4))\n  val l15 = tuple14._2\n  val l16 = CONTEXT.preHeader.timestamp\n  val l17 = tuple3._2\n  val coll18 = placeholder[Coll[Byte]](5)\n  val tuple19 = coll13(placeholder[Int](6))\n  val tuple20 = coll5(placeholder[Int](7))\n  val l21 = coll11(placeholder[Int](8))\n  val bool22 = allOf(\n    Coll[Boolean](\n      box9.propositionBytes == SELF.propositionBytes, box9.value == SELF.value, tuple19._1 == tuple20._1, tuple19._2 == tuple20._2, tuple14._1 == coll7, coll10(\n        placeholder[Int](9)\n      ) == l21, coll13.size == placeholder[Int](10)\n    )\n  )\n  if (bool8) {(\n    val tuple23 = coll2(placeholder[Int](11))\n    val l24 = tuple23._2\n    val l25 = coll11(placeholder[Int](12))\n    val coll26 = box1.R4[Coll[Long]].get\n    val coll27 = box1.R5[Coll[Byte]].get\n    val box28 = OUTPUTS(placeholder[Int](13))\n    val tuple29 = box28.tokens(placeholder[Int](14))\n    sigmaProp(\n      allOf(\n        Coll[Boolean](\n          bool22, coll10(placeholder[Int](15)) == coll11(placeholder[Int](16)) + l24, coll10(placeholder[Int](17)) == l25, coll10(\n            placeholder[Int](18)\n          ) == coll11(placeholder[Int](19)) + placeholder[Long](20), coll10(placeholder[Int](21)) == coll11(placeholder[Int](22)), l15 == l12 - placeholder[\n            Long\n          ](23), blake2b256(box1.propositionBytes) == placeholder[Coll[Byte]](24), coll26(placeholder[Int](25)) == l25, coll26(\n            placeholder[Int](26)\n          ) >= l16 - placeholder[Long](27), coll27 == SELF.id, bool8, l17 == placeholder[Long](28), tuple23._1 == coll18, l24 >= placeholder[Long](\n            29\n          ), box28.propositionBytes == INPUTS(placeholder[Int](30)).propositionBytes, tuple29._1 == coll27, tuple29._2 == placeholder[Long](31)\n        )\n      )\n    )\n  )} else {(\n    val box23 = INPUTS(placeholder[Int](32))\n    val coll24 = box23.tokens\n    val tuple25 = coll24(placeholder[Int](33))\n    val coll26 = tuple25._1\n    if ((coll26 == placeholder[Coll[Byte]](34)) && (INPUTS.size >= placeholder[Int](35))) {(\n      val box27 = INPUTS(placeholder[Int](36))\n      val coll28 = box27.R4[Coll[Long]].get\n      val l29 = coll11(placeholder[Int](37))\n      val l30 = coll10(placeholder[Int](38))\n      sigmaProp(\n        allOf(\n          Coll[Boolean](\n            bool22, box27.tokens(placeholder[Int](39))._1 == placeholder[Coll[Byte]](40), coll28(placeholder[Int](41)) == l29 - placeholder[Long](42), coll28(\n              placeholder[Int](43)\n            ) == placeholder[Long](44), coll10(placeholder[Int](45)) == l29 + placeholder[Long](46), coll10(placeholder[Int](47)) == coll11(\n              placeholder[Int](48)\n            ), l30 == coll11(placeholder[Int](49)) + l21, l30 < l16, l15 == l12\n          )\n        )\n      )\n    )} else {(\n      val l27 = coll11(placeholder[Int](50))\n      val l28 = coll10(placeholder[Int](51))\n      if ((l27 > l28) && (INPUTS.size >= placeholder[Int](52))) {(\n        val func29 = {(coll29: Coll[Box]) => coll29.fold(placeholder[Long](53), {(tuple31: (Long, Box)) =>\n              val coll33 = tuple31._2.tokens\n              val l34 = tuple31._1\n              if (coll33.size == placeholder[Int](54)) { l34 } else {(\n                val coll35 = coll33.filter({(tuple35: (Coll[Byte], Long)) => tuple35._1 == coll18 })\n                val i36 = coll35.size\n                if (i36 == placeholder[Int](55)) { l34 + coll35(placeholder[Int](56))._2 } else { if (i36 == placeholder[Int](57)) { l34 } else { placeholder[Long](58) } }\n              )}\n            }) }\n        val l30 = func29(INPUTS)\n        val l31 = func29(OUTPUTS)\n        val coll32 = box23.R4[Coll[Long]].get\n        val l33 = coll32(placeholder[Int](59))\n        val l34 = l16 - l33 / placeholder[Int](60).toLong\n        val l35 = l27 - l28\n        val l36 = if (l34 >= placeholder[Long](61)) { placeholder[Long](62) } else {\n          if (l34 >= placeholder[Long](63)) { l35 * placeholder[Long](64) / placeholder[Long](65) } else {\n            if (l34 >= placeholder[Long](66)) { l35 * placeholder[Long](67) / placeholder[Long](68) } else {\n              if (l34 >= placeholder[Long](69)) { l35 * placeholder[Long](70) / placeholder[Long](71) } else {\n                l35 * placeholder[Long](72) / placeholder[Long](73)\n              }\n            }\n          }\n        }\n        val box37 = INPUTS(placeholder[Int](74))\n        val l38 = coll32(placeholder[Int](75))\n        val l39 = coll11(placeholder[Int](76))\n        val tuple40 = coll24(placeholder[Int](77))\n        val l41 = tuple40._2 - l35\n        val bool42 = l41 == placeholder[Long](78)\n        val coll43 = tuple40._1\n        sigmaProp(\n          allOf(\n            Coll[Boolean](\n              l30 > placeholder[Long](79), l31 > placeholder[Long](80), l30 - l31 == l36, bool22, box37.tokens.exists(\n                {(tuple44: (Coll[Byte], Long)) => tuple44._1 == box23.R5[Coll[Byte]].get }\n              ), l38 == l39, l28 == l27 - l35, coll10(placeholder[Int](81)) == l39, coll10(placeholder[Int](82)) == coll11(placeholder[Int](83)) - if (bool42) {\n                placeholder[Long](84)\n              } else { placeholder[Long](85) }, coll10(placeholder[Int](86)) == coll11(placeholder[Int](87)), l15 == l12 + if (bool42) {\n                placeholder[Long](88)\n              } else { placeholder[Long](89) }, box1.propositionBytes == box37.propositionBytes, coll4 == coll43, l17 == l35 - l36, if (l41 > placeholder[Long](\n                90\n              )) {(\n                val box44 = OUTPUTS(placeholder[Int](91))\n                val coll45 = box44.tokens\n                val tuple46 = coll45(placeholder[Int](92))\n                val tuple47 = coll45(placeholder[Int](93))\n                val coll48 = box44.R4[Coll[Long]].get\n                allOf(\n                  Coll[Boolean](\n                    box44.value == box23.value, tuple46._1 == coll26, tuple46._2 == tuple25._2, tuple47._1 == coll43, tuple47._2 == l41, l41 >= placeholder[\n                      Long\n                    ](94), coll48(placeholder[Int](95)) == l38, coll48(placeholder[Int](96)) == l33\n                  )\n                )\n              )} else { placeholder[Boolean](97) }\n            )\n          )\n        )\n      )} else { sigmaProp(placeholder[Boolean](98)) }\n    )}\n  )}\n}",
+        "address": "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",
+        "assets": [
+          {
+            "tokenId": "05cde13424a7972fbcd0b43fccbb5e501b1f75302175178fc86d8f243f3f3125",
+            "index": 0,
+            "amount": 1,
+            "name": "ergopad Stake State",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "1028de73d018f0c9a374b71555c5b8f1390994f2f41633e7b9d68f77735782ee",
+            "index": 1,
+            "amount": 999998019,
+            "name": "ergopad Stake Token",
+            "decimals": 0,
+            "type": "EIP-004"
+          }
+        ],
+        "additionalRegisters": {
+          "R4": {
+            "serializedValue": "1105de959981b9018e11fa1ec8d6c8b9a86580f0b252",
+            "sigmaType": "Coll[SLong]",
+            "renderedValue": "[24831534447,1095,1981,1740595860900,86400000]"
+          }
+        },
+        "spentTransactionId": "271de840d2b2b1e276dba779c4a1d4f224000bf8419f2ae2eadb787932c27d65",
+        "mainChain": true
+      },
+      {
+        "boxId": "cd5161583456845615f4db55c36b358b5451aadabb2bc7a72745243b4947fc4f",
+        "transactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+        "blockId": "4b6dafc4a6afdcdb4b1ae94df99c6036c98b98330b11fc66afedf278dd29372b",
+        "value": 1000000,
+        "index": 1,
+        "globalIndex": 20294979,
+        "creationHeight": 1765291,
+        "settlementHeight": 1765293,
+        "ergoTree": "0008cd02780cf1a6875c1e9d3b608d21f0e555c618f05d863c1817f2877f05468ec5c38f",
+        "ergoTreeConstants": "",
+        "ergoTreeScript": "{SigmaProp(ProveDlog(ECPoint(780cf1,a4b575,...)))}",
+        "address": "9fRw3bMzSNBuZNmBJd3VAJGf7XQmFfeiebJ989LvTNdxmcz3vEd",
+        "assets": [
+          {
+            "tokenId": "d71693c49a84fbbecd4908c94813b46514b18b67a99952dc1e6e4791556de413",
+            "index": 0,
+            "amount": 614682,
+            "name": "ergopad",
+            "decimals": 2,
+            "type": "EIP-004"
+          }
+        ],
+        "additionalRegisters": {},
+        "spentTransactionId": "2a10b134fd681271528749503165119cb52d36a5fe77ffb49ad69dd52f83ca88",
+        "mainChain": true
+      },
+      {
+        "boxId": "1f97272be3e7b2af116175499265e7aaba9c7febea79dbc78238a481a7a8a0e4",
+        "transactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+        "blockId": "4b6dafc4a6afdcdb4b1ae94df99c6036c98b98330b11fc66afedf278dd29372b",
+        "value": 1270440000,
+        "index": 2,
+        "globalIndex": 20294980,
+        "creationHeight": 1765291,
+        "settlementHeight": 1765293,
+        "ergoTree": "0008cd02780cf1a6875c1e9d3b608d21f0e555c618f05d863c1817f2877f05468ec5c38f",
+        "ergoTreeConstants": "",
+        "ergoTreeScript": "{SigmaProp(ProveDlog(ECPoint(780cf1,a4b575,...)))}",
+        "address": "9fRw3bMzSNBuZNmBJd3VAJGf7XQmFfeiebJ989LvTNdxmcz3vEd",
+        "assets": [
+          {
+            "tokenId": "b5a117622d6008b5a971dcb442d275361f5d8dab1a2e29074c4af3b33de961c7",
+            "index": 0,
+            "amount": 125000000,
+            "name": "Ershiba",
+            "decimals": 3,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "76eedc3dedc2ed4385eded0459e0a0ede534b1a6b8dc3f9f307460f09d607ded",
+            "index": 1,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "6536d59bd48eed2649a09f600d59a33d3d314890968165f8fd62763733ae50aa",
+            "index": 2,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          },
+          {
+            "tokenId": "2be94e7f03e37811d1bcf0e64d799b4dc22a9a540a9cc12d004022667fd1a2dc",
+            "index": 3,
+            "amount": 1,
+            "name": "ergopad Stake Key",
+            "decimals": 0,
+            "type": "EIP-004"
+          }
+        ],
+        "additionalRegisters": {},
+        "spentTransactionId": "7beb79ec1242ab33da2b88fe261335683d6e4be4a4052eb28b7dad475b0054cc",
+        "mainChain": true
+      },
+      {
+        "boxId": "c4c907ff03e30e64b8a3153214d47e1444da830c91f8d653cd2f81fe448de165",
+        "transactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+        "blockId": "4b6dafc4a6afdcdb4b1ae94df99c6036c98b98330b11fc66afedf278dd29372b",
+        "value": 60000000,
+        "index": 3,
+        "globalIndex": 20294981,
+        "creationHeight": 1765291,
+        "settlementHeight": 1765293,
+        "ergoTree": "1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304",
+        "ergoTreeConstants": "0: 0\n1: 0\n2: Coll(16,2,4,-96,11,8,-51,2,121,-66,102,126,-7,-36,-69,-84,85,-96,98,-107,-50,-121,11,7,2,-101,-4,-37,45,-50,40,-39,89,-14,-127,91,22,-8,23,-104,-22,2,-47,-110,-93,-102,-116,-57,-89,1,115,0,115,1)\n3: Coll(1)\n4: 1",
+        "ergoTreeScript": "{sigmaProp(\n  allOf(\n    Coll[Boolean](\n      HEIGHT == OUTPUTS(placeholder[Int](0)).creationInfo._1, OUTPUTS(placeholder[Int](1)).propositionBytes == substConstants(\n        placeholder[Coll[Byte]](2), placeholder[Coll[Int]](3), Coll[SigmaProp](proveDlog(decodePoint(minerPubKey)))\n      ), OUTPUTS.size == placeholder[Int](4)\n    )\n  )\n)}",
+        "address": "2iHkR7CWvD1R4j1yZg5bkeDRQavjAaVPeTDFGGLZduHyfWMuYpmhHocX8GJoaieTx78FntzJbCBVL6rf96ocJoZdmWBL2fci7NqWgAirppPQmZ7fN9V6z13Ay6brPriBKYqLp1bT2Fk4FkFLCfdPpe",
+        "assets": [],
+        "additionalRegisters": {},
+        "spentTransactionId": "f747cbcdb936c1ee51d3b43b3b04d65ade210869a08b70cce13133d169505e2b",
+        "mainChain": true
+      }
+    ],
+    "size": 2106
+  },
+  "transaction": {
+    "id": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+    "inputs": [
+      {
+        "boxId": "1449644d3ef93a4a0266b497ab448f4dd176171ebdcd99af4f6b761e2f122619",
+        "spendingProof": {
+          "proofBytes": "",
+          "extension": {}
+        }
+      },
+      {
+        "boxId": "366b60da2220fbe9703bad17e6cd632debdf1a4b73cc6d31f2b92790e7d6eccc",
+        "spendingProof": {
+          "proofBytes": "",
+          "extension": {}
+        }
+      },
+      {
+        "boxId": "c5d27661fb377f6d28077917b13dae3469bba5590c0469d8202844cae5ebb3fa",
+        "spendingProof": {
+          "proofBytes": "572941fa8f6b9231ab381285dbfd2c751dbd58da54299ca30a8f8fb74cb64850a926cf1c7a9921907f63b567fc15ad88325e0894efc3cb2d",
+          "extension": {}
+        }
+      }
+    ],
+    "dataInputs": [],
+    "outputs": [
+      {
+        "boxId": "ec9cdc46796ec6952cd0da7ada225773795711bf14abd6d80b5978b90d8df704",
+        "value": 1000000,
+        "ergoTree": "1063040204000402040004020e20d71693c49a84fbbecd4908c94813b46514b18b67a99952dc1e6e4791556de4130400040004080408040404020402040404000400040004020404040405020406040605020e2025b7486b1a78647ad7d50a287e5e958b4e452a4bc86938c94218d706bc377ff0040004020580dddb01050205d00f04020502040204000e200d01f2f0b3254b4a1731e1b61ad77641fe54de2bd68d1c6fc1ae4e7e9ddfb212040604040402040604000e200549ea3374a36b7a22a803766af732e61798463c3332c5f6d86c8ab9195eed590402050204040500040205020404040404060400040004060500040004020400040005fdbfa8ca9a3a0402048090e4c00405100500050c050a05c801050805fa0105d00f0504052805c801053205c8010404040004020402050005000500040204040404050205000406040605020500050004040400040205d00f0400040201010100d816d601b2a5730000d602db63087201d603b27202730100d6048c720301d605db6308a7d606b27205730200d6078c720601d6089372047207d609b2a5730300d60ae4c672090411d60be4c6a70411d60c8c720602d60ddb63087209d60eb2720d730400d60f8c720e02d610db6903db6503fed6118c720302d6127305d613b2720d730600d614b27205730700d615b2720b730800d6169683070193c27209c2a793c17209c1a7938c7213018c721401938c7213028c721402938c720e01720793b2720a730900721593b1720d730a957208d807d617b27202730b00d6188c721702d619b2720b730c00d61ae4c672010411d61be4c67201050ed61cb2a5730d00d61db2db6308721c730e00d196831101721693b2720a730f009ab2720b731000721893b2720a731100721993b2720a7312009ab2720b731300731493b2720a731500b2720b73160093720f99720c731793cbc27201731893b2721a731900721992b2721a731a00997210731b93721bc5a77208937211731c938c7217017212927218731d93c2721cc2b2a4731e00938c721d01721b938c721d02731fd804d617b2a4732000d618db63087217d619b27218732100d61a8c72190195ed93721a732292b1a47323d804d61bb2a4732400d61ce4c6721b0411d61db2720b732500d61eb2720a732600d1968309017216938cb2db6308721b73270001732893b2721c73290099721d732a93b2721c732b00732c93b2720a732d009a721d732e93b2720a732f00b2720b73300093721e9ab2720b73310072158f721e721093720f720cd802d61bb2720b733200d61cb2720a73330095ed91721b721c92b1a47334d80fd61dd9011d0c63b0721d7335d9011f4163d802d621db63088c721f02d6228c721f019593b1722173367222d802d623b57221d901234d0e938c7223017212d624b172239593722473379a72228cb27223733800029593722473397222733ad61eda721d01a4d61fda721d01a5d620e4c672170411d621b27220733b00d6229d99721072217e733c05d62399721b721cd62495927222733d733e95927222733f9d9c7223734073419592722273429d9c7223734373449592722273459d9c7223734673479d9c722373487349d625b2a4734a00d626b27220734b00d627b2720b734c00d628b27218734d00d629998c7228027223d62a937229734ed62b8c722801d196830f0191721e734f91721f73509399721e721f72247216aedb63087225d9012c4d0e938c722c01e4c67217050e937226722793721c99721b722393b2720a735100722793b2720a73520099b2720b73530095722a7354735593b2720a735600b2720b73570093720f9a720c95722a7358735993c27201c27225937204722b937211997223722495917229735ad805d62cb2a5735b00d62ddb6308722cd62eb2722d735c00d62fb2722d735d00d630e4c6722c04119683080193c1722cc17217938c722e01721a938c722e028c721902938c722f01722b938c722f027229927229735e93b27230735f00722693b2723073600072217361d17362",
+        "assets": [
+          {
+            "tokenId": "05cde13424a7972fbcd0b43fccbb5e501b1f75302175178fc86d8f243f3f3125",
+            "amount": 1
+          },
+          {
+            "tokenId": "1028de73d018f0c9a374b71555c5b8f1390994f2f41633e7b9d68f77735782ee",
+            "amount": 999998019
+          }
+        ],
+        "creationHeight": 1765291,
+        "additionalRegisters": {
+          "R4": "1105de959981b9018e11fa1ec8d6c8b9a86580f0b252"
+        },
+        "transactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+        "index": 0
+      },
+      {
+        "boxId": "cd5161583456845615f4db55c36b358b5451aadabb2bc7a72745243b4947fc4f",
+        "value": 1000000,
+        "ergoTree": "0008cd02780cf1a6875c1e9d3b608d21f0e555c618f05d863c1817f2877f05468ec5c38f",
+        "assets": [
+          {
+            "tokenId": "d71693c49a84fbbecd4908c94813b46514b18b67a99952dc1e6e4791556de413",
+            "amount": 614682
+          }
+        ],
+        "creationHeight": 1765291,
+        "additionalRegisters": {},
+        "transactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+        "index": 1
+      },
+      {
+        "boxId": "1f97272be3e7b2af116175499265e7aaba9c7febea79dbc78238a481a7a8a0e4",
+        "value": 1270440000,
+        "ergoTree": "0008cd02780cf1a6875c1e9d3b608d21f0e555c618f05d863c1817f2877f05468ec5c38f",
+        "assets": [
+          {
+            "tokenId": "b5a117622d6008b5a971dcb442d275361f5d8dab1a2e29074c4af3b33de961c7",
+            "amount": 125000000
+          },
+          {
+            "tokenId": "76eedc3dedc2ed4385eded0459e0a0ede534b1a6b8dc3f9f307460f09d607ded",
+            "amount": 1
+          },
+          {
+            "tokenId": "6536d59bd48eed2649a09f600d59a33d3d314890968165f8fd62763733ae50aa",
+            "amount": 1
+          },
+          {
+            "tokenId": "2be94e7f03e37811d1bcf0e64d799b4dc22a9a540a9cc12d004022667fd1a2dc",
+            "amount": 1
+          }
+        ],
+        "creationHeight": 1765291,
+        "additionalRegisters": {},
+        "transactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+        "index": 2
+      },
+      {
+        "boxId": "c4c907ff03e30e64b8a3153214d47e1444da830c91f8d653cd2f81fe448de165",
+        "value": 60000000,
+        "ergoTree": "1005040004000e36100204a00b08cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798ea02d192a39a8cc7a701730073011001020402d19683030193a38cc7b2a57300000193c2b2a57301007473027303830108cdeeac93b1a57304",
+        "assets": [],
+        "creationHeight": 1765291,
+        "additionalRegisters": {},
+        "transactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+        "index": 3
+      }
+    ],
+    "size": 2106
+  },
+  "inputs": [
+    {
+      "globalIndex": 54733449,
+      "inclusionHeight": 1764121,
+      "address": "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",
+      "spentTransactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+      "spendingProof": {
+        "proofBytes": "",
+        "extension": {}
+      },
+      "boxId": "1449644d3ef93a4a0266b497ab448f4dd176171ebdcd99af4f6b761e2f122619",
+      "value": 1000000,
+      "ergoTree": "1063040204000402040004020e20d71693c49a84fbbecd4908c94813b46514b18b67a99952dc1e6e4791556de4130400040004080408040404020402040404000400040004020404040405020406040605020e2025b7486b1a78647ad7d50a287e5e958b4e452a4bc86938c94218d706bc377ff0040004020580dddb01050205d00f04020502040204000e200d01f2f0b3254b4a1731e1b61ad77641fe54de2bd68d1c6fc1ae4e7e9ddfb212040604040402040604000e200549ea3374a36b7a22a803766af732e61798463c3332c5f6d86c8ab9195eed590402050204040500040205020404040404060400040004060500040004020400040005fdbfa8ca9a3a0402048090e4c00405100500050c050a05c801050805fa0105d00f0504052805c801053205c8010404040004020402050005000500040204040404050205000406040605020500050004040400040205d00f0400040201010100d816d601b2a5730000d602db63087201d603b27202730100d6048c720301d605db6308a7d606b27205730200d6078c720601d6089372047207d609b2a5730300d60ae4c672090411d60be4c6a70411d60c8c720602d60ddb63087209d60eb2720d730400d60f8c720e02d610db6903db6503fed6118c720302d6127305d613b2720d730600d614b27205730700d615b2720b730800d6169683070193c27209c2a793c17209c1a7938c7213018c721401938c7213028c721402938c720e01720793b2720a730900721593b1720d730a957208d807d617b27202730b00d6188c721702d619b2720b730c00d61ae4c672010411d61be4c67201050ed61cb2a5730d00d61db2db6308721c730e00d196831101721693b2720a730f009ab2720b731000721893b2720a731100721993b2720a7312009ab2720b731300731493b2720a731500b2720b73160093720f99720c731793cbc27201731893b2721a731900721992b2721a731a00997210731b93721bc5a77208937211731c938c7217017212927218731d93c2721cc2b2a4731e00938c721d01721b938c721d02731fd804d617b2a4732000d618db63087217d619b27218732100d61a8c72190195ed93721a732292b1a47323d804d61bb2a4732400d61ce4c6721b0411d61db2720b732500d61eb2720a732600d1968309017216938cb2db6308721b73270001732893b2721c73290099721d732a93b2721c732b00732c93b2720a732d009a721d732e93b2720a732f00b2720b73300093721e9ab2720b73310072158f721e721093720f720cd802d61bb2720b733200d61cb2720a73330095ed91721b721c92b1a47334d80fd61dd9011d0c63b0721d7335d9011f4163d802d621db63088c721f02d6228c721f019593b1722173367222d802d623b57221d901234d0e938c7223017212d624b172239593722473379a72228cb27223733800029593722473397222733ad61eda721d01a4d61fda721d01a5d620e4c672170411d621b27220733b00d6229d99721072217e733c05d62399721b721cd62495927222733d733e95927222733f9d9c7223734073419592722273429d9c7223734373449592722273459d9c7223734673479d9c722373487349d625b2a4734a00d626b27220734b00d627b2720b734c00d628b27218734d00d629998c7228027223d62a937229734ed62b8c722801d196830f0191721e734f91721f73509399721e721f72247216aedb63087225d9012c4d0e938c722c01e4c67217050e937226722793721c99721b722393b2720a735100722793b2720a73520099b2720b73530095722a7354735593b2720a735600b2720b73570093720f9a720c95722a7358735993c27201c27225937204722b937211997223722495917229735ad805d62cb2a5735b00d62ddb6308722cd62eb2722d735c00d62fb2722d735d00d630e4c6722c04119683080193c1722cc17217938c722e01721a938c722e028c721902938c722f01722b938c722f027229927229735e93b27230735f00722693b2723073600072217361d17362",
+      "assets": [
+        {
+          "tokenId": "05cde13424a7972fbcd0b43fccbb5e501b1f75302175178fc86d8f243f3f3125",
+          "amount": 1
+        },
+        {
+          "tokenId": "1028de73d018f0c9a374b71555c5b8f1390994f2f41633e7b9d68f77735782ee",
+          "amount": 999998018
+        }
+      ],
+      "creationHeight": 1764120,
+      "additionalRegisters": {
+        "R4": "1105929ae481b9018e11fc1ec8d6c8b9a86580f0b252"
+      },
+      "transactionId": "2b87242b9ca77acfc4ac0c94cea8f85b20196e0525982b335cc545379eddbe55",
+      "index": 0
+    },
+    {
+      "globalIndex": 46580101,
+      "inclusionHeight": 1471945,
+      "address": "3eiC8caSy3jiCxCmdsiFNFJ1Ykppmsmff2TEpSsXY1Ha7xbpB923Uv2midKVVkxL3CzGbSS2QURhbHMzP9b9rQUKapP1wpUQYPpH8UebbqVFHJYrSwM3zaNEkBkM9RjjPxHCeHtTnmoun7wzjajrikVFZiWurGTPqNnd1prXnASYh7fd9E2Limc2Zeux4UxjPsLc1i3F9gSjMeSJGZv3SNxrtV14dgPGB9mY1YdziKaaqDVV2Lgq3BJC9eH8a3kqu7kmDygFomy3DiM2hYkippsoAW6bYXL73JMx1tgr462C4d2PE7t83QmNMPzQrD826NZWM2c1kehWB6Y1twd5F9JzEs4Lmd2qJhjQgGg4yyaEG9irTC79pBeGUj98frZv1Aaj6xDmZvM22RtGX5eDBBu2C8GgJw3pUYr3fQuGZj7HKPXFVuk3pSTQRqkWtJvnpc4rfiPYYNpM5wkx6CPenQ39vsdeEi36mDL8Eww6XvyN4cQxzJFcSymATDbQZ1z8yqYSQeeDKF6qCM7ddPr5g5fUzcApepqFrGNg7MqGAs1euvLGHhRk7UoeEpofFfwp3Km5FABdzAsdFR9",
+      "spentTransactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+      "spendingProof": {
+        "proofBytes": "",
+        "extension": {}
+      },
+      "boxId": "366b60da2220fbe9703bad17e6cd632debdf1a4b73cc6d31f2b92790e7d6eccc",
+      "value": 1000000,
+      "ergoTree": "1017040004000e200549ea3374a36b7a22a803766af732e61798463c3332c5f6d86c8ab9195eed59040204000400040204020400040005020402040204060400040204040e2005cde13424a7972fbcd0b43fccbb5e501b1f75302175178fc86d8f243f3f312504020402010001010100d802d601b2a4730000d6028cb2db6308720173010001959372027302d80bd603b2a5dc0c1aa402a7730300d604e4c672030411d605e4c6a70411d606db63087203d607b27206730400d608db6308a7d609b27208730500d60ab27206730600d60bb27208730700d60c8c720b02d60de4c672010411d19683090193c17203c1a793c27203c2a793b272047308009ab27205730900730a93e4c67203050ee4c6a7050e93b27204730b00b27205730c00938c7207018c720901938c7207028c720902938c720a018c720b01938c720a029a720c9d9cb2720d730d00720cb2720d730e00d801d603b2a4730f009593c57203c5a7d801d604b2a5731000d1ed93720273119593c27204c2a7d801d605c67204050e95e67205ed93e47205e4c6a7050e938cb2db6308b2a573120073130001e4c67203050e73147315d17316",
+      "assets": [
+        {
+          "tokenId": "1028de73d018f0c9a374b71555c5b8f1390994f2f41633e7b9d68f77735782ee",
+          "amount": 1
+        },
+        {
+          "tokenId": "d71693c49a84fbbecd4908c94813b46514b18b67a99952dc1e6e4791556de413",
+          "amount": 614682
+        }
+      ],
+      "creationHeight": 1471942,
+      "additionalRegisters": {
+        "R4": "11028e11f0958b9ae95f",
+        "R5": "0e2076eedc3dedc2ed4385eded0459e0a0ede534b1a6b8dc3f9f307460f09d607ded"
+      },
+      "transactionId": "6ebabcd162766cadd31e388eba9849bad4e84197155128debd3e600794b14f74",
+      "index": 14
+    },
+    {
+      "globalIndex": 54750812,
+      "inclusionHeight": 1764788,
+      "address": "9fRw3bMzSNBuZNmBJd3VAJGf7XQmFfeiebJ989LvTNdxmcz3vEd",
+      "spentTransactionId": "0e1f269f2fe8e75d1c75d6550b4bff13ec43cdde7cb5afc94690e5cc1139e032",
+      "spendingProof": {
+        "proofBytes": "572941fa8f6b9231ab381285dbfd2c751dbd58da54299ca30a8f8fb74cb64850a926cf1c7a9921907f63b567fc15ad88325e0894efc3cb2d",
+        "extension": {}
+      },
+      "boxId": "c5d27661fb377f6d28077917b13dae3469bba5590c0469d8202844cae5ebb3fa",
+      "value": 1330440000,
+      "ergoTree": "0008cd02780cf1a6875c1e9d3b608d21f0e555c618f05d863c1817f2877f05468ec5c38f",
+      "assets": [
+        {
+          "tokenId": "b5a117622d6008b5a971dcb442d275361f5d8dab1a2e29074c4af3b33de961c7",
+          "amount": 125000000
+        },
+        {
+          "tokenId": "76eedc3dedc2ed4385eded0459e0a0ede534b1a6b8dc3f9f307460f09d607ded",
+          "amount": 1
+        },
+        {
+          "tokenId": "6536d59bd48eed2649a09f600d59a33d3d314890968165f8fd62763733ae50aa",
+          "amount": 1
+        },
+        {
+          "tokenId": "2be94e7f03e37811d1bcf0e64d799b4dc22a9a540a9cc12d004022667fd1a2dc",
+          "amount": 1
+        }
+      ],
+      "creationHeight": 1764786,
+      "additionalRegisters": {},
+      "transactionId": "204cac958da5f106342df22a36a3996ce5f2b8f752c46b55368c669c0921ae22",
+      "index": 1
+    }
+  ],
+  "dataInputBoxes": [],
+  "inclusionHeader": {
+    "extensionId": "c801265bb233e1b1a79500c91c3e996ee602759054465da3fbd0962c37166e92",
+    "difficulty": "183498182754304",
+    "votes": "000000",
+    "timestamp": 1776346927121,
+    "size": 221,
+    "unparsedBytes": "",
+    "stateRoot": "0b594f0d7fe6b6fb67b00dc528a1aa26aa9688282453ecd844e7a489b65ba5be1a",
+    "height": 1765293,
+    "nBits": 117483236,
+    "version": 4,
+    "id": "4b6dafc4a6afdcdb4b1ae94df99c6036c98b98330b11fc66afedf278dd29372b",
+    "adProofsRoot": "b065b2cd97c16a0c30ebe7ff1fe37cf31b53018716babea7f53871c291c94836",
+    "transactionsRoot": "c351b4dee5430d1791f93afc37433e49d294fa25962273afa516745923a830a0",
+    "extensionHash": "35606de0747076e864976fad090dc44bf4656d3fbab20654a24e77cb8c29956f",
+    "powSolutions": {
+      "pk": "0274e729bb6615cbda94d9d176a2f1525068f12b330e38bbbf387232797dfd891f",
+      "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+      "n": "303d0ea0b6be982b",
+      "d": 0
+    },
+    "adProofsId": "64b3dd2e1a8e59a219b51dcd80b730e02580cb1ba6bd8403bfc532dd2125cba1",
+    "transactionsId": "b393f3ca18956eabf9667d2e7a3c8ba8f128f2219a5cdf0db668b8bd05a7f949",
+    "parentId": "2ebb2314d44275ebca8bc9ce1e4f62ab6292a6b7d54189198a9c57a4ae69a095"
+  },
+  "headers": [
+    {
+      "extensionId": "9028bf5c19b2b42fa3528fe44b3dc15008d9630f7cba3c8e1595af7e170bd7fd",
+      "difficulty": "183498182754304",
+      "votes": "000000",
+      "timestamp": 1776346676233,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "8e6adacbc4fd692de11e8c4087340651333512346fd0bafb534bfeaba1906f171a",
+      "height": 1765292,
+      "nBits": 117483236,
+      "version": 4,
+      "id": "2ebb2314d44275ebca8bc9ce1e4f62ab6292a6b7d54189198a9c57a4ae69a095",
+      "adProofsRoot": "158573bf525f6df4d5d6ced41e2a73357e2e83cb180123af6dc485710ddf87f8",
+      "transactionsRoot": "98537cf2c4e2a761807f4a0c164631ff06cf9e1a9d73cfb973d1b9d1cfaa4edc",
+      "extensionHash": "35606de0747076e864976fad090dc44bf4656d3fbab20654a24e77cb8c29956f",
+      "powSolutions": {
+        "pk": "0274e729bb6615cbda94d9d176a2f1525068f12b330e38bbbf387232797dfd891f",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "20078196b7f35822",
+        "d": 0
+      },
+      "adProofsId": "dc1d7c8d5c33506678f4d3bd4248ee0cd6534c19999bf723b7dadc75b299cfa2",
+      "transactionsId": "942df5bd46fb6b4a762060f936af56ed9878496bf7044f6cef4dc96b72c4e51a",
+      "parentId": "872bcab90402f20498a86610196a301c9d52ed40c6bea05ed8febe169dbba910"
+    },
+    {
+      "extensionId": "41fe715d11246a4eafc80db4e02f5585f357ed31cdfd68b1d21629066b0988ec",
+      "difficulty": "183498182754304",
+      "votes": "000000",
+      "timestamp": 1776346365402,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "f7f654876858368c3154e0e99a89e6f991016d584f3ea895eba23e0461d88c651a",
+      "height": 1765291,
+      "nBits": 117483236,
+      "version": 4,
+      "id": "872bcab90402f20498a86610196a301c9d52ed40c6bea05ed8febe169dbba910",
+      "adProofsRoot": "c22e9ffde17403372ae9a73b94df34366f38d79294415aefbe5a760888f6fd05",
+      "transactionsRoot": "0d26f01c05756498e96e1556b397dfe14ad81299217cb04a908bf143861a14fc",
+      "extensionHash": "62a31880091cceaab84102aad59b05a25db3466023a5f71e70caf44ab99921f5",
+      "powSolutions": {
+        "pk": "0204b680ae52835e22f12fc3c51c4cd9e18852ac4f4a8131be29920678aceeeebe",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "001e8500c1f329b6",
+        "d": 0
+      },
+      "adProofsId": "e9feb99160dbc7462f6ed201585cf2e5a6e6100453adbad33723c19a5505aa1f",
+      "transactionsId": "48070dcce2133ff902733f401a209f33aeacf478ce103402e2de22503d090808",
+      "parentId": "94f3dd32de5b3ea51e8b659c467a5c9f6178671c10599b83f7af9859df945419"
+    },
+    {
+      "extensionId": "6e9e1633e520677075905b1f8a9f2397c057489618db7422670c0b39b033215a",
+      "difficulty": "183498182754304",
+      "votes": "000000",
+      "timestamp": 1776346216651,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "5defd098b7123c93a062613c30cfcef8c9baede57ed52afe86a3fb55a17e66931a",
+      "height": 1765290,
+      "nBits": 117483236,
+      "version": 4,
+      "id": "94f3dd32de5b3ea51e8b659c467a5c9f6178671c10599b83f7af9859df945419",
+      "adProofsRoot": "1ef1b7a6ac78b790c6d1eb0aa5b106c8ebd3e8e2089722de68e9df489d590922",
+      "transactionsRoot": "a129a1254f4c94cd77bbc0c909a8e20742c75269e6ce4eae6fd20dd097822699",
+      "extensionHash": "62a31880091cceaab84102aad59b05a25db3466023a5f71e70caf44ab99921f5",
+      "powSolutions": {
+        "pk": "0274e729bb6615cbda94d9d176a2f1525068f12b330e38bbbf387232797dfd891f",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "ba74002be6403a1b",
+        "d": 0
+      },
+      "adProofsId": "ee945859d9fb865e97149f85bc3937ce28e93da4d51e486aac30239b84d188a4",
+      "transactionsId": "15ddd918c1c46c785fb8a18632a2afc6c4f21a881d52be533fdab226df7e4400",
+      "parentId": "491d6c58eada785184ffdf0ae1695e8abfb2f90ad9cc298b180534eb3052333c"
+    },
+    {
+      "extensionId": "0c0a7da5ad41dfd2cd6081da19f29cc4ee101edcfd1b93c79277281183817368",
+      "difficulty": "183498182754304",
+      "votes": "000000",
+      "timestamp": 1776346155480,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "0987bc07b192a1eca0ea5a0034f537b0ad545403193f012681f9d00362609d221a",
+      "height": 1765289,
+      "nBits": 117483236,
+      "version": 4,
+      "id": "491d6c58eada785184ffdf0ae1695e8abfb2f90ad9cc298b180534eb3052333c",
+      "adProofsRoot": "08fd97ae3078100924a775acabf4a73ffac1817275fa2b3c76172314cc9995e7",
+      "transactionsRoot": "233c412d7f4d3ecacc73c83288f4e3320ec39d57045aa757780fa94a8e47354e",
+      "extensionHash": "62a31880091cceaab84102aad59b05a25db3466023a5f71e70caf44ab99921f5",
+      "powSolutions": {
+        "pk": "0274e729bb6615cbda94d9d176a2f1525068f12b330e38bbbf387232797dfd891f",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "6f0ecd4b5ee2acd0",
+        "d": 0
+      },
+      "adProofsId": "bbb6477e725bcaefc7067fd87af45224e3a6c0738329de1d293a9b1c4a8e9e29",
+      "transactionsId": "fe9e0861b9bea942cd85a5c522f6572f449515e088dd3d0a4024e94020fcc8a0",
+      "parentId": "3b2a972932935c8ba8b9ec58ed2f719d566a1f6a463dcec2bec7386935c86fc0"
+    },
+    {
+      "extensionId": "ac2db327d69855aa2b3eebd856febe15d9cd969b92aa96905a2360e357dba4b9",
+      "difficulty": "183498182754304",
+      "votes": "000000",
+      "timestamp": 1776346082401,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "9abccb41e147da3c15c866233fffb796663db6dd6a8979410584bed59c585c681a",
+      "height": 1765288,
+      "nBits": 117483236,
+      "version": 4,
+      "id": "3b2a972932935c8ba8b9ec58ed2f719d566a1f6a463dcec2bec7386935c86fc0",
+      "adProofsRoot": "78e6cda5e5e2873f1fc87cda0e13e8c6db7dcccff02a2fbe8e2c8ca214149d83",
+      "transactionsRoot": "8ec9909b11f4551f30255b0d3948a3ac78a27b3cd59054f97b4cf1e8cdb36657",
+      "extensionHash": "62a31880091cceaab84102aad59b05a25db3466023a5f71e70caf44ab99921f5",
+      "powSolutions": {
+        "pk": "02eeec374f4e660e117fccbfec79e6fe5cdf44ac508fa228bfc654d2973f9bdc9a",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "eec07ab6a8ae5829",
+        "d": 0
+      },
+      "adProofsId": "ff124c7ce297482a059b33edccec610642fb1e357a6f17748bf1d37ec0e47a70",
+      "transactionsId": "88e158002ad619072eb38989cadb12a3326e9a3f31325b7e97eee079445045e0",
+      "parentId": "78f4715f935ebc9eae4bbca601b49f0fa40c506fa6d8e7c2a1d93e692ce3c390"
+    },
+    {
+      "extensionId": "4a6cb10d52c1fe760613a7020209f1084fca9eae440b6caf8271261949c3b9ae",
+      "difficulty": "183498182754304",
+      "votes": "000000",
+      "timestamp": 1776346061757,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "bae3e1b0f60c627560ed299c86f5ed90a8a302f444d0ed0e9466fdbc1f905e561a",
+      "height": 1765287,
+      "nBits": 117483236,
+      "version": 4,
+      "id": "78f4715f935ebc9eae4bbca601b49f0fa40c506fa6d8e7c2a1d93e692ce3c390",
+      "adProofsRoot": "67c1348d5a1e825f30ade7de7530e7fedfbd3626893616b5425d4f3663ab69bb",
+      "transactionsRoot": "f52acde1b6b2d0ea16b9b52915b86d01b04ef337fef885ad7bc455b32b9369f6",
+      "extensionHash": "62a31880091cceaab84102aad59b05a25db3466023a5f71e70caf44ab99921f5",
+      "powSolutions": {
+        "pk": "0274e729bb6615cbda94d9d176a2f1525068f12b330e38bbbf387232797dfd891f",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "ec06d3dad787b00b",
+        "d": 0
+      },
+      "adProofsId": "b52e0ffab41cf8291ce577d2b81dd2a0a0e9b8a146d649fe2f5d7359f232dd9c",
+      "transactionsId": "fb6e47ed889e6eeacd2707421e798f05c955955fb66508527b32bf6017e8671d",
+      "parentId": "300921120d235dd7f9658cf3dfbe97071a9a5ce6248d9d791e91a71b1a405030"
+    },
+    {
+      "extensionId": "60019f1680031c65be814ad26415905ad73a163350a9727decd85945315e2815",
+      "difficulty": "183498182754304",
+      "votes": "000000",
+      "timestamp": 1776345941910,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "8eef8fa027f4ed56df53b3394f487d8f06f54523784900415c91f75747a5121c1a",
+      "height": 1765286,
+      "nBits": 117483236,
+      "version": 4,
+      "id": "300921120d235dd7f9658cf3dfbe97071a9a5ce6248d9d791e91a71b1a405030",
+      "adProofsRoot": "178671070d1b39f08c40c250f9ef2085de5910789b339bbe53ca3a639361590f",
+      "transactionsRoot": "b4560cfaae5e244b53fb8f23260ee1a85f013e75a2f5dc26440f2e2fdee07439",
+      "extensionHash": "62a31880091cceaab84102aad59b05a25db3466023a5f71e70caf44ab99921f5",
+      "powSolutions": {
+        "pk": "0274e729bb6615cbda94d9d176a2f1525068f12b330e38bbbf387232797dfd891f",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "2b3529d49a1111e8",
+        "d": 0
+      },
+      "adProofsId": "4d3fa278e963d75953dc8e44a219b985c0215552c9a55ba7b5ff67dc267c3d84",
+      "transactionsId": "4bb0de279fd9e2c3a02bc09dd989a07ad8a9b315884f8582b862c051c4f1c1be",
+      "parentId": "45002d7b8e015428c5e1c2d2efd39f036cbc6e46ecc5b0c6ed353c928cfdc10d"
+    },
+    {
+      "extensionId": "9135a9f1012448274f699cf2a72534f92436f9df70bccde769e24073bcb08c27",
+      "difficulty": "183498182754304",
+      "votes": "000000",
+      "timestamp": 1776345775807,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "d4ad89f5df10535f685a3a8e5ae3564720127171c9e8ce5e5cc8ed847c47f1c11a",
+      "height": 1765285,
+      "nBits": 117483236,
+      "version": 4,
+      "id": "45002d7b8e015428c5e1c2d2efd39f036cbc6e46ecc5b0c6ed353c928cfdc10d",
+      "adProofsRoot": "5d9ba844b9a0186995e2c6bee21d1701207f3763661ba14b3867d98dc5ae5490",
+      "transactionsRoot": "445173b61a75c0b7c3b2f991bf3226f65a869897c010779da89852e55b0d3234",
+      "extensionHash": "62a31880091cceaab84102aad59b05a25db3466023a5f71e70caf44ab99921f5",
+      "powSolutions": {
+        "pk": "0274e729bb6615cbda94d9d176a2f1525068f12b330e38bbbf387232797dfd891f",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "e16ce1c5a18a00e6",
+        "d": 0
+      },
+      "adProofsId": "3fe0fdffb4179733aacf167ed2f963b8950a36a8d506110b5bda77badb07fc27",
+      "transactionsId": "17a2b8bd7483d05ae6aa66fed1c546c56b597815fc7b51368d0d8c322cfdfd8f",
+      "parentId": "f8a75936e018154c0a3e38eb2f177ae53477febeef31806e02f9feb9c12c036a"
+    },
+    {
+      "extensionId": "5cec73d7bacf39998dd9548fc9c3d7d0930e235da3aae16631c8ed3dd564ba86",
+      "difficulty": "183498182754304",
+      "votes": "000000",
+      "timestamp": 1776345710454,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "62641c54720b0d49427786a9a0339a1854e4236e319da0808102ec702be920ef1a",
+      "height": 1765284,
+      "nBits": 117483236,
+      "version": 4,
+      "id": "f8a75936e018154c0a3e38eb2f177ae53477febeef31806e02f9feb9c12c036a",
+      "adProofsRoot": "ebf48d88740a22d9d8d43bd80d2a7aaab0a35df25ebfad89e334a9ba6dbdaf29",
+      "transactionsRoot": "3f23b1b4c44dc555a401b7846b4d15c539683c21b9a37c573c93cd1f325daa76",
+      "extensionHash": "62a31880091cceaab84102aad59b05a25db3466023a5f71e70caf44ab99921f5",
+      "powSolutions": {
+        "pk": "028deb6618b1e889f1087659f82ae7041f4431256a66e79a06e1f652885252b7e4",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "a7e3ad72aee09a03",
+        "d": 0
+      },
+      "adProofsId": "2afc9e8bb681a06e1ecd0086b8e5cb31ef71606238006e16fbc4358bbcf1c4a8",
+      "transactionsId": "9544d262d97c0efb715210f7e9c06bcaeb6ea08f2f6c8a75a1dde33e015f641b",
+      "parentId": "92e5c1b9294501d91fe1a7fe2f7f3a1817722f35a7c7cdfab92ec23d27b8b565"
+    },
+    {
+      "extensionId": "c941bb0ad974c55c247066162b6b04a4d03f45aa295939d3c0363ec0835e2e73",
+      "difficulty": "183498182754304",
+      "votes": "000000",
+      "timestamp": 1776345397028,
+      "size": 221,
+      "unparsedBytes": "",
+      "stateRoot": "19b5d3da45633373c0768262811227f179e9e5e2f516c66bd19b7c696b8ca3091a",
+      "height": 1765283,
+      "nBits": 117483236,
+      "version": 4,
+      "id": "92e5c1b9294501d91fe1a7fe2f7f3a1817722f35a7c7cdfab92ec23d27b8b565",
+      "adProofsRoot": "fbee584cf2c08fc88983c56113f600740c09289571378b5c6d7017bc6b537c25",
+      "transactionsRoot": "b0975ddfa90b743116a9f1d7fa71ea4ada57cfc7d8d627fdd8a76c5133a435c4",
+      "extensionHash": "634248d9bcfc54fd522f452efc3c24e05ea22b27910b2249e6e85ea9ff22bac8",
+      "powSolutions": {
+        "pk": "0295facb78290ac2b55f1453204d49df37be5bae9f185ed6704c1ba3ee372280c1",
+        "w": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+        "n": "e9428ee0621f4455",
+        "d": 0
+      },
+      "adProofsId": "85932a02b52ad5dfdf23f27cf7fed0c8254643be89cfecc8b7702d82964c6055",
+      "transactionsId": "ae05dcab5e613b1b7fc77a262bcc57726d61670c0e82bd25c7eeb9f47948833c",
+      "parentId": "1fe5fc1c0e5fc6795f5d355854f0b36eacc93f4e8ae9c219a9320b417b72a7ce"
+    }
+  ],
+  "sources": {
+    "explorer": "https://api.ergoplatform.com/api/v1",
+    "node": "https://ergo-node.eutxo.de"
+  },
+  "capturedOn": "2026-09-11"
+}

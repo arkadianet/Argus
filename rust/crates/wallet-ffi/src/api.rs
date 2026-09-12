@@ -2473,10 +2473,14 @@ async fn sign_prepared_tx(
     client: &ErgoNodeClient,
     op: &'static str,
 ) -> Result<serde_json::Value, String> {
+    if crate::api_stake_recovery_impl::is_direct(&prep.unsigned_tx) {
+        revalidate_stake_recovery(&prep.unsigned_tx, client).await?;
+    }
     let state_context = client
         .get_state_context()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    revalidate_paideia(prep, client, &state_context).await?;
     let reduced_bytes = reduce_transaction_with_context(
         &prep.unsigned_tx,
         prep.ergo_boxes.clone(),
@@ -2513,6 +2517,14 @@ pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, Str
     let prep = take_preparation(handle_id, preparation_id)?;
     let client = node_client(prep.node_url.clone()).await?;
     let tx_json = sign_prepared_tx(handle_id, &prep, &client, "send_erg").await?;
+    if crate::api_stake_recovery_impl::is_direct(&prep.unsigned_tx) {
+        client.check_transaction(&tx_json).await.map_err(|e| {
+            ArgusError::TxBuildFailed(format!(
+                "Recovery inputs are no longer spendable; scan again: {e}"
+            ))
+            .to_json_string()
+        })?;
+    }
 
     let tx_id = client
         .submit_transaction(&tx_json)
@@ -6259,4 +6271,458 @@ pub fn duckpools_discover_orders(boxes_json: String, addresses: Vec<String>) -> 
     let found = duckpools::discover_orders(&boxes, &trees)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
     serde_json::to_string(&found).map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+// ── Stake recovery (read-only) ───────────────────────────────────────────
+
+/// Deployed staking pools with full address-derived trees. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stake_recovery_contracts() -> Result<String, String> {
+    crate::api_stake_recovery_impl::contracts_json()
+}
+
+/// Decode and validate one state-NFT box. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stake_recovery_state(pool_id: String, box_json: String) -> Result<String, String> {
+    crate::api_stake_recovery_impl::state_json(&pool_id, &box_json)
+}
+
+/// Decode a page for the wallet's candidate token ids, optionally against state. Pure.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stake_recovery_positions(
+    pool_id: String,
+    boxes_json: String,
+    keys_json: String,
+    state_box_json: String,
+) -> Result<String, String> {
+    crate::api_stake_recovery_impl::positions_json(
+        &pool_id,
+        &boxes_json,
+        &keys_json,
+        &state_box_json,
+    )
+}
+
+/// Prepare Ergopad recovery using the wallet handle to establish ownership.
+/// The immutable cached transaction is confirmed and committed via send_erg.
+#[flutter_rust_bridge::frb]
+pub async fn stake_recovery_prepare_direct(
+    handle_id: u64,
+    state_box_json: String,
+    stake_box_json: String,
+    key_id: String,
+    user_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let miner_fee = mix_miner_fee(None)?;
+    let mut addresses = spend_addresses;
+    if !addresses.contains(&user_address) {
+        addresses.push(user_address.clone());
+    }
+    let trees = with_handle(handle_id, "stake_recovery_prepare_direct", |h| {
+        crate::api_stake_recovery_impl::owned_trees(h, &addresses)
+    })?;
+    let recipient = address_to_ergo_tree(&user_address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    let client = node_client(node_url.clone()).await?;
+    let height = i32::try_from(
+        client
+            .current_height()
+            .await
+            .map_err(|e| ArgusError::NodeError(e).to_json_string())?,
+    )
+    .map_err(|_| ArgusError::TxBuildFailed("height overflow".into()).to_json_string())?;
+    let (boxes, wallet) = gather_unspent(handle_id, &client, &addresses).await?;
+    let (_, wallet) = apply_mixed_rule(handle_id, boxes, wallet, None)?;
+    let unsigned_tx = crate::api_stake_recovery_impl::prepare_direct(
+        (&state_box_json, &stake_box_json),
+        &key_id,
+        &wallet,
+        &trees,
+        &recipient,
+        height,
+        miner_fee,
+    )?;
+    revalidate_stake_recovery(&unsigned_tx, &client).await?;
+    let context = client
+        .get_state_context()
+        .await
+        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    stake_recovery::direct::reduce(&unsigned_tx, &context)
+        .map_err(|e| ArgusError::TxReductionFailed(e.to_string()).to_json_string())?;
+    let ergo_boxes = unsigned_tx
+        .inputs
+        .iter()
+        .map(stake_recovery::boxes::canonical_box)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    let payout = &unsigned_tx.outputs[1].assets[0].amount;
+    let decimals = stake_recovery::Pool::Ergopad.contracts().reward_decimals as usize;
+    let digits = format!("{:0>width$}", payout, width = decimals + 1);
+    let amount = format!(
+        "{}.{} Ergopad",
+        &digits[..digits.len() - decimals],
+        &digits[digits.len() - decimals..]
+    );
+    let rows = serde_json::json!([
+        {"label": "You receive", "value": amount},
+        {"label": "Stake key", "value": "Returns to your wallet (not burned)"},
+        {"label": "Argus fee", "value": "0.0011 ERG (flat)"},
+        {"label": "Miner fee", "value": format!("{:.9} ERG", miner_fee as f64 / 1_000_000_000.0)},
+        {"label": "Payout and key return", "value": "At least 0.001 ERG in each output; remains yours"}
+    ]);
+    let input_boxes = input_boxes_json(&unsigned_tx.inputs);
+    let unsigned_json = serde_json::to_value(&unsigned_tx)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let change_erg = unsigned_tx.outputs[2]
+        .value
+        .parse::<i64>()
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let preparation_id = store_preparation(CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        stealth_trees: Vec::new(),
+        mix_proofs: Vec::new(),
+        data_input_boxes: Vec::new(),
+        unsigned_tx,
+        miner_fee,
+        change_erg,
+        recipient_erg: stake_recovery::direct::MIN_VALUE,
+        node_url,
+    });
+    Ok(serde_json::json!({"preparation_id": preparation_id, "unsigned_tx": unsigned_json, "rows": rows, "input_boxes": input_boxes, "miner_fee": miner_fee, "app_fee": ARGUS_FEE_NANO}).to_string())
+}
+
+async fn revalidate_stake_recovery(
+    tx: &ergo_tx::Eip12UnsignedTx,
+    client: &ErgoNodeClient,
+) -> Result<(), String> {
+    for (i, input) in tx.inputs.iter().enumerate() {
+        let current = client
+            .recovery_unspent_box(&input.box_id)
+            .await
+            .map_err(|e| {
+                ArgusError::TxBuildFailed(format!(
+                    "{} moved or is unavailable; scan again before recovering: {e}",
+                    if i == 1 { "StakeBox" } else { "Recovery input" }
+                ))
+                .to_json_string()
+            })?;
+        let expected = stake_recovery::boxes::canonical_box(input)
+            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        let actual = stake_recovery::boxes::canonical_box(&crate::api_sigmafi_impl::parse_box(
+            &current.to_string(),
+        )?)
+        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        if expected != actual {
+            return Err(
+                ArgusError::TxBuildFailed("Recovery input changed; scan again".into())
+                    .to_json_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
+// Paideia creation eligibility material is kept alongside the immutable
+// preparation. No executor transaction is retained or exposed.
+struct PaideiaPreflight {
+    handle_id: u64,
+    state: String,
+    stake: String,
+    trees: Vec<String>,
+    recipient: String,
+}
+static PAIDEIA_PREFLIGHTS: Lazy<Mutex<HashMap<String, PaideiaPreflight>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Prepare creation (UI gated until batch 5) or a standalone refund. Recipients
+/// are addresses authenticated by the wallet handle, never caller-supplied hex.
+#[flutter_rust_bridge::frb]
+pub async fn stake_recovery_prepare_proxy(
+    handle_id: u64,
+    refund_box_json: Option<String>,
+    state_box_json: Option<String>,
+    stake_box_json: Option<String>,
+    user_address: String,
+    spend_addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let fail = |e: String| ArgusError::TxBuildFailed(e).to_json_string();
+    let mut addresses = spend_addresses;
+    if !addresses.contains(&user_address) {
+        addresses.push(user_address.clone());
+    }
+    let trees = with_handle(handle_id, "stake_recovery_prepare_proxy", |h| {
+        crate::api_stake_recovery_impl::owned_trees(h, &addresses)
+    })?;
+    let recipient = address_to_ergo_tree(&user_address).map_err(fail)?;
+    let client = node_client(node_url.clone()).await?;
+    let context = client.get_state_context().await.map_err(fail)?;
+    let height = i32::try_from(context.pre_header.height).map_err(|e| fail(e.to_string()))?;
+    let refund = refund_box_json.is_some();
+    let unsigned_tx = if let Some(raw) = refund_box_json {
+        crate::api_stake_recovery_impl::prepare_refund(&raw, &trees, height)?
+    } else {
+        let state = state_box_json.ok_or_else(|| fail("Missing state box".into()))?;
+        let stake = stake_box_json.ok_or_else(|| fail("Missing stake box".into()))?;
+        let (boxes, wallet) = gather_unspent(handle_id, &client, &addresses).await?;
+        let (_, wallet) = apply_mixed_rule(handle_id, boxes, wallet, None)?;
+        let tx = crate::api_stake_recovery_impl::prepare_proxy(
+            (&state, &stake),
+            &wallet,
+            &trees,
+            &recipient,
+            height,
+            &context,
+        )?;
+        let id = ergo_tx::chain::to_unsigned_transaction(&tx)
+            .map_err(fail)?
+            .id()
+            .to_string();
+        let mut cache = recover(PAIDEIA_PREFLIGHTS.lock());
+        cache.retain(|_, p| p.handle_id != handle_id);
+        cache.insert(
+            id,
+            PaideiaPreflight {
+                handle_id,
+                state,
+                stake,
+                trees,
+                recipient,
+            },
+        );
+        tx
+    };
+    let ergo_boxes = unsigned_tx
+        .inputs
+        .iter()
+        .map(stake_recovery::boxes::canonical_box)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| fail(e.to_string()))?;
+    let miner_fee = if refund {
+        stake_recovery::contracts::REFUND_FEE
+    } else {
+        1_100_000
+    };
+    let unsigned_json = serde_json::to_value(&unsigned_tx).map_err(|e| fail(e.to_string()))?;
+    let (tx_id, outputs) = ergo_tx::chain::derive_output_boxes(&unsigned_tx).map_err(fail)?;
+    let expected_proxy = if refund {
+        None
+    } else {
+        Some(outputs[0].clone())
+    };
+    let rows = if refund {
+        serde_json::json!([
+            {"label":"Stake key", "value":"Returns to the recipient wallet"},
+            {"label":"Refund ERG (nanoERG)","value":unsigned_tx.outputs[0].value},
+            {"label":"Miner fee","value":"0.001 ERG"},
+            {"label":"Argus fee","value":"None — contract-pinned refund"}
+        ])
+    } else {
+        serde_json::json!([
+            {"label":"Stake key","value":"Burned on successful unstake; refundable beforehand"},
+            {"label":"Proxy funding (nanoERG)","value":unsigned_tx.outputs[0].value},
+            {"label":"Argus fee","value":"0.0011 ERG (flat)"},
+            {"label":"Creation miner fee","value":"0.0011 ERG"},
+            {"label":"Refund","value":"Returns key and proxy ERG minus 0.001 ERG, without pool state"}
+        ])
+    };
+    let prep = CachedPreparation {
+        handle_id,
+        ergo_boxes,
+        stealth_trees: vec![],
+        mix_proofs: vec![],
+        data_input_boxes: vec![],
+        unsigned_tx,
+        miner_fee,
+        change_erg: 0,
+        recipient_erg: 0,
+        node_url,
+    };
+    revalidate_paideia(&prep, &client, &context).await?;
+    let input_boxes = input_boxes_json(&prep.unsigned_tx.inputs);
+    let preparation_id = store_preparation(prep);
+    Ok(serde_json::json!({"preparation_id":preparation_id,"unsigned_tx":unsigned_json,"input_boxes":input_boxes,"rows":rows,"creation_tx_id":tx_id,"expected_proxy":expected_proxy,"recipient":user_address,"app_fee":if refund {0} else {ARGUS_FEE_NANO},"miner_fee":miner_fee}).to_string())
+}
+
+async fn revalidate_paideia(
+    prep: &CachedPreparation,
+    client: &ErgoNodeClient,
+    context: &ergo_lib::chain::ergo_state_context::ErgoStateContext,
+) -> Result<(), String> {
+    let fail = |e: String| ArgusError::TxBuildFailed(e).to_json_string();
+    let tx = &prep.unsigned_tx;
+    if crate::api_stake_recovery_impl::is_refund(tx) {
+        revalidate_stake_recovery(tx, client).await?;
+        stake_recovery::proxy::validate_refund(&tx.inputs[0], tx.outputs[0].creation_height, tx)
+            .map_err(|e| fail(e.to_string()))?;
+        return stake_recovery::proxy::reduce(tx, context, true).map_err(|e| fail(e.to_string()));
+    }
+    if !crate::api_stake_recovery_impl::is_proxy_creation(tx) {
+        return Ok(());
+    }
+    let id = ergo_tx::chain::to_unsigned_transaction(tx)
+        .map_err(fail)?
+        .id()
+        .to_string();
+    let (state, stake, trees, recipient) = {
+        let cache = recover(PAIDEIA_PREFLIGHTS.lock());
+        let p = cache
+            .get(&id)
+            .filter(|p| p.handle_id == prep.handle_id)
+            .ok_or_else(|| fail("Missing authenticated proxy preflight".into()))?;
+        (
+            p.state.clone(),
+            p.stake.clone(),
+            p.trees.clone(),
+            p.recipient.clone(),
+        )
+    };
+    let state = crate::api_sigmafi_impl::parse_box(&state)?;
+    let stake = crate::api_sigmafi_impl::parse_box(&stake)?;
+    let mut check = tx.clone();
+    check.inputs.extend([state.clone(), stake.clone()]);
+    revalidate_stake_recovery(&check, client).await?;
+    let rebuilt = stake_recovery::proxy::create(
+        &stake_recovery::proxy::CreationRequest {
+            state: &state,
+            stake: &stake,
+            wallet_inputs: &tx.inputs,
+            wallet_trees: &trees,
+            recipient: &recipient,
+            height: tx.outputs[0].creation_height,
+            miner_fee: prep.miner_fee,
+        },
+        context,
+    )
+    .map_err(|e| fail(e.to_string()))?;
+    if serde_json::to_value(tx).map_err(|e| fail(e.to_string()))?
+        != serde_json::to_value(rebuilt).map_err(|e| fail(e.to_string()))?
+    {
+        return Err(fail("Proxy preparation changed".into()));
+    }
+    Ok(())
+}
+
+/// Derive durable tracking from the signed transaction itself. Called after
+/// signing and before any broadcast; canonical output ids include its tx id.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stake_recovery_proxy_record(
+    handle_id: u64,
+    signed_tx_json: String,
+    recipient_address: String,
+) -> Result<String, String> {
+    let fail = |e: String| ArgusError::TxBuildFailed(e).to_json_string();
+    let trees = with_handle(handle_id, "stake_recovery_proxy_record", |h| {
+        crate::api_stake_recovery_impl::owned_trees(h, std::slice::from_ref(&recipient_address))
+    })?;
+    let signed: ergo_lib::chain::transaction::Transaction =
+        serde_json::from_str(&signed_tx_json).map_err(|e| fail(e.to_string()))?;
+    let outputs = signed.outputs;
+    let mut proxies = Vec::new();
+    for (index, b) in outputs.iter().enumerate() {
+        let input = ergo_tx::Eip12InputBox::from_ergo_box(
+            b,
+            b.transaction_id.to_string(),
+            u16::try_from(index).map_err(|e| fail(e.to_string()))?,
+        );
+        if let Ok(proxy) = stake_recovery::PaideiaProxyBox::parse(&input) {
+            let recipient = hex::encode(
+                proxy
+                    .recipient()
+                    .sigma_serialize_bytes()
+                    .map_err(|e| fail(e.to_string()))?,
+            );
+            if !trees.contains(&recipient) {
+                return Err(fail("Foreign proxy recipient".into()));
+            }
+            proxies.push(serde_json::json!({"creation_tx_id":b.transaction_id.to_string(),"proxy":input,"key_id":hex::encode(proxy.key_id()),"recipient":recipient_address,"recipient_tree":recipient,"network":"mainnet"}));
+        }
+    }
+    if proxies.len() != 1 {
+        return Err(fail("Expected exactly one signed proxy output".into()));
+    }
+    Ok(proxies.remove(0).to_string())
+}
+
+#[cfg(test)]
+mod paideia_tracking_tests {
+    use super::*;
+    use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
+    use ergo_lib::{
+        chain::{
+            ergo_state_context::ErgoStateContext, parameters::Parameters,
+            transaction::reduced::reduce_tx,
+        },
+        wallet::tx_context::TransactionContext,
+    };
+
+    #[test]
+    fn signed_creation_record_reconstructs_actual_proxy_and_authenticates_recipient() {
+        let handle = WalletHandle::create(wallet_core::seed::MnemonicPhrase::parse(
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap(),"").unwrap();
+        let address = handle.derive_address(0).unwrap();
+        let trees =
+            crate::api_stake_recovery_impl::owned_trees(&handle, std::slice::from_ref(&address))
+                .unwrap();
+        let history: serde_json::Value = serde_json::from_str(include_str!(
+            "../../vendor/protocols/stake-recovery/tests/fixtures/paideia-unstake.json"
+        ))
+        .unwrap();
+        let state = history["inputs"][0].to_string();
+        let stake = history["inputs"][1].to_string();
+        let mut wallet =
+            crate::api_sigmafi_impl::parse_box(&history["inputs"][2].to_string()).unwrap();
+        wallet.ergo_tree = trees[0].clone();
+        wallet.additional_registers.clear();
+        wallet.value = "200000000".into();
+        let mut json = serde_json::to_value(&wallet).unwrap();
+        json.as_object_mut().unwrap().remove("boxId");
+        let b: ErgoBox = serde_json::from_value(json).unwrap();
+        wallet.box_id = b.box_id().to_string();
+        let header: ergo_lib::ergo_chain_types::Header =
+            serde_json::from_value(history["inclusionHeader"].clone()).unwrap();
+        let headers = serde_json::from_value(history["headers"].clone()).unwrap();
+        let context = ErgoStateContext::new(header.into(), headers, Parameters::default());
+        let tx = crate::api_stake_recovery_impl::prepare_proxy(
+            (&state, &stake),
+            &[wallet],
+            &trees,
+            &trees[0],
+            1399858,
+            &context,
+        )
+        .unwrap();
+        let reduced = reduce_tx(
+            TransactionContext::new(
+                ergo_tx::chain::to_unsigned_transaction(&tx).unwrap(),
+                tx.inputs
+                    .iter()
+                    .map(|b| stake_recovery::boxes::canonical_box(b).unwrap())
+                    .collect(),
+                vec![],
+            )
+            .unwrap(),
+            &context,
+        )
+        .unwrap();
+        let signed = handle.sign_reduced(reduced).unwrap();
+        let signed_json = serde_json::to_string(&signed).unwrap();
+        let id = register_handle(handle);
+        let record: serde_json::Value = serde_json::from_str(
+            &stake_recovery_proxy_record(id, signed_json.clone(), address.clone()).unwrap(),
+        )
+        .unwrap();
+        let (tx_id, outputs) = ergo_tx::chain::derive_output_boxes(&tx).unwrap();
+        assert_eq!(record["creation_tx_id"], tx_id);
+        assert_eq!(record["proxy"]["boxId"], outputs[0].box_id);
+        assert_eq!(record["key_id"], outputs[0].assets[0].token_id);
+        assert_eq!(record["recipient"], address);
+        assert_eq!(record["recipient_tree"], trees[0]);
+        assert_eq!(record["network"], "mainnet");
+        assert!(stake_recovery_proxy_record(id, signed_json, ARGUS_FEE_ADDRESS.into()).is_err());
+        wallet_lock(id).unwrap();
+    }
 }

@@ -30,6 +30,7 @@ import 'services/mix_background.dart';
 import 'ui/dapp_browser_screen.dart';
 import 'ui/duckpools_screen.dart';
 import 'ui/sigmafi_screen.dart';
+import 'ui/stake_recovery_screen.dart';
 import 'ui/liquidity_screen.dart';
 import 'ui/rosen_screen.dart';
 import 'ui/mix_screen.dart';
@@ -138,6 +139,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/contacts' => const ContactsScreen(),
               '/tx' => const TransactionDetailScreen(),
               '/utxos' => const UtxoManagementScreen(),
+              '/stakes' => const StakeRecoveryScreen(),
               '/tokens' => const TokenToolsScreen(),
               '/discover' => const DiscoverScreen(),
               '/mix' => const MixScreen(),

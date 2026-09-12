@@ -1,0 +1,16 @@
+[package]
+name = "stake-recovery"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Contract validation for abandoned v1 staking positions on Ergo"
+
+[dependencies]
+ergo-lib = { workspace = true }
+ergo-chain-types = { workspace = true }
+ergotree-ir = { workspace = true }
+ergo-tx = { workspace = true, features = ["ergo-lib"] }
+hex = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

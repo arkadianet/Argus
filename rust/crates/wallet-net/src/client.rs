@@ -1285,3 +1285,36 @@ mod tests {
         assert!(parse_parameters(&json).is_err());
     }
 }
+
+impl ErgoNodeClient {
+    /// Strict UTXO lookup: never fall back to historical (possibly spent) boxes.
+    pub async fn recovery_unspent_box(&self, box_id: &str) -> Result<serde_json::Value, String> {
+        let response = self
+            .inner
+            .send_get_req(&format!("/utxo/byId/{box_id}"))
+            .await
+            .map_err(|e| format!("Unspent lookup: {e}"))?;
+        let status = response.status();
+        let body = response.text().await.map_err(|e| format!("Read: {e}"))?;
+        if !status.is_success() {
+            return Err(format!("Unspent lookup ({status}): {body}"));
+        }
+        serde_json::from_str(&body).map_err(|e| format!("Unspent box: {e}"))
+    }
+
+    /// Validate a signed transaction against the live UTXO set without broadcast.
+    pub async fn check_transaction(&self, tx: &serde_json::Value) -> Result<(), String> {
+        let body = serde_json::to_string(tx).map_err(|e| format!("Serialize: {e}"))?;
+        let response = self
+            .inner
+            .send_post_req("/transactions/check", body)
+            .await
+            .map_err(|e| format!("Check: {e}"))?;
+        let status = response.status();
+        let body = response.text().await.map_err(|e| format!("Read: {e}"))?;
+        if !status.is_success() {
+            return Err(format!("Transaction check ({status}): {body}"));
+        }
+        Ok(())
+    }
+}

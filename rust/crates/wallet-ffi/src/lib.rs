@@ -7,6 +7,7 @@ mod api_duckpools_impl;
 mod api_mix_impl;
 mod api_sigmafi_impl;
 mod api_sigmausd_impl;
+mod api_stake_recovery_impl;
 mod api_stealth_impl;
 
 pub mod api;
