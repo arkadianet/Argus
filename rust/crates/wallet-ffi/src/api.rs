@@ -5,6 +5,7 @@ use std::sync::Mutex;
 
 use citadel_core::constants::{MIN_BOX_VALUE_NANO, TX_FEE_NANO};
 use ergo_lib::chain::transaction::reduced::ReducedTransaction;
+use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
 use ergo_tx::{build_send_tx_with_fee, DevFeeConfig};
 use ergopay_core::reduce_transaction_with_context;
@@ -648,12 +649,24 @@ pub async fn get_balance(address: String, node_url: Option<String>) -> Result<St
         .get_unspent(&address)
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+    let txs = match address_to_ergo_tree(&address) {
+        Ok(tree) => client.mempool_txs_for(&tree).await.unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    Ok(balance_from_inputs(&address, &boxes, &txs).to_string())
+}
+
+fn balance_from_inputs(
+    address: &str,
+    boxes: &[ErgoBox],
+    txs: &[serde_json::Value],
+) -> serde_json::Value {
     let nano: u64 = boxes
         .iter()
         .fold(0u64, |acc, b| acc.saturating_add(*b.value.as_u64()));
     let mut tokens: Vec<(String, u64)> = {
         let mut by_id: HashMap<String, u64> = HashMap::new();
-        for b in &boxes {
+        for b in boxes {
             if let Some(held) = b.tokens.as_ref() {
                 for t in held.iter() {
                     let id: String = t.token_id.clone().into();
@@ -668,57 +681,49 @@ pub async fn get_balance(address: String, node_url: Option<String>) -> Result<St
     // Mempool delta: unconfirmed sends drop the balance before they confirm.
     // Any mempool failure degrades to the confirmed figure — never fail here.
     let mut delta: i64 = 0;
-    if let Ok(tree) = address_to_ergo_tree(&address) {
-        if let Ok(txs) = client.mempool_txs_for(&tree).await {
-            if !txs.is_empty() {
-                {
-                    let mut confirmed_values: std::collections::HashMap<String, i64> =
-                        std::collections::HashMap::new();
-                    let mut confirmed_tokens: std::collections::HashMap<
-                        String,
-                        Vec<(String, i64)>,
-                    > = std::collections::HashMap::new();
-                    for b in &boxes {
-                        confirmed_values.insert(b.box_id().to_string(), b.value.as_i64());
-                        if let Some(held) = b.tokens.as_ref() {
-                            let held: Vec<(String, i64)> = held
-                                .iter()
-                                .map(|t| (t.token_id.clone().into(), *t.amount.as_u64() as i64))
-                                .collect();
-                            if !held.is_empty() {
-                                confirmed_tokens.insert(b.box_id().to_string(), held);
-                            }
-                        }
-                    }
-                    delta = wallet_net::mempool::balance_delta(&txs, &tree, &confirmed_values);
-                    // Pending token spends reduce the reported amounts under
-                    // the same ownership and spent-set rules as the ERG delta.
-                    let token_delta =
-                        wallet_net::mempool::token_deltas(&txs, &tree, &confirmed_tokens);
-                    if !token_delta.is_empty() {
-                        let mut by_id: std::collections::HashMap<String, u64> =
-                            tokens.into_iter().collect();
-                        for (id, d) in token_delta {
-                            let confirmed = *by_id.get(&id).unwrap_or(&0);
-                            let updated = (confirmed as i64 + d).max(0) as u64;
-                            // Positive deltas introduce tokens the address
-                            // holds only in the mempool (pending arrivals).
-                            if updated > 0 || by_id.contains_key(&id) {
-                                by_id.insert(id, updated);
-                            }
-                        }
-                        tokens = by_id.into_iter().collect();
+    if let Ok(tree) = address_to_ergo_tree(address) {
+        if !txs.is_empty() {
+            let mut confirmed_values: std::collections::HashMap<String, i64> =
+                std::collections::HashMap::new();
+            let mut confirmed_tokens: std::collections::HashMap<String, Vec<(String, i64)>> =
+                std::collections::HashMap::new();
+            for b in boxes {
+                confirmed_values.insert(b.box_id().to_string(), b.value.as_i64());
+                if let Some(held) = b.tokens.as_ref() {
+                    let held: Vec<(String, i64)> = held
+                        .iter()
+                        .map(|t| (t.token_id.clone().into(), *t.amount.as_u64() as i64))
+                        .collect();
+                    if !held.is_empty() {
+                        confirmed_tokens.insert(b.box_id().to_string(), held);
                     }
                 }
+            }
+            delta = wallet_net::mempool::balance_delta(txs, &tree, &confirmed_values);
+            // Pending token spends reduce the reported amounts under
+            // the same ownership and spent-set rules as the ERG delta.
+            let token_delta = wallet_net::mempool::token_deltas(txs, &tree, &confirmed_tokens);
+            if !token_delta.is_empty() {
+                let mut by_id: std::collections::HashMap<String, u64> =
+                    tokens.into_iter().collect();
+                for (id, d) in token_delta {
+                    let confirmed = *by_id.get(&id).unwrap_or(&0);
+                    let updated = (confirmed as i64 + d).max(0) as u64;
+                    // Positive deltas introduce tokens the address
+                    // holds only in the mempool (pending arrivals).
+                    if updated > 0 || by_id.contains_key(&id) {
+                        by_id.insert(id, updated);
+                    }
+                }
+                tokens = by_id.into_iter().collect();
             }
         }
     }
 
-    serde_json::to_string(&serde_json::json!({
+    serde_json::json!({
         "balance_nano_erg": (nano as i64 + delta).max(0),
         "tokens": tokens_json(&tokens),
-    }))
-    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+    })
 }
 
 #[flutter_rust_bridge::frb]
@@ -856,16 +861,24 @@ pub async fn get_pending_transactions(
         }
     }
 
+    Ok(pending_from_inputs(&unique, &trees, &confirmed_values).to_string())
+}
+
+fn pending_from_inputs(
+    unique: &[serde_json::Value],
+    trees: &HashSet<String>,
+    confirmed_values: &HashMap<String, i64>,
+) -> serde_json::Value {
     let mut out = Vec::new();
-    for tx in &unique {
+    for tx in unique {
         let id = match tx["id"].as_str() {
             Some(i) => i.to_string(),
             None => continue,
         };
         let v = wallet_net::mempool::wallet_balance_delta(
             std::slice::from_ref(tx),
-            &trees,
-            &confirmed_values,
+            trees,
+            confirmed_values,
         );
         let token_ids: Vec<String> = tx["outputs"]
             .as_array()
@@ -914,8 +927,65 @@ pub async fn get_pending_transactions(
         }));
     }
 
-    serde_json::to_string(&out)
-        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+    serde_json::Value::Array(out)
+}
+
+/// Request-scoped inputs: no TTL cache, so an explicit refresh always reads the node.
+/// UTXO and mempool inputs are independent and shared by all three consumers.
+#[flutter_rust_bridge::frb]
+pub async fn get_sync_inputs(
+    addresses: Vec<String>,
+    node_url: Option<String>,
+) -> Result<String, String> {
+    let client = node_client(node_url).await?;
+    let addresses: HashSet<_> = addresses.into_iter().filter(|a| !a.is_empty()).collect();
+    let reads = futures::future::join_all(addresses.iter().map(|address| {
+        let client = &client;
+        async move {
+            let mempool = async {
+                match address_to_ergo_tree(address) {
+                    Ok(tree) => client.mempool_txs_for(&tree).await.unwrap_or_default(),
+                    Err(_) => Vec::new(),
+                }
+            };
+            let (boxes, txs) = tokio::join!(client.get_unspent(address), mempool);
+            (address, boxes, txs)
+        }
+    }))
+    .await;
+    let mut balances = serde_json::Map::new();
+    let mut trees = HashSet::new();
+    let mut values = HashMap::new();
+    let mut unique = HashMap::new();
+    let mut count_complete = true;
+    for (address, boxes, txs) in reads {
+        if let Ok(tree) = address_to_ergo_tree(address) {
+            trees.insert(tree);
+        }
+        match boxes {
+            Ok((boxes, _)) => {
+                balances.insert(address.clone(), balance_from_inputs(address, &boxes, &txs));
+                for b in boxes {
+                    values.insert(b.box_id().to_string(), b.value.as_i64());
+                }
+            }
+            Err(_) => {
+                count_complete = false;
+            }
+        }
+        for tx in txs {
+            if let Some(id) = tx["id"].as_str() {
+                unique.insert(id.to_string(), tx);
+            }
+        }
+    }
+    let txs: Vec<_> = unique.into_values().collect();
+    Ok(serde_json::json!({
+        "balances": balances,
+        "pending": pending_from_inputs(&txs, &trees, &values),
+        "utxo_count": if count_complete { Some(values.len()) } else { None },
+    })
+    .to_string())
 }
 
 const MAX_DISCOVERY: u32 = 512;
@@ -6726,3 +6796,7 @@ mod paideia_tracking_tests {
         wallet_lock(id).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "sync_tests.rs"]
+mod sync_tests;

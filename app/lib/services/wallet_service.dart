@@ -10,6 +10,9 @@ import 'package:uuid/uuid.dart';
 import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
 import 'app_fee.dart';
+import 'mix_service.dart';
+import 'stealth_service.dart';
+import 'wallet_sync_controller.dart';
 import 'secure_storage.dart';
 import 'wallet_database_service.dart';
 
@@ -778,7 +781,16 @@ class WalletService {
 
   /// Lock the currently active wallet. If [walletId] is provided, lock only
   /// that specific wallet; otherwise lock the active one.
-  Future<void> lock([String? walletId]) async {
+  Future<void> lock([String? walletId]) => _lock(walletId, switching: false);
+
+  Future<void> lockForSwitch() => _lock(null, switching: true);
+
+  Future<void> _lock(String? walletId, {required bool switching}) async {
+    if (switching) {
+      walletSyncController.deactivate();
+    } else {
+      walletSyncController.reset();
+    }
     final id = _handles[walletId ?? _currentWalletId];
     final wid = walletId ?? _currentWalletId;
     if (id == null) {
@@ -926,6 +938,7 @@ class WalletService {
 
   /// Delete a wallet and all its secure storage.
   Future<void> deleteWallet(String walletId) async {
+    walletSyncController.forgetWallet(walletId);
     await WalletDatabaseService.clearWallet(walletId).catchError((_) {});
     if (_handles.containsKey(walletId)) {
       await lock(walletId);
@@ -1692,6 +1705,17 @@ class WalletService {
     return (map['balance_nano_erg'] as num?)?.toInt() ?? 0;
   }
 
+  Future<Map<String, dynamic>> loadSyncInputs(
+    List<String> addresses, {
+    String? nodeUrl,
+  }) async {
+    final raw = await RustLib.instance.api.crateApiGetSyncInputs(
+      addresses: addresses,
+      nodeUrl: nodeUrl,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
   Future<Map<String, dynamic>> getBalance(String address, {String? nodeUrl}) async {
     final raw = await RustLib.instance.api
         .crateApiGetBalance(address: address, nodeUrl: nodeUrl);
@@ -1726,16 +1750,19 @@ class WalletService {
     int limit = 20,
     int offset = 0,
     Map<String, int>? perAddressOffsets,
+    Future<List<dynamic>>? pending,
   }) async {
     var ok = 0;
     var failed = 0;
     // Unconfirmed transactions ride ahead of confirmed history and are read
     // alongside it. A mempool failure must never break the activity list,
     // so it degrades to confirmed only.
-    final pendingFuture = RustLib.instance.api
-        .crateApiGetPendingTransactions(addresses: addresses)
-        .then((raw) => jsonDecode(raw) as List)
-        .catchError((_) => const <dynamic>[]);
+    final pendingFuture =
+        (pending ??
+                RustLib.instance.api
+                    .crateApiGetPendingTransactions(addresses: addresses)
+                    .then((raw) => jsonDecode(raw) as List))
+            .catchError((_) => const <dynamic>[]);
     final results = await Future.wait(
       addresses.map((address) async {
         try {
@@ -1980,8 +2007,13 @@ class WalletService {
   }
 
   void _setHandle(String walletId, BigInt id) {
+    // Drop overlays tied to the outgoing key before publishing the new view.
+    walletSyncController.deactivate();
+    stealthService.reset();
+    mixService.reset();
     _handles[walletId] = id;
     _currentWalletId = walletId;
+    walletSyncController.activateWallet(walletId);
     currentWalletId.value = walletId;
     unlocked.value = true;
   }

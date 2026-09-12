@@ -67,8 +67,53 @@ abstract class WalletSyncGateway {
   Future<StealthScanResult?> scanStealth();
 }
 
+/// One refresh owns this read; it is never reused by a later refresh.
+abstract interface class WalletSyncRead {
+  Future<Map<String, dynamic>> balance(String address);
+  Future<HistoryResult> history();
+  Future<int> count();
+}
+
+abstract interface class WalletSyncBatchGateway {
+  WalletSyncRead startRead(List<String> addresses);
+}
+
+class _LiveSyncRead implements WalletSyncRead {
+  _LiveSyncRead(List<String> addresses) {
+    final inputs = walletService.loadSyncInputs(
+      addresses,
+      nodeUrl: networkController.activeUrl,
+    );
+    _inputs = inputs;
+    _history = walletService.loadHistory(
+      addresses,
+      pending: inputs.then((value) => value['pending'] as List),
+    );
+  }
+  late final Future<Map<String, dynamic>> _inputs;
+  late final Future<HistoryResult> _history;
+  @override
+  Future<Map<String, dynamic>> balance(String address) async {
+    final raw = (await _inputs)['balances'][address];
+    if (raw == null) throw StateError('Address balance unavailable');
+    return Map<String, dynamic>.from(raw as Map);
+  }
+
+  @override
+  Future<HistoryResult> history() => _history;
+  @override
+  Future<int> count() async {
+    final count = (await _inputs)['utxo_count'] as int?;
+    if (count == null) throw StateError('UTXO listing incomplete');
+    return count;
+  }
+}
+
 /// Production gateway over the app's singleton services.
-class LiveWalletSyncGateway implements WalletSyncGateway {
+class LiveWalletSyncGateway
+    implements WalletSyncGateway, WalletSyncBatchGateway {
+  @override
+  WalletSyncRead startRead(List<String> addresses) => _LiveSyncRead(addresses);
   const LiveWalletSyncGateway();
 
   @override
@@ -125,18 +170,25 @@ class LiveWalletSyncGateway implements WalletSyncGateway {
   Future<void> saveCachedState(Map<String, dynamic> snapshot) =>
       WalletDatabaseService.saveCachedState(
         walletId: snapshot['wallet_id'] as String,
+        frontierAddresses: (snapshot['frontier_addresses'] as List? ?? const [])
+            .cast<String>(),
+        discoveredAt: snapshot['discovered_at'] as int?,
+        discoveryPinnedIndex: snapshot['discovery_pinned_index'] as int?,
+        discoveryUnusedChange: snapshot['discovery_unused_change'] as bool?,
+        changeAddress: snapshot['change_address'] as String?,
         primaryAddress: snapshot['primary_address'] as String?,
-        usedAddresses:
-            (snapshot['used_addresses'] as List).cast<Map<String, dynamic>>(),
+        usedAddresses: (snapshot['used_addresses'] as List)
+            .cast<Map<String, dynamic>>(),
         stealthNano: (snapshot['stealth_nano_erg'] as num?)?.toInt() ?? 0,
         stealthScannedAt: (snapshot['stealth_scanned_at'] as num?) == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(
-                (snapshot['stealth_scanned_at'] as num).toInt()),
-        balanceNano: snapshot['balance_nano_erg'] as int,
+                (snapshot['stealth_scanned_at'] as num).toInt(),
+              ),
+        balanceNano: snapshot['balance_nano_erg'] as int?,
         tokens: (snapshot['tokens'] as List).cast<Map<String, dynamic>>(),
-        transactions:
-            (snapshot['transactions'] as List).cast<Map<String, dynamic>>(),
+        transactions: (snapshot['transactions'] as List)
+            .cast<Map<String, dynamic>>(),
         utxoCount: snapshot['utxo_count'] as int,
         syncPhase: snapshot['sync_phase'] as String?,
         lastSuccessfulSyncAt: (snapshot['last_successful_sync_at'] as num?)
@@ -163,10 +215,9 @@ class LiveWalletSyncGateway implements WalletSyncGateway {
 /// UTXO count, plus the cache that makes the next launch instant.
 ///
 /// The dashboard drives it (hydrate on unlock, full refresh on pull, light
-/// refresh on the poll timer) and renders from its fields. Only a full
-/// refresh runs address discovery and a node probe; the poll path reuses
-/// the addresses already known, which keeps a 20-second tick to a handful
-/// of calls instead of a whole rescan.
+/// refresh on the poll timer) and renders from its fields. Polls reuse known
+/// addresses until discovery expires; manual refresh forces a rescan.
+/// Remembered views are scoped to a wallet and cleared on security lock.
 /// Tokens in a stable order for display: fungible before NFTs, then by
 /// name, then by id. The balance answer lists them in whatever order the
 /// node's map iterates, which changes from one poll to the next and made
@@ -186,6 +237,42 @@ class WalletSyncController extends ChangeNotifier {
   WalletSyncController(this._gw);
 
   final WalletSyncGateway _gw;
+  final Map<String, _WalletView> _remembered = {};
+  String? _viewWalletId;
+  bool ownsWallet(String? walletId) =>
+      walletId != null &&
+      walletId == _viewWalletId &&
+      walletId == _gw.activeWalletId &&
+      _gw.isUnlocked;
+  DateTime? discoveredAt;
+  int? _discoveryPinnedIndex;
+  bool? _discoveryUnusedChange;
+  static const discoveryFreshness = Duration(minutes: 15);
+
+  /// Called synchronously before the service publishes a new wallet identity.
+  void activateWallet(String walletId) {
+    if (_viewWalletId == walletId) return;
+    deactivate();
+    _viewWalletId = walletId;
+    _remembered.remove(walletId)?.restore(this);
+    notifyListeners();
+  }
+
+  /// A switch drops the visible view but retains public data until session lock.
+  void deactivate() {
+    final id = _viewWalletId;
+    if (id != null) _remembered[id] = _WalletView(this);
+    _clearView();
+    _viewWalletId = null;
+  }
+
+  void forgetWallet(String walletId) {
+    _remembered.remove(walletId);
+    if (_viewWalletId == walletId) {
+      _clearView();
+      _viewWalletId = null;
+    }
+  }
 
   SyncPhase phase = SyncPhase.idle;
   String? receiveAddress;
@@ -210,6 +297,7 @@ class WalletSyncController extends ChangeNotifier {
   /// cannot see: a stealth box sits on a one-time script, not on any
   /// address this wallet queries.
   List<Map<String, dynamic>> stealthRows = const [];
+  List<String> _stealthBoxIds = const [];
 
   /// Tokens held in stealth boxes, with [TokenBalance.stealthAmount] equal
   /// to the whole amount.
@@ -243,14 +331,14 @@ class WalletSyncController extends ChangeNotifier {
   /// Box ids of the stealth funds this wallet can spend. Empty while the
   /// balance is unknown: the last scan's boxes may be stale.
   List<String> get stealthRowBoxIds =>
-      stealthBalanceUnknown ? const [] : (stealthService.lastScan?.boxIds ?? const []);
+      stealthBalanceUnknown ? const [] : _stealthBoxIds;
 
   /// Activity as the user should see it: address history plus stealth
   /// receipts, newest first.
   List<Map<String, dynamic>> get displayActivity => mergeStealthActivity(
-        mergeMixActivity(recentTxs, mixService.mixActivityRows()),
-        stealthRows,
-      );
+    mergeMixActivity(recentTxs, mixService.mixActivityRows()),
+    stealthRows,
+  );
 
   /// Non-null when the stored pinned address index can't be derived.
   String? pinIssue;
@@ -335,8 +423,10 @@ class WalletSyncController extends ChangeNotifier {
     }
     notifyListeners();
     unawaited(refresh(discover: false, quiet: true));
+    final broadcastWalletId = _gw.activeWalletId;
     Future.delayed(const Duration(seconds: 4), () {
-      if (_broadcasts.containsKey(txId)) {
+      if (_gw.activeWalletId == broadcastWalletId &&
+          _broadcasts.containsKey(txId)) {
         unawaited(refresh(discover: false, quiet: true));
       }
     });
@@ -413,9 +503,18 @@ class WalletSyncController extends ChangeNotifier {
 
   /// Clears everything back to the locked state.
   void reset() {
+    _remembered.clear();
+    _viewWalletId = null;
+    _clearView();
+  }
+
+  void _clearView() {
     _generation++;
     _inFlight = null;
     _refreshWalletId = null;
+    discoveredAt = null;
+    _discoveryPinnedIndex = null;
+    _discoveryUnusedChange = null;
     phase = SyncPhase.idle;
     receiveAddress = null;
     changeAddress = null;
@@ -433,6 +532,7 @@ class WalletSyncController extends ChangeNotifier {
     stealthNano = 0;
     stealthTokens = const [];
     stealthRows = const [];
+    _stealthBoxIds = const [];
     stealthBalanceUnknown = true;
     stealthScannedAt = null;
     notifyListeners();
@@ -443,10 +543,19 @@ class WalletSyncController extends ChangeNotifier {
   /// could be derived (or the wallet locked meanwhile).
   Future<bool> hydrateAfterUnlock() async {
     if (!_gw.isUnlocked) return false;
+    final id = _gw.activeWalletId;
+    if (id != null) activateWallet(id);
     final generation = _generation;
     final walletId = _gw.activeWalletId;
     final pinned = await _gw.getPinnedAddressIndex();
     if (!_current(generation, walletId)) return false;
+    final unusedChange = _gw.useUnusedChangeAddress(walletId);
+    if (receiveAddress != null) {
+      if (_discoveryPinnedIndex != pinned ||
+          _discoveryUnusedChange != unusedChange)
+        discoveredAt = null;
+      return true;
+    }
     var derived = await _gw.tryDeriveAddress(pinned);
     if (!_current(generation, walletId)) return false;
     if (derived == null && pinned != 0) {
@@ -479,6 +588,22 @@ class WalletSyncController extends ChangeNotifier {
       );
       if (phase == SyncPhase.synced && lastSyncedAt == null)
         phase = SyncPhase.idle;
+      frontierAddresses = (cached['frontier_addresses'] as List? ?? const [])
+          .cast<String>();
+      final discoveryStamp = (cached['discovered_at'] as num?)?.toInt();
+      discoveredAt = discoveryStamp == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(discoveryStamp);
+      _discoveryPinnedIndex = cached['discovery_pinned_index'] as int?;
+      _discoveryUnusedChange = cached['discovery_unused_change'] as bool?;
+      if (_discoveryPinnedIndex == pinned &&
+          _discoveryUnusedChange == unusedChange) {
+        receiveAddress = cached['primary_address'] as String? ?? receive;
+        changeAddress = cached['change_address'] as String? ?? receiveAddress;
+      } else {
+        // A pin/privacy change invalidates routing, but known addresses can refresh.
+        discoveredAt = null;
+      }
       usedAddresses = _mapList(cached['used_addresses']);
       balanceNano = (cached['balance_nano_erg'] as num?)?.toInt();
       recentTxs = _mapList(cached['transactions']);
@@ -496,7 +621,7 @@ class WalletSyncController extends ChangeNotifier {
       ]);
       utxoCount = (cached['utxo_count'] as num?)?.toInt() ?? 0;
     }
-    senderAddress ??= _bestSender(receive);
+    senderAddress ??= _bestSender(receiveAddress ?? receive);
     notifyListeners();
     return true;
   }
@@ -508,21 +633,65 @@ class WalletSyncController extends ChangeNotifier {
   /// itself, so the status strip does not flip to "Syncing…" and back every
   /// 20 seconds. The result still updates the phase, so a failure or stale
   /// balance is reported as soon as it happens.
-  Future<void> refresh({required bool discover, bool quiet = false}) {
+  Future<void> refresh({
+    required bool discover,
+    bool quiet = false,
+    bool forceDiscovery = true,
+  }) {
     if (!_gw.isUnlocked) return Future.value();
     final walletId = _gw.activeWalletId;
+    // Legacy/test callers can seed a view before the first refresh.
+    _viewWalletId ??= walletId;
+    if (walletId != null && _viewWalletId != walletId) activateWallet(walletId);
     final running = _inFlight;
     if (running != null && _refreshWalletId == walletId) return running;
     final generation = ++_generation;
     _refreshWalletId = walletId;
     late final Future<void> op;
-    op = _refresh(discover, generation, walletId, quiet: quiet).whenComplete(
-      () {
-        if (identical(_inFlight, op)) _inFlight = null;
-      },
-    );
+    final age = discoveredAt == null
+        ? null
+        : DateTime.now().difference(discoveredAt!);
+    final expired = age == null || age.isNegative || age >= discoveryFreshness;
+    final needsDiscovery =
+        (discover && (forceDiscovery || expired)) ||
+        (quiet && discoveredAt != null && expired);
+    op = _refreshScheduled(needsDiscovery, generation, walletId, quiet: quiet)
+        .whenComplete(() {
+          if (identical(_inFlight, op)) _inFlight = null;
+        });
     _inFlight = op;
     return op;
+  }
+
+  Future<void> _refreshScheduled(
+    bool discover,
+    int generation,
+    String? walletId, {
+    required bool quiet,
+  }) async {
+    if (!discover || historyAddresses.isEmpty) {
+      await _refresh(discover, generation, walletId, quiet: quiet);
+      return;
+    }
+    // Publish remembered-address results before discovery can change the set.
+    // Discovery starts after this pass: it never delays known holdings.
+    await _refresh(false, generation, walletId, quiet: quiet);
+    if (!_current(generation, walletId)) return;
+    final before = historyAddresses.toSet();
+    _gw.probeNetwork();
+    await _discover(generation, walletId);
+    if (!_current(generation, walletId)) return;
+    if (!setEquals(before, historyAddresses.toSet())) {
+      await _refresh(
+        false,
+        generation,
+        walletId,
+        quiet: true,
+        includeStealth: false,
+      );
+    } else {
+      await _saveSnapshot(walletId);
+    }
   }
 
   /// Keeps publication and cache writes tied to the wallet that started the work.
@@ -531,6 +700,7 @@ class WalletSyncController extends ChangeNotifier {
     int generation,
     String? walletId, {
     bool quiet = false,
+    bool includeStealth = true,
   }) async {
     // A first load has nothing to show yet, so it always announces itself.
     if (!quiet || phase == SyncPhase.idle) {
@@ -558,11 +728,15 @@ class WalletSyncController extends ChangeNotifier {
     // history, which can take ten seconds on a public node, follows.
     // A quiet poll asks the explorer only every few ticks.
     final scanStealth =
-        !quiet || discover || ++_quietPollsSinceStealth >= stealthScanEvery;
-    final balancesFuture = _fetchBalances(addresses);
-    final historyFuture = _fetchHistory(addresses);
-    final countFuture = _gw
-        .countUnspentBoxes(addresses)
+        includeStealth &&
+        (!quiet || discover || ++_quietPollsSinceStealth >= stealthScanEvery);
+    final gateway = _gw;
+    final read = gateway is WalletSyncBatchGateway
+        ? (gateway as WalletSyncBatchGateway).startRead(addresses)
+        : null;
+    final balancesFuture = _fetchBalances(addresses, read);
+    final historyFuture = _fetchHistory(addresses, read);
+    final countFuture = (read?.count() ?? _gw.countUnspentBoxes(addresses))
         .catchError((_) => utxoCount);
     final stealthFuture = scanStealth
         ? _scanStealth(generation, walletId)
@@ -595,7 +769,8 @@ class WalletSyncController extends ChangeNotifier {
       recentTxs = _withBroadcasts(txs).take(5).toList();
       // The node now vouches for what it shows; a broadcast it lists no
       // longer needs its delta carried.
-      if (failed < addresses.length) balanceNano = _withBroadcastDeltas(balances.erg);
+      if (failed < addresses.length)
+        balanceNano = _withBroadcastDeltas(balances.erg);
     }
     utxoCount = boxes;
 
@@ -626,14 +801,24 @@ class WalletSyncController extends ChangeNotifier {
     }
 
     if (!_current(generation, walletId)) return;
+    await _saveSnapshot(walletId);
+  }
+
+  Future<void> _saveSnapshot(String? walletId) async {
     final receive = receiveAddress;
-    if (receive != null && phase != SyncPhase.failed) {
+    if (receive != null &&
+        (phase != SyncPhase.failed || discoveredAt != null)) {
       await _gw.saveCachedState({
         'wallet_id': walletId ?? receive,
         'sync_phase': phase.name,
         'last_successful_sync_at': lastSyncedAt?.millisecondsSinceEpoch,
         'primary_address': receive,
         'used_addresses': usedAddresses,
+        'frontier_addresses': frontierAddresses,
+        'discovered_at': discoveredAt?.millisecondsSinceEpoch,
+        'discovery_pinned_index': _discoveryPinnedIndex,
+        'discovery_unused_change': _discoveryUnusedChange,
+        'change_address': changeAddress,
         // A locked wallet cannot derive its stealth key, so it can never
         // rescan; the last known figure is the only thing it can honestly
         // show, and it is labelled as of a time.
@@ -641,7 +826,7 @@ class WalletSyncController extends ChangeNotifier {
         // Only a successful scan moves this on, so a failed one preserves
         // both the figure and how old it is.
         'stealth_scanned_at': stealthScannedAt?.millisecondsSinceEpoch,
-        'balance_nano_erg': balanceNano ?? 0,
+        'balance_nano_erg': balanceNano,
         'tokens': [
           for (final t in tokens)
             {
@@ -708,6 +893,9 @@ class WalletSyncController extends ChangeNotifier {
         for (var i = 0; i <= next && i < 64; i++) await _gw.deriveAddress(i),
       ];
       if (!_current(generation, walletId)) return false;
+      _discoveryPinnedIndex = pinned;
+      _discoveryUnusedChange = fresh;
+      discoveredAt = DateTime.now();
       usedAddresses = used;
       frontierAddresses = frontier;
       receiveAddress = receive;
@@ -720,14 +908,19 @@ class WalletSyncController extends ChangeNotifier {
     return true;
   }
 
-  Future<_BalanceResult> _fetchBalances(List<String> addresses) async {
-    final maps = await Future.wait(addresses.map((address) async {
-      try {
-        return await _gw.getBalance(address);
-      } catch (_) {
-        return null;
-      }
-    }));
+  Future<_BalanceResult> _fetchBalances(
+    List<String> addresses,
+    WalletSyncRead? read,
+  ) async {
+    final maps = await Future.wait(
+      addresses.map((address) async {
+        try {
+          return await (read?.balance(address) ?? _gw.getBalance(address));
+        } catch (_) {
+          return null;
+        }
+      }),
+    );
     var erg = 0;
     var failed = 0;
     final merged = <String, TokenBalance>{};
@@ -761,6 +954,7 @@ class WalletSyncController extends ChangeNotifier {
       stealthNano = 0;
       stealthTokens = const [];
       stealthRows = const [];
+      _stealthBoxIds = const [];
       stealthBalanceUnknown = false;
       stealthScannedAt = null;
       return;
@@ -803,15 +997,19 @@ class WalletSyncController extends ChangeNotifier {
           stealthAmount: t.amount.toInt(),
         ),
     ];
+    _stealthBoxIds = List.of(result.boxIds);
     stealthRows = stealthActivityRows(result.boxes);
     stealthBalanceUnknown = false;
     stealthScannedAt = DateTime.now();
   }
 
   /// Null when the history call itself failed.
-  Future<HistoryResult?> _fetchHistory(List<String> addresses) async {
+  Future<HistoryResult?> _fetchHistory(
+    List<String> addresses,
+    WalletSyncRead? read,
+  ) async {
     try {
-      return await _gw.loadHistory(addresses, limit: 20);
+      return await (read?.history() ?? _gw.loadHistory(addresses, limit: 20));
     } catch (_) {
       return null;
     }
@@ -860,5 +1058,84 @@ class _BalanceResult {
 
 /// The app's one sync controller: the home screen drives it and the
 /// navigator-level [WalletArgsScope] in `main.dart` reads from it.
-final walletSyncController =
-    WalletSyncController(const LiveWalletSyncGateway());
+final walletSyncController = WalletSyncController(
+  const LiveWalletSyncGateway(),
+);
+
+class _WalletView {
+  _WalletView(WalletSyncController c)
+    : data = (
+        phase: c.phase,
+        receiveAddress: c.receiveAddress,
+        changeAddress: c.changeAddress,
+        senderAddress: c.senderAddress,
+        balanceNano: c.balanceNano,
+        tokens: c.tokens,
+        recentTxs: c.recentTxs,
+        usedAddresses: c.usedAddresses,
+        frontierAddresses: c.frontierAddresses,
+        utxoCount: c.utxoCount,
+        lastSyncedAt: c.lastSyncedAt,
+        stealthNano: c.stealthNano,
+        stealthRows: c.stealthRows,
+        stealthBoxIds: c._stealthBoxIds,
+        stealthTokens: c.stealthTokens,
+        stealthBalanceUnknown: c.stealthBalanceUnknown,
+        stealthScannedAt: c.stealthScannedAt,
+        pinIssue: c.pinIssue,
+        discoveredAt: c.discoveredAt,
+        discoveryPinnedIndex: c._discoveryPinnedIndex,
+        discoveryUnusedChange: c._discoveryUnusedChange,
+        broadcasts: Map<String, _Broadcast>.of(c._broadcasts),
+      );
+  final ({
+    SyncPhase phase,
+    String? receiveAddress,
+    String? changeAddress,
+    String? senderAddress,
+    int? balanceNano,
+    List<TokenBalance> tokens,
+    List<Map<String, dynamic>> recentTxs,
+    List<Map<String, dynamic>> usedAddresses,
+    List<String> frontierAddresses,
+    int utxoCount,
+    DateTime? lastSyncedAt,
+    int stealthNano,
+    List<Map<String, dynamic>> stealthRows,
+    List<String> stealthBoxIds,
+    List<TokenBalance> stealthTokens,
+    bool stealthBalanceUnknown,
+    DateTime? stealthScannedAt,
+    String? pinIssue,
+    DateTime? discoveredAt,
+    int? discoveryPinnedIndex,
+    bool? discoveryUnusedChange,
+    Map<String, _Broadcast> broadcasts,
+  })
+  data;
+  void restore(WalletSyncController c) {
+    c.phase = data.phase;
+    c.receiveAddress = data.receiveAddress;
+    c.changeAddress = data.changeAddress;
+    c.senderAddress = data.senderAddress;
+    c.balanceNano = data.balanceNano;
+    c.tokens = data.tokens;
+    c.recentTxs = data.recentTxs;
+    c.usedAddresses = data.usedAddresses;
+    c.frontierAddresses = data.frontierAddresses;
+    c.utxoCount = data.utxoCount;
+    c.lastSyncedAt = data.lastSyncedAt;
+    c.stealthNano = data.stealthNano;
+    c.stealthRows = data.stealthRows;
+    c._stealthBoxIds = data.stealthBoxIds;
+    c.stealthTokens = data.stealthTokens;
+    c.stealthBalanceUnknown = data.stealthBalanceUnknown;
+    c.stealthScannedAt = data.stealthScannedAt;
+    c.pinIssue = data.pinIssue;
+    c.discoveredAt = data.discoveredAt;
+    c._discoveryPinnedIndex = data.discoveryPinnedIndex;
+    c._discoveryUnusedChange = data.discoveryUnusedChange;
+    if (c.phase == SyncPhase.syncing) c.phase = SyncPhase.idle;
+    c._broadcasts.addAll(data.broadcasts);
+  }
+}

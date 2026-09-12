@@ -389,7 +389,7 @@ void main() {
 
       await c.refresh(discover: true);
 
-      expect(gw.balanceCalls, isEmpty);
+      expect(gw.balanceCalls, ['addr0']); // Read before discovery.
       expect(c.receiveAddress, isNull);
       expect(c.balanceNano, isNull);
       expect(c.phase, SyncPhase.idle);
@@ -401,7 +401,7 @@ void main() {
       await Future.wait([a, b]);
 
       expect(gw.discoverCalls, 1);
-      expect(gw.historyCalls, 1);
+      expect(gw.historyCalls, 2); // Known set, then expanded set.
     });
 
     test('phase is syncing while a refresh is in flight', () async {

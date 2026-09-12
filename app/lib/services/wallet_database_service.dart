@@ -111,10 +111,15 @@ class WalletDatabaseService {
     required String walletId,
     required String? primaryAddress,
     required List<Map<String, dynamic>> usedAddresses,
-    required int balanceNano,
+    required int? balanceNano,
     required List<Map<String, dynamic>> tokens,
     required List<Map<String, dynamic>> transactions,
     required int utxoCount,
+    List<String> frontierAddresses = const [],
+    int? discoveredAt,
+    int? discoveryPinnedIndex,
+    bool? discoveryUnusedChange,
+    String? changeAddress,
     int lastSyncedHeight = 0,
     String? syncPhase,
     int? lastSuccessfulSyncAt,
@@ -127,6 +132,11 @@ class WalletDatabaseService {
       'wallet_id': walletId,
       'primary_address': primaryAddress,
       'used_addresses': usedAddresses,
+      'frontier_addresses': frontierAddresses,
+      'discovered_at': discoveredAt,
+      'discovery_pinned_index': discoveryPinnedIndex,
+      'discovery_unused_change': discoveryUnusedChange,
+      'change_address': changeAddress,
       // A locked wallet cannot rescan for stealth funds: detection needs
       // its seed. The last successful figure is kept with the time it was
       // taken, so the row can say how old it is rather than imply it is now.
@@ -148,7 +158,7 @@ class WalletDatabaseService {
 
   static Future<LastKnownBalance?> lastKnownBalance(String walletId) async {
     final map = await loadCachedState(expectedWalletId: walletId);
-    if (map == null) return null;
+    if (map == null || map['balance_nano_erg'] == null) return null;
     final at = (map['last_sync_timestamp'] as num?)?.toInt();
     return LastKnownBalance(
       balanceNano: (map['balance_nano_erg'] as num?)?.toInt() ?? 0,
