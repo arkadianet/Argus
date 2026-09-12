@@ -10,7 +10,7 @@ import 'wallet_sync_controller.dart';
 /// Shown once per screen, never per row: locked rows carry only their age.
 const lockedWalletsExplainer =
     'Locked wallets refresh from public data every 5 minutes, covering only '
-    'the addresses they have already used. Unlock one to pick up new '
+    'the addresses this app already knows. Unlock one to pick up new '
     'addresses and stealth funds.';
 
 /// Deliberately exposes no handle, discovery, derivation or stealth capability.
