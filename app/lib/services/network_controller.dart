@@ -130,6 +130,7 @@ class NetworkController extends ChangeNotifier {
       );
 
   static const defaultNodes = [
+    'https://node.kadia.io',
     'https://ergo-node.eutxo.de',
     'https://ergo-node.zoomout.io',
     'https://ergo1.oette.info',

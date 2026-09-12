@@ -669,7 +669,7 @@ impl ErgoNodeClient {
         for b in &boxes {
             if let Some(held) = b.tokens.as_ref() {
                 for t in held.iter() {
-                    let id: String = t.token_id.clone().into();
+                    let id: String = t.token_id.into();
                     let entry = tokens.entry(id).or_insert(0);
                     *entry = entry.saturating_add(*t.amount.as_u64());
                 }
@@ -772,7 +772,7 @@ impl ErgoNodeClient {
     ) -> Result<LineageHopResult, String> {
         let mut cur_box_id = starting_box_id.trim().to_string();
         let mut hops = 0u32;
-        let limit = max_hops.max(1).min(200);
+        let limit = max_hops.clamp(1, 200);
 
         loop {
             let box_json = self.get_blockchain_box_by_id(&cur_box_id).await?;
@@ -881,11 +881,7 @@ impl ErgoNodeClient {
             .text()
             .await
             .map_err(|e| format!("Read: {}", e))?;
-        if status.is_success() {
-            Ok(text.trim().trim_matches('"').to_string())
-        } else {
-            Err(format!("Tx rejected ({}): {}", status, text))
-        }
+        transaction_response(status.as_u16(), text, tx_json)
     }
 }
 
@@ -1312,9 +1308,36 @@ impl ErgoNodeClient {
             .map_err(|e| format!("Check: {e}"))?;
         let status = response.status();
         let body = response.text().await.map_err(|e| format!("Read: {e}"))?;
-        if !status.is_success() {
-            return Err(format!("Transaction check ({status}): {body}"));
-        }
-        Ok(())
+        transaction_response(status.as_u16(), body, tx).map(|_| ())
     }
+}
+
+#[cfg(test)]
+#[path = "check_tests.rs"]
+mod check_tests;
+
+/// Normalize only the observed already-known response, never arbitrary HTTP 400s.
+/// Kadia uses this exact envelope for both check and submit; Scala returns 200.
+fn transaction_response(
+    status: u16,
+    text: String,
+    tx: &serde_json::Value,
+) -> std::result::Result<String, String> {
+    if (200..300).contains(&status) {
+        return Ok(text.trim().trim_matches('"').to_string());
+    }
+    let error = serde_json::from_str::<serde_json::Value>(&text).ok();
+    if status == 400 && error == Some(serde_json::json!({"error": 400, "reason": "duplicate"})) {
+        // EIP-12 requests need not carry an id. Derive it from the transaction
+        // rather than trusting caller-supplied id / output box metadata.
+        use ergo_lib::chain::transaction::Transaction;
+        let parse = |error| format!("Cannot derive already-known transaction id: {error}");
+        let inputs = serde_json::from_value(tx["inputs"].clone()).map_err(parse)?;
+        let data_inputs = serde_json::from_value(tx["dataInputs"].clone()).map_err(parse)?;
+        let outputs = serde_json::from_value(tx["outputs"].clone()).map_err(parse)?;
+        let transaction = Transaction::new_from_vec(inputs, data_inputs, outputs)
+            .map_err(|error| format!("Cannot derive already-known transaction id: {error}"))?;
+        return Ok(transaction.id().to_string());
+    }
+    Err(format!("transaction rejected ({status}): {text}"))
 }
