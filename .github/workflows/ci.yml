@@ -42,6 +42,7 @@ jobs:
       - name: FRB bindings match codegen
         working-directory: .
         run: |
+          cargo install cargo-expand --version 1.0.110 --locked
           cargo install flutter_rust_bridge_codegen --version 2.11.1 --locked
           flutter_rust_bridge_codegen generate
           git diff --exit-code

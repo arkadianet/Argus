@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -19,6 +20,7 @@ import 'support/tx_result_harness.dart';
 class ErgoPayApi extends RustLibApi {
   int submissions = 0;
   Object? submitError;
+  Completer<void>? submitGate;
 
   @override
   Future<BigInt> crateApiWalletRestore({
@@ -54,6 +56,7 @@ class ErgoPayApi extends RustLibApi {
     String? nodeUrl,
   }) async {
     submissions++;
+    await submitGate?.future;
     if (submitError != null) throw submitError!;
     return resultTxId;
   }
@@ -73,6 +76,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     api.submissions = 0;
     api.submitError = null;
+    api.submitGate = null;
     await walletService.restoreWallet('mock', walletId: 'result-test');
   });
   tearDown(() async {
@@ -129,6 +133,42 @@ void main() {
     await tester.pumpAndSettle();
     expect(returned, resultTxId);
     expect(find.text('Open ErgoPay'), findsOneWidget);
+  });
+
+  testWidgets('covered ErgoPay route finishes after receipt dismissal', (
+    tester,
+  ) async {
+    final nav = GlobalKey<NavigatorState>();
+    api.submitGate = Completer<void>();
+    await tester.pumpWidget(
+      MaterialApp(
+        navigatorKey: nav,
+        theme: argusTheme(watchful: true),
+        home: const ErgoPayScreen(link: 'ergopay:AAEC'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await reviewAndSubmit(tester);
+    expect(api.submissions, 1);
+    nav.currentState!.push(
+      MaterialPageRoute<void>(
+        builder: (_) => const Scaffold(body: Text('Other screen')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    api.submitGate!.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('Signed and sent'), findsOneWidget);
+    expect(find.text(resultTxId), findsOneWidget);
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    expect(find.text('Other screen'), findsOneWidget);
+    nav.currentState!.pop();
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.text('Signed and sent'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('callback failure warns on successful ErgoPay receipt', (

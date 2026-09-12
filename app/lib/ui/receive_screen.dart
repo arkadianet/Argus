@@ -171,7 +171,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
       final txId =
           await walletService.sendErg(preparationId: preview.preparationId);
       if (mounted) setState(() => _sweeping = false);
-      final warning = await txBookkeeping(() => stealthService.scan());
+      final warning = await txBookkeeping(() async {
+        await stealthService.scan();
+        if (stealthService.lastScanFailed) {
+          throw StateError('Could not refresh stealth funds');
+        }
+      });
       showTxResultSheet(
         receiptContext,
         txId: txId,

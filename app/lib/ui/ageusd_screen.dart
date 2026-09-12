@@ -174,9 +174,10 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> with TxReceiptOwner {
   }
 
   Future<void> _review() async {
+    final action = _action;
     final st = _state;
     if (st == null) return;
-    final amount = parseDecimalToBase(_amountCtrl.text, _action.decimals);
+    final amount = parseDecimalToBase(_amountCtrl.text, action.decimals);
     if (amount == null || amount <= 0) {
       showErrorSheet(context, message: 'Enter an amount');
       return;
@@ -191,7 +192,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> with TxReceiptOwner {
     SigmaUsdBuildResult build;
     try {
       build = await sigmaUsdService.build(
-        action: _action,
+        action: action,
         amount: amount,
         recipient: _recipient,
         changeAddress: _args.changeAddress.isNotEmpty
@@ -212,16 +213,16 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> with TxReceiptOwner {
     }
     if (!mounted) return;
 
-    final isMint = !(_action.isRedeem);
+    final isMint = !(action.isRedeem);
     final confirmed = await showConfirmTransactionSheet(
       context,
       preparationId: build.preparationId,
-      title: '${_action.verb} ${_action.tokenName}',
+      title: '${action.verb} ${action.tokenName}',
       rows: [
         ConfirmTxRow(
           isMint ? 'You receive' : 'You redeem',
-          '${formatTokenAmount(build.tokenAmount, _action.decimals)} '
-          '${_action.tokenName}',
+          '${formatTokenAmount(build.tokenAmount, action.decimals)} '
+          '${action.tokenName}',
         ),
         if (isMint)
           ConfirmTxRow('ERG cost', formatErg(build.ergAmountNano))
@@ -233,8 +234,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> with TxReceiptOwner {
       detail: isMint
           ? 'Minted against the bank at the oracle rate.'
           : 'Redeemed against the bank at the oracle rate.',
-      confirmLabel:
-          'Sign & broadcast ${_action.verb.toLowerCase()}',
+      confirmLabel: 'Sign & broadcast ${action.verb.toLowerCase()}',
     );
     if (!confirmed) {
       if (mounted) setState(() => _busy = false);
@@ -254,7 +254,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> with TxReceiptOwner {
       showTxResultSheet(
         receiptContext,
         txId: txId,
-        headline: '${_action.verb} ${_action.tokenName} submitted',
+        headline: '${action.verb} ${action.tokenName} submitted',
         warning: warning,
       );
     } catch (e) {

@@ -255,6 +255,75 @@ void main() {
     }, () => boxes(102));
   });
 
+  for (final refreshFails in [false, true]) {
+    testWidgets(
+      'partial consolidation refreshes and clears selection: failure=$refreshFails',
+      (tester) async {
+        api.failAt = 2;
+        var refreshRequests = 0;
+        await http.runWithClient(
+          () async {
+            await open(tester);
+            await tester.scrollUntilVisible(
+              find.text('Select All'),
+              300,
+              scrollable: find.byType(Scrollable).first,
+            );
+            await tap(tester, 'Select All');
+            await tester.tap(find.text('Consolidate').first);
+            await tester.pumpAndSettle();
+            await tap(tester, 'Sign & broadcast 2');
+            await tester.pump(const Duration(seconds: 2));
+            await tester.pumpAndSettle();
+            expect(refreshRequests, greaterThan(0));
+            expect(
+              find.textContaining('Broadcast may have failed'),
+              findsOneWidget,
+            );
+            expect(
+              find.textContaining('local tracking could not be updated'),
+              refreshFails ? findsOneWidget : findsNothing,
+            );
+            await tap(tester, 'Done');
+            expect(find.text('Clear (102)'), findsNothing);
+            expect(find.byType(UtxoSelectionActions), findsNothing);
+            await tester.tap(find.byTooltip('Last consolidation result'));
+            await tester.pumpAndSettle();
+            expect(
+              find.textContaining('local tracking could not be updated'),
+              refreshFails ? findsOneWidget : findsNothing,
+            );
+            await tap(tester, 'Done');
+          },
+          () => MockClient((request) async {
+            if (api.submissions >= 2) {
+              refreshRequests++;
+              return http.Response(
+                refreshFails ? 'refresh unavailable' : '[]',
+                refreshFails ? 503 : 200,
+              );
+            }
+            final offset = int.parse(request.url.queryParameters['offset']!);
+            return http.Response(
+              jsonEncode(
+                List.generate(
+                  102,
+                  (i) => {
+                    'boxId': i.toRadixString(16).padLeft(64, '0'),
+                    'value': 5000000000,
+                    'creationHeight': 100,
+                    'assets': [],
+                  },
+                ).skip(offset).take(100).toList(),
+              ),
+              200,
+            );
+          }),
+        );
+      },
+    );
+  }
+
   testWidgets(
     'partial consolidation retains successful IDs and uncertain broadcast warning',
     (tester) async {
@@ -264,6 +333,8 @@ void main() {
         await open(tester);
         await tap(tester, 'Consolidate');
         await tap(tester, 'Sign & broadcast 2');
+        await tester.pump(const Duration(seconds: 2));
+        await tester.pumpAndSettle();
         expect(api.submissions, 2);
         expect(find.byType(TxResultView), findsNothing);
         expect(find.byType(TxBatchResultView), findsOneWidget);

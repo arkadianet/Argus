@@ -53,11 +53,7 @@ class _MixScreenState extends State<MixScreen> with TxReceiptOwner {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
-  Future<void> _guard(
-    String failureTitle,
-    Future<void> Function() body, {
-    bool transaction = false,
-  }) async {
+  Future<void> _guard(String failureTitle, Future<void> Function() body) async {
     if (_working) return;
     setState(() {
       _working = true;
@@ -67,11 +63,7 @@ class _MixScreenState extends State<MixScreen> with TxReceiptOwner {
       await body();
     } catch (e) {
       if (!mounted) return;
-      if (transaction) {
-        showTxFailureSheet(context, e);
-      } else {
-        showErrorSheet(context, title: failureTitle, message: '$e');
-      }
+      showErrorSheet(context, title: failureTitle, message: '$e');
     } finally {
       if (mounted) {
         setState(() {
@@ -292,14 +284,20 @@ class _MixScreenState extends State<MixScreen> with TxReceiptOwner {
     );
     if (!ok) return;
     String? warning;
-    final tx = await mixService.leave(
-      r,
-      destinationAddress: destination,
-      onWarning: (e) {
-        warning =
-            'Withdrawal submitted, but local tracking could not be updated: $e. Keep this transaction ID.';
-      },
-    );
+    final String tx;
+    try {
+      tx = await mixService.leave(
+        r,
+        destinationAddress: destination,
+        onWarning: (e) {
+          warning =
+              'Withdrawal submitted, but local tracking could not be updated: $e. Keep this transaction ID.';
+        },
+      );
+    } catch (e) {
+      if (mounted) showTxFailureSheet(context, e);
+      return;
+    }
 
     showTxResultSheet(
       receiptContext,
@@ -310,7 +308,7 @@ class _MixScreenState extends State<MixScreen> with TxReceiptOwner {
           ? 'This round was not mixed. The mixing tokens on the box will be lost if this withdrawal confirms.'
           : null,
     );
-  }, transaction: true);
+  });
 
   Future<String?> _pickDestination(WalletRouteArgs args) async {
     final toStealth = await showDialog<bool>(

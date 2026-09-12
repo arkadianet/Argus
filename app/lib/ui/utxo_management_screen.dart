@@ -63,7 +63,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     super.dispose();
   }
 
-  Future<void> _loadBoxes() async {
+  Future<void> _loadBoxes({bool propagateError = false}) async {
     if (!mounted) return;
     setState(() {
       _loading = true;
@@ -96,6 +96,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
         _error = 'Failed to load UTXOs: $e';
         _loading = false;
       });
+      if (propagateError) rethrow;
     }
   }
 
@@ -206,19 +207,6 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
         );
         submitted.add(txId);
       }
-      bookkeepingWarning = await txBookkeeping(() async {
-        if (!mounted) return;
-        _tools.clearSelection();
-        await Future.delayed(const Duration(seconds: 1));
-        await _loadBoxes();
-      });
-      if (chunks.length == 1)
-        showTxResultSheet(
-          receiptContext,
-          txId: submitted.single,
-          headline: 'Consolidation submitted',
-          warning: bookkeepingWarning,
-        );
     } catch (e) {
       failure = e;
       if (mounted && chunks.length == 1) {
@@ -230,30 +218,43 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
         );
       }
     } finally {
+      if (submitted.isNotEmpty) {
+        bookkeepingWarning = await txBookkeeping(() async {
+          if (!mounted) return;
+          _tools.clearSelection();
+          await Future.delayed(const Duration(seconds: 1));
+          await _loadBoxes(propagateError: true);
+        });
+        if (chunks.length == 1)
+          showTxResultSheet(
+            receiptContext,
+            txId: submitted.single,
+            headline: 'Consolidation submitted',
+            warning: bookkeepingWarning,
+          );
+      }
+      final classified = failure == null ? null : classifyTxFailure(failure);
+      final batchFailure = [
+        if (classified != null)
+          '${classified.title}\n${classified.message}\nRefresh boxes and check Activity before retrying.',
+        if (bookkeepingWarning != null) bookkeepingWarning,
+      ].join('\n\n');
       if (mounted) {
         setState(() {
           _busy = false;
           if (chunks.length > 1) {
             _consolidationIds = List.unmodifiable(submitted);
             _consolidationPlanned = chunks.length;
-            final classified = failure == null
-                ? null
-                : classifyTxFailure(failure);
-            _consolidationFailure = classified == null
-                ? bookkeepingWarning
-                : '${classified.title}\n${classified.message}\nRefresh boxes and check Activity before retrying.';
+            _consolidationFailure = batchFailure.isEmpty ? null : batchFailure;
           }
         });
       }
       if (chunks.length > 1) {
-        final classified = failure == null ? null : classifyTxFailure(failure);
         showTxBatchResultSheet(
           receiptContext,
           txIds: submitted,
           plannedCount: chunks.length,
-          failure: classified == null
-              ? bookkeepingWarning
-              : '${classified.title}\n${classified.message}\nRefresh boxes and check Activity before retrying.',
+          failure: batchFailure.isEmpty ? null : batchFailure,
         );
       }
     }

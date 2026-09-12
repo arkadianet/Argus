@@ -159,6 +159,46 @@ void main() {
     },
   );
 
+  testWidgets('failed presentation does not poison later receipts', (
+    tester,
+  ) async {
+    late BuildContext context;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (ctx) {
+            context = ctx;
+            return const Scaffold();
+          },
+        ),
+      ),
+    );
+    final failure = StateError('presentation failed');
+    final first = queueTxPresentation(context, (_) async => throw failure);
+    final firstExpectation = expectLater(first, throwsA(same(failure)));
+    var secondRan = false;
+    final second = queueTxPresentation(context, (ctx) async {
+      secondRan = true;
+      await showModalBottomSheet<void>(
+        context: ctx,
+        builder: (_) => const Text('Second receipt'),
+      );
+    });
+    // Observe the error on the old implementation without an unhandled future.
+    Object? secondError;
+    final observedSecond = second.catchError((Object e) {
+      secondError = e;
+    });
+    await tester.pumpAndSettle();
+    await firstExpectation;
+    expect(secondRan, isTrue);
+    expect(secondError, isNull);
+    expect(find.text('Second receipt'), findsOneWidget);
+    Navigator.of(context).pop();
+    await tester.pumpAndSettle();
+    await observedSecond;
+  });
+
   testWidgets(
     'post-broadcast write failure is a warning with the acknowledged ID',
     (tester) async {

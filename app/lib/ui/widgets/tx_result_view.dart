@@ -122,7 +122,8 @@ Future<void> queueTxPresentation(
   final navigator = Navigator.of(context, rootNavigator: true);
   final previous = _receiptQueues[navigator] ?? Future<void>.value();
   final next = previous.then((_) => show(navigator.context));
-  _receiptQueues[navigator] = next;
+  // Preserve this presentation's error for its caller, but keep the queue usable.
+  _receiptQueues[navigator] = next.catchError((Object _) {});
   return next;
 }
 

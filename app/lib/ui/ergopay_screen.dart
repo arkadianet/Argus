@@ -201,6 +201,7 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> with TxReceiptOwner {
           _replyError = '$e';
         }
       }
+      if (mounted) setState(() => _stage = _Stage.done);
       if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
         showTxResultSheet(
           receiptContext,
@@ -210,7 +211,6 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> with TxReceiptOwner {
         );
         return;
       }
-      setState(() => _stage = _Stage.done);
     } catch (e) {
       await _signFailed(e);
     }
