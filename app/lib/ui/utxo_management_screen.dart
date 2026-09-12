@@ -1,3 +1,4 @@
+import 'widgets/tx_batch_result_view.dart';
 import 'widgets/tx_result_view.dart';
 import 'widgets/error_sheet.dart';
 import '../services/app_fee.dart';
@@ -27,6 +28,17 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
   final _tools = UtxoToolsController();
   final TextEditingController _searchCtrl = TextEditingController();
   bool _busy = false;
+
+  List<String>? _consolidationIds;
+  int _consolidationPlanned = 0;
+  String? _consolidationFailure;
+
+  void _showConsolidationResult() => showTxBatchResultSheet(
+    context,
+    txIds: _consolidationIds!,
+    plannedCount: _consolidationPlanned,
+    failure: _consolidationFailure,
+  );
 
   List<InputBoxInput> get _boxes => _tools.boxes;
 
@@ -177,7 +189,8 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     if (!confirmed || !mounted) return;
 
     setState(() => _busy = true);
-    var done = 0;
+    final submitted = <String>[];
+    Object? failure;
     try {
       for (final chunk in chunks) {
         final preview = await walletService.prepareConsolidate(
@@ -186,8 +199,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           changeAddress: changeAddress,
           nodeUrl: networkController.activeUrl,
         );
-        final txId = await walletService.sendErg(preparationId: preview.preparationId);
-        done++;
+        final txId = await walletService.sendErg(
+          preparationId: preview.preparationId,
+        );
+        submitted.add(txId);
         if (!mounted) return;
         if (chunks.length == 1) {
           showTxResultSheet(
@@ -195,27 +210,38 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
             txId: txId,
             headline: 'Consolidation submitted',
           );
-        } else {
-          // Each batch has its own ID; do not present the last as the whole job.
-          _snack(
-            'Transaction $done of ${chunks.length} broadcast · ${shorten(txId, head: 8, tail: 6)}',
-          );
         }
       }
       _tools.clearSelection();
       await Future.delayed(const Duration(seconds: 1));
       await _loadBoxes();
     } catch (e) {
-      if (mounted) {
+      failure = e;
+      if (mounted && chunks.length == 1) {
         showTxFailureSheet(
           context,
           e,
           note:
-              'Stopped after $done of ${chunks.length}. Refresh boxes and check Activity before retrying.',
+              'Stopped after ${submitted.length} of ${chunks.length}. Refresh boxes and check Activity before retrying.',
         );
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          if (chunks.length > 1) {
+            _consolidationIds = List.unmodifiable(submitted);
+            _consolidationPlanned = chunks.length;
+            final classified = failure == null
+                ? null
+                : classifyTxFailure(failure);
+            _consolidationFailure = classified == null
+                ? null
+                : '${classified.title}\n${classified.message}\nRefresh boxes and check Activity before retrying.';
+          }
+        });
+        if (chunks.length > 1) _showConsolidationResult();
+      }
     }
   }
 
@@ -420,6 +446,12 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       appBar: AppBar(
         title: const Text('UTXO Management'),
         actions: [
+          if (_consolidationIds != null)
+            IconButton(
+              tooltip: 'Last consolidation result',
+              onPressed: _showConsolidationResult,
+              icon: const Icon(Icons.receipt_long),
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh boxes',

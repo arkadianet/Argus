@@ -23,6 +23,12 @@ class TrackedStakeProxy {
       (jsonDecode(jsonEncode(_record['proxy'])) as Map).cast();
   ProxyStatus get status =>
       ProxyStatus.values.byName(_record['status'] as String);
+  List<String> get refundTxIds => List<String>.unmodifiable(
+    (_record['refund_tx_ids'] as List?)?.cast<String>() ?? const <String>[],
+  );
+  String? get spendingTxId => _record['spending_tx_id'] as String?;
+  bool refundConfirmed(String txId) =>
+      status == ProxyStatus.spent && spendingTxId == txId;
   String? get note => _record['note'] as String?;
   Map<String, dynamic> toJson() =>
       (jsonDecode(jsonEncode(_record)) as Map).cast();
@@ -85,17 +91,22 @@ class LiveStakeProxyGateway implements StakeProxyGateway {
     final box = jsonDecode(response.body) as Map;
     if (box['boxId'] != record.boxId)
       throw StateError('Proxy lookup returned a different box');
-    if (box['mainChain'] == false) return ProxyStatus.pending;
+    if (box['mainChain'] == false) {
+      record._record['spending_tx_id'] = null;
+      return ProxyStatus.pending;
+    }
     if (box['mainChain'] != true || !box.containsKey('spentTransactionId')) {
       throw StateError('Proxy chain status is incomplete');
     }
     if (box['spentTransactionId'] is String &&
         (box['spentTransactionId'] as String).isNotEmpty) {
+      record._record['spending_tx_id'] = box['spentTransactionId'];
       return ProxyStatus.spent;
     }
     if (box['settlementHeight'] == null && box['inclusionHeight'] == null) {
       throw StateError('Proxy confirmation is not yet known');
     }
+    record._record['spending_tx_id'] = null;
     return ProxyStatus.confirmed;
   }
 }
@@ -113,6 +124,32 @@ class StakeProxyService extends ChangeNotifier {
   bool _busy = false;
   bool _reconciling = false;
   String? error;
+  Future<void> _writes = Future<void>.value();
+
+  // Reconciliation and refund signing may overlap. Merge each update into the
+  // latest durable rows so a slow lookup cannot erase a pre-broadcast write.
+  Future<void> _updateRows(
+    String wallet,
+    String network,
+    void Function(List<Map<String, dynamic>>) update,
+  ) {
+    final write = _writes.then((_) async {
+      final rows = await WalletDatabaseService.loadStakeProxies(
+        wallet,
+        network,
+      );
+      update(rows);
+      await WalletDatabaseService.saveStakeProxies(wallet, network, rows);
+      if (_scope == (wallet: wallet, network: network)) {
+        _loaded = _scope;
+        _records = rows.map(TrackedStakeProxy.new).toList();
+        notifyListeners();
+      }
+    });
+    _writes = write.then<void>((_) {}, onError: (Object _, StackTrace __) {});
+    return write;
+  }
+
   bool get busy => _busy || _reconciling;
   ({String? wallet, String network}) get _scope =>
       (wallet: _gw.walletId, network: _gw.network);
@@ -153,11 +190,17 @@ class StakeProxyService extends ChangeNotifier {
         }
       }
       if (scope.wallet != null) {
-        await WalletDatabaseService.saveStakeProxies(
-          scope.wallet!,
-          scope.network,
-          records.map((r) => r.toJson()).toList(),
-        );
+        await _updateRows(scope.wallet!, scope.network, (rows) {
+          for (final row in rows) {
+            final boxId = (row['proxy'] as Map)['boxId'];
+            final matches = records.where((r) => r.boxId == boxId);
+            if (matches.isEmpty) continue;
+            final reconciled = matches.single;
+            row['status'] = reconciled.status.name;
+            row['note'] = reconciled.note;
+            row['spending_tx_id'] = reconciled.spendingTxId;
+          }
+        });
       }
     } catch (e) {
       error = '$e';
@@ -282,6 +325,21 @@ class StakeProxyService extends ChangeNotifier {
       final signed = await _gw.sign(
         (prepared['preparation_id'] as num).toInt(),
       );
+      _requireScope(wallet, network, node);
+      final txId = (jsonDecode(signed) as Map)['id'] as String;
+      if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(txId)) {
+        throw StateError('Signed refund has no valid transaction ID');
+      }
+      await _updateRows(wallet, network, (rows) {
+        final row = rows.singleWhere(
+          (r) => (r['proxy'] as Map)['boxId'] == prepared['proxy_box_id'],
+        );
+        final ids = List<String>.from(row['refund_tx_ids'] as List? ?? []);
+        if (!ids.contains(txId)) ids.add(txId);
+        row['refund_tx_ids'] = ids;
+      });
+      // Await persistence before attempting broadcast. An ID records an
+      // attempt, never proof of acceptance or a completed refund.
       _requireScope(wallet, network, node);
       return await _gw.broadcast(signed, node);
     } finally {

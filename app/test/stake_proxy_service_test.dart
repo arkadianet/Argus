@@ -7,6 +7,9 @@ import 'package:argus_wallet/services/wallet_database_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+const refundId =
+    'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789';
+
 Map<String, dynamic> prepared() => {
   'wallet_id': 'alice',
   'network': 'mainnet',
@@ -34,7 +37,7 @@ class Gateway implements StakeProxyGateway {
   @override
   Future<String> sign(int preparationId) async {
     if (switchDuringSign) walletId = 'bob';
-    return 'signed';
+    return preparationId == 8 ? jsonEncode({'id': refundId}) : 'signed';
   }
 
   @override
@@ -59,10 +62,14 @@ class Gateway implements StakeProxyGateway {
     expect(persisted.single['wallet_id'], 'alice');
     expect(persisted.single['network'], 'mainnet');
     expect((persisted.single['proxy'] as Map)['boxId'], 'proxy');
+    if (signed != 'signed') {
+      expect(persisted.single['refund_tx_ids'], contains(refundId));
+      expect(persisted.single['status'], isNot('spent'));
+    }
     if (crash) throw StateError('simulated process loss before network');
     broadcasts++;
     if (uncertain) throw TimeoutException('accepted by node, response lost');
-    return 'signed-id';
+    return signed == 'signed' ? 'signed-id' : refundId;
   }
 
   @override
@@ -156,10 +163,12 @@ void main() {
       final reconciling = restarted.reload();
       await loaded.future;
       final refund = await restarted.prepareRefund(restarted.records.single);
-      expect(await restarted.commitRefund(refund), 'signed-id');
+      expect(await restarted.commitRefund(refund), refundId);
       expect(gw.lookupWait!.isCompleted, isFalse);
       gw.lookupWait!.complete(ProxyStatus.confirmed);
       await reconciling;
+      await restarted.reload();
+      expect(restarted.records.single.refundTxIds, [refundId]);
       restarted.dispose();
     },
   );
@@ -195,7 +204,7 @@ void main() {
         final refund = await restarted.prepareRefund(restarted.records.single);
         gw.uncertain = false;
         gw.crash = false;
-        expect(await restarted.commitRefund(refund), 'signed-id');
+        expect(await restarted.commitRefund(refund), refundId);
         expect(gw.refunds, 1);
         gw.lookupFails = false;
         gw.status = ProxyStatus.spent;
@@ -207,6 +216,55 @@ void main() {
       },
     );
   }
+  test(
+    'refund ID survives reload and completion needs matching chain spend',
+    () async {
+      final gw = Gateway();
+      final svc = StakeProxyService(gateway: gw);
+      await svc.commitCreation(prepared());
+      await svc.reload();
+      await svc.commitRefund(await svc.prepareRefund(svc.records.single));
+      svc.dispose();
+      final restarted = StakeProxyService(gateway: gw);
+      addTearDown(restarted.dispose);
+      await restarted.reload();
+      expect(restarted.records.single.refundTxIds, [refundId]);
+      expect(restarted.records.single.refundConfirmed(refundId), isFalse);
+      final record = restarted.records.single;
+      final live = LiveStakeProxyGateway(
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'boxId': 'proxy',
+              'mainChain': true,
+              'spentTransactionId': refundId,
+            }),
+            200,
+          ),
+        ),
+      );
+      final status = await live.lookup(record);
+      final confirmed = TrackedStakeProxy({
+        ...record.toJson(),
+        'status': status.name,
+      });
+      expect(confirmed.refundConfirmed(refundId), isTrue);
+      expect(confirmed.refundConfirmed('another-spend'), isFalse);
+    },
+  );
+  test('refund persistence failure prevents broadcast', () async {
+    final gw = Gateway();
+    final svc = StakeProxyService(gateway: gw);
+    addTearDown(svc.dispose);
+    await svc.commitCreation(prepared());
+    await svc.reload();
+    final refund = await svc.prepareRefund(svc.records.single);
+    SharedPreferences.setMockInitialValues({
+      'argus_stake_proxies_v1_mainnet_alice': 'corrupt',
+    });
+    await expectLater(svc.commitRefund(refund), throwsStateError);
+    expect(gw.broadcasts, 1);
+  });
   test('corrupt persistence prevents any broadcast', () async {
     final gw = Gateway();
     SharedPreferences.setMockInitialValues({
@@ -259,6 +317,8 @@ void main() {
     addTearDown(restarted.dispose);
     await restarted.reload();
     expect(restarted.records.single.status, ProxyStatus.confirmed);
+    expect(restarted.records.single.refundTxIds, [refundId]);
+    expect(restarted.records.single.refundConfirmed(refundId), isFalse);
     await restarted.prepareRefund(restarted.records.single);
     expect(gw.refunds, 2);
   });

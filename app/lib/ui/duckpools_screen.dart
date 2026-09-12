@@ -1,3 +1,4 @@
+import 'widgets/tx_explorer_link.dart';
 import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 
@@ -813,6 +814,14 @@ class _OrderCard extends StatelessWidget {
           Wrap(
             spacing: 8,
             children: [
+              TxExplorerLink(txId: o.txId, label: 'Order transaction'),
+              if (o.outcomeTxId != null)
+                TxExplorerLink(
+                  txId: o.outcomeTxId!,
+                  label: o.status == 'refund_sent' || o.status == 'refunded'
+                      ? 'Refund transaction'
+                      : 'Outcome transaction',
+                ),
               if (o.status == 'refundable') FilledButton.tonal(style: inlineButtonStyle, onPressed: working ? null : onRefund, child: const Text('Refund')),
               if (!o.open) TextButton(onPressed: onRemove, child: const Text('Remove')),
             ],

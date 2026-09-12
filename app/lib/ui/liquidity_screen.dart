@@ -1,3 +1,4 @@
+import 'widgets/tx_explorer_link.dart';
 import 'widgets/tx_result_view.dart';
 import 'dart:convert';
 
@@ -825,6 +826,11 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
                 const SizedBox(height: 10),
                 Wrap(spacing: 8, children: [
                   FilledButton(style: inlineButtonStyle, onPressed: _working || !_ownsWallet ? null : _create, child: const Text('Finish the pool')),
+                  if (pending['bootstrap_tx_id'] is String)
+                    TxExplorerLink(
+                      txId: pending['bootstrap_tx_id'] as String,
+                      label: 'Step 1 transaction',
+                    ),
                   TextButton(onPressed: _working ? null : _forget, child: const Text('Forget')),
                 ]),
               ],

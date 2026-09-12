@@ -1,3 +1,4 @@
+import 'widgets/tx_explorer_link.dart';
 import 'package:flutter/material.dart';
 
 import '../services/stake_recovery_service.dart';
@@ -186,6 +187,14 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
                     Text('Paideia proxy · ${proxy.status.name}'),
                     Text('Stake key ${proxy.keyId}'),
                     if (proxy.note != null) Text(proxy.note!),
+                    for (final txId in proxy.refundTxIds) ...[
+                      Text(
+                        proxy.refundConfirmed(txId)
+                            ? 'Refund confirmed'
+                            : 'Refund attempt — completion not confirmed. Check the transaction before retrying.',
+                      ),
+                      TxExplorerLink(txId: txId, label: 'Refund transaction'),
+                    ],
                     if (proxy.status != ProxyStatus.spent)
                       FilledButton(
                         onPressed: _working ? null : () => _refund(proxy),
