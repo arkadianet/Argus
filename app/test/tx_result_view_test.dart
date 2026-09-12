@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:argus_wallet/ui/widgets/error_sheet.dart';
 import 'package:argus_wallet/services/network_controller.dart';
 import 'package:argus_wallet/theme/argus_theme.dart';
 import 'package:argus_wallet/ui/widgets/tx_result_view.dart';
@@ -74,6 +76,121 @@ void main() {
     expect(find.text('Working screen'), findsOneWidget);
   });
 
+  for (final fullyDisposed in [false, true]) {
+    testWidgets('late receipt survives Back: disposed=$fullyDisposed', (
+      tester,
+    ) async {
+      final broadcast = Completer<String>();
+      final nav = GlobalKey<NavigatorState>();
+      await tester.pumpWidget(
+        MaterialApp(
+          navigatorKey: nav,
+          home: const Scaffold(body: Text('Previous screen')),
+        ),
+      );
+      nav.currentState!.push(
+        MaterialPageRoute<void>(
+          builder: (_) => _BroadcastScreen(broadcast: broadcast.future),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Broadcast'));
+      nav.currentState!.pop();
+      if (fullyDisposed) {
+        await tester.pumpAndSettle();
+      } else {
+        await tester.pump();
+      }
+      broadcast.complete(resultTxId);
+      await tester.pumpAndSettle();
+      expect(find.text(resultTxId), findsOneWidget);
+      expect(find.text('Recovery submitted'), findsOneWidget);
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
+      expect(find.text('Previous screen'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets(
+    'repeated completions queue one modal and return IDs immediately',
+    (tester) async {
+      late BuildContext context;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (ctx) {
+              context = ctx;
+              return const Scaffold(body: Text('Browser'));
+            },
+          ),
+        ),
+      );
+      Future<String> submit(String id) async {
+        showTxResultSheet(
+          context,
+          txId: id,
+          headline: 'dApp transaction submitted',
+        );
+        return id;
+      }
+
+      final ids = await Future.wait([
+        submit('first'),
+        submit('second'),
+        submit('third'),
+      ]);
+      expect(ids, ['first', 'second', 'third']);
+      queueTxPresentation(
+        context,
+        (ctx) => showTxFailureSheet(ctx, StateError('node unavailable')),
+      );
+      await tester.pumpAndSettle();
+      for (final id in ids) {
+        expect(find.byType(TxResultView, skipOffstage: false), findsOneWidget);
+        expect(find.text(id), findsOneWidget);
+        await tester.tap(find.text('Done'));
+        await tester.pumpAndSettle();
+      }
+      expect(find.text('Broadcast may have failed'), findsOneWidget);
+      await tester.tap(find.text('Close'));
+      await tester.pumpAndSettle();
+      expect(find.text('Browser'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'post-broadcast write failure is a warning with the acknowledged ID',
+    (tester) async {
+      late BuildContext context;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (ctx) {
+              context = ctx;
+              return const Scaffold();
+            },
+          ),
+        ),
+      );
+      final warning = await txBookkeeping(
+        () async => throw StateError('disk full'),
+      );
+      showTxResultSheet(
+        context,
+        txId: resultTxId,
+        headline: 'Pool creation submitted',
+        warning: warning,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text(resultTxId), findsOneWidget);
+      expect(find.textContaining('disk full'), findsOneWidget);
+      expect(find.text('Broadcast may have failed'), findsNothing);
+      await tester.tap(find.text('Done'));
+      await tester.pumpAndSettle();
+    },
+  );
+
   testWidgets('receipt scrolls on a small screen with large text', (
     tester,
   ) async {
@@ -105,4 +222,29 @@ void main() {
     await tester.ensureVisible(find.text('Done'));
     expect(tester.takeException(), isNull);
   });
+}
+
+class _BroadcastScreen extends StatefulWidget {
+  const _BroadcastScreen({required this.broadcast});
+  final Future<String> broadcast;
+  @override
+  State<_BroadcastScreen> createState() => _BroadcastScreenState();
+}
+
+class _BroadcastScreenState extends State<_BroadcastScreen>
+    with TxReceiptOwner {
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    body: TextButton(
+      onPressed: () async {
+        final id = await widget.broadcast;
+        showTxResultSheet(
+          receiptContext,
+          txId: id,
+          headline: 'Recovery submitted',
+        );
+      },
+      child: const Text('Broadcast'),
+    ),
+  );
 }

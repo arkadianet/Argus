@@ -23,7 +23,7 @@ class ReceiveScreen extends StatefulWidget {
   State<ReceiveScreen> createState() => _ReceiveScreenState();
 }
 
-class _ReceiveScreenState extends State<ReceiveScreen> {
+class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
   final _amountCtrl = TextEditingController();
   String _qrData = '';
   String? _amountError;
@@ -170,14 +170,14 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       }
       final txId =
           await walletService.sendErg(preparationId: preview.preparationId);
-      if (!mounted) return;
-      setState(() => _sweeping = false);
+      if (mounted) setState(() => _sweeping = false);
+      final warning = await txBookkeeping(() => stealthService.scan());
       showTxResultSheet(
-        context,
+        receiptContext,
         txId: txId,
         headline: 'Stealth sweep submitted',
+        warning: warning,
       );
-      await stealthService.scan();
     } catch (e) {
       if (!mounted) return;
       setState(() => _sweeping = false);

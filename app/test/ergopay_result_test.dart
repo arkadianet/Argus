@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:argus_wallet/services/ergopay_service.dart';
 
 import 'package:argus_wallet/bridge/argus_error.dart';
 import 'package:argus_wallet/bridge/frb_generated.dart';
@@ -127,6 +130,70 @@ void main() {
     expect(returned, resultTxId);
     expect(find.text('Open ErgoPay'), findsOneWidget);
   });
+
+  testWidgets('callback failure warns on successful ErgoPay receipt', (
+    tester,
+  ) async {
+    var replies = 0;
+    final client = ErgoPayClient(
+      client: MockClient((request) async {
+        if (request.method == 'GET') {
+          return http.Response(
+            jsonEncode({
+              'reducedTx': 'AAEC',
+              'replyTo': 'https://dapp.invalid/callback',
+            }),
+            200,
+          );
+        }
+        replies++;
+        expect(request.url.toString(), 'https://dapp.invalid/callback');
+        expect(jsonDecode(request.body), {'txId': resultTxId});
+        return http.Response('unavailable', 503);
+      }),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: argusTheme(watchful: true),
+        home: ErgoPayScreen(
+          link: 'ergopay://dapp.invalid/request',
+          client: client,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await reviewAndSubmit(tester);
+    expect(api.submissions, 1);
+    expect(replies, 1);
+    final receipt = tester.widget<TxResultView>(find.byType(TxResultView));
+    expect(receipt.txId, resultTxId);
+    expect(receipt.warning, contains('503'));
+    expect(find.text('Signed and sent'), findsOneWidget);
+    expect(find.text('Broadcast may have failed'), findsNothing);
+  });
+
+  testWidgets(
+    'Activity update failure cannot turn an acknowledged broadcast into failure',
+    (tester) async {
+      final previous = walletService.onBroadcast;
+      walletService.onBroadcast = (_, _) =>
+          throw StateError('Activity update failed');
+      addTearDown(() => walletService.onBroadcast = previous);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: argusTheme(watchful: true),
+          home: const ErgoPayScreen(link: 'ergopay:AAEC'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await reviewAndSubmit(tester);
+      expect(api.submissions, 1);
+      expect(find.byType(TxResultView), findsOneWidget);
+      expect(find.text(resultTxId), findsOneWidget);
+      expect(find.textContaining('Activity update failed'), findsOneWidget);
+      expect(find.text('Broadcast may have failed'), findsNothing);
+    },
+  );
 
   testWidgets('ErgoPay uncertain submission shows Activity guidance', (
     tester,

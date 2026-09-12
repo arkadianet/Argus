@@ -113,7 +113,7 @@ class LiquidityScreen extends StatefulWidget {
   State<LiquidityScreen> createState() => _LiquidityScreenState();
 }
 
-class _LiquidityScreenState extends State<LiquidityScreen> {
+class _LiquidityScreenState extends State<LiquidityScreen> with TxReceiptOwner {
   List<LiquidityPool> _pools = const [];
   bool _loading = true;
   bool _truncated = false;
@@ -174,7 +174,7 @@ class _LiquidityScreenState extends State<LiquidityScreen> {
     final txId = await walletService.sendErg(
       preparationId: (prepared['preparation_id'] as num).toInt(),
     );
-    if (mounted) showTxResultSheet(context, txId: txId, headline: headline);
+    showTxResultSheet(receiptContext, txId: txId, headline: headline);
   }
 
   Future<void> _add(LiquidityPool pool) async {
@@ -574,7 +574,8 @@ class _CreateTab extends StatefulWidget {
   State<_CreateTab> createState() => _CreateTabState();
 }
 
-class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMixin {
+class _CreateTabState extends State<_CreateTab>
+    with TxReceiptOwner, AutomaticKeepAliveClientMixin {
   late final String? _walletId = walletService.activeWalletId;
   PoolCreationStore? get _store => _walletId == null ? null : PoolCreationStore(_walletId);
   bool _loadingPending = true;
@@ -714,15 +715,18 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
       final txId = await walletService.sendErg(
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      await _savePending({...record, 'bootstrap_tx_id': txId, 'sent': true});
-      if (mounted)
-        showTxResultSheet(
-          context,
-          txId: txId,
-          headline: 'Pool step 1 submitted',
-          note:
-              'The pool is not created yet. Wait for confirmation, then continue with step 2 in the progress card.',
-        );
+      final warning = await txBookkeeping(
+        () => _savePending({...record, 'bootstrap_tx_id': txId, 'sent': true}),
+      );
+
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Pool step 1 submitted',
+        note:
+            'The pool is not created yet. Wait for confirmation, then continue with step 2 in the progress card.',
+      );
     } catch (e) {
       if (mounted) showTxFailureSheet(context, e);
     } finally {
@@ -765,15 +769,16 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
       final txId = await walletService.sendErg(
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      await _savePending(null);
-      if (mounted)
-        showTxResultSheet(
-          context,
-          txId: txId,
-          headline: 'Pool creation submitted',
-          note:
-              'Step 2 is submitted. The pool becomes available after confirmation.',
-        );
+      final warning = await txBookkeeping(() => _savePending(null));
+
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Pool creation submitted',
+        note:
+            'Step 2 is submitted. The pool becomes available after confirmation.',
+      );
     } catch (e) {
       if (mounted) showTxFailureSheet(context, e);
     } finally {

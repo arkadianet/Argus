@@ -21,7 +21,8 @@ class SigmaFiScreen extends StatefulWidget {
   State<SigmaFiScreen> createState() => _SigmaFiScreenState();
 }
 
-class _SigmaFiScreenState extends State<SigmaFiScreen> with SingleTickerProviderStateMixin {
+class _SigmaFiScreenState extends State<SigmaFiScreen>
+    with TxReceiptOwner, SingleTickerProviderStateMixin {
   late final TabController _tabs = TabController(length: 3, vsync: this);
   bool _working = false;
 
@@ -108,10 +109,13 @@ class _SigmaFiScreenState extends State<SigmaFiScreen> with SingleTickerProvider
       final txId = await walletService.sendErg(
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      if (mounted) {
-        showTxResultSheet(context, txId: txId, headline: done);
-      }
-      await _refresh();
+      final warning = await txBookkeeping(() => _refresh());
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: done,
+      );
     } catch (e) {
       if (mounted) showTxFailureSheet(context, e);
     } finally {
@@ -239,11 +243,16 @@ class _SigmaFiScreenState extends State<SigmaFiScreen> with SingleTickerProvider
       final txId = await walletService.sendErg(
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      if (mounted) {
-        showTxResultSheet(context, txId: txId, headline: 'Request posted');
-        _tabs.animateTo(1);
-      }
-      await _refresh();
+      final warning = await txBookkeeping(() async {
+        if (mounted) _tabs.animateTo(1);
+        await _refresh();
+      });
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        headline: 'Request posted',
+        warning: warning,
+      );
     } catch (e) {
       if (mounted) showTxFailureSheet(context, e);
     } finally {

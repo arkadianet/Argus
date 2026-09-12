@@ -22,7 +22,8 @@ class UtxoManagementScreen extends StatefulWidget {
   State<UtxoManagementScreen> createState() => _UtxoManagementScreenState();
 }
 
-class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
+class _UtxoManagementScreenState extends State<UtxoManagementScreen>
+    with TxReceiptOwner {
   bool _loading = true;
   String? _error;
   final _tools = UtxoToolsController();
@@ -34,7 +35,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
   String? _consolidationFailure;
 
   void _showConsolidationResult() => showTxBatchResultSheet(
-    context,
+    receiptContext,
     txIds: _consolidationIds!,
     plannedCount: _consolidationPlanned,
     failure: _consolidationFailure,
@@ -191,6 +192,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     setState(() => _busy = true);
     final submitted = <String>[];
     Object? failure;
+    String? bookkeepingWarning;
     try {
       for (final chunk in chunks) {
         final preview = await walletService.prepareConsolidate(
@@ -203,18 +205,20 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           preparationId: preview.preparationId,
         );
         submitted.add(txId);
-        if (!mounted) return;
-        if (chunks.length == 1) {
-          showTxResultSheet(
-            context,
-            txId: txId,
-            headline: 'Consolidation submitted',
-          );
-        }
       }
-      _tools.clearSelection();
-      await Future.delayed(const Duration(seconds: 1));
-      await _loadBoxes();
+      bookkeepingWarning = await txBookkeeping(() async {
+        if (!mounted) return;
+        _tools.clearSelection();
+        await Future.delayed(const Duration(seconds: 1));
+        await _loadBoxes();
+      });
+      if (chunks.length == 1)
+        showTxResultSheet(
+          receiptContext,
+          txId: submitted.single,
+          headline: 'Consolidation submitted',
+          warning: bookkeepingWarning,
+        );
     } catch (e) {
       failure = e;
       if (mounted && chunks.length == 1) {
@@ -236,11 +240,21 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
                 ? null
                 : classifyTxFailure(failure);
             _consolidationFailure = classified == null
-                ? null
+                ? bookkeepingWarning
                 : '${classified.title}\n${classified.message}\nRefresh boxes and check Activity before retrying.';
           }
         });
-        if (chunks.length > 1) _showConsolidationResult();
+      }
+      if (chunks.length > 1) {
+        final classified = failure == null ? null : classifyTxFailure(failure);
+        showTxBatchResultSheet(
+          receiptContext,
+          txIds: submitted,
+          plannedCount: chunks.length,
+          failure: classified == null
+              ? bookkeepingWarning
+              : '${classified.title}\n${classified.message}\nRefresh boxes and check Activity before retrying.',
+        );
       }
     }
   }
@@ -339,10 +353,17 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           final txId = await walletService.sendErg(
             preparationId: preview.preparationId,
           );
-          if (mounted)
-            showTxResultSheet(context, txId: txId, headline: 'Split submitted');
-          await Future.delayed(const Duration(seconds: 1));
-          await _loadBoxes();
+
+          final warning = await txBookkeeping(() async {
+            await Future.delayed(const Duration(seconds: 1));
+            if (mounted) await _loadBoxes();
+          });
+          showTxResultSheet(
+            receiptContext,
+            txId: txId,
+            warning: warning,
+            headline: 'Split submitted',
+          );
         } finally {
           if (mounted) setState(() => _busy = false);
         }
@@ -412,14 +433,17 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           final txId = await walletService.sendErg(
             preparationId: preview.preparationId,
           );
-          if (mounted)
-            showTxResultSheet(
-              context,
-              txId: txId,
-              headline: 'Restructure submitted',
-            );
-          await Future.delayed(const Duration(seconds: 1));
-          await _loadBoxes();
+
+          final warning = await txBookkeeping(() async {
+            await Future.delayed(const Duration(seconds: 1));
+            if (mounted) await _loadBoxes();
+          });
+          showTxResultSheet(
+            receiptContext,
+            txId: txId,
+            warning: warning,
+            headline: 'Restructure submitted',
+          );
         } finally {
           if (mounted) setState(() => _busy = false);
         }

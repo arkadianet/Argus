@@ -38,7 +38,7 @@ class DexyScreen extends StatefulWidget {
   State<DexyScreen> createState() => _DexyScreenState();
 }
 
-class _DexyScreenState extends State<DexyScreen> {
+class _DexyScreenState extends State<DexyScreen> with TxReceiptOwner {
   DexyVariant _variant = DexyVariant.gold;
   DexyState? _state;
   bool _loading = true;
@@ -135,8 +135,7 @@ class _DexyScreenState extends State<DexyScreen> {
       final txId = await walletService.sendErg(
         preparationId: build.preparationId,
       );
-      if (!mounted) return;
-      showTxResultSheet(context, txId: txId, headline: headline);
+      showTxResultSheet(receiptContext, txId: txId, headline: headline);
       HapticFeedback.mediumImpact();
     } catch (e) {
       if (!mounted) return;

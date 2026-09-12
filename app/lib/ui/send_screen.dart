@@ -90,7 +90,7 @@ class _RecipientEntry {
   }
 }
 
-class _SendScreenState extends State<SendScreen> {
+class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
   final _formKey = GlobalKey<FormState>();
   final _recipientCtrl = TextEditingController();
   final _amountCtrl = TextEditingController();
@@ -199,6 +199,7 @@ class _SendScreenState extends State<SendScreen> {
   String? _feeTokenId;
   final List<_RecipientEntry> _extraRecipients = [];
   bool get _multiRecipient => _extraRecipients.isNotEmpty;
+
 
 
   @override
@@ -659,7 +660,10 @@ class _SendScreenState extends State<SendScreen> {
     }
     try {
       final txId = await walletService.sendErg(preparationId: build.preparationId);
-      if (!mounted) return;
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+        showTxResultSheet(receiptContext, txId: txId, headline: 'Sent!');
+        return;
+      }
       HapticFeedback.mediumImpact();
       setState(() {
         _resultTxId = txId;
@@ -814,7 +818,10 @@ class _SendScreenState extends State<SendScreen> {
           final txId = await walletService.sendErg(
             preparationId: preview.preparationId,
           );
-          if (!mounted) return;
+          if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+            showTxResultSheet(receiptContext, txId: txId, headline: 'Sent!');
+            return;
+          }
           HapticFeedback.mediumImpact();
           setState(() {
             _resultTxId = txId;

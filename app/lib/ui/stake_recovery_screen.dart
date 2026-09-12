@@ -18,7 +18,8 @@ class StakeRecoveryScreen extends StatefulWidget {
   State<StakeRecoveryScreen> createState() => _StakeRecoveryScreenState();
 }
 
-class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
+class _StakeRecoveryScreenState extends State<StakeRecoveryScreen>
+    with TxReceiptOwner {
   final _service = stakeRecoveryService;
   bool _working = false;
 
@@ -45,10 +46,13 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
       );
       if (!ok || !mounted) return;
       final txId = await stakeProxyService.commitRefund(prepared);
-      if (mounted) {
-        showTxResultSheet(context, txId: txId, headline: 'Refund submitted');
-      }
-      await stakeProxyService.reload();
+      final warning = await txBookkeeping(() => stakeProxyService.reload());
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Refund submitted',
+      );
     } catch (e) {
       if (mounted) {
         showTxFailureSheet(
@@ -93,10 +97,13 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
       final txId = await walletService.sendErg(
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      if (mounted) {
-        showTxResultSheet(context, txId: txId, headline: 'Recovery submitted');
-      }
-      await _refresh();
+      final warning = await txBookkeeping(() => _refresh());
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Recovery submitted',
+      );
     } catch (e) {
       if (mounted) showTxFailureSheet(context, e);
     } finally {

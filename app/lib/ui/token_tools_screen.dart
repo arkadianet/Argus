@@ -45,7 +45,8 @@ class _IssueTab extends StatefulWidget {
   State<_IssueTab> createState() => _IssueTabState();
 }
 
-class _IssueTabState extends State<_IssueTab> with AutomaticKeepAliveClientMixin {
+class _IssueTabState extends State<_IssueTab>
+    with TxReceiptOwner, AutomaticKeepAliveClientMixin {
   final _name = TextEditingController();
   final _description = TextEditingController();
   final _amount = TextEditingController();
@@ -129,13 +130,13 @@ class _IssueTabState extends State<_IssueTab> with AutomaticKeepAliveClientMixin
       final txId = await walletService.sendErg(
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      if (!mounted) return;
-      setState(() {
-        _issuedId = tokenId;
-        _issuedTxId = txId;
-      });
+      if (mounted)
+        setState(() {
+          _issuedId = tokenId;
+          _issuedTxId = txId;
+        });
       showTxResultSheet(
-        context,
+        receiptContext,
         txId: txId,
         headline: 'Token issuance submitted',
         note:
@@ -197,7 +198,7 @@ class _IssueTabState extends State<_IssueTab> with AutomaticKeepAliveClientMixin
             const SizedBox(height: 16),
             OutlinedButton(
               onPressed: () => showTxResultSheet(
-                context,
+                receiptContext,
                 txId: _issuedTxId!,
                 headline: 'Token issuance submitted',
                 note:
@@ -341,7 +342,8 @@ class _BurnTab extends StatefulWidget {
   State<_BurnTab> createState() => _BurnTabState();
 }
 
-class _BurnTabState extends State<_BurnTab> with AutomaticKeepAliveClientMixin {
+class _BurnTabState extends State<_BurnTab>
+    with TxReceiptOwner, AutomaticKeepAliveClientMixin {
   /// Token id to the amount field, for the tokens picked to burn.
   final Map<String, TextEditingController> _picked = {};
   final _confirmWord = TextEditingController();
@@ -422,15 +424,19 @@ class _BurnTabState extends State<_BurnTab> with AutomaticKeepAliveClientMixin {
       );
       if (!ok || !mounted) return;
       final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
-      if (!mounted) return;
-      setState(() {
-        for (final c in _picked.values) {
-          c.dispose();
-        }
-        _picked.clear();
-        _confirmWord.clear();
-      });
-      showTxResultSheet(context, txId: txId, headline: 'Token burn submitted');
+      if (mounted)
+        setState(() {
+          for (final c in _picked.values) {
+            c.dispose();
+          }
+          _picked.clear();
+          _confirmWord.clear();
+        });
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        headline: 'Token burn submitted',
+      );
     } catch (e) {
       if (mounted) showTxFailureSheet(context, e);
     } finally {

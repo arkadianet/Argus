@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:url_launcher/url_launcher.dart';
@@ -29,7 +30,7 @@ class RosenScreen extends StatefulWidget {
   State<RosenScreen> createState() => _RosenScreenState();
 }
 
-class _RosenScreenState extends State<RosenScreen> {
+class _RosenScreenState extends State<RosenScreen> with TxReceiptOwner {
   RosenToken? _token;
   RosenTarget? _target;
   final _address = TextEditingController();
@@ -135,7 +136,14 @@ class _RosenScreenState extends State<RosenScreen> {
       );
       if (!ok || !mounted) return;
       final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
-      if (!mounted) return;
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+        showTxResultSheet(
+          receiptContext,
+          txId: txId,
+          headline: 'Bridge lock submitted',
+        );
+        return;
+      }
       setState(() => _sentTxId = txId);
     } catch (e) {
       if (mounted) showTxFailureSheet(context, e);
@@ -331,6 +339,8 @@ class _RosenScreenState extends State<RosenScreen> {
         children: [
           Icon(Icons.check_circle_outline, size: 48, color: accentOf(context)),
           const SizedBox(height: 12),
+          if (walletService.broadcastWarning(txId) case final warning?)
+            SelectableText(warning, style: TextStyle(color: rustFor(context))),
           Text('Transfer started', style: Theme.of(context).textTheme.titleLarge, textAlign: TextAlign.center),
           const SizedBox(height: 8),
           Text(

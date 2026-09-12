@@ -115,8 +115,12 @@ class LiveStakeProxyGateway implements StakeProxyGateway {
 /// Creation has no UI entry in batch 4; this commit path already enforces the
 /// persistence ordering needed when the entry is enabled in batch 5.
 class StakeProxyService extends ChangeNotifier {
-  StakeProxyService({StakeProxyGateway? gateway})
-    : _gw = gateway ?? LiveStakeProxyGateway();
+  StakeProxyService({
+    StakeProxyGateway? gateway,
+    Future<void> Function(String, String, List<Map<String, dynamic>>)? save,
+  }) : _gw = gateway ?? LiveStakeProxyGateway(),
+       _save = save ?? WalletDatabaseService.saveStakeProxies;
+  final Future<void> Function(String, String, List<Map<String, dynamic>>) _save;
   final StakeProxyGateway _gw;
   static const creationEnabled = false;
   List<TrackedStakeProxy> _records = [];
@@ -139,7 +143,7 @@ class StakeProxyService extends ChangeNotifier {
         network,
       );
       update(rows);
-      await WalletDatabaseService.saveStakeProxies(wallet, network, rows);
+      await _save(wallet, network, rows);
       if (_scope == (wallet: wallet, network: network)) {
         _loaded = _scope;
         _records = rows.map(TrackedStakeProxy.new).toList();
@@ -285,7 +289,7 @@ class StakeProxyService extends ChangeNotifier {
       rows.add(record);
       // This awaited durable write MUST precede the first broadcast attempt.
       // A crash or timeout after this point leaves everything needed to refund.
-      await WalletDatabaseService.saveStakeProxies(wallet, network, rows);
+      await _save(wallet, network, rows);
       _requireScope(wallet, network, node);
       _loaded = _scope;
       _records = rows.map(TrackedStakeProxy.new).toList();

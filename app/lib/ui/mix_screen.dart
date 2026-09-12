@@ -44,7 +44,7 @@ class MixScreen extends StatefulWidget {
   State<MixScreen> createState() => _MixScreenState();
 }
 
-class _MixScreenState extends State<MixScreen> {
+class _MixScreenState extends State<MixScreen> with TxReceiptOwner {
   bool _working = false;
   String _status = '';
 
@@ -291,18 +291,25 @@ class _MixScreenState extends State<MixScreen> {
       ],
     );
     if (!ok) return;
-    final tx = await mixService.leave(r, destinationAddress: destination);
-    if (mounted)
-      showTxResultSheet(
-        context,
-        txId: tx,
-        headline: isHalf
-            ? 'Early reclaim submitted'
-            : 'Mix withdrawal submitted',
-        note: isHalf
-            ? 'This round was not mixed. The mixing tokens on the box are lost.'
-            : null,
-      );
+    String? warning;
+    final tx = await mixService.leave(
+      r,
+      destinationAddress: destination,
+      onWarning: (e) {
+        warning =
+            'Withdrawal submitted, but local tracking could not be updated: $e. Keep this transaction ID.';
+      },
+    );
+
+    showTxResultSheet(
+      receiptContext,
+      txId: tx,
+      warning: warning,
+      headline: isHalf ? 'Early reclaim submitted' : 'Mix withdrawal submitted',
+      note: isHalf
+          ? 'This round was not mixed. The mixing tokens on the box will be lost if this withdrawal confirms.'
+          : null,
+    );
   }, transaction: true);
 
   Future<String?> _pickDestination(WalletRouteArgs args) async {

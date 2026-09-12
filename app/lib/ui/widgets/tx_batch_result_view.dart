@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../theme/argus_theme.dart';
+import '../../services/wallet_service.dart';
+import 'tx_result_view.dart';
 import 'tx_explorer_link.dart';
 
 /// A receipt of acknowledged submissions, not a claim of chain confirmation.
@@ -43,6 +45,8 @@ class TxBatchResultView extends StatelessWidget {
           const Divider(height: 24),
           Text('Transaction ${i + 1}'),
           SelectableText(txIds[i], style: monoStyle(context, size: 12)),
+          if (walletService.broadcastWarning(txIds[i]) case final warning?)
+            SelectableText(warning, style: TextStyle(color: rustFor(context))),
           TextButton.icon(
             key: ValueKey('copy-${txIds[i]}'),
             onPressed: () => Clipboard.setData(ClipboardData(text: txIds[i])),
@@ -67,19 +71,23 @@ Future<void> showTxBatchResultSheet(
   required List<String> txIds,
   required int plannedCount,
   String? failure,
-}) => showModalBottomSheet<void>(
-  context: context,
-  isScrollControlled: true,
-  backgroundColor: Theme.of(context).colorScheme.surface,
-  shape: const RoundedRectangleBorder(
-    borderRadius: BorderRadius.vertical(top: Radius.circular(cardRadius)),
-  ),
-  builder: (ctx) => SafeArea(
-    child: TxBatchResultView(
-      txIds: List.unmodifiable(txIds),
-      plannedCount: plannedCount,
-      failure: failure,
-      onDismiss: () => Navigator.pop(ctx),
+}) => queueTxPresentation(
+  context,
+  (survivingContext) => showModalBottomSheet<void>(
+    context: survivingContext,
+    useRootNavigator: true,
+    isScrollControlled: true,
+    backgroundColor: Theme.of(survivingContext).colorScheme.surface,
+    shape: const RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(cardRadius)),
+    ),
+    builder: (ctx) => SafeArea(
+      child: TxBatchResultView(
+        txIds: List.unmodifiable(txIds),
+        plannedCount: plannedCount,
+        failure: failure,
+        onDismiss: () => Navigator.pop(ctx),
+      ),
     ),
   ),
 );

@@ -47,7 +47,7 @@ class SwapScreen extends StatefulWidget {
   State<SwapScreen> createState() => _SwapScreenState();
 }
 
-class _SwapScreenState extends State<SwapScreen> {
+class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
   AmmPoolSet? _set;
   bool _loading = true;
   String? _error;
@@ -416,8 +416,7 @@ class _SwapScreenState extends State<SwapScreen> {
       final txId = await walletService.sendErg(
         preparationId: build.preparationId,
       );
-      if (!mounted) return;
-      showTxResultSheet(context, txId: txId, headline: 'Swap submitted');
+      showTxResultSheet(receiptContext, txId: txId, headline: 'Swap submitted');
       HapticFeedback.mediumImpact();
     } catch (e) {
       if (!mounted) return;

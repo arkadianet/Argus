@@ -71,7 +71,9 @@ class DappBrowserScreen extends StatefulWidget {
   State<DappBrowserScreen> createState() => _DappBrowserScreenState();
 }
 
-class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHost {
+class _DappBrowserScreenState extends State<DappBrowserScreen>
+    with TxReceiptOwner
+    implements DappHost {
   InAppWebViewController? _web;
   late final DappConnector _connector = DappConnector(this);
   final _url = TextEditingController();
@@ -277,15 +279,15 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
         signedTxJson,
         nodeUrl: networkController.activeUrl,
       );
-      if (mounted)
-        showTxResultSheet(
-          context,
-          txId: txId,
-          headline: 'dApp transaction submitted',
-        );
+
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        headline: 'dApp transaction submitted',
+      );
       return txId;
     } catch (e) {
-      if (mounted) showTxFailureSheet(context, e);
+      queueTxPresentation(receiptContext, (ctx) => showTxFailureSheet(ctx, e));
       rethrow;
     }
   }

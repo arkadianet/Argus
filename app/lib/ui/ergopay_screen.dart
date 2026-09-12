@@ -1,4 +1,5 @@
 
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -23,16 +24,17 @@ enum _Stage { loading, message, ready, signing, done, error }
 /// EIP-20 ErgoPay: resolve a link into a signing request, show what the
 /// transaction does, sign, broadcast, and tell the dApp the tx id.
 class ErgoPayScreen extends StatefulWidget {
-  const ErgoPayScreen({super.key, required this.link});
+  const ErgoPayScreen({super.key, required this.link, this.client});
 
   /// Raw `ergopay:` link from a deep link or QR code.
   final String link;
+  final ErgoPayClient? client;
 
   @override
   State<ErgoPayScreen> createState() => _ErgoPayScreenState();
 }
 
-class _ErgoPayScreenState extends State<ErgoPayScreen> {
+class _ErgoPayScreenState extends State<ErgoPayScreen> with TxReceiptOwner {
   _Stage _stage = _Stage.loading;
   String _status = 'Contacting the dApp…';
   String? _error;
@@ -72,7 +74,7 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> {
             url = parsed.withAddress(chosen);
           }
           setState(() => _status = 'Contacting the dApp…');
-          request = await ergoPayClient.fetch(url);
+          request = await (widget.client ?? ergoPayClient).fetch(url);
       }
       if (!mounted) return;
       _request = request;
@@ -189,19 +191,25 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> {
         signed,
         nodeUrl: networkController.activeUrl,
       );
-      if (!mounted) return;
-      HapticFeedback.mediumImpact();
       _txId = txId;
       final replyTo = request?.replyTo;
       if (replyTo != null) {
-        setState(() => _status = 'Telling the dApp…');
+        if (mounted) setState(() => _status = 'Telling the dApp…');
         try {
-          await ergoPayClient.reply(replyTo, txId);
-        } on ErgoPayException catch (e) {
-          _replyError = e.message;
+          await (widget.client ?? ergoPayClient).reply(replyTo, txId);
+        } catch (e) {
+          _replyError = '$e';
         }
       }
-      if (!mounted) return;
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+        showTxResultSheet(
+          receiptContext,
+          txId: txId,
+          headline: 'Signed and sent',
+          warning: _replyError,
+        );
+        return;
+      }
       setState(() => _stage = _Stage.done);
     } catch (e) {
       await _signFailed(e);

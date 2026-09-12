@@ -25,7 +25,7 @@ class DuckpoolsScreen extends StatefulWidget {
   State<DuckpoolsScreen> createState() => _DuckpoolsScreenState();
 }
 
-class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
+class _DuckpoolsScreenState extends State<DuckpoolsScreen> with TxReceiptOwner {
   bool _working = false;
 
   @override
@@ -57,16 +57,17 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       throw StateError('The wallet changed while the order was being prepared; nothing was sent');
     }
     final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
-    await duckpoolsService.commitOrder(prepared, txId);
-    if (mounted) {
-      showTxResultSheet(
-        context,
-        txId: txId,
-        headline: 'Order posted',
-        note:
-            'The order is pending execution. Follow its pending, refundable, or filled status under Your orders.',
-      );
-    }
+    final warning = await txBookkeeping(
+      () => duckpoolsService.commitOrder(prepared, txId),
+    );
+    showTxResultSheet(
+      receiptContext,
+      txId: txId,
+      warning: warning,
+      headline: 'Order posted',
+      note:
+          'The order is pending execution. Follow its pending, refundable, or filled status under Your orders.',
+    );
   }
 
   /// Whether the wallet is still the one a sheet was opened for; says so
@@ -291,14 +292,15 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       final txId = await walletService.sendErg(
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      if (mounted) {
-        showTxResultSheet(
-          context,
-          txId: txId,
-          headline: 'Collateral adjustment submitted',
-        );
-      }
-      await duckpoolsService.refreshLoans(args.historyAddresses);
+      final warning = await txBookkeeping(
+        () => duckpoolsService.refreshLoans(args.historyAddresses),
+      );
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Collateral adjustment submitted',
+      );
     } catch (e) {
       if (mounted) showTxFailureSheet(context, e);
     } finally {
@@ -374,16 +376,17 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       if (!ok || !mounted) return;
       if (!svc.canCommit(prepared)) throw StateError('The wallet changed while the order was being prepared; nothing was sent');
       final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
-      await svc.commitOrder(prepared, txId);
-      if (mounted) {
-        showTxResultSheet(
-          context,
-          txId: txId,
-          headline: 'Order posted',
-          note:
-              'The order is pending execution. Follow its pending, refundable, or filled status under Your orders.',
-        );
-      }
+      final warning = await txBookkeeping(
+        () => svc.commitOrder(prepared, txId),
+      );
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Order posted',
+        note:
+            'The order is pending execution. Follow its pending, refundable, or filled status under Your orders.',
+      );
     } catch (e) {
       if (mounted) showTxFailureSheet(context, e);
     } finally {
@@ -414,13 +417,16 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       final txId = await walletService.sendErg(
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      await duckpoolsService.markRefundSent(o, txId);
-      if (mounted)
-        showTxResultSheet(
-          context,
-          txId: txId,
-          headline: 'Order refund submitted',
-        );
+      final warning = await txBookkeeping(
+        () => duckpoolsService.markRefundSent(o, txId),
+      );
+
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Order refund submitted',
+      );
     } catch (e) {
       if (mounted) showTxFailureSheet(context, e);
     } finally {
@@ -938,6 +944,7 @@ class _OrderSheetState extends State<_OrderSheet> {
     )));
   }
 }
+
 
 
 /// "2.5 ERG" or "1,000 SigUSD": a collateral amount in its own unit.

@@ -231,6 +231,30 @@ void main() {
     },
   );
 
+  testWidgets('zero-success consolidation retains failure receipt', (
+    tester,
+  ) async {
+    api.failAt = 1;
+    await http.runWithClient(() async {
+      await open(tester);
+      await tap(tester, 'Consolidate');
+      await tap(tester, 'Sign & broadcast 2');
+      expect(api.submissions, 1);
+      expect(find.byType(TxResultView), findsNothing);
+      expect(find.text('0 of 2 transactions submitted'), findsOneWidget);
+      expect(
+        find.textContaining('Check Activity before retrying'),
+        findsOneWidget,
+      );
+      expect(find.text('Copy id'), findsNothing);
+      await tap(tester, 'Done');
+      await tester.tap(find.byTooltip('Last consolidation result'));
+      await tester.pumpAndSettle();
+      expect(find.text('0 of 2 transactions submitted'), findsOneWidget);
+      await tap(tester, 'Done');
+    }, () => boxes(102));
+  });
+
   testWidgets(
     'partial consolidation retains successful IDs and uncertain broadcast warning',
     (tester) async {

@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/network_controller.dart';
+import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 
 /// A receipt for a submitted transaction, not a claim of chain confirmation.
@@ -27,6 +28,10 @@ class TxResultView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final warnings = [
+      warning,
+      walletService.broadcastWarning(txId),
+    ].whereType<String>().join('\n\n');
     return SingleChildScrollView(
       padding: const EdgeInsets.all(28),
       child: Column(
@@ -49,10 +54,10 @@ class TxResultView extends StatelessWidget {
           const Text('Transaction ID'),
           const SizedBox(height: 8),
           SelectableText(txId, style: monoStyle(context, size: 12)),
-          if (warning != null) ...[
+          if (warnings.isNotEmpty) ...[
             const SizedBox(height: 12),
             SelectableText(
-              warning!,
+              warnings,
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12.5, color: rustFor(context)),
             ),
@@ -85,16 +90,55 @@ class TxResultView extends StatelessWidget {
   }
 }
 
-/// Stays until dismissed, while preserving the working screen underneath.
+/// Retains the root navigator before an asynchronous broadcast can outlive State.
+mixin TxReceiptOwner<T extends StatefulWidget> on State<T> {
+  late BuildContext receiptContext;
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    receiptContext = Navigator.of(context, rootNavigator: true).context;
+  }
+}
+
+/// Bookkeeping cannot undo a successful node acknowledgement.
+Future<String?> txBookkeeping(Future<void> Function() update) async {
+  try {
+    await update();
+    return null;
+  } catch (e) {
+    return 'Transaction submitted, but local tracking could not be updated: $e. '
+        'Keep this transaction ID and check Activity before retrying.';
+  }
+}
+
+final _receiptQueues = Expando<Future<void>>();
+
+/// One presentation at a time per surviving navigator. Submission futures do
+/// not await this queue; every queued ID remains available until dismissed.
+Future<void> queueTxPresentation(
+  BuildContext context,
+  Future<void> Function(BuildContext) show,
+) {
+  final navigator = Navigator.of(context, rootNavigator: true);
+  final previous = _receiptQueues[navigator] ?? Future<void>.value();
+  final next = previous.then((_) => show(navigator.context));
+  _receiptQueues[navigator] = next;
+  return next;
+}
+
+/// Stays until dismissed, even when the originating route has been popped.
 Future<void> showTxResultSheet(
   BuildContext context, {
   required String txId,
   required String headline,
   String? note,
-}) {
-  return showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: Theme.of(context).colorScheme.surface,
+  String? warning,
+}) => queueTxPresentation(
+  context,
+  (survivingContext) => showModalBottomSheet<void>(
+    context: survivingContext,
+    useRootNavigator: true,
+    backgroundColor: Theme.of(survivingContext).colorScheme.surface,
     isScrollControlled: true,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(cardRadius)),
@@ -104,8 +148,9 @@ Future<void> showTxResultSheet(
         txId: txId,
         headline: headline,
         note: note,
+        warning: warning,
         onDismiss: () => Navigator.pop(ctx),
       ),
     ),
-  );
-}
+  ),
+);

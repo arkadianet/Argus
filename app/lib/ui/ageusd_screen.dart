@@ -4,7 +4,6 @@ import '../services/app_fee.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../bridge/argus_error.dart';
 import '../format.dart';
@@ -29,7 +28,7 @@ class AgeUsdScreen extends StatefulWidget {
   State<AgeUsdScreen> createState() => _AgeUsdScreenState();
 }
 
-class _AgeUsdScreenState extends State<AgeUsdScreen> {
+class _AgeUsdScreenState extends State<AgeUsdScreen> with TxReceiptOwner {
   SigmaUsdAction _action = SigmaUsdAction.mintSigUsd;
   SigmaUsdStateData? _state;
   bool _loading = true;
@@ -246,15 +245,18 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
       final txId = await walletService.sendErg(
         preparationId: build.preparationId,
       );
-      if (!mounted) return;
+      final warning = await txBookkeeping(() async {
+        if (mounted) {
+          _amountCtrl.clear();
+          await _load();
+        }
+      });
       showTxResultSheet(
-        context,
+        receiptContext,
         txId: txId,
         headline: '${_action.verb} ${_action.tokenName} submitted',
+        warning: warning,
       );
-      HapticFeedback.mediumImpact();
-      _amountCtrl.clear();
-      await _load();
     } catch (e) {
       if (!mounted) return;
       await showTxFailureSheet(context, e);
