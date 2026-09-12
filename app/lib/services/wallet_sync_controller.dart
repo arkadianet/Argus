@@ -190,6 +190,7 @@ class LiveWalletSyncGateway
         transactions: (snapshot['transactions'] as List)
             .cast<Map<String, dynamic>>(),
         utxoCount: snapshot['utxo_count'] as int,
+        publicOnly: snapshot['public_only'] == true,
         syncPhase: snapshot['sync_phase'] as String?,
         lastSuccessfulSyncAt: (snapshot['last_successful_sync_at'] as num?)
             ?.toInt(),
@@ -255,11 +256,14 @@ class WalletSyncController extends ChangeNotifier {
     deactivate();
     _viewWalletId = walletId;
     _remembered.remove(walletId)?.restore(this);
+    final warm = _publicWarm.remove(walletId);
+    if (warm != null) _applyPublic(warm);
     notifyListeners();
   }
 
   /// A switch drops the visible view but retains public data until session lock.
   void deactivate() {
+    _publicGeneration++;
     final id = _viewWalletId;
     if (id != null) _remembered[id] = _WalletView(this);
     _clearView();
@@ -267,11 +271,50 @@ class WalletSyncController extends ChangeNotifier {
   }
 
   void forgetWallet(String walletId) {
+    _publicGeneration++;
+    _publicWarm.remove(walletId);
     _remembered.remove(walletId);
     if (_viewWalletId == walletId) {
       _clearView();
       _viewWalletId = null;
     }
+  }
+
+  final Map<String, Map<String, dynamic>> _publicWarm = {};
+  int _publicGeneration = 0;
+  int get publicGeneration => _publicGeneration;
+  bool publicSnapshotOnly = false;
+
+  bool rememberPublic(
+    String id,
+    Map<String, dynamic> snapshot,
+    int generation,
+  ) {
+    if (generation != publicGeneration ||
+        !_gw.isUnlocked ||
+        id == _gw.activeWalletId ||
+        snapshot['wallet_id'] != id)
+      return false;
+    _publicWarm[id] = snapshot;
+    return true;
+  }
+
+  void _applyPublic(Map<String, dynamic> snapshot) {
+    publicSnapshotOnly = true;
+    balanceNano = snapshot['balance_nano_erg'] as int;
+    recentTxs = _mapList(snapshot['transactions']);
+    tokens = orderTokensForDisplay([
+      for (final t in snapshot['tokens'] as List)
+        TokenBalance(
+          id: t['id'],
+          amount: t['amount'],
+          name: t['name'],
+          decimals: t['decimals'],
+          iconUrl: t['iconUrl'],
+          emissionAmount: t['emissionAmount'],
+        ),
+    ]);
+    phase = SyncPhase.idle;
   }
 
   SyncPhase phase = SyncPhase.idle;
@@ -360,6 +403,8 @@ class WalletSyncController extends ChangeNotifier {
 
   /// Reserves success for a completed wallet sync, even when a node is online.
   String statusLabel({required bool online}) {
+    if (publicSnapshotOnly)
+      return 'Last-known public data · known addresses only';
     if (isSyncing) return 'Syncing…';
     if (isStale) return 'Out of sync';
     if (!online) return 'Offline';
@@ -503,6 +548,8 @@ class WalletSyncController extends ChangeNotifier {
 
   /// Clears everything back to the locked state.
   void reset() {
+    _publicGeneration++;
+    _publicWarm.clear();
     _remembered.clear();
     _viewWalletId = null;
     _clearView();
@@ -515,6 +562,7 @@ class WalletSyncController extends ChangeNotifier {
     discoveredAt = null;
     _discoveryPinnedIndex = null;
     _discoveryUnusedChange = null;
+    publicSnapshotOnly = false;
     phase = SyncPhase.idle;
     receiveAddress = null;
     changeAddress = null;
@@ -577,6 +625,7 @@ class WalletSyncController extends ChangeNotifier {
     final cached = await _gw.loadCachedState(_cacheKey(receive));
     if (!_current(generation, walletId)) return false;
     if (cached != null) {
+      publicSnapshotOnly = cached['public_only'] == true;
       final stamp = (cached['last_successful_sync_at'] as num?)?.toInt();
       lastSyncedAt = stamp == null
           ? null
@@ -781,6 +830,7 @@ class WalletSyncController extends ChangeNotifier {
     } else if (history == null || history.partial) {
       phase = SyncPhase.historyPartial;
     } else {
+      publicSnapshotOnly = false;
       phase = SyncPhase.synced;
       lastSyncedAt = DateTime.now();
     }
@@ -810,6 +860,7 @@ class WalletSyncController extends ChangeNotifier {
         (phase != SyncPhase.failed || discoveredAt != null)) {
       await _gw.saveCachedState({
         'wallet_id': walletId ?? receive,
+        'public_only': publicSnapshotOnly,
         'sync_phase': phase.name,
         'last_successful_sync_at': lastSyncedAt?.millisecondsSinceEpoch,
         'primary_address': receive,
@@ -1065,6 +1116,7 @@ final walletSyncController = WalletSyncController(
 class _WalletView {
   _WalletView(WalletSyncController c)
     : data = (
+        publicSnapshotOnly: c.publicSnapshotOnly,
         phase: c.phase,
         receiveAddress: c.receiveAddress,
         changeAddress: c.changeAddress,
@@ -1089,6 +1141,7 @@ class _WalletView {
         broadcasts: Map<String, _Broadcast>.of(c._broadcasts),
       );
   final ({
+    bool publicSnapshotOnly,
     SyncPhase phase,
     String? receiveAddress,
     String? changeAddress,
@@ -1114,6 +1167,7 @@ class _WalletView {
   })
   data;
   void restore(WalletSyncController c) {
+    c.publicSnapshotOnly = data.publicSnapshotOnly;
     c.phase = data.phase;
     c.receiveAddress = data.receiveAddress;
     c.changeAddress = data.changeAddress;

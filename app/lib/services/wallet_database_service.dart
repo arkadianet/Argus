@@ -121,6 +121,7 @@ class WalletDatabaseService {
     bool? discoveryUnusedChange,
     String? changeAddress,
     int lastSyncedHeight = 0,
+    bool publicOnly = false,
     String? syncPhase,
     int? lastSuccessfulSyncAt,
     int stealthNano = 0,
@@ -147,6 +148,7 @@ class WalletDatabaseService {
       'transactions': transactions,
       'utxo_count': utxoCount,
       'last_synced_height': lastSyncedHeight,
+      'public_only': publicOnly,
       'sync_phase': syncPhase,
       'last_successful_sync_at': lastSuccessfulSyncAt,
       'last_sync_timestamp': DateTime.now().millisecondsSinceEpoch,
@@ -154,6 +156,20 @@ class WalletDatabaseService {
 
     final obfuscated = _obfuscate(jsonEncode(snapshot), walletId);
     await prefs.setString(_snapshotKey(walletId), obfuscated);
+  }
+
+  /// Writes public data only while the originating session still owns the job.
+  static Future<void> savePublicSnapshot(
+    String walletId,
+    Map<String, dynamic> snapshot,
+    bool Function() valid,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!valid() || snapshot['wallet_id'] != walletId) return;
+    await prefs.setString(
+      _snapshotKey(walletId),
+      _obfuscate(jsonEncode(snapshot), walletId),
+    );
   }
 
   static Future<LastKnownBalance?> lastKnownBalance(String walletId) async {

@@ -1,3 +1,4 @@
+import '../services/public_wallet_sync.dart';
 import 'widgets/error_sheet.dart';
 import 'widgets/wallet_view_boundary.dart';
 import 'dart:async';
@@ -265,6 +266,9 @@ class _DashboardScreenState extends State<DashboardScreen>
         return;
       }
     }
+    if (!_pollBackgrounded && publicWalletSync.isDue()) {
+      unawaited(_refreshOtherBalances());
+    }
     final now = DateTime.now();
     if (!shouldPoll(
       now: now,
@@ -311,6 +315,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    publicWalletSync.setForeground(state == AppLifecycleState.resumed);
     // Pause mempool polling while backgrounded; resume on return.
     final backgrounded =
         state == AppLifecycleState.paused || state == AppLifecycleState.hidden;
@@ -396,31 +401,28 @@ class _DashboardScreenState extends State<DashboardScreen>
     // addresses does.
     for (final w in others) {
       final known = await WalletDatabaseService.lastKnownBalance(w.walletId);
-      if (known != null) _lastKnown[w.walletId] = known;
+      if (known != null) {
+        _lastKnown[w.walletId] = known;
+        _otherBalances[w.walletId] = known.balanceNano;
+      }
     }
     if (mounted) setState(() {});
-    final results = await Future.wait(others.map((w) async {
-      final addresses = lockedWalletAddresses(
-        knownAddresses: _lastKnown[w.walletId]?.addresses ?? const [],
-        displayAddress: w.displayAddress,
-      );
-      if (addresses.isEmpty) return null;
-      try {
-        final each = await Future.wait(addresses.map((a) =>
-            walletService.getBalanceNano(a, nodeUrl: networkController.activeUrl)));
-        return each.fold<int>(0, (sum, v) => sum + v);
-      } catch (_) {
-        // Keep the snapshot rather than showing a wrong zero.
-        return null;
-      }
-    }));
+    await publicWalletSync.tick(
+      wallets: {for (final w in _wallets) w.walletId: w.displayAddress},
+      controller: _sync,
+      activeId: walletService.activeWalletId,
+      unlocked: () => walletService.isUnlocked,
+    );
     if (gen != _otherGeneration || !mounted) return;
-    setState(() {
-      _otherBalances.clear();
-      for (var i = 0; i < others.length; i++) {
-        _otherBalances[others[i].walletId] = results[i];
+    for (final w in others) {
+      final known = await WalletDatabaseService.lastKnownBalance(w.walletId);
+      if (gen != _otherGeneration || !mounted) return;
+      if (known != null) {
+        _lastKnown[w.walletId] = known;
+        _otherBalances[w.walletId] = known.balanceNano;
       }
-    });
+    }
+    setState(() {});
   }
 
   Future<void> _init() async {
@@ -1797,8 +1799,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     final balance = display.balanceNano;
     final stealthNote = display.note;
     final addr = isActive ? (_sync.receiveAddress ?? w.displayAddress) : w.displayAddress;
-    // Only a figure that could not be refreshed is dated.
-    final asOf = !isActive && live == null && known != null
+    // Public snapshots always carry their age, even after a successful read.
+    final asOf = !isActive && known != null
         ? formatSyncAge(DateTime.now().subtract(known.age))
         : null;
     return InkWell(
@@ -1881,7 +1883,12 @@ class _DashboardScreenState extends State<DashboardScreen>
                 balance,
                 isActive ? _sync.isSyncing : false,
                 asOf: asOf,
-                note: stealthNote ?? lockedStealthNote,
+                note: isActive
+                    ? stealthNote
+                    : [
+                        publicSnapshotNote,
+                        if (lockedStealthNote != null) lockedStealthNote,
+                      ].join(' · '),
                 tokens: isActive
                     ? [
                         for (final t in _sync.displayTokens)
