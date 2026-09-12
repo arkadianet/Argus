@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'widgets/error_sheet.dart';
 import '../services/app_fee.dart';
 import 'dart:convert';
@@ -188,19 +189,29 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
         final txId = await walletService.sendErg(preparationId: preview.preparationId);
         done++;
         if (!mounted) return;
-        _snack(chunks.length == 1
-            ? 'Consolidation broadcast · ${shorten(txId, head: 8, tail: 6)}'
-            : 'Transaction $done of ${chunks.length} broadcast · ${shorten(txId, head: 8, tail: 6)}');
+        if (chunks.length == 1) {
+          showTxResultSheet(
+            context,
+            txId: txId,
+            headline: 'Consolidation submitted',
+          );
+        } else {
+          // Each batch has its own ID; do not present the last as the whole job.
+          _snack(
+            'Transaction $done of ${chunks.length} broadcast · ${shorten(txId, head: 8, tail: 6)}',
+          );
+        }
       }
       _tools.clearSelection();
       await Future.delayed(const Duration(seconds: 1));
       await _loadBoxes();
     } catch (e) {
       if (mounted) {
-        showErrorSheet(
+        showTxFailureSheet(
           context,
-          title: done == 0 ? 'Consolidation failed' : 'Stopped after $done of ${chunks.length}',
-          message: '$e',
+          e,
+          note:
+              'Stopped after $done of ${chunks.length}. Refresh boxes and check Activity before retrying.',
         );
       }
     } finally {
@@ -302,11 +313,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           final txId = await walletService.sendErg(
             preparationId: preview.preparationId,
           );
-          _snack(
-            'Split transaction broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}',
-          );
-        await Future.delayed(const Duration(seconds: 1));
-        await _loadBoxes();
+          if (mounted)
+            showTxResultSheet(context, txId: txId, headline: 'Split submitted');
+          await Future.delayed(const Duration(seconds: 1));
+          await _loadBoxes();
         } finally {
           if (mounted) setState(() => _busy = false);
         }
@@ -314,7 +324,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);
-        showErrorSheet(context, title: 'Split failed', message: '$e');
+        showTxFailureSheet(context, e);
       }
     }
   }
@@ -376,11 +386,14 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           final txId = await walletService.sendErg(
             preparationId: preview.preparationId,
           );
-          _snack(
-            'Restructure transaction broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}',
-          );
-        await Future.delayed(const Duration(seconds: 1));
-        await _loadBoxes();
+          if (mounted)
+            showTxResultSheet(
+              context,
+              txId: txId,
+              headline: 'Restructure submitted',
+            );
+          await Future.delayed(const Duration(seconds: 1));
+          await _loadBoxes();
         } finally {
           if (mounted) setState(() => _busy = false);
         }
@@ -388,7 +401,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);
-        showErrorSheet(context, title: 'Restructure failed', message: '$e');
+        showTxFailureSheet(context, e);
       }
     }
   }

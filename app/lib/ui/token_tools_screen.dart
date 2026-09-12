@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 
@@ -55,6 +56,7 @@ class _IssueTabState extends State<_IssueTab> with AutomaticKeepAliveClientMixin
   String _kind = 'picture';
   bool _working = false;
   String? _issuedId;
+  String? _issuedTxId;
 
   @override
   bool get wantKeepAlive => true;
@@ -124,11 +126,23 @@ class _IssueTabState extends State<_IssueTab> with AutomaticKeepAliveClientMixin
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
       if (!ok || !mounted) return;
-      await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
+      final txId = await walletService.sendErg(
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
       if (!mounted) return;
-      setState(() => _issuedId = tokenId);
+      setState(() {
+        _issuedId = tokenId;
+        _issuedTxId = txId;
+      });
+      showTxResultSheet(
+        context,
+        txId: txId,
+        headline: 'Token issuance submitted',
+        note:
+            'The token ID remains on the issuance screen. The token appears in your assets after confirmation.',
+      );
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not issue the token', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -140,18 +154,30 @@ class _IssueTabState extends State<_IssueTab> with AutomaticKeepAliveClientMixin
     final muted = ArgusColors.of(context).muted;
     final issued = _issuedId;
     if (issued != null) {
-      return Padding(
+      return SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Icon(Icons.check_circle_outline, size: 48, color: accentOf(context)),
+            Icon(
+              Icons.check_circle_outline,
+              size: 48,
+              color: accentOf(context),
+            ),
             const SizedBox(height: 12),
-            Text('${_name.text.trim()} issued', style: Theme.of(context).textTheme.titleLarge, textAlign: TextAlign.center),
+            Text(
+              '${_name.text.trim()} issuance submitted',
+              style: Theme.of(context).textTheme.titleLarge,
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 8),
-            Text('It appears in your assets once the transaction confirms. The token id is what other wallets and sites know it by.',
-                style: TextStyle(color: muted), textAlign: TextAlign.center),
+            Text(
+              'It appears in your assets once the transaction confirms. The token id is what other wallets and sites know it by.',
+              style: TextStyle(color: muted),
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 16),
+            const Text('Token ID', textAlign: TextAlign.center),
             SoftCard(
               padding: const EdgeInsets.all(14),
               child: Row(
@@ -170,8 +196,21 @@ class _IssueTabState extends State<_IssueTab> with AutomaticKeepAliveClientMixin
             ),
             const SizedBox(height: 16),
             OutlinedButton(
+              onPressed: () => showTxResultSheet(
+                context,
+                txId: _issuedTxId!,
+                headline: 'Token issuance submitted',
+                note:
+                    'The token ID remains on the issuance screen. The token appears in your assets after confirmation.',
+              ),
+              child: const Text('View transaction receipt'),
+            ),
+            const Text('Transaction ID'),
+            SelectableText(_issuedTxId!, style: monoStyle(context, size: 11)),
+            OutlinedButton(
               onPressed: () => setState(() {
                 _issuedId = null;
+                _issuedTxId = null;
                 for (final c in [_name, _description, _amount, _hash, _url]) {
                   c.clear();
                 }
@@ -391,9 +430,9 @@ class _BurnTabState extends State<_BurnTab> with AutomaticKeepAliveClientMixin {
         _picked.clear();
         _confirmWord.clear();
       });
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Burn sent: ${shorten(txId)}')));
+      showTxResultSheet(context, txId: txId, headline: 'Token burn submitted');
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not burn the tokens', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }

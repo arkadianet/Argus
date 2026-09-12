@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'widgets/error_sheet.dart';
 import '../services/app_fee.dart';
 import 'dart:async';
@@ -97,11 +98,6 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
         _loading = false;
       });
     }
-  }
-
-  void _snack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   List<String> get _spendAddresses {
@@ -247,10 +243,15 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     }
 
     try {
-      final txId =
-          await walletService.sendErg(preparationId: build.preparationId);
+      final txId = await walletService.sendErg(
+        preparationId: build.preparationId,
+      );
       if (!mounted) return;
-      _snack('Broadcast! ${shorten(txId, head: 8, tail: 6)}');
+      showTxResultSheet(
+        context,
+        txId: txId,
+        headline: '${_action.verb} ${_action.tokenName} submitted',
+      );
       HapticFeedback.mediumImpact();
       _amountCtrl.clear();
       await _load();

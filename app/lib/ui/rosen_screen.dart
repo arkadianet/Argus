@@ -138,7 +138,7 @@ class _RosenScreenState extends State<RosenScreen> {
       if (!mounted) return;
       setState(() => _sentTxId = txId);
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not start the transfer', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -361,6 +361,15 @@ class _RosenScreenState extends State<RosenScreen> {
             onPressed: () => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
             icon: const Icon(Icons.open_in_new, size: 18),
             label: const Text('Follow on Rosen'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: () => launchUrl(
+              Uri.parse(networkController.explorerTx(txId)),
+              mode: LaunchMode.externalApplication,
+            ),
+            icon: const Icon(Icons.open_in_browser, size: 18),
+            label: const Text('View Ergo lock transaction'),
           ),
           const SizedBox(height: 8),
           TextButton(

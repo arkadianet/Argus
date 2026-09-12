@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'dart:convert';
 import 'dart:math';
 
@@ -270,7 +271,24 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
   }
 
   @override
-  Future<String> submit(String signedTxJson) => walletService.submitSignedTransaction(signedTxJson, nodeUrl: networkController.activeUrl);
+  Future<String> submit(String signedTxJson) async {
+    try {
+      final txId = await walletService.submitSignedTransaction(
+        signedTxJson,
+        nodeUrl: networkController.activeUrl,
+      );
+      if (mounted)
+        showTxResultSheet(
+          context,
+          txId: txId,
+          headline: 'dApp transaction submitted',
+        );
+      return txId;
+    } catch (e) {
+      if (mounted) showTxFailureSheet(context, e);
+      rethrow;
+    }
+  }
 
   // ── UI ────────────────────────────────────────────────────────────
 

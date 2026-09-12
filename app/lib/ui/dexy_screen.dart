@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -125,18 +126,17 @@ class _DexyScreenState extends State<DexyScreen> {
   DexyState? get _stateForVariant =>
       _state != null && _state!.variant == _variant ? _state : null;
 
-  void _snack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
-
-  Future<void> _broadcast(DexyBuildResult build) async {
+  Future<void> _broadcast(
+    DexyBuildResult build, {
+    required String headline,
+  }) async {
     setState(() => _busy = true);
     try {
-      final txId =
-          await walletService.sendErg(preparationId: build.preparationId);
+      final txId = await walletService.sendErg(
+        preparationId: build.preparationId,
+      );
       if (!mounted) return;
-      _snack('Broadcast! ${shorten(txId, head: 8, tail: 6)}');
+      showTxResultSheet(context, txId: txId, headline: headline);
       HapticFeedback.mediumImpact();
     } catch (e) {
       if (!mounted) return;
@@ -185,7 +185,7 @@ class _DexyScreenState extends State<DexyScreen> {
       detail: c.detail,
       confirmLabel: c.confirmLabel,
     );
-    if (confirmed) await _broadcast(build);
+    if (confirmed) await _broadcast(build, headline: 'Dexy mint submitted');
   }
 
   Future<void> _openSwap() async {
@@ -222,7 +222,7 @@ class _DexyScreenState extends State<DexyScreen> {
       detail: c.detail,
       confirmLabel: c.confirmLabel,
     );
-    if (confirmed) await _broadcast(build);
+    if (confirmed) await _broadcast(build, headline: 'Dexy swap submitted');
   }
 
   Future<void> _openLiquidity({String initialAction = 'deposit'}) async {
@@ -271,7 +271,13 @@ class _DexyScreenState extends State<DexyScreen> {
       detail: c.detail,
       confirmLabel: c.confirmLabel,
     );
-    if (confirmed) await _broadcast(build);
+    if (confirmed)
+      await _broadcast(
+        build,
+        headline: build.action == 'deposit'
+            ? 'Dexy liquidity addition submitted'
+            : 'Dexy liquidity removal submitted',
+      );
   }
 
   // ── Layout ─────────────────────────────────────────────────────────────

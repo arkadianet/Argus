@@ -1,4 +1,5 @@
 import 'package:argus_wallet/services/network_controller.dart';
+import 'package:argus_wallet/ui/widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -39,8 +40,11 @@ class TxResultHarness {
 
   Future<void> verifyReceipt(WidgetTester tester) async {
     expect(
-      find.byWidgetPredicate(
-        (w) => w is SelectableText && w.data == resultTxId,
+      find.descendant(
+        of: find.byType(TxResultView),
+        matching: find.byWidgetPredicate(
+          (w) => w is SelectableText && w.data == resultTxId,
+        ),
       ),
       findsOneWidget,
     );

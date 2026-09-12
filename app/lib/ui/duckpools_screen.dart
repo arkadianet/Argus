@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
@@ -57,7 +58,13 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
     final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
     await duckpoolsService.commitOrder(prepared, txId);
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Order posted: ${shorten(txId)}')));
+      showTxResultSheet(
+        context,
+        txId: txId,
+        headline: 'Order posted',
+        note:
+            'The order is pending execution. Follow its pending, refundable, or filled status under Your orders.',
+      );
     }
   }
 
@@ -104,19 +111,45 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       );
       if (!mounted) return;
       final q = (prepared['quote'] as Map).cast<String, dynamic>();
-      String amt(num units) => '${formatTokenAmountGrouped(units.toInt(), s.decimals)} ${s.ticker}';
-      final (cTicker, cDecimals) = pool.collateralUnit(q['collateral_asset'] as String?);
-      await _post(prepared, title: 'Post a borrow order', rows: [
-        ConfirmTxRow('Borrow', amt(q['loan'] as num), bold: true),
-        ConfirmTxRow('Collateral', '${formatTokenAmountGrouped((q['collateral_amount'] as num).toInt(), cDecimals)} $cTicker', bold: true),
-        ConfirmTxRow('Collateral counts as', amt(q['collateral_value'] as num)),
-        ConfirmTxRow('Liquidation line', '${((q['threshold'] as num) / 10).toStringAsFixed(0)}% of the debt'),
-        ConfirmTxRow('Health at open', '${((q['health_bps'] as num) / 100).toStringAsFixed(0)}%'),
-        // What the proxy carries beyond the collateral itself.
-        ConfirmTxRow('Bot fee + fill fee', formatErg((q['box_value'] as num).toInt() - (q['collateral_nano'] as num).toInt())),
-      ]);
+      String amt(num units) =>
+          '${formatTokenAmountGrouped(units.toInt(), s.decimals)} ${s.ticker}';
+      final (cTicker, cDecimals) = pool.collateralUnit(
+        q['collateral_asset'] as String?,
+      );
+      await _post(
+        prepared,
+        title: 'Post a borrow order',
+        rows: [
+          ConfirmTxRow('Borrow', amt(q['loan'] as num), bold: true),
+          ConfirmTxRow(
+            'Collateral',
+            '${formatTokenAmountGrouped((q['collateral_amount'] as num).toInt(), cDecimals)} $cTicker',
+            bold: true,
+          ),
+          ConfirmTxRow(
+            'Collateral counts as',
+            amt(q['collateral_value'] as num),
+          ),
+          ConfirmTxRow(
+            'Liquidation line',
+            '${((q['threshold'] as num) / 10).toStringAsFixed(0)}% of the debt',
+          ),
+          ConfirmTxRow(
+            'Health at open',
+            '${((q['health_bps'] as num) / 100).toStringAsFixed(0)}%',
+          ),
+          // What the proxy carries beyond the collateral itself.
+          ConfirmTxRow(
+            'Bot fee + fill fee',
+            formatErg(
+              (q['box_value'] as num).toInt() -
+                  (q['collateral_nano'] as num).toInt(),
+            ),
+          ),
+        ],
+      );
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not post the order', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -179,11 +212,24 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       // A token pool's repayment rides as tokens, so the box's ERG is all
       // fees. The ERG pool's box is the repayment alone: the bot's fee and
       // the fill fee come out of the collateral box's own carry.
-      final carried = (q['box_value'] as num).toInt() - (l.collateralAsset == null ? 0 : (q['repayment'] as num).toInt());
-      rows.add(ConfirmTxRow('Bot fee + fill fee', carried > 0 ? formatErg(carried) : 'paid from the collateral box\'s 0.002 ERG carry'));
-      await _post(prepared, title: partial ? 'Post a partial repayment' : 'Post a repayment', rows: rows);
+      final carried =
+          (q['box_value'] as num).toInt() -
+          (l.collateralAsset == null ? 0 : (q['repayment'] as num).toInt());
+      rows.add(
+        ConfirmTxRow(
+          'Bot fee + fill fee',
+          carried > 0
+              ? formatErg(carried)
+              : 'paid from the collateral box\'s 0.002 ERG carry',
+        ),
+      );
+      await _post(
+        prepared,
+        title: partial ? 'Post a partial repayment' : 'Post a repayment',
+        rows: rows,
+      );
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not post the order', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -241,13 +287,19 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
       if (!ok || !mounted) return;
-      final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
+      final txId = await walletService.sendErg(
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Collateral adjusted: ${shorten(txId)}')));
+        showTxResultSheet(
+          context,
+          txId: txId,
+          headline: 'Collateral adjustment submitted',
+        );
       }
       await duckpoolsService.refreshLoans(args.historyAddresses);
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not adjust the collateral', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -323,10 +375,16 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
       final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
       await svc.commitOrder(prepared, txId);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Order posted: ${shorten(txId)}')));
+        showTxResultSheet(
+          context,
+          txId: txId,
+          headline: 'Order posted',
+          note:
+              'The order is pending execution. Follow its pending, refundable, or filled status under Your orders.',
+        );
       }
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not post the order', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -352,10 +410,18 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> {
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
       if (!ok || !mounted) return;
-      final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
+      final txId = await walletService.sendErg(
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
       await duckpoolsService.markRefundSent(o, txId);
+      if (mounted)
+        showTxResultSheet(
+          context,
+          txId: txId,
+          headline: 'Order refund submitted',
+        );
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not refund the order', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }

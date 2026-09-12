@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -52,7 +53,11 @@ class _MixScreenState extends State<MixScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
   }
 
-  Future<void> _guard(String failureTitle, Future<void> Function() body) async {
+  Future<void> _guard(
+    String failureTitle,
+    Future<void> Function() body, {
+    bool transaction = false,
+  }) async {
     if (_working) return;
     setState(() {
       _working = true;
@@ -62,7 +67,11 @@ class _MixScreenState extends State<MixScreen> {
       await body();
     } catch (e) {
       if (!mounted) return;
-      showErrorSheet(context, title: failureTitle, message: '$e');
+      if (transaction) {
+        showTxFailureSheet(context, e);
+      } else {
+        showErrorSheet(context, title: failureTitle, message: '$e');
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -256,33 +265,45 @@ class _MixScreenState extends State<MixScreen> {
         _snack(r.inPool ? 'In the pool' : 'Entry not sent');
       });
 
-  Future<void> _leave(WalletRouteArgs args, MixRecord r) =>
-      _guard('Could not take the money out', () async {
-        String? destination;
-        if (r.needsDestination) {
-          destination = await _pickDestination(args);
-          if (destination == null) return;
-        }
-        final isHalf = r.phaseKind == 'half_posted';
-        final ok = await showConfirmTransactionSheet(
-          context,
-          title: 'Withdraw from the mix',
-          confirmLabel: 'Withdraw',
-          detail: isHalf
-              ? 'This box is still waiting for a partner, so it has not been mixed '
-                  'this round. It goes to your destination minus the miner fee, and '
-                  'the mixing tokens on it are lost.'
-              : 'After ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'} of about '
-                  '${r.roundsTarget}. The money leaves the pool for the destination you chose.',
-          rows: [
-            ConfirmTxRow('Amount', mixAmountText(r), bold: true),
-            ConfirmTxRow('Rounds done', '${r.roundsDone} of ${r.roundsTarget}'),
-          ],
-        );
-        if (!ok) return;
-        final tx = await mixService.leave(r, destinationAddress: destination);
-        _snack('Withdrawing: ${shorten(tx)}');
-      });
+  Future<void> _leave(
+    WalletRouteArgs args,
+    MixRecord r,
+  ) => _guard('Could not take the money out', () async {
+    String? destination;
+    if (r.needsDestination) {
+      destination = await _pickDestination(args);
+      if (destination == null) return;
+    }
+    final isHalf = r.phaseKind == 'half_posted';
+    final ok = await showConfirmTransactionSheet(
+      context,
+      title: 'Withdraw from the mix',
+      confirmLabel: 'Withdraw',
+      detail: isHalf
+          ? 'This box is still waiting for a partner, so it has not been mixed '
+                'this round. It goes to your destination minus the miner fee, and '
+                'the mixing tokens on it are lost.'
+          : 'After ${r.roundsDone} ${r.roundsDone == 1 ? 'round' : 'rounds'} of about '
+                '${r.roundsTarget}. The money leaves the pool for the destination you chose.',
+      rows: [
+        ConfirmTxRow('Amount', mixAmountText(r), bold: true),
+        ConfirmTxRow('Rounds done', '${r.roundsDone} of ${r.roundsTarget}'),
+      ],
+    );
+    if (!ok) return;
+    final tx = await mixService.leave(r, destinationAddress: destination);
+    if (mounted)
+      showTxResultSheet(
+        context,
+        txId: tx,
+        headline: isHalf
+            ? 'Early reclaim submitted'
+            : 'Mix withdrawal submitted',
+        note: isHalf
+            ? 'This round was not mixed. The mixing tokens on the box are lost.'
+            : null,
+      );
+  }, transaction: true);
 
   Future<String?> _pickDestination(WalletRouteArgs args) async {
     final toStealth = await showDialog<bool>(

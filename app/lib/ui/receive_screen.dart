@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -171,14 +172,16 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
           await walletService.sendErg(preparationId: preview.preparationId);
       if (!mounted) return;
       setState(() => _sweeping = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Sweep sent: ${shorten(txId)}')),
+      showTxResultSheet(
+        context,
+        txId: txId,
+        headline: 'Stealth sweep submitted',
       );
       await stealthService.scan();
     } catch (e) {
       if (!mounted) return;
       setState(() => _sweeping = false);
-      showErrorSheet(context, title: 'Could not sweep stealth funds', message: '$e');
+      showTxFailureSheet(context, e);
     }
   }
 

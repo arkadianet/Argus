@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'widgets/error_sheet.dart';
 import '../services/app_fee.dart';
 import 'dart:async';
@@ -412,13 +413,15 @@ class _SwapScreenState extends State<SwapScreen> {
 
   Future<void> _broadcast(AmmSwapBuild build) async {
     try {
-      final txId = await walletService.sendErg(preparationId: build.preparationId);
+      final txId = await walletService.sendErg(
+        preparationId: build.preparationId,
+      );
       if (!mounted) return;
-      _snack('Broadcast! ${shorten(txId, head: 8, tail: 6)}');
+      showTxResultSheet(context, txId: txId, headline: 'Swap submitted');
       HapticFeedback.mediumImpact();
     } catch (e) {
       if (!mounted) return;
-      showErrorSheet(context, title: 'Broadcast may have failed. Check activity before retrying.', message: '$e');
+      showTxFailureSheet(context, e);
     }
   }
 
