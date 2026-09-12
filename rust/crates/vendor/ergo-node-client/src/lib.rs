@@ -749,9 +749,9 @@ impl NodeClient {
     /// Dry-run a fully-assembled transaction through the node's `POST /transactions/check`
     /// endpoint WITHOUT broadcasting it. `tx_json` must be a complete `ErgoTransaction`
     /// (inputs with `spendingProof`, dataInputs, outputs). Returns `Ok(tx_id)` if the node
-    /// would accept it, or `Err` with the node's rejection message. This validates the
-    /// full script execution against the live UTXO set — the strongest pre-broadcast check
-    /// available. Note the inputs must be currently unspent for the check to run.
+    /// would accept it or already knows it, or `Err` with the node's rejection message.
+    /// New transactions undergo script validation against the live UTXO set; an
+    /// exact already-known response acknowledges prior admission.
     pub async fn check_transaction(&self, tx_json: &serde_json::Value) -> Result<String> {
         let body = serde_json::to_string(tx_json).map_err(|e| NodeError::ApiError {
             message: format!("Failed to serialize tx for check: {}", e),
@@ -761,24 +761,8 @@ impl NodeClient {
         let text = response.text().await.map_err(|e| NodeError::ApiError {
             message: format!("Failed to read /transactions/check response: {}", e),
         })?;
-        if status.is_success() {
-            // Body is the accepted tx id, JSON-quoted.
-            Ok(text.trim().trim_matches('"').to_string())
-        } else {
-            // Body is a JSON error object; surface `detail`/`reason` if present.
-            let detail = serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
-                .and_then(|v| {
-                    v.get("detail")
-                        .or_else(|| v.get("reason"))
-                        .and_then(|d| d.as_str())
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or(text);
-            Err(NodeError::ApiError {
-                message: format!("transaction rejected ({}): {}", status.as_u16(), detail),
-            })
-        }
+        transaction_response(status.as_u16(), text, tx_json)
+            .map_err(|message| NodeError::ApiError { message })
     }
 
     /// Broadcast a fully-assembled transaction via `POST /transactions`. `tx_json` must be
@@ -794,13 +778,8 @@ impl NodeClient {
         let text = response.text().await.map_err(|e| NodeError::ApiError {
             message: format!("Failed to read /transactions response: {}", e),
         })?;
-        if status.is_success() {
-            Ok(text.trim().trim_matches('"').to_string())
-        } else {
-            Err(NodeError::ApiError {
-                message: format!("transaction not accepted ({}): {}", status.as_u16(), text),
-            })
-        }
+        transaction_response(status.as_u16(), text, tx_json)
+            .map_err(|message| NodeError::ApiError { message })
     }
 }
 
@@ -1109,4 +1088,34 @@ mod tests {
         });
         assert!(json_output_to_eip12(&output, "tx1", 0).is_none());
     }
+}
+
+#[cfg(test)]
+#[path = "check_tests.rs"]
+mod check_tests;
+
+/// Normalize only the observed already-known response, never arbitrary HTTP 400s.
+/// Kadia uses this exact envelope for both check and submit; Scala returns 200.
+fn transaction_response(
+    status: u16,
+    text: String,
+    tx: &serde_json::Value,
+) -> std::result::Result<String, String> {
+    if (200..300).contains(&status) {
+        return Ok(text.trim().trim_matches('"').to_string());
+    }
+    let error = serde_json::from_str::<serde_json::Value>(&text).ok();
+    if status == 400 && error == Some(serde_json::json!({"error": 400, "reason": "duplicate"})) {
+        // EIP-12 requests need not carry an id. Derive it from the transaction
+        // rather than trusting caller-supplied id / output box metadata.
+        use ergo_lib::chain::transaction::Transaction;
+        let parse = |error| format!("Cannot derive already-known transaction id: {error}");
+        let inputs = serde_json::from_value(tx["inputs"].clone()).map_err(parse)?;
+        let data_inputs = serde_json::from_value(tx["dataInputs"].clone()).map_err(parse)?;
+        let outputs = serde_json::from_value(tx["outputs"].clone()).map_err(parse)?;
+        let transaction = Transaction::new_from_vec(inputs, data_inputs, outputs)
+            .map_err(|error| format!("Cannot derive already-known transaction id: {error}"))?;
+        return Ok(transaction.id().to_string());
+    }
+    Err(format!("transaction rejected ({status}): {text}"))
 }

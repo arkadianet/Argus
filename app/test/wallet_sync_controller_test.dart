@@ -83,18 +83,15 @@ class FakeGateway implements WalletSyncGateway {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> loadHistory(
+  Future<HistoryResult> loadHistory(
     List<String> addresses, {
     int limit = 20,
   }) async {
     historyCalls++;
     if (historyGate != null) await historyGate!.future;
     if (historyThrows) throw Exception('history down');
-    return history;
+    return (rows: history, partial: historyPartial);
   }
-
-  @override
-  bool get lastHistoryPartial => historyPartial;
 
   /// When set, history waits on it: models the slow leg of a refresh.
   Completer<void>? historyGate;

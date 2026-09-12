@@ -1536,9 +1536,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     final muted = ArgusColors.of(context).muted;
     final online = networkController.activeUrl != null;
     final stale = _sync.isStale;
-    final syncing = _sync.isSyncing;
-    final synced = !stale && !syncing && online;
-    final syncAge = formatSyncAge(_sync.lastSyncedAt);
+    final status = _sync.statusLabel(online: online);
+    final synced = status == 'Synced';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -1576,13 +1575,12 @@ class _DashboardScreenState extends State<DashboardScreen>
                 InkWell(
                   onTap: () => _go('/utxos'),
                   borderRadius: BorderRadius.circular(8),
-                  child: SyncStatusLine(
-                    status: synced ? 'Synced' : (stale ? 'Out of sync' : (syncing ? 'Syncing…' : 'Offline')),
+                  child: SyncStatusLine.wallet(
+                    sync: _sync,
+                    online: online,
                     statusColor: synced ? moss : (stale ? rust : accentOf(context)),
                     height: networkController.height,
-                    count: _sync.utxoCount,
                     fragmented: fragmented,
-                    age: syncing ? '' : syncAge,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -2171,6 +2169,24 @@ bool shouldPoll({
 class SyncStatusLine extends StatelessWidget {
   const SyncStatusLine({super.key, required this.status, required this.statusColor,
     required this.height, required this.count, required this.fragmented, required this.age});
+  /// Keeps the last successful age visible while the next sync is in flight.
+  factory SyncStatusLine.wallet({
+    Key? key,
+    required WalletSyncController sync,
+    required bool online,
+    required Color statusColor,
+    required int? height,
+    required bool fragmented,
+  }) => SyncStatusLine(
+    key: key,
+    status: sync.statusLabel(online: online),
+    statusColor: statusColor,
+    height: height,
+    count: sync.utxoCount,
+    fragmented: fragmented,
+    age: formatSyncAge(sync.lastSyncedAt),
+  );
+
   final String status;
   final Color statusColor;
   final int? height;

@@ -4,6 +4,7 @@ import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
 import '../services/token_pricer.dart';
 import '../services/wallet_service.dart';
+import '../services/wallet_sync_controller.dart';
 import '../theme/argus_theme.dart';
 import 'send_screen.dart';
 import 'widgets/asset_tile.dart';
@@ -33,16 +34,24 @@ class AssetsScreen extends StatelessWidget {
     );
   }
 
+  /// Uses one live snapshot for sections and emptiness as wallet holdings change.
   @override
   Widget build(BuildContext context) {
-    final fungible = args.tokens.where((t) => !t.isNft).toList();
-    final nfts = args.tokens.where((t) => t.isNft).toList();
-
     return Scaffold(
       appBar: AppBar(title: const Text('Assets')),
       body: ListenableBuilder(
-        listenable: Listenable.merge([networkController, privacyService, tokenPricer]),
+        listenable: Listenable.merge([
+          networkController,
+          privacyService,
+          tokenPricer,
+          walletSyncController,
+        ]),
         builder: (context, _) {
+          final live = walletSyncController;
+          final holdings = live.displayTokens;
+          final balance = live.totalNanoWithStealth;
+          final fungible = holdings.where((t) => !t.isNft).toList();
+          final nfts = holdings.where((t) => t.isNft).toList();
           final hidden = privacyService.hideBalances;
           return ListView(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
@@ -51,8 +60,8 @@ class AssetsScreen extends StatelessWidget {
               SoftCard(
                 padding: EdgeInsets.zero,
                 child: AssetTile.erg(
-                  balanceNano: args.spendableNano,
-                  fiatText: networkController.fiatText(args.spendableNano),
+                  balanceNano: balance,
+                  fiatText: networkController.fiatText(balance),
                   hidden: hidden,
                 ),
               ),
@@ -89,7 +98,7 @@ class AssetsScreen extends StatelessWidget {
                   ),
                 ),
               ],
-              if (args.tokens.isEmpty) ...[
+              if (holdings.isEmpty) ...[
                 const SizedBox(height: 16),
                 const SoftCard(
                   child: EmptyState(

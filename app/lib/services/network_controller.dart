@@ -117,7 +117,23 @@ List<String> restApiUrlsFromPeers(List<dynamic> peers, {Iterable<String> known =
 }
 
 class NetworkController extends ChangeNotifier {
+  /// Allows network configuration to be exercised without loading native code.
+  NetworkController({Future<void> Function(List<String>, String)? configure})
+    : _configure = configure ?? _configureRust;
+
+  final Future<void> Function(List<String>, String) _configure;
+  String? _appliedConfiguration;
+  Future<void>? _configurationInFlight;
+
+  /// Shares the ordered node choice with the clients used by wallet requests.
+  static Future<void> _configureRust(List<String> urls, String explorer) =>
+      RustLib.instance.api.crateApiSetNetwork(
+        nodeUrls: urls,
+        explorerUrl: explorer,
+      );
+
   static const defaultNodes = [
+    'https://node.kadia.io',
     'https://ergo-node.eutxo.de',
     'https://ergo-node.zoomout.io',
     'https://ergo1.oette.info',
@@ -325,21 +341,42 @@ class NetworkController extends ChangeNotifier {
     }
   }
 
+  /// Keeps native clients reusable and lets the latest settings win when
+  /// callers arrive while an earlier configuration is still being installed.
   Future<void> apply() async {
-    final urls = orderedUrls;
-    if (urls.isEmpty) return;
-    await RustLib.instance.api.crateApiSetNetwork(
-      nodeUrls: urls,
-      explorerUrl: explorer,
-    );
+    while (true) {
+      final pending = _configurationInFlight;
+      if (pending != null) {
+        try {
+          await pending;
+        } catch (_) {
+          // The owner reports its failure; this caller can retry current settings.
+        }
+        continue;
+      }
+      final urls = orderedUrls;
+      if (urls.isEmpty) return;
+      final explorerUrl = explorer;
+      final configuration = jsonEncode([urls, explorerUrl]);
+      if (configuration == _appliedConfiguration) return;
+      final operation = Future<void>.sync(() => _configure(urls, explorerUrl));
+      _configurationInFlight = operation;
+      try {
+        await operation;
+        _appliedConfiguration = configuration;
+      } finally {
+        _configurationInFlight = null;
+      }
+      // Settings may have changed during the native call, even without a waiter.
+    }
   }
 
+  /// Chooses from fresh health results before configuring clients and pricing.
   Future<void> probe() async {
     if (probing) return;
     probing = true;
     notifyListeners();
     try {
-      await apply();
       final urls = orderedUrls;
       final results = await Future.wait(urls.map(probeNodeDetails));
       probes
@@ -351,12 +388,9 @@ class NetworkController extends ChangeNotifier {
       if (activeUrl != null) {
         lastGood = activeUrl;
         await persist();
-        // Rust takes the list in order and uses the first that answers.
-        await apply();
       }
-      try {
-        await RustLib.instance.api.crateApiProbeNetwork();
-      } catch (_) {}
+      // Rust takes the list in order and uses the first that answers.
+      await apply();
     } catch (_) {
       activeUrl = null;
       height = null;
