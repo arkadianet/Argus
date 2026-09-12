@@ -1,9 +1,9 @@
+import 'widgets/tx_result_view.dart';
 import 'widgets/error_sheet.dart';
 import '../services/app_fee.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../bridge/argus_error.dart';
 import '../format.dart';
@@ -28,7 +28,7 @@ class AgeUsdScreen extends StatefulWidget {
   State<AgeUsdScreen> createState() => _AgeUsdScreenState();
 }
 
-class _AgeUsdScreenState extends State<AgeUsdScreen> {
+class _AgeUsdScreenState extends State<AgeUsdScreen> with TxReceiptOwner {
   SigmaUsdAction _action = SigmaUsdAction.mintSigUsd;
   SigmaUsdStateData? _state;
   bool _loading = true;
@@ -97,11 +97,6 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
         _loading = false;
       });
     }
-  }
-
-  void _snack(String msg) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   List<String> get _spendAddresses {
@@ -179,9 +174,10 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
   }
 
   Future<void> _review() async {
+    final action = _action;
     final st = _state;
     if (st == null) return;
-    final amount = parseDecimalToBase(_amountCtrl.text, _action.decimals);
+    final amount = parseDecimalToBase(_amountCtrl.text, action.decimals);
     if (amount == null || amount <= 0) {
       showErrorSheet(context, message: 'Enter an amount');
       return;
@@ -196,7 +192,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     SigmaUsdBuildResult build;
     try {
       build = await sigmaUsdService.build(
-        action: _action,
+        action: action,
         amount: amount,
         recipient: _recipient,
         changeAddress: _args.changeAddress.isNotEmpty
@@ -217,16 +213,16 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     }
     if (!mounted) return;
 
-    final isMint = !(_action.isRedeem);
+    final isMint = !(action.isRedeem);
     final confirmed = await showConfirmTransactionSheet(
       context,
       preparationId: build.preparationId,
-      title: '${_action.verb} ${_action.tokenName}',
+      title: '${action.verb} ${action.tokenName}',
       rows: [
         ConfirmTxRow(
           isMint ? 'You receive' : 'You redeem',
-          '${formatTokenAmount(build.tokenAmount, _action.decimals)} '
-          '${_action.tokenName}',
+          '${formatTokenAmount(build.tokenAmount, action.decimals)} '
+          '${action.tokenName}',
         ),
         if (isMint)
           ConfirmTxRow('ERG cost', formatErg(build.ergAmountNano))
@@ -238,8 +234,7 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
       detail: isMint
           ? 'Minted against the bank at the oracle rate.'
           : 'Redeemed against the bank at the oracle rate.',
-      confirmLabel:
-          'Sign & broadcast ${_action.verb.toLowerCase()}',
+      confirmLabel: 'Sign & broadcast ${action.verb.toLowerCase()}',
     );
     if (!confirmed) {
       if (mounted) setState(() => _busy = false);
@@ -247,13 +242,21 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> {
     }
 
     try {
-      final txId =
-          await walletService.sendErg(preparationId: build.preparationId);
-      if (!mounted) return;
-      _snack('Broadcast! ${shorten(txId, head: 8, tail: 6)}');
-      HapticFeedback.mediumImpact();
-      _amountCtrl.clear();
-      await _load();
+      final txId = await walletService.sendErg(
+        preparationId: build.preparationId,
+      );
+      final warning = await txBookkeeping(() async {
+        if (mounted) {
+          _amountCtrl.clear();
+          await _load();
+        }
+      });
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        headline: '${action.verb} ${action.tokenName} submitted',
+        warning: warning,
+      );
     } catch (e) {
       if (!mounted) return;
       await showTxFailureSheet(context, e);

@@ -1,3 +1,5 @@
+import 'widgets/tx_batch_result_view.dart';
+import 'widgets/tx_result_view.dart';
 import 'widgets/error_sheet.dart';
 import '../services/app_fee.dart';
 import 'dart:convert';
@@ -20,12 +22,24 @@ class UtxoManagementScreen extends StatefulWidget {
   State<UtxoManagementScreen> createState() => _UtxoManagementScreenState();
 }
 
-class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
+class _UtxoManagementScreenState extends State<UtxoManagementScreen>
+    with TxReceiptOwner {
   bool _loading = true;
   String? _error;
   final _tools = UtxoToolsController();
   final TextEditingController _searchCtrl = TextEditingController();
   bool _busy = false;
+
+  List<String>? _consolidationIds;
+  int _consolidationPlanned = 0;
+  String? _consolidationFailure;
+
+  void _showConsolidationResult() => showTxBatchResultSheet(
+    receiptContext,
+    txIds: _consolidationIds!,
+    plannedCount: _consolidationPlanned,
+    failure: _consolidationFailure,
+  );
 
   List<InputBoxInput> get _boxes => _tools.boxes;
 
@@ -49,7 +63,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     super.dispose();
   }
 
-  Future<void> _loadBoxes() async {
+  Future<void> _loadBoxes({bool propagateError = false}) async {
     if (!mounted) return;
     setState(() {
       _loading = true;
@@ -82,6 +96,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
         _error = 'Failed to load UTXOs: $e';
         _loading = false;
       });
+      if (propagateError) rethrow;
     }
   }
 
@@ -176,7 +191,9 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     if (!confirmed || !mounted) return;
 
     setState(() => _busy = true);
-    var done = 0;
+    final submitted = <String>[];
+    Object? failure;
+    String? bookkeepingWarning;
     try {
       for (final chunk in chunks) {
         final preview = await walletService.prepareConsolidate(
@@ -185,26 +202,61 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           changeAddress: changeAddress,
           nodeUrl: networkController.activeUrl,
         );
-        final txId = await walletService.sendErg(preparationId: preview.preparationId);
-        done++;
-        if (!mounted) return;
-        _snack(chunks.length == 1
-            ? 'Consolidation broadcast · ${shorten(txId, head: 8, tail: 6)}'
-            : 'Transaction $done of ${chunks.length} broadcast · ${shorten(txId, head: 8, tail: 6)}');
+        final txId = await walletService.sendErg(
+          preparationId: preview.preparationId,
+        );
+        submitted.add(txId);
       }
-      _tools.clearSelection();
-      await Future.delayed(const Duration(seconds: 1));
-      await _loadBoxes();
     } catch (e) {
-      if (mounted) {
-        showErrorSheet(
+      failure = e;
+      if (mounted && chunks.length == 1) {
+        showTxFailureSheet(
           context,
-          title: done == 0 ? 'Consolidation failed' : 'Stopped after $done of ${chunks.length}',
-          message: '$e',
+          e,
+          note:
+              'Stopped after ${submitted.length} of ${chunks.length}. Refresh boxes and check Activity before retrying.',
         );
       }
     } finally {
-      if (mounted) setState(() => _busy = false);
+      if (submitted.isNotEmpty) {
+        bookkeepingWarning = await txBookkeeping(() async {
+          if (!mounted) return;
+          _tools.clearSelection();
+          await Future.delayed(const Duration(seconds: 1));
+          await _loadBoxes(propagateError: true);
+        });
+        if (chunks.length == 1)
+          showTxResultSheet(
+            receiptContext,
+            txId: submitted.single,
+            headline: 'Consolidation submitted',
+            warning: bookkeepingWarning,
+          );
+      }
+      final classified = failure == null ? null : classifyTxFailure(failure);
+      final batchFailure = [
+        if (classified != null)
+          '${classified.title}\n${classified.message}\nRefresh boxes and check Activity before retrying.',
+        if (bookkeepingWarning != null) bookkeepingWarning,
+      ].join('\n\n');
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          if (chunks.length > 1) {
+            _consolidationIds = List.unmodifiable(submitted);
+            _consolidationPlanned = chunks.length;
+            _consolidationFailure = batchFailure.isEmpty ? null : batchFailure;
+          }
+        });
+      }
+      if (chunks.length > 1) {
+        showTxBatchResultSheet(
+          receiptContext,
+          txIds: submitted,
+          plannedCount: chunks.length,
+          failure: batchFailure.isEmpty ? null : batchFailure,
+        );
+      }
     }
   }
 
@@ -302,11 +354,17 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           final txId = await walletService.sendErg(
             preparationId: preview.preparationId,
           );
-          _snack(
-            'Split transaction broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}',
+
+          final warning = await txBookkeeping(() async {
+            await Future.delayed(const Duration(seconds: 1));
+            if (mounted) await _loadBoxes();
+          });
+          showTxResultSheet(
+            receiptContext,
+            txId: txId,
+            warning: warning,
+            headline: 'Split submitted',
           );
-        await Future.delayed(const Duration(seconds: 1));
-        await _loadBoxes();
         } finally {
           if (mounted) setState(() => _busy = false);
         }
@@ -314,7 +372,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);
-        showErrorSheet(context, title: 'Split failed', message: '$e');
+        showTxFailureSheet(context, e);
       }
     }
   }
@@ -376,11 +434,17 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
           final txId = await walletService.sendErg(
             preparationId: preview.preparationId,
           );
-          _snack(
-            'Restructure transaction broadcast! Tx: ${shorten(txId, head: 8, tail: 6)}',
+
+          final warning = await txBookkeeping(() async {
+            await Future.delayed(const Duration(seconds: 1));
+            if (mounted) await _loadBoxes();
+          });
+          showTxResultSheet(
+            receiptContext,
+            txId: txId,
+            warning: warning,
+            headline: 'Restructure submitted',
           );
-        await Future.delayed(const Duration(seconds: 1));
-        await _loadBoxes();
         } finally {
           if (mounted) setState(() => _busy = false);
         }
@@ -388,7 +452,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
     } catch (e) {
       if (mounted) {
         setState(() => _busy = false);
-        showErrorSheet(context, title: 'Restructure failed', message: '$e');
+        showTxFailureSheet(context, e);
       }
     }
   }
@@ -407,6 +471,12 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen> {
       appBar: AppBar(
         title: const Text('UTXO Management'),
         actions: [
+          if (_consolidationIds != null)
+            IconButton(
+              tooltip: 'Last consolidation result',
+              onPressed: _showConsolidationResult,
+              icon: const Icon(Icons.receipt_long),
+            ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh boxes',

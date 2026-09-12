@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 
 import '../format.dart';
@@ -20,7 +21,8 @@ class SigmaFiScreen extends StatefulWidget {
   State<SigmaFiScreen> createState() => _SigmaFiScreenState();
 }
 
-class _SigmaFiScreenState extends State<SigmaFiScreen> with SingleTickerProviderStateMixin {
+class _SigmaFiScreenState extends State<SigmaFiScreen>
+    with TxReceiptOwner, SingleTickerProviderStateMixin {
   late final TabController _tabs = TabController(length: 3, vsync: this);
   bool _working = false;
 
@@ -100,74 +102,103 @@ class _SigmaFiScreenState extends State<SigmaFiScreen> with SingleTickerProvider
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
       if (!ok || !mounted) return;
-      if (!svc.canCommit(prepared)) throw StateError('The wallet changed while the transaction was being prepared; nothing was sent');
-      final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$done: ${shorten(txId)}')));
-      }
-      await _refresh();
+      if (!svc.canCommit(prepared))
+        throw StateError(
+          'The wallet changed while the transaction was being prepared; nothing was sent',
+        );
+      final txId = await walletService.sendErg(
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
+      final warning = await txBookkeeping(() => _refresh());
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: done,
+      );
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not ${confirmLabel.toLowerCase()}', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
   }
 
   Future<void> _lend(SigmaFiOrder o) => _spend(
-        'close',
-        o.box,
-        (p) => [
-          ConfirmTxRow('You lend', _amount(o.loanAsset, o.principal), bold: true),
-          ConfirmTxRow('SigmaFi fee (0.5%)', _amount(o.loanAsset, o.devFee)),
-          ConfirmTxRow('Argus fee (0.4%)', _amount(o.loanAsset, o.uiFee)),
-          ConfirmTxRow('Total out', _amount(o.loanAsset, o.lenderCost), bold: true),
-          ConfirmTxRow('Repaid to you', _amount(o.loanAsset, o.repayment)),
-          ConfirmTxRow('By block', '${p['maturity_height']} (${_term(o.termBlocks)})'),
-          ConfirmTxRow('Collateral held', _collateral(o.collateralErg, o.collateralTokens, _wallet(context))),
-        ],
-        title: 'Lend against this request',
-        detail: 'The collateral moves into a bond. The borrower repays you before maturity, '
-            'or you may take the collateral after it. SigmaFi and Argus each take a small fee of the loan.',
-        confirmLabel: 'Lend',
-        done: 'Loan sent',
-      );
+    'close',
+    o.box,
+    (p) => [
+      ConfirmTxRow('You lend', _amount(o.loanAsset, o.principal), bold: true),
+      ConfirmTxRow('SigmaFi fee (0.5%)', _amount(o.loanAsset, o.devFee)),
+      ConfirmTxRow('Argus fee (0.4%)', _amount(o.loanAsset, o.uiFee)),
+      ConfirmTxRow('Total out', _amount(o.loanAsset, o.lenderCost), bold: true),
+      ConfirmTxRow('Repaid to you', _amount(o.loanAsset, o.repayment)),
+      ConfirmTxRow(
+        'By block',
+        '${p['maturity_height']} (${_term(o.termBlocks)})',
+      ),
+      ConfirmTxRow(
+        'Collateral held',
+        _collateral(o.collateralErg, o.collateralTokens, _wallet(context)),
+      ),
+    ],
+    title: 'Lend against this request',
+    detail:
+        'The collateral moves into a bond. The borrower repays you before maturity, '
+        'or you may take the collateral after it. SigmaFi and Argus each take a small fee of the loan.',
+    confirmLabel: 'Lend',
+    done: 'Loan submitted',
+  );
 
   Future<void> _cancel(SigmaFiOrder o) => _spend(
-        'cancel',
-        o.box,
-        (p) => [ConfirmTxRow('Back to you', _collateral(o.collateralErg, o.collateralTokens, _wallet(context)), bold: true)],
-        title: 'Withdraw the request',
-        detail: 'Nobody has lent against it; the collateral comes back.',
-        confirmLabel: 'Withdraw',
-        done: 'Request withdrawn',
-      );
+    'cancel',
+    o.box,
+    (p) => [
+      ConfirmTxRow(
+        'Back to you',
+        _collateral(o.collateralErg, o.collateralTokens, _wallet(context)),
+        bold: true,
+      ),
+    ],
+    title: 'Withdraw the request',
+    detail: 'Nobody has lent against it; the collateral comes back.',
+    confirmLabel: 'Withdraw',
+    done: 'Request withdrawal submitted',
+  );
 
   Future<void> _repay(SigmaFiBond b) => _spend(
-        'repay',
-        b.box,
-        (p) => [
-          ConfirmTxRow('You repay', _amount(b.loanAsset, b.repayment), bold: true),
-          ConfirmTxRow('Collateral back', _collateral(b.collateralErg, b.collateralTokens, _wallet(context))),
-          ConfirmTxRow('Blocks left', '${b.blocksRemaining}'),
-        ],
-        title: 'Repay the bond',
-        detail: 'The repayment goes to the lender and the collateral returns to you.',
-        confirmLabel: 'Repay',
-        done: 'Repaid',
-      );
+    'repay',
+    b.box,
+    (p) => [
+      ConfirmTxRow('You repay', _amount(b.loanAsset, b.repayment), bold: true),
+      ConfirmTxRow(
+        'Collateral back',
+        _collateral(b.collateralErg, b.collateralTokens, _wallet(context)),
+      ),
+      ConfirmTxRow('Blocks left', '${b.blocksRemaining}'),
+    ],
+    title: 'Repay the bond',
+    detail:
+        'The repayment goes to the lender and the collateral returns to you.',
+    confirmLabel: 'Repay',
+    done: 'Repayment submitted',
+  );
 
   Future<void> _liquidate(SigmaFiBond b) => _spend(
-        'liquidate',
-        b.box,
-        (p) => [
-          ConfirmTxRow('You take', _collateral(b.collateralErg, b.collateralTokens, _wallet(context)), bold: true),
-          ConfirmTxRow('Blocks overdue', '${-b.blocksRemaining}'),
-        ],
-        title: 'Take the collateral',
-        detail: 'The bond matured without repayment; the collateral is yours.',
-        confirmLabel: 'Liquidate',
-        done: 'Collateral taken',
-      );
+    'liquidate',
+    b.box,
+    (p) => [
+      ConfirmTxRow(
+        'You take',
+        _collateral(b.collateralErg, b.collateralTokens, _wallet(context)),
+        bold: true,
+      ),
+      ConfirmTxRow('Blocks overdue', '${-b.blocksRemaining}'),
+    ],
+    title: 'Take the collateral',
+    detail: 'The bond matured without repayment; the collateral is yours.',
+    confirmLabel: 'Liquidate',
+    done: 'Collateral claim submitted',
+  );
 
   Future<void> _post(_Request r) async {
     if (_working) return;
@@ -205,15 +236,25 @@ class _SigmaFiScreenState extends State<SigmaFiScreen> with SingleTickerProvider
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
       if (!ok || !mounted) return;
-      if (!svc.canCommit(prepared)) throw StateError('The wallet changed while the request was being prepared; nothing was sent');
-      final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Request posted: ${shorten(txId)}')));
-        _tabs.animateTo(1);
-      }
-      await _refresh();
+      if (!svc.canCommit(prepared))
+        throw StateError(
+          'The wallet changed while the request was being prepared; nothing was sent',
+        );
+      final txId = await walletService.sendErg(
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
+      final warning = await txBookkeeping(() async {
+        if (mounted) _tabs.animateTo(1);
+        await _refresh();
+      });
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        headline: 'Request posted',
+        warning: warning,
+      );
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not post the request', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }

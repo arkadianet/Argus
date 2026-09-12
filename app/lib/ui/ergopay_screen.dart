@@ -1,4 +1,5 @@
 
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -16,22 +17,24 @@ import 'confirm_transaction_sheet.dart';
 import 'offline_banner.dart';
 import 'widgets/soft_card.dart';
 import 'widgets/error_sheet.dart';
+import 'widgets/tx_result_view.dart';
 
 enum _Stage { loading, message, ready, signing, done, error }
 
 /// EIP-20 ErgoPay: resolve a link into a signing request, show what the
 /// transaction does, sign, broadcast, and tell the dApp the tx id.
 class ErgoPayScreen extends StatefulWidget {
-  const ErgoPayScreen({super.key, required this.link});
+  const ErgoPayScreen({super.key, required this.link, this.client});
 
   /// Raw `ergopay:` link from a deep link or QR code.
   final String link;
+  final ErgoPayClient? client;
 
   @override
   State<ErgoPayScreen> createState() => _ErgoPayScreenState();
 }
 
-class _ErgoPayScreenState extends State<ErgoPayScreen> {
+class _ErgoPayScreenState extends State<ErgoPayScreen> with TxReceiptOwner {
   _Stage _stage = _Stage.loading;
   String _status = 'Contacting the dApp…';
   String? _error;
@@ -71,7 +74,7 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> {
             url = parsed.withAddress(chosen);
           }
           setState(() => _status = 'Contacting the dApp…');
-          request = await ergoPayClient.fetch(url);
+          request = await (widget.client ?? ergoPayClient).fetch(url);
       }
       if (!mounted) return;
       _request = request;
@@ -188,20 +191,26 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> {
         signed,
         nodeUrl: networkController.activeUrl,
       );
-      if (!mounted) return;
-      HapticFeedback.mediumImpact();
       _txId = txId;
       final replyTo = request?.replyTo;
       if (replyTo != null) {
-        setState(() => _status = 'Telling the dApp…');
+        if (mounted) setState(() => _status = 'Telling the dApp…');
         try {
-          await ergoPayClient.reply(replyTo, txId);
-        } on ErgoPayException catch (e) {
-          _replyError = e.message;
+          await (widget.client ?? ergoPayClient).reply(replyTo, txId);
+        } catch (e) {
+          _replyError = '$e';
         }
       }
-      if (!mounted) return;
-      setState(() => _stage = _Stage.done);
+      if (mounted) setState(() => _stage = _Stage.done);
+      if (!mounted || ModalRoute.of(context)?.isCurrent != true) {
+        showTxResultSheet(
+          receiptContext,
+          txId: txId,
+          headline: 'Signed and sent',
+          warning: _replyError,
+        );
+        return;
+      }
     } catch (e) {
       await _signFailed(e);
     }
@@ -384,43 +393,16 @@ class _ErgoPayScreenState extends State<ErgoPayScreen> {
   }
 
   Widget _done() => Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.check_circle, size: 64, color: Color(0xFF5B9E6D)),
-              const SizedBox(height: 20),
-              Text('Signed and sent', style: Theme.of(context).textTheme.headlineSmall),
-              const SizedBox(height: 8),
-              const SizedBox(width: 48, child: Hairline(gold: true)),
-              const SizedBox(height: 16),
-              SelectableText(_txId ?? '', style: monoStyle(context, size: 12)),
-              if (_replyError != null) ...[
-                const SizedBox(height: 12),
-                SelectableText(
-                  'The transaction is on the network, but the dApp could not be notified: $_replyError',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 12.5, color: rustFor(context)),
-                ),
-              ],
-              const SizedBox(height: 12),
-              TextButton.icon(
-                onPressed: _txId == null
-                    ? null
-                    : () => launchUrl(
-                          Uri.parse(networkController.explorerTx(_txId!)),
-                          mode: LaunchMode.externalApplication,
-                        ),
-                icon: const Icon(Icons.open_in_browser, size: 16),
-                label: const Text('View on explorer'),
-              ),
-              const SizedBox(height: 20),
-              FilledButton(onPressed: () => Navigator.pop(context, _txId), child: const Text('Done')),
-            ],
-          ),
-        ),
-      );
+    child: TxResultView(
+      txId: _txId!,
+      headline: 'Signed and sent',
+      warning: _replyError == null
+          ? null
+          : 'The transaction is on the network, but the dApp could not be notified: $_replyError',
+      explorerLaunchMode: LaunchMode.externalApplication,
+      onDismiss: () => Navigator.pop(context, _txId),
+    ),
+  );
 
   Widget _errorView() => Center(
         child: Padding(

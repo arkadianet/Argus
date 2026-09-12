@@ -1,3 +1,4 @@
+import 'widgets/tx_explorer_link.dart';
 import 'package:flutter/material.dart';
 
 import '../services/stake_recovery_service.dart';
@@ -8,6 +9,7 @@ import '../theme/argus_theme.dart';
 import 'widgets/soft_card.dart';
 import 'confirm_transaction_sheet.dart';
 import 'widgets/error_sheet.dart';
+import 'widgets/tx_result_view.dart';
 
 /// Discovery and Direct Ergopad recovery.
 class StakeRecoveryScreen extends StatefulWidget {
@@ -16,7 +18,8 @@ class StakeRecoveryScreen extends StatefulWidget {
   State<StakeRecoveryScreen> createState() => _StakeRecoveryScreenState();
 }
 
-class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
+class _StakeRecoveryScreenState extends State<StakeRecoveryScreen>
+    with TxReceiptOwner {
   final _service = stakeRecoveryService;
   bool _working = false;
 
@@ -43,19 +46,20 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
       );
       if (!ok || !mounted) return;
       final txId = await stakeProxyService.commitRefund(prepared);
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Refund submitted: $txId')));
-      }
-      await stakeProxyService.reload();
+      final warning = await txBookkeeping(() => stakeProxyService.reload());
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Refund submitted',
+      );
     } catch (e) {
       if (mounted) {
-        showErrorSheet(
+        showTxFailureSheet(
           context,
-          title: 'Refund not confirmed',
-          message:
-              '$e\nThe proxy remains tracked. Refresh to reconcile before retrying.',
+          e,
+          note:
+              'The proxy remains tracked. Refresh to reconcile before retrying.',
         );
       }
     } finally {
@@ -93,18 +97,15 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
       final txId = await walletService.sendErg(
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
-      if (mounted)
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Recovery submitted: $txId')));
-      await _refresh();
+      final warning = await txBookkeeping(() => _refresh());
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Recovery submitted',
+      );
     } catch (e) {
-      if (mounted)
-        showErrorSheet(
-          context,
-          title: 'Could not recover stake',
-          message: '$e',
-        );
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -193,6 +194,14 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
                     Text('Paideia proxy · ${proxy.status.name}'),
                     Text('Stake key ${proxy.keyId}'),
                     if (proxy.note != null) Text(proxy.note!),
+                    for (final txId in proxy.refundTxIds) ...[
+                      Text(
+                        proxy.refundConfirmed(txId)
+                            ? 'Refund confirmed'
+                            : 'Refund attempt — completion not confirmed. Check the transaction before retrying.',
+                      ),
+                      TxExplorerLink(txId: txId, label: 'Refund transaction'),
+                    ],
                     if (proxy.status != ProxyStatus.spent)
                       FilledButton(
                         onPressed: _working ? null : () => _refund(proxy),

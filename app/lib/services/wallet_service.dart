@@ -1140,11 +1140,23 @@ class WalletService {
       preparationId: BigInt.from(preparationId),
     );
     final map = jsonDecode(raw) as Map<String, dynamic>;
-    onBroadcast?.call(
+    _recordBroadcast(
       map['tx_id']?.toString() ?? '',
       (map['wallet_delta_nano_erg'] as num?)?.toInt(),
     );
     return map;
+  }
+
+  final Map<String, String> _broadcastWarnings = {};
+  String? broadcastWarning(String txId) => _broadcastWarnings[txId];
+
+  void _recordBroadcast(String txId, int? delta) {
+    try {
+      onBroadcast?.call(txId, delta);
+    } catch (e) {
+      _broadcastWarnings[txId] =
+          'Transaction submitted, but Activity could not be updated: $e. Keep this transaction ID.';
+    }
   }
 
   /// Told of every transaction this app broadcasts: its id and, when the
@@ -1650,7 +1662,7 @@ class WalletService {
       txJson: txJson,
       nodeUrl: nodeUrl,
     );
-    onBroadcast?.call(txId, null);
+    _recordBroadcast(txId, null);
     return txId;
   }
 

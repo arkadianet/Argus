@@ -1429,7 +1429,11 @@ class MixService extends ChangeNotifier {
       );
 
   /// Withdraw or reclaim now. Broadcasts and records the result.
-  Future<String> leave(MixRecord r, {String? destinationAddress}) async {
+  Future<String> leave(
+    MixRecord r, {
+    String? destinationAddress,
+    void Function(Object)? onWarning,
+  }) async {
     if (!r.inPool || r.boxId == null) throw StateError('This mix has nothing in the pool');
     if (destinationAddress == null && r.destinationErgoTree.isEmpty) {
       throw StateError('Choose where the money should go');
@@ -1441,12 +1445,17 @@ class MixService extends ChangeNotifier {
       final raw =
           await _gw.leave(jsonEncode(r.state), snap.json, destinationAddress, _gw.nodeUrl, _now);
       final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
-      r.state = (result['state'] as Map).cast<String, dynamic>();
-      r.lastError = null;
-      r.lastCheckedAt = _clock();
-      await _persist();
-      if (r.finished) await _dropKey(r);
-      _reschedule();
+      try {
+        r.state = (result['state'] as Map).cast<String, dynamic>();
+        r.lastError = null;
+        r.lastCheckedAt = _clock();
+        if (!await _persist())
+          throw StateError('Could not save withdrawal tracking');
+        if (r.finished) await _dropKey(r);
+        _reschedule();
+      } catch (e) {
+        onWarning?.call(e);
+      }
       return result['tx_id'] as String? ?? '';
     });
   }

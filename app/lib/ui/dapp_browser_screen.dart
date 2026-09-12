@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'dart:convert';
 import 'dart:math';
 
@@ -70,7 +71,9 @@ class DappBrowserScreen extends StatefulWidget {
   State<DappBrowserScreen> createState() => _DappBrowserScreenState();
 }
 
-class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHost {
+class _DappBrowserScreenState extends State<DappBrowserScreen>
+    with TxReceiptOwner
+    implements DappHost {
   InAppWebViewController? _web;
   late final DappConnector _connector = DappConnector(this);
   final _url = TextEditingController();
@@ -270,7 +273,24 @@ class _DappBrowserScreenState extends State<DappBrowserScreen> implements DappHo
   }
 
   @override
-  Future<String> submit(String signedTxJson) => walletService.submitSignedTransaction(signedTxJson, nodeUrl: networkController.activeUrl);
+  Future<String> submit(String signedTxJson) async {
+    try {
+      final txId = await walletService.submitSignedTransaction(
+        signedTxJson,
+        nodeUrl: networkController.activeUrl,
+      );
+
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        headline: 'dApp transaction submitted',
+      );
+      return txId;
+    } catch (e) {
+      queueTxPresentation(receiptContext, (ctx) => showTxFailureSheet(ctx, e));
+      rethrow;
+    }
+  }
 
   // ── UI ────────────────────────────────────────────────────────────
 

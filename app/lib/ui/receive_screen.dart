@@ -1,3 +1,4 @@
+import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -22,7 +23,7 @@ class ReceiveScreen extends StatefulWidget {
   State<ReceiveScreen> createState() => _ReceiveScreenState();
 }
 
-class _ReceiveScreenState extends State<ReceiveScreen> {
+class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
   final _amountCtrl = TextEditingController();
   String _qrData = '';
   String? _amountError;
@@ -169,16 +170,23 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       }
       final txId =
           await walletService.sendErg(preparationId: preview.preparationId);
-      if (!mounted) return;
-      setState(() => _sweeping = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Sweep sent: ${shorten(txId)}')),
+      if (mounted) setState(() => _sweeping = false);
+      final warning = await txBookkeeping(() async {
+        await stealthService.scan();
+        if (stealthService.lastScanFailed) {
+          throw StateError('Could not refresh stealth funds');
+        }
+      });
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        headline: 'Stealth sweep submitted',
+        warning: warning,
       );
-      await stealthService.scan();
     } catch (e) {
       if (!mounted) return;
       setState(() => _sweeping = false);
-      showErrorSheet(context, title: 'Could not sweep stealth funds', message: '$e');
+      showTxFailureSheet(context, e);
     }
   }
 

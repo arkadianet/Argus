@@ -1,3 +1,5 @@
+import 'widgets/tx_explorer_link.dart';
+import 'widgets/tx_result_view.dart';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -111,7 +113,7 @@ class LiquidityScreen extends StatefulWidget {
   State<LiquidityScreen> createState() => _LiquidityScreenState();
 }
 
-class _LiquidityScreenState extends State<LiquidityScreen> {
+class _LiquidityScreenState extends State<LiquidityScreen> with TxReceiptOwner {
   List<LiquidityPool> _pools = const [];
   bool _loading = true;
   bool _truncated = false;
@@ -152,7 +154,14 @@ class _LiquidityScreenState extends State<LiquidityScreen> {
     ];
   }
 
-  Future<void> _confirmAndSend(Map<String, dynamic> prepared, {required String title, required List<ConfirmTxRow> rows, String? detail, String confirmLabel = 'Sign & broadcast'}) async {
+  Future<void> _confirmAndSend(
+    Map<String, dynamic> prepared, {
+    required String title,
+    required String headline,
+    required List<ConfirmTxRow> rows,
+    String? detail,
+    String confirmLabel = 'Sign & broadcast',
+  }) async {
     final ok = await showConfirmTransactionSheet(
       context,
       title: title,
@@ -162,8 +171,10 @@ class _LiquidityScreenState extends State<LiquidityScreen> {
       preparationId: (prepared['preparation_id'] as num).toInt(),
     );
     if (!ok || !mounted) return;
-    final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sent: ${shorten(txId)}')));
+    final txId = await walletService.sendErg(
+      preparationId: (prepared['preparation_id'] as num).toInt(),
+    );
+    showTxResultSheet(receiptContext, txId: txId, headline: headline);
   }
 
   Future<void> _add(LiquidityPool pool) async {
@@ -188,14 +199,40 @@ class _LiquidityScreenState extends State<LiquidityScreen> {
         spendAddresses: args.historyAddresses,
       );
       if (!mounted) return;
-      await _confirmAndSend(prepared, title: 'Add liquidity to ${pool.pairLabel}', rows: [
-        ConfirmTxRow('Deposit ${pool.name(pool.xTokenId)}', _fmt(prepared['x_deposited'], pool.decimals(pool.xTokenId), pool.name(pool.xTokenId)), bold: true),
-        ConfirmTxRow('Deposit ${pool.name(pool.yTokenId)}', _fmt(prepared['y_deposited'], pool.decimals(pool.yTokenId), pool.name(pool.yTokenId)), bold: true),
-        ConfirmTxRow('LP tokens received', '${prepared['lp_reward']}'),
-        ConfirmTxRow('Miner fee', formatErg((prepared['miner_fee'] as num).toInt())),
-      ], detail: 'Spends the pool box directly with your boxes; no bot is involved. Your share earns the pool\'s ${pool.feePercent.toStringAsFixed(2)}% swap fee.');
+      await _confirmAndSend(
+        prepared,
+        title: 'Add liquidity to ${pool.pairLabel}',
+        headline: 'Liquidity addition submitted',
+        rows: [
+          ConfirmTxRow(
+            'Deposit ${pool.name(pool.xTokenId)}',
+            _fmt(
+              prepared['x_deposited'],
+              pool.decimals(pool.xTokenId),
+              pool.name(pool.xTokenId),
+            ),
+            bold: true,
+          ),
+          ConfirmTxRow(
+            'Deposit ${pool.name(pool.yTokenId)}',
+            _fmt(
+              prepared['y_deposited'],
+              pool.decimals(pool.yTokenId),
+              pool.name(pool.yTokenId),
+            ),
+            bold: true,
+          ),
+          ConfirmTxRow('LP tokens received', '${prepared['lp_reward']}'),
+          ConfirmTxRow(
+            'Miner fee',
+            formatErg((prepared['miner_fee'] as num).toInt()),
+          ),
+        ],
+        detail:
+            'Spends the pool box directly with your boxes; no bot is involved. Your share earns the pool\'s ${pool.feePercent.toStringAsFixed(2)}% swap fee.',
+      );
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not add liquidity', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -222,14 +259,42 @@ class _LiquidityScreenState extends State<LiquidityScreen> {
         spendAddresses: args.historyAddresses,
       );
       if (!mounted) return;
-      await _confirmAndSend(prepared, title: 'Remove liquidity from ${pool.pairLabel}', rows: [
-        ConfirmTxRow('LP tokens returned', '${prepared['lp_redeemed']}', bold: true),
-        ConfirmTxRow('You receive', _fmt(prepared['x_received'], pool.decimals(pool.xTokenId), pool.name(pool.xTokenId)), bold: true),
-        ConfirmTxRow('And', _fmt(prepared['y_received'], pool.decimals(pool.yTokenId), pool.name(pool.yTokenId)), bold: true),
-        ConfirmTxRow('Miner fee', formatErg((prepared['miner_fee'] as num).toInt())),
-      ]);
+      await _confirmAndSend(
+        prepared,
+        title: 'Remove liquidity from ${pool.pairLabel}',
+        headline: 'Liquidity removal submitted',
+        rows: [
+          ConfirmTxRow(
+            'LP tokens returned',
+            '${prepared['lp_redeemed']}',
+            bold: true,
+          ),
+          ConfirmTxRow(
+            'You receive',
+            _fmt(
+              prepared['x_received'],
+              pool.decimals(pool.xTokenId),
+              pool.name(pool.xTokenId),
+            ),
+            bold: true,
+          ),
+          ConfirmTxRow(
+            'And',
+            _fmt(
+              prepared['y_received'],
+              pool.decimals(pool.yTokenId),
+              pool.name(pool.yTokenId),
+            ),
+            bold: true,
+          ),
+          ConfirmTxRow(
+            'Miner fee',
+            formatErg((prepared['miner_fee'] as num).toInt()),
+          ),
+        ],
+      );
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not remove liquidity', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -509,7 +574,8 @@ class _CreateTab extends StatefulWidget {
   State<_CreateTab> createState() => _CreateTabState();
 }
 
-class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMixin {
+class _CreateTabState extends State<_CreateTab>
+    with TxReceiptOwner, AutomaticKeepAliveClientMixin {
   late final String? _walletId = walletService.activeWalletId;
   PoolCreationStore? get _store => _walletId == null ? null : PoolCreationStore(_walletId);
   bool _loadingPending = true;
@@ -646,10 +712,23 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
       };
       await _savePending(record);
       if (!_ownsWallet) return;
-      final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
-      await _savePending({...record, 'bootstrap_tx_id': txId, 'sent': true});
+      final txId = await walletService.sendErg(
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
+      final warning = await txBookkeeping(
+        () => _savePending({...record, 'bootstrap_tx_id': txId, 'sent': true}),
+      );
+
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Pool step 1 submitted',
+        note:
+            'The pool is not created yet. Wait for confirmation, then continue with step 2 in the progress card.',
+      );
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not start the pool', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -687,11 +766,21 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
         preparationId: (prepared['preparation_id'] as num).toInt(),
       );
       if (!ok || !mounted || !_ownsWallet) return;
-      final txId = await walletService.sendErg(preparationId: (prepared['preparation_id'] as num).toInt());
-      await _savePending(null);
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Pool created: ${shorten(txId)}')));
+      final txId = await walletService.sendErg(
+        preparationId: (prepared['preparation_id'] as num).toInt(),
+      );
+      final warning = await txBookkeeping(() => _savePending(null));
+
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Pool creation submitted',
+        note:
+            'Step 2 is submitted. The pool becomes available after confirmation.',
+      );
     } catch (e) {
-      if (mounted) showErrorSheet(context, title: 'Could not create the pool', message: '$e');
+      if (mounted) showTxFailureSheet(context, e);
     } finally {
       if (mounted) setState(() => _working = false);
     }
@@ -742,6 +831,11 @@ class _CreateTabState extends State<_CreateTab> with AutomaticKeepAliveClientMix
                 const SizedBox(height: 10),
                 Wrap(spacing: 8, children: [
                   FilledButton(style: inlineButtonStyle, onPressed: _working || !_ownsWallet ? null : _create, child: const Text('Finish the pool')),
+                  if (pending['bootstrap_tx_id'] is String)
+                    TxExplorerLink(
+                      txId: pending['bootstrap_tx_id'] as String,
+                      label: 'Step 1 transaction',
+                    ),
                   TextButton(onPressed: _working ? null : _forget, child: const Text('Forget')),
                 ]),
               ],

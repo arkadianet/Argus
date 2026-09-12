@@ -104,7 +104,16 @@ TxFailure classifyTxFailure(Object error) {
   );
 }
 
-Future<void> showTxFailureSheet(BuildContext context, Object error) {
+Future<void> showTxFailureSheet(
+  BuildContext context,
+  Object error, {
+  String? note,
+}) {
   final f = classifyTxFailure(error);
-  return showErrorSheet(context, title: f.title, message: f.message, code: f.code);
+  return showErrorSheet(
+    context,
+    title: f.title,
+    message: note == null ? f.message : '${f.message}\n\n$note',
+    code: f.code,
+  );
 }
