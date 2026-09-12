@@ -7,8 +7,11 @@ import 'wallet_database_service.dart';
 import 'wallet_service.dart';
 import 'wallet_sync_controller.dart';
 
-const publicSnapshotNote =
-    'Last-known public data · known addresses only; undiscovered funds may be missing';
+/// Shown once per screen, never per row: locked rows carry only their age.
+const lockedWalletsExplainer =
+    'Locked wallets refresh from public data every 5 minutes, covering only '
+    'the addresses this app already knows. Unlock one to pick up new '
+    'addresses and stealth funds.';
 
 /// Deliberately exposes no handle, discovery, derivation or stealth capability.
 abstract class PublicWalletGateway {
