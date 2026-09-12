@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:argus_wallet/services/amm_service.dart';
 import 'package:argus_wallet/services/oracle_pool.dart';
 import 'package:argus_wallet/services/sigmausd_service.dart';
@@ -17,6 +18,7 @@ class _Fakes {
   double? rate;
   double? usdRate;
   bool oracleFails = false;
+  Completer<void>? poolGate;
 
   late final PricerDeps deps = PricerDeps(
     nodeUrl: () => 'http://node',
@@ -35,13 +37,20 @@ class _Fakes {
         'bitcoin': {'usd': 81000},
       };
     },
-    pools: () async => AmmPoolSet(truncated: false, pools: [
-      {
-        'pool_type': 'N2T',
-        'erg_reserves': 1000 * 1000000000,
-        'token_y': {'token_id': SigmaUsdTokens.sigUsd, 'amount': 30000},
-      },
-    ], tokens: const {}),
+    pools: () async {
+      if (poolGate != null) await poolGate!.future;
+      return AmmPoolSet(
+        truncated: false,
+        pools: [
+          {
+            'pool_type': 'N2T',
+            'erg_reserves': 1000 * 1000000000,
+            'token_y': {'token_id': SigmaUsdTokens.sigUsd, 'amount': 30000},
+          },
+        ],
+        tokens: const {},
+      );
+    },
     sigRsvPriceNano: () async => 4000000,
     dexyGoldRateNano: () async => null,
     onRate: (f, u) {
@@ -53,6 +62,23 @@ class _Fakes {
 
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test(
+    'BATCH A: oracle prices publish while pools are still pending',
+    () async {
+      final f = _Fakes()..poolGate = Completer<void>();
+      final p = TokenPricer(f.deps);
+      final op = p.refresh();
+      await Future<void>.delayed(Duration.zero);
+      expect(p.refreshing, isTrue);
+      expect(p.result.ergUsd, 0.5);
+      expect(f.rate, 0.5);
+      expect(p.priceOf(rsBtc)?.usd, 80000);
+      f.poolGate!.complete();
+      await op;
+      expect(p.refreshing, isFalse);
+    },
+  );
 
   test('defaults to the oracle source and publishes the ERG rate', () async {
     final f = _Fakes();

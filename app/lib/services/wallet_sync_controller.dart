@@ -144,6 +144,9 @@ class LiveWalletSyncGateway implements WalletSyncGateway {
         transactions:
             (snapshot['transactions'] as List).cast<Map<String, dynamic>>(),
         utxoCount: snapshot['utxo_count'] as int,
+        syncPhase: snapshot['sync_phase'] as String?,
+        lastSuccessfulSyncAt: (snapshot['last_successful_sync_at'] as num?)
+            ?.toInt(),
       );
 
   @override
@@ -259,6 +262,27 @@ class WalletSyncController extends ChangeNotifier {
   String? pinIssue;
 
   Future<void>? _inFlight;
+  int _generation = 0;
+  String? _refreshWalletId;
+
+  bool _current(int generation, String? walletId) {
+    if (generation != _generation || walletId != _gw.activeWalletId)
+      return false;
+    if (!_gw.isUnlocked) {
+      reset();
+      return false;
+    }
+    return true;
+  }
+
+  String statusLabel({required bool online}) {
+    if (isSyncing) return 'Syncing…';
+    if (isStale) return 'Out of sync';
+    if (!online) return 'Offline';
+    if (phase == SyncPhase.historyPartial) return 'History incomplete';
+    if (phase == SyncPhase.synced && lastSyncedAt != null) return 'Synced';
+    return 'Not synced';
+  }
 
   /// Transactions this app broadcast recently, by id: when, and the
   /// balance change they carry. A row for each is shown at once, and kept
@@ -393,6 +417,9 @@ class WalletSyncController extends ChangeNotifier {
 
   /// Clears everything back to the locked state.
   void reset() {
+    _generation++;
+    _inFlight = null;
+    _refreshWalletId = null;
     phase = SyncPhase.idle;
     receiveAddress = null;
     changeAddress = null;
@@ -420,15 +447,19 @@ class WalletSyncController extends ChangeNotifier {
   /// could be derived (or the wallet locked meanwhile).
   Future<bool> hydrateAfterUnlock() async {
     if (!_gw.isUnlocked) return false;
+    final generation = _generation;
+    final walletId = _gw.activeWalletId;
     final pinned = await _gw.getPinnedAddressIndex();
+    if (!_current(generation, walletId)) return false;
     var derived = await _gw.tryDeriveAddress(pinned);
+    if (!_current(generation, walletId)) return false;
     if (derived == null && pinned != 0) {
       pinIssue = _pinIssueFor(pinned);
       derived = await _gw.tryDeriveAddress(0);
     } else {
       pinIssue = null;
     }
-    if (!_gw.isUnlocked) return false;
+    if (!_current(generation, walletId)) return false;
     if (derived == null) {
       phase = SyncPhase.noAddresses;
       notifyListeners();
@@ -439,7 +470,19 @@ class WalletSyncController extends ChangeNotifier {
     changeAddress ??= receive;
 
     final cached = await _gw.loadCachedState(_cacheKey(receive));
+    if (!_current(generation, walletId)) return false;
     if (cached != null) {
+      final stamp = (cached['last_successful_sync_at'] as num?)?.toInt();
+      lastSyncedAt = stamp == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(stamp);
+      // Older snapshots have no evidence of a complete successful sync.
+      phase = SyncPhase.values.firstWhere(
+        (p) => p.name == cached['sync_phase'] && p != SyncPhase.syncing,
+        orElse: () => SyncPhase.idle,
+      );
+      if (phase == SyncPhase.synced && lastSyncedAt == null)
+        phase = SyncPhase.idle;
       usedAddresses = _mapList(cached['used_addresses']);
       balanceNano = (cached['balance_nano_erg'] as num?)?.toInt();
       recentTxs = _mapList(cached['transactions']);
@@ -452,6 +495,7 @@ class WalletSyncController extends ChangeNotifier {
               name: t['name']?.toString(),
               decimals: (t['decimals'] as num?)?.toInt() ?? 0,
               iconUrl: t['iconUrl']?.toString(),
+              emissionAmount: (t['emissionAmount'] as num?)?.toInt(),
             ),
       ]);
       utxoCount = (cached['utxo_count'] as num?)?.toInt() ?? 0;
@@ -463,20 +507,34 @@ class WalletSyncController extends ChangeNotifier {
 
   /// Refreshes balances, activity and UTXO count. With [discover] the
   /// address set is rescanned first and the node list re-probed.
-  /// Concurrent callers share the in-flight operation.
+  /// Concurrent callers in the same wallet generation share the operation.
   /// [quiet] is for the background poll: it refreshes without announcing
   /// itself, so the status strip does not flip to "Syncing…" and back every
   /// 20 seconds. The result still updates the phase, so a failure or stale
   /// balance is reported as soon as it happens.
   Future<void> refresh({required bool discover, bool quiet = false}) {
+    if (!_gw.isUnlocked) return Future.value();
+    final walletId = _gw.activeWalletId;
     final running = _inFlight;
-    if (running != null) return running;
-    final op = _refresh(discover, quiet: quiet).whenComplete(() => _inFlight = null);
+    if (running != null && _refreshWalletId == walletId) return running;
+    final generation = ++_generation;
+    _refreshWalletId = walletId;
+    late final Future<void> op;
+    op = _refresh(discover, generation, walletId, quiet: quiet).whenComplete(
+      () {
+        if (identical(_inFlight, op)) _inFlight = null;
+      },
+    );
     _inFlight = op;
     return op;
   }
 
-  Future<void> _refresh(bool discover, {bool quiet = false}) async {
+  Future<void> _refresh(
+    bool discover,
+    int generation,
+    String? walletId, {
+    bool quiet = false,
+  }) async {
     // A first load has nothing to show yet, so it always announces itself.
     if (!quiet || phase == SyncPhase.idle) {
       phase = SyncPhase.syncing;
@@ -485,8 +543,8 @@ class WalletSyncController extends ChangeNotifier {
 
     if (discover) {
       _gw.probeNetwork();
-      final ok = await _discover();
-      if (!ok) return;
+      final ok = await _discover(generation, walletId);
+      if (!ok || !_current(generation, walletId)) return;
     }
 
     final addresses = historyAddresses;
@@ -506,15 +564,16 @@ class WalletSyncController extends ChangeNotifier {
         !quiet || discover || ++_quietPollsSinceStealth >= stealthScanEvery;
     final balancesFuture = _fetchBalances(addresses);
     final historyFuture = _fetchHistory(addresses);
-    final countFuture = _gw.countUnspentBoxes(addresses).catchError((_) => utxoCount);
-    final stealthFuture = scanStealth ? _scanStealth() : Future<void>.value();
+    final countFuture = _gw
+        .countUnspentBoxes(addresses)
+        .catchError((_) => utxoCount);
+    final stealthFuture = scanStealth
+        ? _scanStealth(generation, walletId)
+        : Future<void>.value();
     if (scanStealth) _quietPollsSinceStealth = 0;
 
     final balances = await balancesFuture;
-    if (!_gw.isUnlocked) {
-      reset();
-      return;
-    }
+    if (!_current(generation, walletId)) return;
     final failed = balances.failed;
     if (failed < addresses.length) {
       balanceNano = _withBroadcastDeltas(balances.erg);
@@ -522,11 +581,12 @@ class WalletSyncController extends ChangeNotifier {
       notifyListeners();
     }
 
-    final results = await Future.wait<Object?>([historyFuture, countFuture, stealthFuture]);
-    if (!_gw.isUnlocked) {
-      reset();
-      return;
-    }
+    final results = await Future.wait<Object?>([
+      historyFuture,
+      countFuture,
+      stealthFuture,
+    ]);
+    if (!_current(generation, walletId)) return;
     final txs = results[0] as List<Map<String, dynamic>>?;
     final boxes = results[1] as int;
 
@@ -552,6 +612,7 @@ class WalletSyncController extends ChangeNotifier {
       lastSyncedAt = DateTime.now();
     }
     notifyListeners();
+    if (!_current(generation, walletId)) return;
 
     // Names for tokens that moved, so activity rows can say "1 SigUSD".
     final tokenIds = <String>{
@@ -562,13 +623,17 @@ class WalletSyncController extends ChangeNotifier {
     }..remove('');
     if (tokenIds.isNotEmpty) {
       await _gw.prefetchTokenMeta(tokenIds);
+      if (!_current(generation, walletId)) return;
       notifyListeners();
     }
 
+    if (!_current(generation, walletId)) return;
     final receive = receiveAddress;
     if (receive != null && phase != SyncPhase.failed) {
       await _gw.saveCachedState({
-        'wallet_id': _cacheKey(receive),
+        'wallet_id': walletId ?? receive,
+        'sync_phase': phase.name,
+        'last_successful_sync_at': lastSyncedAt?.millisecondsSinceEpoch,
         'primary_address': receive,
         'used_addresses': usedAddresses,
         // A locked wallet cannot derive its stealth key, so it can never
@@ -587,6 +652,7 @@ class WalletSyncController extends ChangeNotifier {
               'name': t.name,
               'decimals': t.decimals,
               'iconUrl': t.iconUrl,
+              'emissionAmount': t.emissionAmount,
             },
         ],
         'transactions': recentTxs,
@@ -598,28 +664,31 @@ class WalletSyncController extends ChangeNotifier {
   /// Rescans the address set. Returns false when the wallet locked meanwhile.
   /// Discovery failures fall through so balances still refresh on the
   /// addresses already known.
-  Future<bool> _discover() async {
+  Future<bool> _discover(int generation, String? walletId) async {
     try {
       final raw = await _gw.discoverAddresses();
-      if (!_gw.isUnlocked) {
-        reset();
-        return false;
-      }
+      if (!_current(generation, walletId)) return false;
       final map = jsonDecode(raw) as Map<String, dynamic>;
       final used = _mapList(map['addresses']);
       final next = (map['next_unused_index'] as num?)?.toInt() ?? 0;
 
       final pinned = await _gw.getPinnedAddressIndex();
-      final pinnedReceive =
-          pinned > 0 ? await _gw.tryDeriveAddress(pinned) : null;
-      pinIssue = pinned > 0 && pinnedReceive == null ? _pinIssueFor(pinned) : null;
+      if (!_current(generation, walletId)) return false;
+      final pinnedReceive = pinned > 0
+          ? await _gw.tryDeriveAddress(pinned)
+          : null;
+      if (!_current(generation, walletId)) return false;
+      pinIssue = pinned > 0 && pinnedReceive == null
+          ? _pinIssueFor(pinned)
+          : null;
 
       // Reuse mode (default): everything goes to the main address, which is
       // the pinned one or index 0. Fresh mode (Nautilus-style): receive and
       // change move to the next unused address, except that a pinned
       // address at or beyond the frontier stays the receive address.
       final main = pinnedReceive ?? await _gw.deriveAddress(0);
-      final fresh = _gw.useUnusedChangeAddress(_gw.activeWalletId);
+      if (!_current(generation, walletId)) return false;
+      final fresh = _gw.useUnusedChangeAddress(walletId);
       final String receive;
       final String change;
       if (!fresh) {
@@ -640,10 +709,7 @@ class WalletSyncController extends ChangeNotifier {
       final frontier = <String>[
         for (var i = 0; i <= next && i < 64; i++) await _gw.deriveAddress(i),
       ];
-      if (!_gw.isUnlocked) {
-        reset();
-        return false;
-      }
+      if (!_current(generation, walletId)) return false;
       usedAddresses = used;
       frontierAddresses = frontier;
       receiveAddress = receive;
@@ -692,7 +758,7 @@ class WalletSyncController extends ChangeNotifier {
   ///
   /// Off means "no stealth funds to show"; on but unreachable means
   /// "unknown", which the UI says out loud instead of showing a wrong zero.
-  Future<void> _scanStealth() async {
+  Future<void> _scanStealth(int generation, String? walletId) async {
     if (!_gw.stealthScanEnabled) {
       stealthNano = 0;
       stealthTokens = const [];
@@ -707,11 +773,11 @@ class WalletSyncController extends ChangeNotifier {
     } catch (_) {
       result = null;
     }
+    if (!_current(generation, walletId)) return;
     if (result == null) {
       stealthBalanceUnknown = true;
       return;
     }
-    stealthNano = result.totalNanoErg;
     // Names and decimals, so a token held only in stealth boxes is not
     // rendered in base units and priced as if it had none. Hydration is
     // best effort: on failure the raw amounts still show.
@@ -724,6 +790,8 @@ class WalletSyncController extends ChangeNotifier {
     } catch (_) {
       hydrated = const [];
     }
+    if (!_current(generation, walletId)) return;
+    stealthNano = result.totalNanoErg;
     final meta = {for (final t in hydrated) t.id: t};
     stealthTokens = [
       for (final t in result.tokens)

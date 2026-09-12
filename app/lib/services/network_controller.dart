@@ -117,6 +117,18 @@ List<String> restApiUrlsFromPeers(List<dynamic> peers, {Iterable<String> known =
 }
 
 class NetworkController extends ChangeNotifier {
+  NetworkController({Future<void> Function(List<String>, String)? configure})
+    : _configure = configure ?? _configureRust;
+
+  final Future<void> Function(List<String>, String) _configure;
+  String? _appliedConfiguration;
+
+  static Future<void> _configureRust(List<String> urls, String explorer) =>
+      RustLib.instance.api.crateApiSetNetwork(
+        nodeUrls: urls,
+        explorerUrl: explorer,
+      );
+
   static const defaultNodes = [
     'https://ergo-node.eutxo.de',
     'https://ergo-node.zoomout.io',
@@ -328,10 +340,10 @@ class NetworkController extends ChangeNotifier {
   Future<void> apply() async {
     final urls = orderedUrls;
     if (urls.isEmpty) return;
-    await RustLib.instance.api.crateApiSetNetwork(
-      nodeUrls: urls,
-      explorerUrl: explorer,
-    );
+    final configuration = jsonEncode([urls, explorer]);
+    if (configuration == _appliedConfiguration) return;
+    await _configure(urls, explorer);
+    _appliedConfiguration = configuration;
   }
 
   Future<void> probe() async {
@@ -339,7 +351,6 @@ class NetworkController extends ChangeNotifier {
     probing = true;
     notifyListeners();
     try {
-      await apply();
       final urls = orderedUrls;
       final results = await Future.wait(urls.map(probeNodeDetails));
       probes
@@ -351,12 +362,9 @@ class NetworkController extends ChangeNotifier {
       if (activeUrl != null) {
         lastGood = activeUrl;
         await persist();
-        // Rust takes the list in order and uses the first that answers.
-        await apply();
       }
-      try {
-        await RustLib.instance.api.crateApiProbeNetwork();
-      } catch (_) {}
+      // Rust takes the list in order and uses the first that answers.
+      await apply();
     } catch (_) {
       activeUrl = null;
       height = null;

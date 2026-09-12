@@ -133,64 +133,88 @@ class TokenPricer extends ChangeNotifier {
     }
 
     final needsGecko = src == PriceSource.coingecko || fiat != 'usd';
-    final results = await Future.wait<Object?>([
-      src == PriceSource.oracle && node != null ? attempt('oracle', () => _deps.oracle(node)) : Future.value(null),
+    final results = List<Object?>.filled(5, null);
+    void publish() {
+      if (gen != _gen) return;
+      final oracle = results[0] as OracleSnapshot?;
+      final gecko =
+          (results[1] as Map<String, Map<String, double>>?) ?? const {};
+      final pools = results[2] as AmmPoolSet?;
+      final sigRsv = results[3] as int?;
+      final gold = results[4] as int?;
+
+      final geckoUsd = <String, double>{
+        for (final e in gecko.entries)
+          if (e.value['usd'] != null) e.key: e.value['usd']!,
+      };
+      final fresh = priceTokens(
+        PricingInputs(
+          source: src,
+          oracle: oracle,
+          coingeckoUsd: geckoUsd,
+          pools: pools?.pools ?? const [],
+          sigRsvPriceNano: sigRsv,
+          dexyGoldRateNano: gold,
+          decimalsOf: (id) =>
+              pools?.tokens[id]?.decimals ?? knownToken(id)?.decimals ?? 0,
+        ),
+      );
+      // A source that momentarily answers with nothing must not blank every
+      // price in the wallet. Keep the last good result and say it is old.
+      if (fresh.ergUsd != null || result.ergUsd == null) {
+        result = fresh;
+        pricesAreOld = false;
+      } else {
+        pricesAreOld = true;
+      }
+
+      final ergo = gecko['ergo'];
+      if (fiat == 'usd') {
+        fiatPerUsd = 1;
+      } else if (ergo != null &&
+          ergo['usd'] != null &&
+          ergo[fiat] != null &&
+          ergo['usd']! > 0) {
+        fiatPerUsd = ergo[fiat]! / ergo['usd']!;
+      }
+      stale =
+          pricesAreOld ||
+          (src == PriceSource.oracle &&
+              (oracle?.isStale(_deps.tipHeight()) ?? false));
+      lastError = errors.isEmpty ? null : errors.join('; ');
+      if (result.ergUsd != null) {
+        asOf = now;
+        _fetchedAt = now;
+      }
+      final ergUsd = result.ergUsd;
+      displayRateKnown = fiat == 'usd' || (ergo?[fiat] != null);
+      _deps.onRate(
+        ergUsd == null || !displayRateKnown ? null : ergUsd * fiatPerUsd,
+        ergUsd,
+      );
+      notifyListeners();
+    }
+
+    final branches = <Future<Object?>>[
+      src == PriceSource.oracle && node != null
+          ? attempt('oracle', () => _deps.oracle(node))
+          : Future.value(null),
       needsGecko
           ? attempt('coingecko', () => _deps.coingecko(coingeckoIdsFor(src), ['usd', if (fiat != 'usd') fiat]))
           : Future.value(null),
       attempt('pools', _deps.pools),
       attempt('sigmausd', _deps.sigRsvPriceNano),
       attempt('dexy', _deps.dexyGoldRateNano),
+    ];
+    await Future.wait([
+      for (var i = 0; i < branches.length; i++)
+        branches[i].then((value) {
+          results[i] = value;
+          publish();
+        }),
     ]);
-    if (gen != _gen) {
-      refreshing = false;
-      return;
-    }
-    final oracle = results[0] as OracleSnapshot?;
-    final gecko = (results[1] as Map<String, Map<String, double>>?) ?? const {};
-    final pools = results[2] as AmmPoolSet?;
-    final sigRsv = results[3] as int?;
-    final gold = results[4] as int?;
-
-    final geckoUsd = <String, double>{
-      for (final e in gecko.entries)
-        if (e.value['usd'] != null) e.key: e.value['usd']!,
-    };
-    final fresh = priceTokens(PricingInputs(
-      source: src,
-      oracle: oracle,
-      coingeckoUsd: geckoUsd,
-      pools: pools?.pools ?? const [],
-      sigRsvPriceNano: sigRsv,
-      dexyGoldRateNano: gold,
-      decimalsOf: (id) => pools?.tokens[id]?.decimals ?? knownToken(id)?.decimals ?? 0,
-    ));
-    // A source that momentarily answers with nothing must not blank every
-    // price in the wallet. Keep the last good result and say it is old.
-    if (fresh.ergUsd != null || result.ergUsd == null) {
-      result = fresh;
-      pricesAreOld = false;
-    } else {
-      pricesAreOld = true;
-    }
-
-    final ergo = gecko['ergo'];
-    if (fiat == 'usd') {
-      fiatPerUsd = 1;
-    } else if (ergo != null && ergo['usd'] != null && ergo[fiat] != null && ergo['usd']! > 0) {
-      fiatPerUsd = ergo[fiat]! / ergo['usd']!;
-    }
-    stale = pricesAreOld ||
-        (src == PriceSource.oracle && (oracle?.isStale(_deps.tipHeight()) ?? false));
-    lastError = errors.isEmpty ? null : errors.join('; ');
-    if (result.ergUsd != null) {
-      asOf = now;
-      _fetchedAt = now;
-    }
-    final ergUsd = result.ergUsd;
-    displayRateKnown = fiat == 'usd' || (ergo?[fiat] != null);
-    _deps.onRate(ergUsd == null || !displayRateKnown ? null : ergUsd * fiatPerUsd, ergUsd);
     refreshing = false;
+    if (gen != _gen) return;
     notifyListeners();
   }
 }

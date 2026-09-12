@@ -116,6 +116,8 @@ class WalletDatabaseService {
     required List<Map<String, dynamic>> transactions,
     required int utxoCount,
     int lastSyncedHeight = 0,
+    String? syncPhase,
+    int? lastSuccessfulSyncAt,
     int stealthNano = 0,
     DateTime? stealthScannedAt,
   }) async {
@@ -135,6 +137,8 @@ class WalletDatabaseService {
       'transactions': transactions,
       'utxo_count': utxoCount,
       'last_synced_height': lastSyncedHeight,
+      'sync_phase': syncPhase,
+      'last_successful_sync_at': lastSuccessfulSyncAt,
       'last_sync_timestamp': DateTime.now().millisecondsSinceEpoch,
     };
 
