@@ -416,7 +416,7 @@ class WalletSyncController extends ChangeNotifier {
   /// Reserves success for a completed wallet sync, even when a node is online.
   String statusLabel({required bool online}) {
     if (publicSnapshotOnly)
-      return 'Last-known public data · known addresses only';
+      return 'Public data · known addresses only';
     if (isSyncing) return 'Syncing…';
     if (isStale) return 'Out of sync';
     if (!online) return 'Offline';

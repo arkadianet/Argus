@@ -249,9 +249,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                         ],
                         const SizedBox(height: 20),
                         Text(
-                          'Locked wallets show their last synced total, or the '
-                          'balance of their primary address if they have never '
-                          'been opened on this device.',
+                          lockedWalletsExplainer,
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
@@ -381,12 +379,6 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                           : 'wallet_id: ${w.walletId.length >= 8 ? w.walletId.substring(0, 8) : w.walletId}\u2026',
                       style: monoStyle(context, size: 11),
                     ),
-                    if (!isActiveUnlocked)
-                      Text(
-                        publicSnapshotNote,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-
                   ],
                 ),
               ),

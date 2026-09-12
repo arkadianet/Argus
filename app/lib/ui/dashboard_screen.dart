@@ -1883,12 +1883,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                 balance,
                 isActive ? _sync.isSyncing : false,
                 asOf: asOf,
-                note: isActive
-                    ? stealthNote
-                    : [
-                        publicSnapshotNote,
-                        if (lockedStealthNote != null) lockedStealthNote,
-                      ].join(' · '),
+                note: isActive ? stealthNote : lockedStealthNote,
                 tokens: isActive
                     ? [
                         for (final t in _sync.displayTokens)
