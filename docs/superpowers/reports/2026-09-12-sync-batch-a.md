@@ -1,7 +1,12 @@
 # Batch A sync work — 2026-09-12
 
-Part 2 is implemented. Part 1 is stopped at the response-parity gate: **kadia is not added to the default nodes**. The tree remains dirty on `main`, based on `v1.0.0-alpha.48`; nothing was committed. No Rust source, dependencies, or native libraries changed. No transaction was broadcast.
+**Superseded interim report.** Part 2 landed in `9665c61`; Part 1 was subsequently completed in `c839397` on `feat/sync-a`, as described in [the Part 1 completion report](2026-09-12-sync-batch-a-part1.md). Kadia is now the first default node and both Rust clients handle the exact already-known response. The blocked/default-node verdict and uncommitted-tree statements below describe the earlier checkpoint, not PR #113's final result.
 
+The raw response and command-log directories were removed from the repository. This report retains historical summaries and excerpts only; those dumps are not included or linked. No transaction was broadcast during the work.
+
+## Historical checkpoint (superseded)
+
+The remaining sections record the initial Part 2 investigation before Part 1's compatibility fix.
 ## Default-node verdict and blocker
 
 Do not make kadia preferred, or ship it as another default, yet. On a read-only preflight of the same existing network transaction, the endpoints disagreed:
@@ -51,7 +56,7 @@ This is sampled endpoint evidence, not a claim to have proved every possible res
 
 Kadia's `isExplorer: false` is not treated as proof that extraIndex is disabled. The **existing pinned** `ergo-node-interface-rust` revision `0264f6f` detects that capability by requesting `/blockchain/indexedHeight`; Argus's protocol client then compares index and chain heights. The sampled responses satisfy those existing checks. Neither Dart selection nor Rust capability logic changed.
 
-[Recursive shape differences](sync-batch-a-evidence/shape-diff.json) preserve the observed differing paths. Dynamic register keys and different mempool contents can naturally produce shape differences in that file; the table distinguishes these from same-response comparisons. Selected blocker and balance responses are stored alongside it. Larger raw samples remain in `/home/rkadias/.cache/argus-tmp/batch-a/`.
+The table records the observed shape differences. Dynamic register keys and different mempool contents are distinguished from comparisons of the same response. Raw samples are no longer included in the repository.
 
 Bulk retest: kadia 3,406 ms, eutxo 5,107 ms, 500 exactly equal decoded boxes (1,053,052 vs 1,151,553 bytes). This reverses the user's 5,237 vs approximately 3,570 ms pair. These isolated HTTP measurements establish variability, not a reliable bulk-speed ranking. The original mempool measurement remains the reason to consider kadia first after compatibility is repaired.
 
@@ -75,7 +80,7 @@ A new Python HTTP replay on this machine measured:
 | 2 | 4,425 ms | 1,952 ms | 2,473 ms |
 | 3 | 4,567 ms | 2,091 ms | 2,476 ms |
 
-**Qualification:** sigmaspace `/info` returned HTTP 403 in every replay, so its indexed-height request was skipped: the actual replay was 11 versus 7 requests. The script's legacy JSON key labels say `12`/`8`; these are the healthy-path counts, not the observed counts. This is an HTTP replay, not a device/FFI trace; it does not measure cache-reuse gains, persistence or rendering. [Verbatim timing output](sync-batch-a-evidence/probe-timing.log).
+**Qualification:** sigmaspace `/info` returned HTTP 403 in every replay, so its indexed-height request was skipped: the actual replay was 11 versus 7 requests. The script's legacy JSON key labels say `12`/`8`; these are the healthy-path counts, not the observed counts. This is an HTTP replay, not a device/FFI trace; it does not measure cache-reuse gains, persistence or rendering.
 
 ## Regression verification and validation
 
@@ -98,7 +103,7 @@ Fourteen behavior tests were run against the actual HEAD implementations and fai
 13. The rendered status strip must retain age during refresh.
 14. The rendered Assets screen must follow live holdings and clear on reset.
 
-The old-code run used the original implementation files from `git show HEAD:...`, with only test adapters retained: the injected network setter, a method exposing the **original dashboard status decision**, and a widget factory exposing the **original age suppression**. This allowed the new tests to compile against old behavior. It was not a test of missing symbols or a compiler failure. Production files were restored in a `finally` block. Result: **8 passed, 14 failed**, with expected assertion failures. The additional failed-configuration retry test also passes and protects unchanged behavior. [Verbatim old-behavior output](sync-batch-a-evidence/old-behavior.log).
+The old-code run used the original implementation files from `git show HEAD:...`, with only test adapters retained: the injected network setter, a method exposing the **original dashboard status decision**, and a widget factory exposing the **original age suppression**. This allowed the new tests to compile against old behavior. It was not a test of missing symbols or a compiler failure. Production files were restored in a `finally` block. Result: **8 passed, 14 failed**, with expected assertion failures. The additional failed-configuration retry test also passes and protects unchanged behavior.
 
 All tests then pass with the implementation restored: 692 passed, one existing skipped test, zero failures. Final result lines, verbatim:
 
@@ -107,10 +112,7 @@ No issues found! (ran in 3.9s)
 00:24 +692 ~1: All tests passed!
 ```
 
-Full final command output is retained verbatim:
-
-- [flutter analyze output](sync-batch-a-evidence/analyze.log)
-- [flutter test output](sync-batch-a-evidence/test.log)
+Only the final command excerpts above are retained; the full logs were removed.
 
 Both use `TMPDIR=/home/rkadias/.cache/argus-tmp` and `/home/rkadias/coding/development/flutter/bin/flutter`. Rust clippy/tests are not required for this change because no Rust crate was touched. No native rebuild was performed. Formatting was limited to the nine changed Dart files, with unrelated formatter-only changes restored. `git diff --check` is clean.
 

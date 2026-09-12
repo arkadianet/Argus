@@ -19,10 +19,17 @@ typedef ActivityPage = ({List<Map<String, dynamic>> rows, bool partial});
 typedef HistoryLoader = Future<ActivityPage> Function(List<String> addresses,
     {required int limit, required Map<String, int> perAddressOffsets});
 
-Future<ActivityPage> _readHistory(List<String> addresses,
-    {required int limit, required Map<String, int> perAddressOffsets}) async {
-  final rows = await walletService.loadHistory(addresses, limit: limit, perAddressOffsets: perAddressOffsets);
-  return (rows: rows, partial: walletService.lastHistoryPartial);
+/// Keeps paging status tied to these rows while other history requests finish.
+Future<ActivityPage> _readHistory(
+  List<String> addresses, {
+  required int limit,
+  required Map<String, int> perAddressOffsets,
+}) async {
+  return walletService.loadHistory(
+    addresses,
+    limit: limit,
+    perAddressOffsets: perAddressOffsets,
+  );
 }
 
 class TransactionsScreen extends StatefulWidget {

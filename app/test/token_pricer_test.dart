@@ -61,6 +61,24 @@ class _Fakes {
 }
 
 void main() {
+  test(
+    'REVIEW: changing source during a gated branch refreshes new prices',
+    () async {
+      final f = _Fakes()..poolGate = Completer<void>();
+      final p = TokenPricer(f.deps);
+      final old = p.refresh();
+      await Future<void>.delayed(Duration.zero);
+      final changed = p.setSource(PriceSource.coingecko);
+      await Future<void>.delayed(Duration.zero);
+      expect(p.result.ergUsd, isNull);
+      f.poolGate!.complete();
+      await Future.wait([old, changed]);
+      expect(f.geckoCalls, 1);
+      expect(p.result.ergUsd, 0.4);
+      expect(p.refreshing, isFalse);
+    },
+  );
+
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   test(

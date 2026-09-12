@@ -1,6 +1,6 @@
 # Batch A Part 1 — 2026-09-12
 
-Implemented on `main`, following `ef7ec9d`; uncommitted. No branch changes, new dependencies, native-library rebuilds, or `jniLibs/**/*.so` changes. No transaction submitted to mainnet. **A native rebuild is required for these Rust changes to reach a device.**
+Completed in `c839397` on `feat/sync-a`, following Part 2 (`9665c61`). This report supersedes the initial report’s blocked Part 1 verdict. No branch changes, new dependencies, native-library rebuilds, or `jniLibs/**/*.so` changes. No transaction submitted to mainnet. **A native rebuild is required for these Rust changes to reach a device.**
 
 ## Result and remaining limits
 
@@ -10,7 +10,7 @@ This is **Argus response compatibility for the tested cases, not complete node b
 
 ## Verbatim live responses
 
-[Every check response, status, and malformed submission response](sync-batch-a-part1-evidence/responses.md) is recorded verbatim, including intermediate probes. The matching request JSON files are alongside it. Minimum cases:
+The response and command-log directories were removed from the repository. Only the summaries and verbatim excerpts in this report remain; request JSON and raw logs are not included. Selected cases:
 
 ### Already known
 
@@ -86,7 +86,7 @@ eutxo: HTTP 400
 
 Both fresh UTXO listings contain one box totaling **492,636,552,062 nanoERG**. Kadia's balance endpoint equals that sum. Scala's endpoint reports **494,720,040,911**, overstating its own listed UTXOs by **2,083,488,849 nanoERG**. The previous report's balance concern is resolved in kadia's favor.
 
-Repository call-site search found no call to the pinned interface's `nano_ergs_balance`, its only `/blockchain/balance` method. That method itself reads only confirmed nanoERG. Neither Argus client consumes the endpoint or its token `name`/`decimals`. The vendor client's `get_address_balances` sums fetched boxes, as does `wallet-net`; metadata has separate token/issuance lookup paths. Thus the missing balance-token metadata has no Argus consumer. [Fresh comparison](sync-batch-a-part1-evidence/comparison.json).
+Repository call-site search found no call to the pinned interface's `nano_ergs_balance`, its only `/blockchain/balance` method. That method itself reads only confirmed nanoERG. Neither Argus client consumes the endpoint or its token `name`/`decimals`. The vendor client's `get_address_balances` sums fetched boxes, as does `wallet-net`; metadata has separate token/issuance lookup paths. Thus the missing balance-token metadata has no Argus consumer.
 
 ## Updated parity table
 
@@ -114,7 +114,7 @@ Kadia check/submit differ by CheckOnly/Broadcast mode, with a shared JSON respon
 
 ## Regression and validation evidence
 
-Before production edits, each client's actual HTTP `check_transaction` was exercised against a local TCP server: **duplicate-as-pass failed by assertion**, while **Scala success and invalid-fails-closed passed**. These were behavioral failures, not compile failures. Separate logs: [vendor old behavior](sync-batch-a-part1-evidence/old-check-tests.log), [wallet-net old behavior](sync-batch-a-part1-evidence/old-wallet-check-tests.log).
+Before production edits, each client's actual HTTP `check_transaction` was exercised against a local TCP server: **duplicate-as-pass failed by assertion**, while **Scala success and invalid-fails-closed passed**. These were behavioral failures, not compile failures.
 
 The final tests cover both clients' check and submit methods: exact duplicate, Scala success, spent input, failed script, similar duplicate wording, extra detail, inconsistent/missing error code, wrong status and malformed responses. They also check that malformed transaction data cannot produce an already-known ID. Submit tests verify a computed hex ID rather than the deliberately forged caller ID. All run locally; none contact mainnet.
 
@@ -128,7 +128,7 @@ TMPDIR=/home/rkadias/.cache/argus-tmp /home/rkadias/coding/development/flutter/b
 TMPDIR=/home/rkadias/.cache/argus-tmp /home/rkadias/coding/development/flutter/bin/flutter test
 ```
 
-Full verbatim output: [cargo test](sync-batch-a-part1-evidence/cargo-test.log), [clippy](sync-batch-a-part1-evidence/clippy.log), [flutter analyze](sync-batch-a-part1-evidence/analyze.log), [flutter test](sync-batch-a-part1-evidence/test.log). Cargo retains its pre-existing unused `ergo-rest` patch warning; there are no clippy diagnostics with warnings denied.
+The full command logs were removed; final excerpts remain below. Cargo retains its pre-existing unused `ergo-rest` patch warning; there are no clippy diagnostics with warnings denied.
 
 Flutter final lines, verbatim:
 
@@ -154,6 +154,6 @@ test client::check_tests::submit_success_duplicate_and_rejection ... ok
 test client::check_tests::invalid_preflight_fails_closed ... ok
 ```
 
-`git diff --check` passed. Final branch is `main`; the worktree is dirty and uncommitted. No lockfiles or native binaries changed.
+`git diff --check` passed. The completed work is recorded in `c839397` on `feat/sync-a`. No lockfiles or native binaries changed.
 
-Nonempty-tree pagination follow-up (`offset=1&limit=1`): both HTTP 200 bare arrays, lengths 1 / 0. Returned IDs: kadia ['3072ef1eb1d9e1debbb8ecb1151a06306286d6df1a61605b7d78104e12e6ff7f'], Scala []. Pool ordering/contents remain node-local; this verifies the pagination response shape, not identical pool snapshots. Raw bodies are `common-tree-page.json` per node in the evidence directory.
+Nonempty-tree pagination follow-up (`offset=1&limit=1`): both HTTP 200 bare arrays, lengths 1 / 0. Returned IDs: kadia ['3072ef1eb1d9e1debbb8ecb1151a06306286d6df1a61605b7d78104e12e6ff7f'], Scala []. Pool ordering/contents remain node-local; this verifies the pagination response shape, not identical pool snapshots. Raw pagination bodies are no longer included.

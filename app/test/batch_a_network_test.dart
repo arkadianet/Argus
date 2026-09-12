@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/network_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -32,6 +33,48 @@ class ProbeApi extends RustLibApi {
 }
 
 void main() {
+  test('REVIEW: concurrent apply shares the native request', () async {
+    final gate = Completer<void>();
+    var calls = 0;
+    final c = NetworkController(
+      configure: (_, _) async {
+        calls++;
+        await gate.future;
+      },
+    );
+    final first = c.apply();
+    final second = c.apply();
+    await Future<void>.delayed(Duration.zero);
+    final callsWhilePending = calls;
+    gate.complete();
+    await Future.wait([first, second]);
+    expect(callsWhilePending, 1);
+    expect(calls, 1);
+  });
+  test('REVIEW: final settings win while configuration is pending', () async {
+    final gate = Completer<void>();
+    final seen = <String>[];
+    String? nativeExplorer;
+    final c = NetworkController(
+      configure: (_, explorer) async {
+        seen.add(explorer);
+        if (seen.length == 1) await gate.future;
+        nativeExplorer = explorer;
+      },
+    );
+    final first = c.apply();
+    c.explorer = 'https://intermediate.example';
+    final second = c.apply();
+    c.explorer = 'https://final.example';
+    final third = c.apply();
+    gate.complete();
+    await Future.wait([first, second, third]);
+    expect(nativeExplorer, 'https://final.example');
+    expect(seen, [NetworkController.defaultExplorer, 'https://final.example']);
+    await c.apply();
+    expect(seen, hasLength(2));
+  });
+
   final api = ProbeApi();
   setUpAll(() => RustLib.initMock(api: api));
 

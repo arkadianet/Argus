@@ -586,6 +586,9 @@ bool isIncorrectPin(Object error) {
   return msg.toLowerCase().contains('incorrect pin');
 }
 
+/// Completeness belongs to one history request, including its pending rows.
+typedef HistoryResult = ({List<Map<String, dynamic>> rows, bool partial});
+
 class WalletService {
   /// All wallet handle IDs currently in memory, keyed by wallet ID.
   final Map<String, BigInt> _handles = {};
@@ -1716,11 +1719,9 @@ class WalletService {
     return out;
   }
 
-  /// True when the last [loadHistory] succeeded but at least one address
-  /// failed to load, meaning the returned activity may be incomplete.
-  bool lastHistoryPartial = false;
-
-  Future<List<Map<String, dynamic>>> loadHistory(
+  /// Carries completeness with the rows so overlapping wallet requests cannot
+  /// borrow each other's status while waiting for balances or pending activity.
+  Future<HistoryResult> loadHistory(
     List<String> addresses, {
     int limit = 20,
     int offset = 0,
@@ -1760,7 +1761,6 @@ class WalletService {
         message: 'Could not load activity',
       );
     }
-    lastHistoryPartial = failed > 0;
     final all = <Map<String, dynamic>>[];
     final seen = <String>{};
     for (final txs in results) {
@@ -1777,7 +1777,7 @@ class WalletService {
       final ta = (a['timestamp'] as num?)?.toInt() ?? 0;
       return tb.compareTo(ta);
     });
-    return mergePending(await pendingFuture, all);
+    return (rows: mergePending(await pendingFuture, all), partial: failed > 0);
   }
 
   Future<TokenBalance> tokenMeta(String id, int amount) async {

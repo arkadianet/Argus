@@ -47,11 +47,9 @@ abstract class WalletSyncGateway {
   bool useUnusedChangeAddress(String? walletId);
   Future<Map<String, dynamic>> getBalance(String address);
   Future<List<TokenBalance>> hydrateTokens(dynamic raw);
-  Future<List<Map<String, dynamic>>> loadHistory(
-    List<String> addresses, {
-    int limit = 20,
-  });
-  bool get lastHistoryPartial;
+
+  /// Keeps missing-address status attached to the request that produced the rows.
+  Future<HistoryResult> loadHistory(List<String> addresses, {int limit = 20});
   Future<int> countUnspentBoxes(List<String> addresses);
   Future<Map<String, dynamic>?> loadCachedState(String walletKey);
   Future<void> saveCachedState(Map<String, dynamic> snapshot);
@@ -104,15 +102,10 @@ class LiveWalletSyncGateway implements WalletSyncGateway {
   Future<List<TokenBalance>> hydrateTokens(dynamic raw) =>
       walletService.hydrateTokens(raw);
 
+  /// Passes request-local completeness through without consulting shared state.
   @override
-  Future<List<Map<String, dynamic>>> loadHistory(
-    List<String> addresses, {
-    int limit = 20,
-  }) =>
+  Future<HistoryResult> loadHistory(List<String> addresses, {int limit = 20}) =>
       walletService.loadHistory(addresses, limit: limit);
-
-  @override
-  bool get lastHistoryPartial => walletService.lastHistoryPartial;
 
   @override
   Future<int> countUnspentBoxes(List<String> addresses) async {
@@ -127,6 +120,7 @@ class LiveWalletSyncGateway implements WalletSyncGateway {
   Future<Map<String, dynamic>?> loadCachedState(String walletKey) =>
       WalletDatabaseService.loadCachedState(expectedWalletId: walletKey);
 
+  /// Preserves sync validity separately from the time the snapshot is written.
   @override
   Future<void> saveCachedState(Map<String, dynamic> snapshot) =>
       WalletDatabaseService.saveCachedState(
@@ -265,6 +259,7 @@ class WalletSyncController extends ChangeNotifier {
   int _generation = 0;
   String? _refreshWalletId;
 
+  /// Rejects work from a wallet or refresh that no longer owns the screen.
   bool _current(int generation, String? walletId) {
     if (generation != _generation || walletId != _gw.activeWalletId)
       return false;
@@ -275,6 +270,7 @@ class WalletSyncController extends ChangeNotifier {
     return true;
   }
 
+  /// Reserves success for a completed wallet sync, even when a node is online.
   String statusLabel({required bool online}) {
     if (isSyncing) return 'Syncing…';
     if (isStale) return 'Out of sync';
@@ -529,6 +525,7 @@ class WalletSyncController extends ChangeNotifier {
     return op;
   }
 
+  /// Keeps publication and cache writes tied to the wallet that started the work.
   Future<void> _refresh(
     bool discover,
     int generation,
@@ -587,7 +584,8 @@ class WalletSyncController extends ChangeNotifier {
       stealthFuture,
     ]);
     if (!_current(generation, walletId)) return;
-    final txs = results[0] as List<Map<String, dynamic>>?;
+    final history = results[0] as HistoryResult?;
+    final txs = history?.rows;
     final boxes = results[1] as int;
 
     // Replace only when trustworthy: an empty result with no failures means
@@ -605,7 +603,7 @@ class WalletSyncController extends ChangeNotifier {
       phase = SyncPhase.failed;
     } else if (failed > 0) {
       phase = SyncPhase.balancesStale;
-    } else if (txs == null || _gw.lastHistoryPartial) {
+    } else if (history == null || history.partial) {
       phase = SyncPhase.historyPartial;
     } else {
       phase = SyncPhase.synced;
@@ -811,9 +809,7 @@ class WalletSyncController extends ChangeNotifier {
   }
 
   /// Null when the history call itself failed.
-  Future<List<Map<String, dynamic>>?> _fetchHistory(
-    List<String> addresses,
-  ) async {
+  Future<HistoryResult?> _fetchHistory(List<String> addresses) async {
     try {
       return await _gw.loadHistory(addresses, limit: 20);
     } catch (_) {

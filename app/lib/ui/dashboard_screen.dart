@@ -2169,6 +2169,7 @@ bool shouldPoll({
 class SyncStatusLine extends StatelessWidget {
   const SyncStatusLine({super.key, required this.status, required this.statusColor,
     required this.height, required this.count, required this.fragmented, required this.age});
+  /// Keeps the last successful age visible while the next sync is in flight.
   factory SyncStatusLine.wallet({
     Key? key,
     required WalletSyncController sync,

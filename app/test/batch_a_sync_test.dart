@@ -43,7 +43,76 @@ class GatedGateway extends FakeGateway {
   ];
 }
 
+class HistoryRaceGateway extends GatedGateway {
+  final oldHistory = Completer<void>();
+  final newHistoryReady = Completer<void>();
+  @override
+  Future<HistoryResult> loadHistory(
+    List<String> addresses, {
+    int limit = 20,
+  }) async {
+    final old = addresses.single == 'old';
+    if (old) await oldHistory.future;
+    historyPartial = old;
+    if (!old) newHistoryReady.complete();
+    return (
+      rows: [
+        {'tx_id': old ? 'old-tx' : 'new-tx'},
+      ],
+      partial: old,
+    );
+  }
+}
+
 void main() {
+  test('REVIEW: old partial history cannot taint the new generation', () async {
+    final gw = HistoryRaceGateway()
+      ..balances['old'] = {'balance_nano_erg': 1, 'tokens': []};
+    final c = WalletSyncController(gw)..receiveAddress = 'old';
+    final old = c.refresh(discover: false);
+    await Future<void>.delayed(Duration.zero);
+    c.reset();
+    c.receiveAddress = 'new';
+    gw.balanceGate = Completer<Map<String, dynamic>>();
+    final next = c.refresh(discover: false);
+    await gw.newHistoryReady.future;
+    gw.oldHistory.complete();
+    await old;
+    gw.balanceGate!.complete({'balance_nano_erg': 2, 'tokens': []});
+    await next;
+    expect(c.recentTxs.single['tx_id'], 'new-tx');
+    expect(c.phase, SyncPhase.synced);
+    expect(gw.savedCache?['sync_phase'], 'synced');
+  });
+  for (final staleArgs in [false, true]) {
+    testWidgets(
+      'REVIEW: Assets empty state follows live tokens (stale args: $staleArgs)',
+      (tester) async {
+        walletSyncController.reset();
+        final args = WalletRouteArgs(
+          senderAddress: 'addr',
+          receiveAddress: 'addr',
+          changeAddress: 'addr',
+          tokens: staleArgs ? [TokenBalance(id: 'old', amount: 1)] : const [],
+        );
+        await tester.pumpWidget(MaterialApp(home: AssetsScreen(args: args)));
+        expect(find.text('No tokens yet'), findsOneWidget);
+        walletSyncController.tokens = [
+          TokenBalance(id: 'live', amount: 1, name: 'Live token'),
+        ];
+        walletSyncController.noteBroadcast('review-test');
+        await tester.pump();
+        expect(find.text('Live token'), findsOneWidget);
+        expect(find.text('No tokens yet'), findsNothing);
+        walletSyncController.reset();
+        await tester.pump();
+        expect(find.text('No tokens yet'), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump(const Duration(seconds: 4));
+      },
+    );
+  }
+
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
   test(

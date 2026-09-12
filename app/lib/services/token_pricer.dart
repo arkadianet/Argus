@@ -66,6 +66,7 @@ class TokenPricer extends ChangeNotifier {
 
   DateTime? _fetchedAt;
   int _gen = 0;
+  bool _pendingForcedRefresh = false;
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -73,6 +74,7 @@ class TokenPricer extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Invalidates old prices immediately so a source switch cannot mix rates.
   Future<void> setSource(PriceSource s) async {
     if (s == source) return;
     source = s;
@@ -112,10 +114,15 @@ class TokenPricer extends ChangeNotifier {
   double? usdOf(String tokenId, int amount, int decimals) =>
       holdingUsd(amount: amount, decimals: decimals, price: result[tokenId]);
 
+  /// Publishes usable rates as each branch settles and retains forced requests
+  /// made during a fetch, so a source change cannot leave prices empty.
   Future<void> refresh({bool force = false}) async {
     final now = DateTime.now();
     if (!force && _fetchedAt != null && now.difference(_fetchedAt!) < refreshTtl) return;
-    if (refreshing) return;
+    if (refreshing) {
+      _pendingForcedRefresh |= force;
+      return;
+    }
     refreshing = true;
     final gen = _gen;
     final src = source;
@@ -134,6 +141,8 @@ class TokenPricer extends ChangeNotifier {
 
     final needsGecko = src == PriceSource.coingecko || fiat != 'usd';
     final results = List<Object?>.filled(5, null);
+
+    /// Only the current source may contribute to the visible price snapshot.
     void publish() {
       if (gen != _gen) return;
       final oracle = results[0] as OracleSnapshot?;
@@ -206,16 +215,23 @@ class TokenPricer extends ChangeNotifier {
       attempt('sigmausd', _deps.sigRsvPriceNano),
       attempt('dexy', _deps.dexyGoldRateNano),
     ];
-    await Future.wait([
-      for (var i = 0; i < branches.length; i++)
-        branches[i].then((value) {
-          results[i] = value;
-          publish();
-        }),
-    ]);
-    refreshing = false;
-    if (gen != _gen) return;
-    notifyListeners();
+    try {
+      await Future.wait([
+        for (var i = 0; i < branches.length; i++)
+          branches[i].then((value) {
+            results[i] = value;
+            publish();
+          }),
+      ]);
+    } finally {
+      refreshing = false;
+      if (_pendingForcedRefresh) {
+        _pendingForcedRefresh = false;
+        await refresh(force: true);
+      } else if (gen == _gen) {
+        notifyListeners();
+      }
+    }
   }
 }
 

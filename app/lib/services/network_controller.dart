@@ -117,12 +117,15 @@ List<String> restApiUrlsFromPeers(List<dynamic> peers, {Iterable<String> known =
 }
 
 class NetworkController extends ChangeNotifier {
+  /// Allows network configuration to be exercised without loading native code.
   NetworkController({Future<void> Function(List<String>, String)? configure})
     : _configure = configure ?? _configureRust;
 
   final Future<void> Function(List<String>, String) _configure;
   String? _appliedConfiguration;
+  Future<void>? _configurationInFlight;
 
+  /// Shares the ordered node choice with the clients used by wallet requests.
   static Future<void> _configureRust(List<String> urls, String explorer) =>
       RustLib.instance.api.crateApiSetNetwork(
         nodeUrls: urls,
@@ -338,15 +341,37 @@ class NetworkController extends ChangeNotifier {
     }
   }
 
+  /// Keeps native clients reusable and lets the latest settings win when
+  /// callers arrive while an earlier configuration is still being installed.
   Future<void> apply() async {
-    final urls = orderedUrls;
-    if (urls.isEmpty) return;
-    final configuration = jsonEncode([urls, explorer]);
-    if (configuration == _appliedConfiguration) return;
-    await _configure(urls, explorer);
-    _appliedConfiguration = configuration;
+    while (true) {
+      final pending = _configurationInFlight;
+      if (pending != null) {
+        try {
+          await pending;
+        } catch (_) {
+          // The owner reports its failure; this caller can retry current settings.
+        }
+        continue;
+      }
+      final urls = orderedUrls;
+      if (urls.isEmpty) return;
+      final explorerUrl = explorer;
+      final configuration = jsonEncode([urls, explorerUrl]);
+      if (configuration == _appliedConfiguration) return;
+      final operation = Future<void>.sync(() => _configure(urls, explorerUrl));
+      _configurationInFlight = operation;
+      try {
+        await operation;
+        _appliedConfiguration = configuration;
+      } finally {
+        _configurationInFlight = null;
+      }
+      // Settings may have changed during the native call, even without a waiter.
+    }
   }
 
+  /// Chooses from fresh health results before configuring clients and pricing.
   Future<void> probe() async {
     if (probing) return;
     probing = true;

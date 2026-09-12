@@ -34,6 +34,7 @@ class AssetsScreen extends StatelessWidget {
     );
   }
 
+  /// Uses one live snapshot for sections and emptiness as wallet holdings change.
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -97,7 +98,7 @@ class AssetsScreen extends StatelessWidget {
                   ),
                 ),
               ],
-              if (args.tokens.isEmpty) ...[
+              if (holdings.isEmpty) ...[
                 const SizedBox(height: 16),
                 const SoftCard(
                   child: EmptyState(
