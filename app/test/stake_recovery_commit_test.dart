@@ -96,4 +96,51 @@ void main() {
       }
     });
   }
+
+  // An unsynced wallet, a capped scan or an unreachable pool all mean other
+  // positions may be missing. None of them makes a position that WAS found
+  // any less real, so recovery must stay available for it.
+  test('an incomplete scan still recovers the position it did find', () async {
+    final gw = Gateway();
+    final svc = StakeRecoveryService(
+      gateway: gw,
+      client: MockClient((r) async {
+        final shared = discovery.common(r);
+        if (shared != null) return shared;
+        if (r.url.path.contains('/utxo/byId/')) {
+          final id = r.url.pathSegments.last;
+          return discovery.ok(
+            id == 'position'
+                ? discovery.box(id, discovery.keyA)
+                : {'boxId': id},
+          );
+        }
+        return discovery.ok([discovery.box('position', discovery.keyA)]);
+      }),
+    );
+    addTearDown(svc.dispose);
+    await svc.refresh({discovery.keyA}, walletTokensComplete: false);
+    final result = svc.results.first;
+    expect(result.status, StakeScanStatus.incomplete);
+    expect(result.positions.single.eligible, isTrue);
+    final prepared = await svc.prepareDirect(
+      result: result,
+      position: result.positions.single,
+      userAddress: 'wallet',
+      spendAddresses: ['wallet'],
+      prepare: (state, stake, key) async => jsonEncode({
+        'preparation_id': 1,
+        'rows': [],
+        'unsigned_tx': {
+          'inputs': [
+            {'boxId': 'state'},
+            {'boxId': 'position'},
+            {'boxId': 'key'},
+          ],
+        },
+      }),
+    );
+    expect(svc.canCommit(prepared), isTrue);
+    await svc.revalidateCommit(prepared);
+  });
 }

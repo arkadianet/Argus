@@ -264,9 +264,11 @@ class _StakeRecoveryScreenState extends State<StakeRecoveryScreen> {
                             ? 'Not currently recoverable: ${position.eligibilityError}'
                             : 'Recovery eligibility unknown until the pool state can be read',
                       ),
+                      // A found position is fully decoded, unambiguous and
+                      // checked against pool state. An incomplete scan means
+                      // others may be missing, never that this one is wrong.
                       if (result.pool.id == 'ergopad' &&
-                          position.eligible == true &&
-                          result.status == StakeScanStatus.complete)
+                          position.eligible == true)
                         FilledButton(
                           onPressed: _working || _service.busy
                               ? null

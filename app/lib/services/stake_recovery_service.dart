@@ -232,7 +232,8 @@ class StakeRecoveryService extends ChangeNotifier {
                 result.status == StakeScanStatus.complete) {
               result.status = StakeScanStatus.incomplete;
               result.message =
-                  'Wallet token balances are incomplete. Refresh the wallet and scan again.';
+                  'Wallet token balances were still loading, so more positions '
+                  'may exist. Anything listed here can still be recovered.';
             }
             if (current()) notifyListeners();
           }),
@@ -485,7 +486,6 @@ class StakeRecoveryService extends ChangeNotifier {
         scope.network != 'mainnet' ||
         !results.contains(result) ||
         result.pool.id != 'ergopad' ||
-        result.status != StakeScanStatus.complete ||
         position.eligible != true ||
         result.positions.where((p) => p.keyId == position.keyId).length != 1 ||
         !result.positions.contains(position) ||
