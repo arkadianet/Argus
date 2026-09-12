@@ -87,7 +87,11 @@ class _LiveSyncRead implements WalletSyncRead {
     _inputs = inputs;
     _history = walletService.loadHistory(
       addresses,
-      pending: inputs.then((value) => value['pending'] as List),
+      pending: inputs.then((value) {
+        final pending = value['pending'];
+        if (pending == null) throw StateError('Pending values unavailable');
+        return pending as List;
+      }),
     );
   }
   late final Future<Map<String, dynamic>> _inputs;
@@ -100,7 +104,15 @@ class _LiveSyncRead implements WalletSyncRead {
   }
 
   @override
-  Future<HistoryResult> history() => _history;
+  Future<HistoryResult> history() async {
+    final history = await _history;
+    if ((await _inputs)['pending'] == null) {
+      // Keep the last activity snapshot when input values cannot be verified.
+      throw StateError('Pending values unavailable');
+    }
+    return history;
+  }
+
   @override
   Future<int> count() async {
     final count = (await _inputs)['utxo_count'] as int?;
@@ -599,10 +611,15 @@ class WalletSyncController extends ChangeNotifier {
     if (!_current(generation, walletId)) return false;
     final unusedChange = _gw.useUnusedChangeAddress(walletId);
     if (receiveAddress != null) {
-      if (_discoveryPinnedIndex != pinned ||
-          _discoveryUnusedChange != unusedChange)
-        discoveredAt = null;
-      return true;
+      if (_discoveryPinnedIndex == pinned &&
+          _discoveryUnusedChange == unusedChange) {
+        return true;
+      }
+      discoveredAt = null;
+      receiveAddress = null;
+      changeAddress = null;
+      senderAddress = null;
+      notifyListeners();
     }
     var derived = await _gw.tryDeriveAddress(pinned);
     if (!_current(generation, walletId)) return false;

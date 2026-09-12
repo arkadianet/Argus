@@ -786,16 +786,23 @@ class WalletService {
   Future<void> lockForSwitch() => _lock(null, switching: true);
 
   Future<void> _lock(String? walletId, {required bool switching}) async {
-    if (switching) {
-      walletSyncController.deactivate();
-    } else {
-      walletSyncController.reset();
-    }
-    final id = _handles[walletId ?? _currentWalletId];
     final wid = walletId ?? _currentWalletId;
+    final active = wid == _currentWalletId;
+    final id = _handles[wid];
+    if (active) {
+      if (switching) {
+        walletSyncController.deactivate();
+      } else {
+        walletSyncController.reset();
+      }
+    } else if (wid != null) {
+      walletSyncController.forgetWallet(wid);
+    }
     if (id == null) {
-      unlocked.value = false;
-      if (wid == null) currentWalletId.value = null;
+      if (active) {
+        unlocked.value = false;
+        if (wid == null) currentWalletId.value = null;
+      }
       return;
     }
     try {

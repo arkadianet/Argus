@@ -134,6 +134,11 @@ async fn sync_failed_listing_is_missing_not_a_zero_balance_or_count() {
     let result: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert!(result["balances"].as_object().unwrap().is_empty());
     assert!(result["utxo_count"].is_null());
+    assert!(
+        result["pending"].is_null(),
+        "missing confirmed inputs must not turn this spend into +123 nanoERG: {}",
+        result["pending"]
+    );
 }
 
 #[tokio::test]

@@ -1,4 +1,3 @@
-import 'dart:async';
 import '../services/public_wallet_sync.dart';
 import '../services/wallet_sync_controller.dart';
 import 'package:flutter/material.dart';
@@ -55,7 +54,12 @@ class WalletOverviewScreen extends StatefulWidget {
     super.key,
     this.selectedWalletId,
     this.activeBalanceNano,
+    this.initializeWalletService,
   });
+
+  /// Allows widget tests to use the mock bridge without native initialization.
+  @visibleForTesting
+  final Future<void> Function()? initializeWalletService;
 
   /// The wallet currently selected on the dashboard (may be locked).
   final String? selectedWalletId;
@@ -116,7 +120,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
 
   Future<void> _load() async {
     try {
-      await walletService.init();
+      await (widget.initializeWalletService ?? walletService.init)();
       final wallets = await walletService.listWallets();
       if (!mounted) return;
       setState(() {
@@ -135,13 +139,11 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
     if (_refreshing) return;
     setState(() => _refreshing = true);
     try {
-      unawaited(
-        publicWalletSync.tick(
-          wallets: {for (final w in _wallets) w.walletId: w.displayAddress},
-          controller: walletSyncController,
-          activeId: walletService.activeWalletId,
-          unlocked: () => walletService.isUnlocked,
-        ),
+      await publicWalletSync.tick(
+        wallets: {for (final w in _wallets) w.walletId: w.displayAddress},
+        controller: walletSyncController,
+        activeId: walletService.activeWalletId,
+        unlocked: () => walletService.isUnlocked,
       );
       final futures = _wallets.map(
         (w) async => (

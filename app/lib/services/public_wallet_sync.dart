@@ -103,9 +103,10 @@ class PublicWalletSync extends ChangeNotifier {
           if (!valid()) return;
           final stamp =
               old['public_refreshed_at'] ?? old['last_successful_sync_at'];
-          if (stamp is int &&
-              at.difference(DateTime.fromMillisecondsSinceEpoch(stamp)) <
-                  interval) {
+          final age = stamp is int
+              ? at.difference(DateTime.fromMillisecondsSinceEpoch(stamp))
+              : null;
+          if (age != null && !age.isNegative && age < interval) {
             if (old['balance_nano_erg'] != null)
               controller.rememberPublic(entry.key, old, generation);
             continue;

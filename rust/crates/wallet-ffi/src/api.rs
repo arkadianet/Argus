@@ -982,7 +982,9 @@ pub async fn get_sync_inputs(
     let txs: Vec<_> = unique.into_values().collect();
     Ok(serde_json::json!({
         "balances": balances,
-        "pending": pending_from_inputs(&txs, &trees, &values),
+        // A missing listing can hide a spent input from any transaction.
+        // Null means unavailable; an empty array would claim no pending activity.
+        "pending": if count_complete { Some(pending_from_inputs(&txs, &trees, &values)) } else { None },
         "utxo_count": if count_complete { Some(values.len()) } else { None },
     })
     .to_string())
