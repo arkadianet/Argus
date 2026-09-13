@@ -40,7 +40,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
     if (stealthService.address == null) {
       stealthService.loadAddress();
     }
+    stealthService.loadIdentities();
   }
+
+  /// Which stealth identity the section is showing. Identity 0 for a wallet
+  /// that has never added one, which is every wallet until it does.
+  int _identity = 0;
 
   @override
   void didChangeDependencies() {
@@ -144,12 +149,70 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
     );
   }
 
-  Future<void> _sweepStealth(String destination) async {
+  /// Ask for a label and publish a new identity at the next index.
+  Future<void> _addIdentity() async {
+    final controller = TextEditingController();
+    final label = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add stealth address'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text(
+              'A separate address you can publish in a different place. '
+              'Nothing links it to your other stealth addresses, and it '
+              'comes back from your recovery phrase like everything else.',
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              key: const Key('stealth-identity-label-field'),
+              controller: controller,
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              maxLength: 40,
+              decoration: const InputDecoration(
+                labelText: 'Label',
+                hintText: 'Donations',
+                helperText: 'Stored on this device only.',
+              ),
+              onSubmitted: (v) => Navigator.pop(context, v),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('stealth-identity-add-confirm'),
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (label == null || !mounted) return;
+    try {
+      final created = await stealthService.addIdentity(label);
+      if (!mounted) return;
+      setState(() => _identity = created.index);
+    } catch (e) {
+      if (!mounted) return;
+      showTxFailureSheet(context, e);
+    }
+  }
+
+  Future<void> _sweepStealth(String destination, {int? onlyIdentity}) async {
     setState(() => _sweeping = true);
     try {
       final preview = await stealthService.prepareSweep(
         destinationAddress: destination,
         nodeUrl: networkController.activeUrl,
+        onlyIdentity: onlyIdentity,
       );
       if (!mounted) return;
       final ok = await showConfirmTransactionSheet(
@@ -190,28 +253,90 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
     }
   }
 
+  /// What the line under the QR says about the shown identity.
+  ///
+  /// A single-identity wallet reads exactly as it did before; once there are
+  /// several, the figure is that address's alone, said explicitly, so nobody
+  /// reads one pocket's balance as the whole stealth balance.
+  static String _stealthStatus(
+    StealthScanResult? scan,
+    StealthIdentityBalance? balance,
+    bool multiple,
+  ) {
+    if (!stealthService.scanEnabled) {
+      return 'Stealth scanning is off. Turn it on in Settings → Security '
+          'to see funds sent here.';
+    }
+    if (scan == null || balance == null) {
+      return 'Stealth balance unknown — the explorer could not be reached yet.';
+    }
+    if (balance.ownedCount == 0) {
+      return multiple
+          ? 'No payments to this stealth address.'
+          : 'No stealth payments found.';
+    }
+    final amount = '${formatErg(balance.totalNanoErg)} in '
+        '${balance.ownedCount} stealth '
+        'box${balance.ownedCount == 1 ? '' : 'es'}';
+    return multiple ? '$amount on this address.' : '$amount.';
+  }
+
   Widget _stealthSection(BuildContext context, String sweepTo) {
     final colors = ArgusColors.of(context);
     return ListenableBuilder(
       listenable: stealthService,
       builder: (context, _) {
-        final stealth = stealthService.address;
+        final identities = stealthService.identities;
+        // A wallet that never added one shows exactly what it always did.
+        final selected = identities.any((i) => i.index == _identity)
+            ? _identity
+            : 0;
+        final stealth = stealthService.addressOf(selected);
         if (stealth == null) return const SizedBox.shrink();
         final scan = stealthService.lastScan;
+        final balance = scan?.balanceOf(selected);
+        final multiple = identities.length > 1;
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             const SizedBox(height: 32),
-            const SectionLabel('Stealth address'),
+            SectionLabel(multiple ? 'Stealth addresses' : 'Stealth address'),
             const SizedBox(height: 8),
             Text(
-              'One address you can publish anywhere. Each payment to it lands '
+              'An address you can publish anywhere. Each payment to it lands '
               'on a different one-time script, so nothing on chain links two '
               'payments to you or to this string. Amounts and timing are '
               'still public. Finding incoming stealth payments needs the '
               'explorer, so it works only while you are online.',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
+            if (multiple) ...[
+              const SizedBox(height: 16),
+              // Labels, not indices: the derivation index is plumbing and
+              // choosing one by hand is how a user strands a published
+              // string on the wrong path.
+              DropdownButtonFormField<int>(
+                key: const Key('stealth-identity-picker'),
+                initialValue: selected,
+                decoration: const InputDecoration(labelText: 'Address'),
+                items: [
+                  for (final id in identities)
+                    DropdownMenuItem(
+                      value: id.index,
+                      child: Text(id.displayLabel),
+                    ),
+                ],
+                onChanged: (v) {
+                  if (v != null) setState(() => _identity = v);
+                },
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Two of your stealth addresses cannot be linked to each '
+                'other, so publishing one per context keeps them apart.',
+                style: TextStyle(fontSize: 12, color: colors.muted),
+              ),
+            ],
             const SizedBox(height: 20),
             Center(
               child: Container(
@@ -258,29 +383,31 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
             ),
             const SizedBox(height: 12),
             Text(
-              !stealthService.scanEnabled
-                  ? 'Stealth scanning is off. Turn it on in Settings → Security '
-                      'to see funds sent here.'
-                  : scan == null
-                      ? 'Stealth balance unknown — the explorer could not be '
-                          'reached yet.'
-                      : scan.isEmpty
-                          ? 'No stealth payments found.'
-                          : '${formatErg(scan.totalNanoErg)} in '
-                              '${scan.ownedCount} stealth '
-                              'box${scan.ownedCount == 1 ? '' : 'es'}.',
+              _stealthStatus(scan, balance, multiple),
               style: TextStyle(fontSize: 12, color: colors.muted),
               textAlign: TextAlign.center,
             ),
-            if (scan != null && !scan.isEmpty && sweepTo.isNotEmpty) ...[
+            if ((balance?.ownedCount ?? 0) > 0 && sweepTo.isNotEmpty) ...[
               const SizedBox(height: 12),
+              // Sweeping one identity at a time by default: pulling every
+              // identity into one output would spend them together and link
+              // the contexts the user separated.
               OutlinedButton.icon(
                 key: const Key('stealth-sweep'),
-                onPressed: _sweeping ? null : () => _sweepStealth(sweepTo),
+                onPressed: _sweeping
+                    ? null
+                    : () => _sweepStealth(sweepTo, onlyIdentity: selected),
                 icon: const Icon(Icons.move_down, size: 18),
                 label: Text(_sweeping ? 'Sweeping…' : 'Sweep stealth funds'),
               ),
             ],
+            const SizedBox(height: 12),
+            TextButton.icon(
+              key: const Key('stealth-identity-add'),
+              onPressed: _addIdentity,
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add stealth address'),
+            ),
           ],
         );
       },

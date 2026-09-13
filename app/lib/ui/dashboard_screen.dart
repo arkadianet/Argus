@@ -534,6 +534,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     // be shown before any network call. Restoring a wallet lands here too,
     // and the refresh below runs the first stealth scan.
     unawaited(stealthService.loadAddress());
+    // Reads the persisted identity list and tells the handle about it, so
+    // the refresh below scans with every identity the user has published.
+    unawaited(stealthService.loadIdentities());
     unawaited(mixService.load());
     unawaited(duckpoolsService.load());
     notificationService.requestPermission();

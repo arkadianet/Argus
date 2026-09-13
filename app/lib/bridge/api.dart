@@ -123,6 +123,58 @@ Future<bool> walletOwnsAddress({
 Future<String> stealthAddress({required BigInt handleId}) =>
     RustLib.instance.api.crateApiStealthAddress(handleId: handleId);
 
+/// The published `stealth…` string for stealth identity `index`.
+///
+/// Identity 0 is the one every wallet has always had and returns exactly what
+/// [`stealth_address`] does. Higher indices are the extra identities the user
+/// publishes for separate contexts; all of them regenerate from the seed, so
+/// nothing here has to be backed up separately.
+Future<String> stealthAddressAt({
+  required BigInt handleId,
+  required int index,
+}) => RustLib.instance.api.crateApiStealthAddressAt(
+  handleId: handleId,
+  index: index,
+);
+
+/// Tell this session to scan and spend with stealth identities `0..=index`.
+///
+/// Dart owns the durable identity list; this is how that list reaches the
+/// keys. Only ever raises the frontier, and returns how many identities are
+/// in use afterwards. Call it after unlock, and again whenever an identity is
+/// added, *before* the next scan.
+Future<int> stealthUseIdentity({
+  required BigInt handleId,
+  required int index,
+}) => RustLib.instance.api.crateApiStealthUseIdentity(
+  handleId: handleId,
+  index: index,
+);
+
+/// How many stealth identities this session is currently using.
+Future<int> stealthIdentityCount({required BigInt handleId}) =>
+    RustLib.instance.api.crateApiStealthIdentityCount(handleId: handleId);
+
+/// Highest stealth identity index a wallet will derive.
+int maxStealthIdentity() => RustLib.instance.api.crateApiMaxStealthIdentity();
+
+/// Restore-time discovery: which stealth identities hold funds in this box
+/// set, as a JSON array of indices.
+///
+/// A stealth identity leaves no trace on chain until it is paid, so there is
+/// no "N empty in a row, stop" rule that terminates correctly — a published
+/// but unpaid identity would be missed forever. This answers the narrower,
+/// answerable question instead, over a bounded span of indices, and the
+/// caller turns the result into a frontier. An identity that was funded and
+/// then swept clean is not rediscovered; it holds nothing either way.
+Future<String> stealthDiscoverIdentities({
+  required BigInt handleId,
+  required String explorerBoxesJson,
+}) => RustLib.instance.api.crateApiStealthDiscoverIdentities(
+  handleId: handleId,
+  explorerBoxesJson: explorerBoxesJson,
+);
+
 /// `sha256` of the stealth script template — the path segment for the
 /// explorer's `boxes/unspent/byErgoTreeTemplateHash/{hash}` endpoint.
 String stealthTemplateHash() =>
@@ -131,6 +183,10 @@ String stealthTemplateHash() =>
 /// The BIP-32 path the stealth secret is derived on, for display in Settings.
 String stealthDerivationPath() =>
     RustLib.instance.api.crateApiStealthDerivationPath();
+
+/// The BIP-32 path of stealth identity `index`, for display in Settings.
+String stealthDerivationPathAt({required int index}) =>
+    RustLib.instance.api.crateApiStealthDerivationPathAt(index: index);
 
 /// Validate a `stealth…` string: prefix, Base58, length, blake2b checksum
 /// and that the key is a point on the curve.
@@ -174,20 +230,26 @@ Future<String> stealthScan({
   explorerBoxesJson: explorerBoxesJson,
 );
 
-/// Prepare a transaction moving every owned stealth box to one of this
-/// wallet's own addresses. Confirm and broadcast it with `send_erg`.
+/// Prepare a transaction moving owned stealth boxes to one of this wallet's
+/// own addresses. Confirm and broadcast it with `send_erg`.
+///
+/// `only_identity` restricts the sweep to one stealth identity; `None` sweeps
+/// every identity in use, which is what a wallet with a single identity has
+/// always done.
 Future<String> prepareStealthSweep({
   required BigInt handleId,
   required String explorerBoxesJson,
   required String destinationAddress,
   String? nodeUrl,
   PlatformInt64? feeNano,
+  int? onlyIdentity,
 }) => RustLib.instance.api.crateApiPrepareStealthSweep(
   handleId: handleId,
   explorerBoxesJson: explorerBoxesJson,
   destinationAddress: destinationAddress,
   nodeUrl: nodeUrl,
   feeNano: feeNano,
+  onlyIdentity: onlyIdentity,
 );
 
 Future<String> generateMnemonic({required int strength}) =>

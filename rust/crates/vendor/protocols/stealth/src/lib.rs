@@ -20,11 +20,14 @@ pub use address::{
     decode_stealth_address, encode_stealth_address, is_stealth_address,
     looks_like_stealth_address, STEALTH_PREFIX,
 };
-pub use detect::{detect_owned, parse_explorer_boxes, totals, StealthAsset, StealthBox};
+pub use detect::{
+    detect_owned, detect_owned_multi, discover_funded_identities, identity_for_tree,
+    parse_explorer_boxes, totals, OwnedStealthBox, StealthAsset, StealthBox,
+};
 pub use error::StealthError;
 pub use secret::{
-    build_payment_tree_hex, payment_address_for_stealth_address, StealthSecret,
-    STEALTH_DERIVATION_PATH,
+    build_payment_tree_hex, payment_address_for_stealth_address, stealth_derivation_path,
+    StealthSecret, MAX_STEALTH_IDENTITY, STEALTH_DERIVATION_PATH, STEALTH_DISCOVERY_SPAN,
 };
 pub use tree::{
     is_stealth_tree, parse_stealth_tree, stealth_template_hash_hex, stealth_tree_to_address,

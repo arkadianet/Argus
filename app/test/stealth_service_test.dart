@@ -1,10 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:argus_wallet/services/stealth_identities.dart';
 import 'package:argus_wallet/services/stealth_service.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   _paginationTests();
@@ -13,6 +15,7 @@ void main() {
   _truncationTests();
   _stealthActivityTests();
   _walletRowTests();
+  _identityFrontierTests();
   test('a template scan asks the explorer for nothing but the template list', () async {
     final client = _RecordingHttpClient();
     final service = StealthService(
@@ -265,6 +268,223 @@ void _walletRowTests() {
       isActive: true, spendableNano: null, stealthNano: 1000000000, cachedNano: null, hidden: false);
     expect(d.balanceNano, isNull);
   });
+}
+
+// The handle must learn every identity before a scan runs, or funds on a
+// later identity are reported as missing rather than as somebody else's.
+void _identityFrontierTests() {
+  StealthService serviceWith(_IdentityWallet wallet) => StealthService(
+        wallet: wallet,
+        fetcher: (_) async => jsonEncode({'items': const []}),
+      );
+
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  test('a scan raises the frontier to cover every stored identity', () async {
+    await StealthIdentityStore.add('w1', 'Donations');
+    await StealthIdentityStore.add('w1', 'Project B');
+    final wallet = _IdentityWallet();
+    final service = serviceWith(wallet);
+
+    await service.scan(explorerBase: 'https://explorer');
+
+    // Frontier 3 means identities 0..2, so the handle is told index 2.
+    expect(wallet.frontierCalls, [2]);
+    expect(service.frontier, 3);
+    expect(service.identities.map((i) => i.displayLabel),
+        ['Main', 'Donations', 'Project B']);
+    // Every string is derived once and cached.
+    expect(service.addressOf(0), 'stealth-0');
+    expect(service.addressOf(2), 'stealth-2');
+    expect(wallet.derived, [0, 1, 2]);
+  });
+
+  test('the frontier is pushed before the scan, not after', () async {
+    await StealthIdentityStore.add('w1', 'Donations');
+    final wallet = _IdentityWallet();
+    await serviceWith(wallet).scan(explorerBase: 'https://explorer');
+    expect(wallet.order.indexOf('frontier'), lessThan(wallet.order.indexOf('scan')));
+  });
+
+  test('a single-identity wallet still scans with identity 0', () async {
+    final wallet = _IdentityWallet();
+    final service = serviceWith(wallet);
+    await service.scan(explorerBase: 'https://explorer');
+    expect(wallet.frontierCalls, [0]);
+    expect(service.frontier, 1);
+    expect(service.hasMultipleIdentities, isFalse);
+  });
+
+  test('adding an identity widens the frontier immediately', () async {
+    final wallet = _IdentityWallet();
+    final service = serviceWith(wallet);
+    await service.loadIdentities();
+    expect(wallet.frontierCalls, [0]);
+
+    final created = await service.addIdentity('Donations');
+    expect(created.index, 1);
+    expect(wallet.frontierCalls.last, 1);
+    expect(service.addressOf(1), 'stealth-1');
+  });
+
+  test('reset forgets the identities of the previous wallet', () async {
+    await StealthIdentityStore.add('w1', 'Donations');
+    final service = serviceWith(_IdentityWallet());
+    await service.loadIdentities();
+    expect(service.identities.length, 2);
+
+    service.reset();
+    expect(service.identities.map((i) => i.index), [0]);
+    expect(service.addressOf(1), isNull);
+    expect(service.frontier, 1);
+  });
+
+  test('discovery adopts funded identities the device did not know', () async {
+    final wallet = _IdentityWallet(funded: const [3]);
+    final service = serviceWith(wallet);
+    await service.loadIdentities();
+
+    final result =
+        await service.discoverIdentities(explorerBase: 'https://explorer');
+    expect(result.isComplete, isTrue);
+    expect(result.adopted, [3]);
+    expect(service.identities.map((i) => i.index), [0, 3]);
+    expect(service.frontier, 4);
+    expect(wallet.frontierCalls.last, 3);
+    // It survives a reload: discovery wrote it down.
+    expect((await StealthIdentityStore.load('w1')).map((i) => i.index), [0, 3]);
+  });
+
+  test('a complete search that finds nothing is a real answer', () async {
+    final service = serviceWith(_IdentityWallet());
+    await service.loadIdentities();
+    final result = await service.discoverIdentities(explorerBase: 'https://x');
+    expect(result.isComplete, isTrue);
+    expect(result.adopted, isEmpty);
+    expect(result.error, isNull);
+  });
+
+  // "Could not look" must not read as "looked and found nothing" — this runs
+  // when a user is asking whether a restore recovered their money.
+  test('a truncated box list is not evidence an identity is unfunded', () async {
+    final wallet = _IdentityWallet(funded: const [3]);
+    final service = StealthService(
+      wallet: wallet,
+      fetcher: (_) async =>
+          jsonEncode({'items': const [], 'argus_truncated': true}),
+    );
+    await service.loadIdentities();
+
+    final result = await service.discoverIdentities(explorerBase: 'https://x');
+    expect(result.isComplete, isFalse);
+    expect(result.adopted, isEmpty);
+    expect(result.error, contains('incomplete'));
+    expect(service.identities.map((i) => i.index), [0]);
+  });
+
+  test('an unreachable explorer is a failure, not an empty result', () async {
+    final service = StealthService(
+      wallet: _IdentityWallet(funded: const [3]),
+      fetcher: (_) async => throw StateError('explorer down'),
+    );
+    await service.loadIdentities();
+
+    final result = await service.discoverIdentities(explorerBase: 'https://x');
+    expect(result.isComplete, isFalse);
+    expect(result.error, contains('Could not reach the explorer'));
+  });
+
+  test('an FFI failure is a failure, not an empty result', () async {
+    final service = serviceWith(_IdentityWallet(discoveryThrows: true));
+    await service.loadIdentities();
+
+    final result = await service.discoverIdentities(explorerBase: 'https://x');
+    expect(result.isComplete, isFalse);
+    expect(result.error, contains('Could not search'));
+  });
+
+  // A frontier push that failed must not be remembered as loaded, or the
+  // session scans narrow forever and funds on later identities stay hidden.
+  test('a failed frontier push leaves the next scan to retry', () async {
+    await StealthIdentityStore.add('w1', 'Donations');
+    final wallet = _IdentityWallet(frontierThrowsUntil: 2);
+    final service = serviceWith(wallet);
+
+    await service.loadIdentities();
+    expect(wallet.frontierCalls, [1]);
+
+    // The retry happens on the next scan rather than waiting for an unlock.
+    await service.scan(explorerBase: 'https://x');
+    expect(wallet.frontierCalls, [1, 1]);
+
+    // Third attempt succeeds and is not retried after that.
+    await service.scan(explorerBase: 'https://x');
+    expect(wallet.frontierCalls, [1, 1, 1]);
+    await service.scan(explorerBase: 'https://x');
+    expect(wallet.frontierCalls, [1, 1, 1]);
+  });
+
+  test('a successful frontier push is not repeated on every scan', () async {
+    final wallet = _IdentityWallet();
+    final service = serviceWith(wallet);
+    await service.scan(explorerBase: 'https://x');
+    await service.scan(explorerBase: 'https://x');
+    expect(wallet.frontierCalls, [0]);
+  });
+}
+
+class _IdentityWallet extends WalletService {
+  _IdentityWallet({
+    this.funded = const [],
+    this.frontierThrowsUntil = 0,
+    this.discoveryThrows = false,
+  });
+
+  /// Indices `stealthDiscoverIdentities` should report as holding funds.
+  final List<int> funded;
+
+  /// Fail this many `stealthUseIdentity` calls before succeeding.
+  final int frontierThrowsUntil;
+
+  final bool discoveryThrows;
+
+  final frontierCalls = <int>[];
+  final derived = <int>[];
+  final order = <String>[];
+
+  @override
+  bool get isUnlocked => true;
+
+  @override
+  String? get activeWalletId => 'w1';
+
+  @override
+  Future<int> stealthUseIdentity(int index) async {
+    frontierCalls.add(index);
+    order.add('frontier');
+    if (frontierCalls.length <= frontierThrowsUntil) {
+      throw StateError('handle busy');
+    }
+    return index + 1;
+  }
+
+  @override
+  Future<String> stealthAddressAt(int index) async {
+    derived.add(index);
+    return 'stealth-$index';
+  }
+
+  @override
+  Future<Map<String, dynamic>> stealthScan(String boxesJson) async {
+    order.add('scan');
+    return {'scanned': 0, 'owned_count': 0, 'total_nano_erg': 0};
+  }
+
+  @override
+  Future<Map<String, dynamic>> stealthDiscoverIdentities(String boxesJson) async {
+    if (discoveryThrows) throw StateError('ffi failed');
+    return {'span': 32, 'funded': funded, 'frontier': 1};
+  }
 }
 
 // Change we send ourselves must be findable without the template scan
