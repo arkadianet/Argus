@@ -308,7 +308,7 @@ pub(crate) fn build_buyback_output(ctx: &DexyTxContext, new_erg: i64, height: i3
 
     let box_id_bytes: Vec<u8> =
         base16::decode(&ctx.buyback_input.box_id).map_err(|e| TxError::BuildFailed {
-            message: format!("Invalid buyback box_id hex: {}", e),
+            message: format!("Invalid buyback box_id hex: {e}"),
         })?;
     let registers = ergo_tx::sigma_registers!(
         "R4" => ergo_tx::sigma::encode_sigma_coll_byte(&box_id_bytes)

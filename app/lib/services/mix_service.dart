@@ -216,19 +216,19 @@ abstract class MixGateway {
 
   // Background mixing: a per-mix key in the app's keystore, and the same
   // engine calls driven by it instead of the unlocked wallet.
-  Future<String> exportKey(int mixId);
-  Future<void> saveKey({required String walletId, required int mixId, required String keyHex});
-  Future<String?> loadKey({required String walletId, required int mixId});
+  Future<Uint8List> exportKey(int mixId);
+  Future<void> saveKey({required String walletId, required int mixId, required Uint8List keyBytes});
+  Future<Uint8List?> loadKey({required String walletId, required int mixId});
   Future<void> deleteKey({required String walletId, required int mixId});
   Future<List<({String walletId, int mixId})>> listKeys();
-  Future<String> observeWithKey(String stateJson, String chainJson, String keyHex, int nowUnix);
+  Future<String> observeWithKey(String stateJson, String chainJson, Uint8List keyBytes, int nowUnix);
   Future<String> advanceWithKey(
     String stateJson,
     String chainJson,
     List<String> ownHalfBoxIds,
     String? nodeUrl,
     int nowUnix,
-    String keyHex,
+    Uint8List keyBytes,
   );
 }
 
@@ -361,12 +361,12 @@ class LiveMixGateway implements MixGateway {
       notificationService.mixProgress(title: title, body: body, mixId: mixId);
 
   @override
-  Future<String> exportKey(int mixId) => walletService.mixExportKey(mixId);
+  Future<Uint8List> exportKey(int mixId) => walletService.mixExportKey(mixId);
   @override
-  Future<void> saveKey({required String walletId, required int mixId, required String keyHex}) =>
-      SecureStorageService.saveMixKey(walletId: walletId, mixId: mixId, keyHex: keyHex);
+  Future<void> saveKey({required String walletId, required int mixId, required Uint8List keyBytes}) =>
+      SecureStorageService.saveMixKey(walletId: walletId, mixId: mixId, keyBytes: keyBytes);
   @override
-  Future<String?> loadKey({required String walletId, required int mixId}) =>
+  Future<Uint8List?> loadKey({required String walletId, required int mixId}) =>
       SecureStorageService.loadMixKey(walletId: walletId, mixId: mixId);
   @override
   Future<void> deleteKey({required String walletId, required int mixId}) =>
@@ -374,11 +374,11 @@ class LiveMixGateway implements MixGateway {
   @override
   Future<List<({String walletId, int mixId})>> listKeys() => SecureStorageService.listMixKeys();
   @override
-  Future<String> observeWithKey(String stateJson, String chainJson, String keyHex, int nowUnix) =>
+  Future<String> observeWithKey(String stateJson, String chainJson, Uint8List keyBytes, int nowUnix) =>
       bridge.mixObserveWithKey(
         stateJson: stateJson,
         chainJson: chainJson,
-        keyHex: keyHex,
+        keyBytes: keyBytes,
         nowUnix: nowUnix,
       );
   @override
@@ -388,7 +388,7 @@ class LiveMixGateway implements MixGateway {
     List<String> ownHalfBoxIds,
     String? nodeUrl,
     int nowUnix,
-    String keyHex,
+    Uint8List keyBytes,
   ) =>
       bridge.mixAdvanceWithKey(
         stateJson: stateJson,
@@ -397,7 +397,7 @@ class LiveMixGateway implements MixGateway {
         nodeUrl: nodeUrl,
         feeNano: null,
         nowUnix: nowUnix,
-        keyHex: keyHex,
+        keyBytes: keyBytes,
       );
 }
 
@@ -445,7 +445,7 @@ class MixSnapshot {
   final String json;
   final int height;
 
-  /// A list hit [mixListCap] before its last page. Planning still works,
+  /// A fee or token list hit its cap. Planning still works,
   /// but a counterpart may have been missed.
   final bool truncated;
 }
@@ -709,8 +709,12 @@ class MixService extends ChangeNotifier {
   Future<void> _exportKey(MixRecord r) async {
     final id = _walletId;
     if (id == null || !backgroundEnabled || !_gw.isUnlocked) return;
-    final hex = await _gw.exportKey(r.mixId);
-    await _gw.saveKey(walletId: id, mixId: r.mixId, keyHex: hex);
+    final bytes = await _gw.exportKey(r.mixId);
+    try {
+      await _gw.saveKey(walletId: id, mixId: r.mixId, keyBytes: bytes);
+    } finally {
+      bytes.fillRange(0, bytes.length, 0);
+    }
   }
 
   Future<void> _dropKey(MixRecord r) async {
@@ -830,20 +834,20 @@ class MixService extends ChangeNotifier {
   /// Unspent boxes under one script, from the node's index when the wallet
   /// has a node, else from the explorer. The node answers in seconds; an
   /// explorer can take half a minute per page.
-  Future<List<dynamic>> _listByTree(String base, String tree, {int cap = mixListCap}) async {
+  Future<List<dynamic>> _listByTree(String base, String tree, {int cap = mixListCap, bool requireComplete = false}) async {
     final node = _nodeBase;
     if (node != null) {
       try {
-        return await _pageNode(node, tree, cap: cap);
+        return await _pageNode(node, tree, cap: cap, requireComplete: requireComplete);
       } catch (_) {
         // A node without the extra index, or unreachable: the explorer has
         // the same data.
       }
     }
-    return _pageExplorer(base, tree, cap: cap);
+    return _pageExplorer(base, tree, cap: cap, requireComplete: requireComplete);
   }
 
-  Future<List<dynamic>> _pageNode(String node, String tree, {required int cap}) async {
+  Future<List<dynamic>> _pageNode(String node, String tree, {required int cap, required bool requireComplete}) async {
     final items = <dynamic>[];
     final seen = <String>{};
     var offset = 0;
@@ -864,21 +868,34 @@ class MixService extends ChangeNotifier {
         // HTTP 200; that is a reason to fall back, not an empty pool.
         throw StateError('node returned ${decoded is Map ? decoded.keys.join(',') : decoded.runtimeType} for byErgoTree');
       }
+      // Never pass a pool larger than our parsing budget to the engine,
+      // even if a server ignores the requested page size.
+      if (requireComplete && offset + page.length > cap) {
+        throw StateError('The mix pool list is incomplete; it exceeds the read limit');
+      }
       for (final b in page) {
         final id = (b as Map)['boxId']?.toString() ?? '';
+        if (requireComplete && (id.isEmpty || seen.contains(id))) {
+          throw StateError('The mix pool list is incomplete; invalid or repeated box id');
+        }
         if (id.isNotEmpty && seen.add(id)) items.add(b);
       }
       offset += page.length;
-      if (page.length < mixPageLimit) break;
-      if (items.length >= cap) {
+      final total = decoded is Map ? (decoded['total'] as num?)?.toInt() : null;
+      if (total != null ? offset >= total : page.length < mixPageLimit) break;
+      if (page.isEmpty) throw StateError('The node returned an incomplete mix pool list');
+      if (offset >= cap) {
         _lastListTruncated = true;
+        if (requireComplete) {
+          throw StateError('The mix pool list is incomplete; try again with another node');
+        }
         break;
       }
     }
     return items;
   }
 
-  Future<List<dynamic>> _pageExplorer(String base, String tree, {required int cap}) async {
+  Future<List<dynamic>> _pageExplorer(String base, String tree, {required int cap, required bool requireComplete}) async {
     final items = <dynamic>[];
     final seen = <String>{};
     var offset = 0;
@@ -891,15 +908,27 @@ class MixService extends ChangeNotifier {
       if (page == null) {
         throw StateError('${uri.host} returned ${body.keys.join(',')} instead of a box list');
       }
+      // Never pass a pool larger than our parsing budget to the engine,
+      // even if a server ignores the requested page size.
+      if (requireComplete && offset + page.length > cap) {
+        throw StateError('The mix pool list is incomplete; it exceeds the read limit');
+      }
       for (final b in page) {
         final id = (b as Map)['boxId']?.toString() ?? '';
+        if (requireComplete && (id.isEmpty || seen.contains(id))) {
+          throw StateError('The mix pool list is incomplete; invalid or repeated box id');
+        }
         if (id.isNotEmpty && seen.add(id)) items.add(b);
       }
       final total = (body['total'] as num?)?.toInt();
       offset += page.length;
-      if (page.length < mixPageLimit || (total != null && offset >= total)) break;
-      if (items.length >= cap) {
+      if (total != null ? offset >= total : page.length < mixPageLimit) break;
+      if (page.isEmpty) throw StateError('The explorer returned an incomplete mix pool list');
+      if (offset >= cap) {
         _lastListTruncated = true;
+        if (requireComplete) {
+          throw StateError('The mix pool list is incomplete; try again with another node');
+        }
         break;
       }
     }
@@ -987,6 +1016,9 @@ class MixService extends ChangeNotifier {
   Future<bool> _confirmFinished(String base, MixRecord r) async {
     if (!_awaitsFinishing(r)) return false;
     final last = (r.state['events'] as List).last as Map;
+    // The destination may be external, so the wallet's balance refresh
+    // cannot confirm this payment. Scanning all chain transactions is not
+    // affordable on a phone. This id lookup still discloses the payout.
     final tx = await _txById(base, last['tx_id'].toString());
     if (tx == null) return false;
     var changed = false;
@@ -1074,6 +1106,8 @@ class MixService extends ChangeNotifier {
   }
 
   /// The outputs of one transaction: node first, then explorer.
+  // Backfill funding outputs after a lost response. These may already be
+  // spent, so the unspent pool cannot replace this historical id lookup.
   Future<List<dynamic>> _txOutputs(String base, String txId) async {
     final node = _nodeBase;
     if (node != null) {
@@ -1093,10 +1127,10 @@ class MixService extends ChangeNotifier {
     final trees = _trees;
     _lastListTruncated = false;
     final listsFuture = Future.wait<List<dynamic>>([
-      _listByTree(base, trees['half']!),
+      _listByTree(base, trees['half']!, requireComplete: true),
       _listByTree(base, trees['fee']!, cap: 100),
       _listByTree(base, trees['token']!, cap: 100),
-      _listByTree(base, trees['full']!),
+      _listByTree(base, trees['full']!, requireComplete: true),
     ]);
     final results = await Future.wait<Object>([listsFuture, _height(base)]);
     final lists = results[0] as List<List<dynamic>>;
@@ -1270,6 +1304,9 @@ class MixService extends ChangeNotifier {
   }
 
   /// Whether the chain (node or explorer) knows a box by id, spent or not.
+  // Staged-entry recovery needs historical existence, including spent
+  // boxes. Unspent lists cannot answer it; scanning chain history is too
+  // expensive here. This exceptional lookup still reveals the box id.
   Future<bool> boxOnChain(String boxId) async {
     try {
       final b = await _boxById(_explorerBase, boxId);
@@ -1507,11 +1544,11 @@ class MixService extends ChangeNotifier {
       }
       var changed = false;
       for (final r in targets) {
-        final keyHex = await _gw.loadKey(walletId: walletId, mixId: r.mixId);
-        if (keyHex == null) continue;
-        r.lastCheckedAt = _clock();
+        final keyBytes = await _gw.loadKey(walletId: walletId, mixId: r.mixId);
+        if (keyBytes == null) continue;
         try {
-          final observed = await _gw.observeWithKey(jsonEncode(r.state), snap.json, keyHex, _now);
+          r.lastCheckedAt = _clock();
+          final observed = await _gw.observeWithKey(jsonEncode(r.state), snap.json, keyBytes, _now);
           r.state = (jsonDecode(observed) as Map).cast<String, dynamic>();
           if (r.inPool && !r.awaitingWithdrawal) r.mixedBoxId = null;
           if (r.awaitingWithdrawal) await _confirmFinished(_explorerBase, r);
@@ -1526,7 +1563,7 @@ class MixService extends ChangeNotifier {
               own,
               _gw.nodeUrl,
               _now,
-              keyHex,
+              keyBytes,
             );
             final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
             if (result['action'] != 'wait') {
@@ -1536,6 +1573,8 @@ class MixService extends ChangeNotifier {
           r.lastError = null;
         } catch (e) {
           r.lastError = e.toString();
+        } finally {
+          keyBytes.fillRange(0, keyBytes.length, 0);
         }
         changed = true;
       }
@@ -1572,6 +1611,8 @@ class MixService extends ChangeNotifier {
     }
   }
 
+  // Recovery needs positive spend evidence. Absence from an unspent list
+  // is insufficient, and a whole-chain historical scan is unaffordable.
   Future<bool> _boxIsSpent(String id) async {
     final node = _nodeBase;
     for (final url in [

@@ -5,6 +5,7 @@ members = [
     "crates/wallet-net",
     "crates/wallet-ffi",
     "crates/vendor/citadel-core",
+    "crates/vendor/core2",
     "crates/vendor/ergo-tx",
     "crates/vendor/ergo-node-client",
     "crates/vendor/ergopay-core",

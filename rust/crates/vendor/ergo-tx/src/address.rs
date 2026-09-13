@@ -28,13 +28,13 @@ pub fn ergo_tree_to_address(ergo_tree_hex: &str) -> Result<String, AddressError>
     use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
 
     let tree_bytes = hex::decode(ergo_tree_hex)
-        .map_err(|e| AddressError::InvalidErgoTree(format!("Invalid hex: {}", e)))?;
+        .map_err(|e| AddressError::InvalidErgoTree(format!("Invalid hex: {e}")))?;
 
     let tree = ErgoTree::sigma_parse_bytes(&tree_bytes)
-        .map_err(|e| AddressError::InvalidErgoTree(format!("Failed to parse: {}", e)))?;
+        .map_err(|e| AddressError::InvalidErgoTree(format!("Failed to parse: {e}")))?;
 
     let address = Address::recreate_from_ergo_tree(&tree)
-        .map_err(|e| AddressError::InvalidErgoTree(format!("Failed to create address: {}", e)))?;
+        .map_err(|e| AddressError::InvalidErgoTree(format!("Failed to create address: {e}")))?;
 
     let encoder = AddressEncoder::new(NetworkPrefix::Mainnet);
     Ok(encoder.address_to_str(&address))

@@ -60,9 +60,9 @@ pub fn parse_fee_num_from_r4(
         None => return Ok(fees::DEFAULT_FEE_NUM),
     };
     let r4_bytes = hex::decode(r4_hex)
-        .map_err(|e| crate::AmmError::TxBuildError(format!("Invalid R4 hex: {}", e)))?;
+        .map_err(|e| crate::AmmError::TxBuildError(format!("Invalid R4 hex: {e}")))?;
     let constant = Constant::sigma_parse_bytes(&r4_bytes)
-        .map_err(|e| crate::AmmError::TxBuildError(format!("Failed to parse R4 constant: {}", e)))?;
+        .map_err(|e| crate::AmmError::TxBuildError(format!("Failed to parse R4 constant: {e}")))?;
     Ok(ergo_tx::ergo_box_utils::extract_int(&constant).unwrap_or(fees::DEFAULT_FEE_NUM))
 }
 

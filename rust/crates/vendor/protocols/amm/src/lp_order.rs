@@ -261,22 +261,22 @@ fn build_deposit_ergo_tree(
 
     let tree = tree
         .with_constant(0, Constant::from(refund_prop))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RefundProp: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RefundProp: {e}")))?
         .with_constant(2, Constant::from(erg_amount as i64))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set SelfX: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set SelfX: {e}")))?
         .with_constant(12, Constant::from(pool_nft_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set PoolNFT: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set PoolNFT: {e}")))?
         .with_constant(15, Constant::from(ex_fee as i64))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFee: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFee: {e}")))?
         .with_constant(16, Constant::from(erg_amount as i64))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set SelfX repeat: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set SelfX repeat: {e}")))?
         .with_constant(17, Constant::from(ex_fee as i64))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFee repeat: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFee repeat: {e}")))?
         .with_constant(
             22,
             Constant::from(lp_templates::DEFAULT_MAX_MINER_FEE as i64),
         )
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxMinerFee: {}", e)))?;
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxMinerFee: {e}")))?;
 
     serialize_ergo_tree(&tree)
 }
@@ -292,37 +292,37 @@ fn build_redeem_ergo_tree(
 
     let tree = tree
         .with_constant(0, Constant::from(refund_prop))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RefundProp: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RefundProp: {e}")))?
         .with_constant(11, Constant::from(pool_nft_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set PoolNFT: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set PoolNFT: {e}")))?
         .with_constant(12, Constant::from(ex_fee as i64))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFee: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFee: {e}")))?
         .with_constant(
             16,
             Constant::from(lp_templates::DEFAULT_MAX_MINER_FEE as i64),
         )
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxMinerFee: {}", e)))?;
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxMinerFee: {e}")))?;
 
     serialize_ergo_tree(&tree)
 }
 
 fn parse_ergo_tree(hex_str: &str) -> Result<ErgoTree, AmmError> {
     let bytes = hex::decode(hex_str)
-        .map_err(|e| AmmError::TxBuildError(format!("Invalid ErgoTree hex: {}", e)))?;
+        .map_err(|e| AmmError::TxBuildError(format!("Invalid ErgoTree hex: {e}")))?;
     ErgoTree::sigma_parse_bytes(&bytes)
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to parse ErgoTree: {}", e)))
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to parse ErgoTree: {e}")))
 }
 
 fn serialize_ergo_tree(tree: &ErgoTree) -> Result<String, AmmError> {
     let bytes = tree
         .sigma_serialize_bytes()
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to serialize ErgoTree: {}", e)))?;
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to serialize ErgoTree: {e}")))?;
     Ok(hex::encode(bytes))
 }
 
 fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>, AmmError> {
     hex::decode(hex_str)
-        .map_err(|e| AmmError::TxBuildError(format!("Invalid hex string '{}': {}", hex_str, e)))
+        .map_err(|e| AmmError::TxBuildError(format!("Invalid hex string '{hex_str}': {e}")))
 }
 
 fn build_prove_dlog(pk_hex: &str) -> Result<ProveDlog, AmmError> {
@@ -335,8 +335,7 @@ fn build_prove_dlog(pk_hex: &str) -> Result<ProveDlog, AmmError> {
     }
     let ec_point = EcPoint::from_base16_str(pk_hex.to_string()).ok_or_else(|| {
         AmmError::TxBuildError(format!(
-            "Failed to parse EC point from public key: {}",
-            pk_hex
+            "Failed to parse EC point from public key: {pk_hex}"
         ))
     })?;
     Ok(ProveDlog::new(ec_point))
@@ -427,8 +426,7 @@ mod tests {
         let num_constants = tree.constants_len().unwrap();
         assert!(
             num_constants >= 23,
-            "N2T deposit template should have at least 23 constants (for position 22), got {}",
-            num_constants
+            "N2T deposit template should have at least 23 constants (for position 22), got {num_constants}"
         );
     }
 
@@ -445,8 +443,7 @@ mod tests {
         let num_constants = tree.constants_len().unwrap();
         assert!(
             num_constants >= 17,
-            "N2T redeem template should have at least 17 constants (for position 16), got {}",
-            num_constants
+            "N2T redeem template should have at least 17 constants (for position 16), got {num_constants}"
         );
     }
 
@@ -566,8 +563,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Insufficient"),
-            "Should report insufficient funds: {}",
-            err
+            "Should report insufficient funds: {err}"
         );
     }
 
@@ -598,8 +594,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Insufficient"),
-            "Should report insufficient LP tokens: {}",
-            err
+            "Should report insufficient LP tokens: {err}"
         );
     }
 

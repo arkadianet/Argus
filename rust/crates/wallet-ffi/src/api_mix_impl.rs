@@ -231,6 +231,7 @@ pub fn rings_json(view: &ChainView) -> serde_json::Value {
 
 /// What a funding box must hold to enter an ERG ring of `denomination`
 /// at `level`.
+#[cfg(test)]
 pub fn funding_requirement(
     view: &ChainView,
     denomination: i64,
@@ -305,14 +306,9 @@ pub fn key_secrets<'a>(
     move |round| key.round_secret(round).map_err(err)
 }
 
-/// Parse a hex mix key exported by `mix_export_key`.
-pub fn parse_key(hex_key: &str, mix_id: u32) -> Result<zerojoin::MixKey, String> {
-    // The decoded secret is wiped when this scope ends; the caller's hex
-    // string is theirs to clear.
-    let bytes = zeroize::Zeroizing::new(
-        hex::decode(hex_key.trim()).map_err(|e| ser_err(format!("mix key: {e}")))?,
-    );
-    zerojoin::MixKey::from_bytes(&bytes, mix_id).map_err(ser_err)
+/// Parse a binary mix key; callers own and zeroise the input buffer.
+pub fn parse_key(bytes: &[u8], mix_id: u32) -> Result<zerojoin::MixKey, String> {
+    zerojoin::MixKey::from_bytes(bytes, mix_id).map_err(ser_err)
 }
 
 /// One built move, with everything the caller needs to reduce and sign it.
@@ -939,8 +935,8 @@ mod tests {
     #[test]
     fn a_stored_mix_key_builds_the_same_moves_as_the_unlocked_wallet() {
         let h = handle();
-        let exported = hex::encode(&h.mix_key(0).unwrap().to_bytes().unwrap()[..]);
-        let key = parse_key(&exported, 0).unwrap();
+        let exported = h.mix_key(0).unwrap().to_bytes().unwrap();
+        let key = parse_key(&exported[..], 0).unwrap();
         let v = view("[]", vec![]);
         let level = v.token_box().unwrap().levels()[0];
         let need = funding_requirement(&v, 1_000_000_000, level, MINER_FEE).unwrap();
@@ -967,7 +963,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(a.applied, b.applied, "same gX, same half box id");
-        assert!(parse_key("zz", 0).is_err());
+        assert!(parse_key(b"zz", 0).is_err());
     }
 
     #[test]

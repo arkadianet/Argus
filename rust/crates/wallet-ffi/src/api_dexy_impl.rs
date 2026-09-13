@@ -475,11 +475,9 @@ mod lp_live_tests {
                 let n = tree.constants_len().unwrap_or(0);
                 println!("  {label} tree constants: {n}");
                 for i in 0..n {
-                    if let Ok(c) = tree.get_constant(i) {
-                        if let Some(c) = c {
-                            let bytes = c.sigma_serialize_bytes().unwrap_or_default();
-                            println!("    [{i}] {}", hex::encode(bytes));
-                        }
+                    if let Ok(Some(c)) = tree.get_constant(i) {
+                        let bytes = c.sigma_serialize_bytes().unwrap_or_default();
+                        println!("    [{i}] {}", hex::encode(bytes));
                     }
                 }
             }

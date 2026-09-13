@@ -108,8 +108,7 @@ fn test_integer_division_order_matters() {
     // New calculation matches contract order exactly
     assert_eq!(
         new_bank_erg_added, contract_order,
-        "New calculation {} should equal contract order {}",
-        new_bank_erg_added, contract_order
+        "New calculation {new_bank_erg_added} should equal contract order {contract_order}"
     );
 }
 

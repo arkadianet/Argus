@@ -81,6 +81,7 @@ pub struct MultiSendSummary {
     pub change_erg: i64,
     pub miner_fee: i64,
     pub input_count: usize,
+    pub citadel_fee_nano: i64,
 }
 
 #[derive(Debug)]
@@ -248,6 +249,7 @@ pub fn build_multi_send_tx_with_fee(
             change_erg,
             miner_fee: effective_fee,
             input_count: user_inputs.len(),
+            citadel_fee_nano: app_fee,
         },
     })
 }

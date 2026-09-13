@@ -195,8 +195,7 @@ pub(crate) fn build_t2t_direct_swap(
     } else {
         if !change_tokens.is_empty() && change_erg < MIN_CHANGE_VALUE {
             return Err(AmmError::TxBuildError(format!(
-                "Change tokens exist but not enough ERG for change box (need {}, have {})",
-                MIN_CHANGE_VALUE, change_erg
+                "Change tokens exist but not enough ERG for change box (need {MIN_CHANGE_VALUE}, have {change_erg})"
             )));
         }
 

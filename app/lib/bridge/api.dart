@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `apply_mixed_rule`, `babel_json`, `balance_from_inputs`, `broadcast_mix_move_with`, `broadcast_mix_move`, `clear_node_clients`, `covers`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent_all`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_leave_destination`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `mixed_rule`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pending_from_inputs`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `revalidate_paideia`, `revalidate_stake_recovery`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `wallet_delta_nano_erg`, `with_handle`, `without_reserved`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `apply_mixed_rule`, `babel_json`, `balance_from_inputs`, `broadcast_mix_move_with`, `broadcast_mix_move`, `clear_node_clients`, `covers`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent_all`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_leave_destination`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `mixed_rule`, `multi_send_required_erg`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pending_from_inputs`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `revalidate_paideia`, `revalidate_stake_recovery`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `wallet_delta_nano_erg`, `with_handle`, `without_reserved`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `BabelPick`, `CachedPreparation`, `FundingReservation`, `ManagementBuild`, `PaideiaPreflight`, `ParsedRecipient`, `PreparedManagement`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`
 
@@ -1123,21 +1123,24 @@ Future<String> mixPrepareEntry({
   nowUnix: nowUnix,
 );
 
-/// The key for one mix, as hex, for the app's keystore. It derives every
+/// The key for one mix, as bytes, for the app's keystore. It derives every
 /// round of that mix and nothing else; see `zerojoin::MixKey`.
-Future<String> mixExportKey({required BigInt handleId, required int mixId}) =>
+Future<Uint8List> mixExportKey({
+  required BigInt handleId,
+  required int mixId,
+}) =>
     RustLib.instance.api.crateApiMixExportKey(handleId: handleId, mixId: mixId);
 
 /// `mix_observe` from a stored key instead of the unlocked wallet.
 Future<String> mixObserveWithKey({
   required String stateJson,
   required String chainJson,
-  required String keyHex,
+  required List<int> keyBytes,
   required PlatformInt64 nowUnix,
 }) => RustLib.instance.api.crateApiMixObserveWithKey(
   stateJson: stateJson,
   chainJson: chainJson,
-  keyHex: keyHex,
+  keyBytes: keyBytes,
   nowUnix: nowUnix,
 );
 
@@ -1151,7 +1154,7 @@ Future<String> mixAdvanceWithKey({
   String? nodeUrl,
   PlatformInt64? feeNano,
   required PlatformInt64 nowUnix,
-  required String keyHex,
+  required List<int> keyBytes,
 }) => RustLib.instance.api.crateApiMixAdvanceWithKey(
   stateJson: stateJson,
   chainJson: chainJson,
@@ -1159,7 +1162,7 @@ Future<String> mixAdvanceWithKey({
   nodeUrl: nodeUrl,
   feeNano: feeNano,
   nowUnix: nowUnix,
-  keyHex: keyHex,
+  keyBytes: keyBytes,
 );
 
 /// Advance a mix already in the pool by one move: remix as Bob or Alice,

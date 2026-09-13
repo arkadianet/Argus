@@ -764,7 +764,7 @@ mod tests {
         let err = build_consolidate_tx(&inputs, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::InsufficientErg { .. } => {}
-            _ => panic!("Expected InsufficientErg, got {:?}", err),
+            _ => panic!("Expected InsufficientErg, got {err:?}"),
         }
     }
 
@@ -774,7 +774,7 @@ mod tests {
         let err = build_consolidate_tx(&inputs, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::TooFewInputs(1) => {}
-            _ => panic!("Expected TooFewInputs(1), got {:?}", err),
+            _ => panic!("Expected TooFewInputs(1), got {err:?}"),
         }
     }
 
@@ -784,7 +784,7 @@ mod tests {
         let err = build_consolidate_tx(&inputs, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::NoInputs => {}
-            _ => panic!("Expected NoInputs, got {:?}", err),
+            _ => panic!("Expected NoInputs, got {err:?}"),
         }
     }
 
@@ -859,7 +859,7 @@ mod tests {
         let err = build_split_tx(&inputs, &mode, 5, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::InsufficientErg { .. } => {}
-            _ => panic!("Expected InsufficientErg, got {:?}", err),
+            _ => panic!("Expected InsufficientErg, got {err:?}"),
         }
     }
 
@@ -872,7 +872,7 @@ mod tests {
         let err = build_split_tx(&inputs, &mode, 3, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::BelowMinBoxValue { .. } => {}
-            _ => panic!("Expected BelowMinBoxValue, got {:?}", err),
+            _ => panic!("Expected BelowMinBoxValue, got {err:?}"),
         }
     }
 
@@ -906,7 +906,7 @@ mod tests {
                 count: 101,
                 max: 100,
             } => {}
-            _ => panic!("Expected TooManyOutputs, got {:?}", err),
+            _ => panic!("Expected TooManyOutputs, got {err:?}"),
         }
     }
 
@@ -919,7 +919,7 @@ mod tests {
         let err = build_split_tx(&inputs, &mode, 0, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::ZeroSplitCount => {}
-            _ => panic!("Expected ZeroSplitCount, got {:?}", err),
+            _ => panic!("Expected ZeroSplitCount, got {err:?}"),
         }
     }
 
@@ -932,7 +932,7 @@ mod tests {
         let err = build_split_tx(&inputs, &mode, 3, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::NoInputs => {}
-            _ => panic!("Expected NoInputs, got {:?}", err),
+            _ => panic!("Expected NoInputs, got {err:?}"),
         }
     }
 
@@ -1019,7 +1019,7 @@ mod tests {
                 need: 300,
                 ..
             } => {}
-            _ => panic!("Expected InsufficientTokens, got {:?}", err),
+            _ => panic!("Expected InsufficientTokens, got {err:?}"),
         }
     }
 
@@ -1034,7 +1034,7 @@ mod tests {
         let err = build_split_tx(&inputs, &mode, 3, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::InsufficientErg { .. } => {}
-            _ => panic!("Expected InsufficientErg, got {:?}", err),
+            _ => panic!("Expected InsufficientErg, got {err:?}"),
         }
     }
 
@@ -1049,7 +1049,7 @@ mod tests {
         let err = build_split_tx(&inputs, &mode, 3, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::ZeroSplitAmount => {}
-            _ => panic!("Expected ZeroSplitAmount, got {:?}", err),
+            _ => panic!("Expected ZeroSplitAmount, got {err:?}"),
         }
     }
 
@@ -1064,7 +1064,7 @@ mod tests {
         let err = build_split_tx(&inputs, &mode, 3, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::BelowMinBoxValue { .. } => {}
-            _ => panic!("Expected BelowMinBoxValue, got {:?}", err),
+            _ => panic!("Expected BelowMinBoxValue, got {err:?}"),
         }
     }
 
@@ -1143,7 +1143,7 @@ mod tests {
         let err = build_restructure_tx(&inputs, &outs, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::InputNotOwned { .. } => {}
-            _ => panic!("Expected InputNotOwned, got {:?}", err),
+            _ => panic!("Expected InputNotOwned, got {err:?}"),
         }
     }
 
@@ -1157,7 +1157,7 @@ mod tests {
         let err = build_restructure_tx(&inputs, &outs, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::TokenOverAllocated { .. } => {}
-            _ => panic!("Expected TokenOverAllocated, got {:?}", err),
+            _ => panic!("Expected TokenOverAllocated, got {err:?}"),
         }
     }
 
@@ -1175,7 +1175,7 @@ mod tests {
         let err = build_restructure_tx(&inputs, &outs, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::UnassignedTokens { count: 1 } => {}
-            _ => panic!("Expected UnassignedTokens, got {:?}", err),
+            _ => panic!("Expected UnassignedTokens, got {err:?}"),
         }
     }
 
@@ -1189,7 +1189,7 @@ mod tests {
         let err = build_restructure_tx(&inputs, &outs, USER_TREE, 50000).unwrap_err();
         match err {
             UtxoManagementError::ErgOverAllocated { .. } => {}
-            _ => panic!("Expected ErgOverAllocated, got {:?}", err),
+            _ => panic!("Expected ErgOverAllocated, got {err:?}"),
         }
     }
 
@@ -1232,7 +1232,7 @@ mod tests {
                 count,
                 max: MAX_RESTRUCTURE_OUTPUTS,
             } if count == n => {}
-            _ => panic!("Expected TooManyOutputs, got {:?}", err),
+            _ => panic!("Expected TooManyOutputs, got {err:?}"),
         }
     }
 }

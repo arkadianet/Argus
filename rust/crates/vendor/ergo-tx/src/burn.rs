@@ -386,7 +386,7 @@ mod tests {
                 assert_eq!(have, 100);
                 assert_eq!(need, 500);
             }
-            _ => panic!("Expected InsufficientTokens, got {:?}", err),
+            _ => panic!("Expected InsufficientTokens, got {err:?}"),
         }
     }
 
@@ -396,7 +396,7 @@ mod tests {
         let err = build_burn_tx(&inputs, TOKEN_A, 50, USER_TREE, 50000).unwrap_err();
         match err {
             BurnError::InsufficientErg { .. } => {}
-            _ => panic!("Expected InsufficientErg, got {:?}", err),
+            _ => panic!("Expected InsufficientErg, got {err:?}"),
         }
     }
 
@@ -406,7 +406,7 @@ mod tests {
         let err = build_burn_tx(&inputs, TOKEN_A, 0, USER_TREE, 50000).unwrap_err();
         match err {
             BurnError::ZeroAmount => {}
-            _ => panic!("Expected ZeroAmount, got {:?}", err),
+            _ => panic!("Expected ZeroAmount, got {err:?}"),
         }
     }
 
@@ -549,7 +549,7 @@ mod tests {
         let err = build_multi_burn_tx(&inputs, &[], USER_TREE, 50000).unwrap_err();
         match err {
             BurnError::EmptyBurnList => {}
-            _ => panic!("Expected EmptyBurnList, got {:?}", err),
+            _ => panic!("Expected EmptyBurnList, got {err:?}"),
         }
     }
 
@@ -569,7 +569,7 @@ mod tests {
         let err = build_multi_burn_tx(&inputs, &items, USER_TREE, 50000).unwrap_err();
         match err {
             BurnError::DuplicateToken(id) => assert_eq!(id, TOKEN_A),
-            _ => panic!("Expected DuplicateToken, got {:?}", err),
+            _ => panic!("Expected DuplicateToken, got {err:?}"),
         }
     }
 
@@ -583,7 +583,7 @@ mod tests {
         let err = build_multi_burn_tx(&inputs, &items, USER_TREE, 50000).unwrap_err();
         match err {
             BurnError::ZeroAmount => {}
-            _ => panic!("Expected ZeroAmount, got {:?}", err),
+            _ => panic!("Expected ZeroAmount, got {err:?}"),
         }
     }
 
@@ -600,7 +600,7 @@ mod tests {
                 assert_eq!(have, 10);
                 assert_eq!(need, 100);
             }
-            _ => panic!("Expected InsufficientTokens, got {:?}", err),
+            _ => panic!("Expected InsufficientTokens, got {err:?}"),
         }
     }
 }

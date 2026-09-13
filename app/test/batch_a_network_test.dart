@@ -33,6 +33,23 @@ class ProbeApi extends RustLibApi {
 }
 
 void main() {
+  test('setErgRate publishes both rates and clears them when unavailable', () {
+    final c = NetworkController(configure: (_, _) async {});
+    addTearDown(c.dispose);
+    var notifications = 0;
+    c.addListener(() => notifications++);
+
+    c.setErgRate(fiatPerErg: 2.5, usdPerErg: 1.75);
+    expect(c.fiatPerErg, 2.5);
+    expect(c.usdPerErg, 1.75);
+    expect(notifications, 1);
+
+    c.setErgRate(fiatPerErg: null, usdPerErg: null);
+    expect(c.fiatPerErg, isNull);
+    expect(c.usdPerErg, isNull);
+    expect(notifications, 2);
+  });
+
   test('REVIEW: concurrent apply shares the native request', () async {
     final gate = Completer<void>();
     var calls = 0;

@@ -131,8 +131,7 @@ fn build_n2t_lp_redeem(
 
     if new_pool_erg <= POOL_MIN_ERG_STRICT {
         return Err(AmmError::TxBuildError(format!(
-            "New pool box ERG ({}) must be strictly greater than {} nano (Spectrum V1 pool contract invariant)",
-            new_pool_erg, POOL_MIN_ERG_STRICT
+            "New pool box ERG ({new_pool_erg}) must be strictly greater than {POOL_MIN_ERG_STRICT} nano (Spectrum V1 pool contract invariant)"
         )));
     }
     // Belt-and-suspenders: also reject anything the network per-byte rule would reject.

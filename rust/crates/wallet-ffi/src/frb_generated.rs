@@ -2090,7 +2090,7 @@ fn wire__crate__api__mix_advance_with_key_impl(
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             let api_fee_nano = <Option<i64>>::sse_decode(&mut deserializer);
             let api_now_unix = <i64>::sse_decode(&mut deserializer);
-            let api_key_hex = <String>::sse_decode(&mut deserializer);
+            let api_key_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
@@ -2102,7 +2102,7 @@ fn wire__crate__api__mix_advance_with_key_impl(
                             api_node_url,
                             api_fee_nano,
                             api_now_unix,
-                            api_key_hex,
+                            api_key_bytes,
                         )
                         .await?;
                         Ok(output_ok)
@@ -2386,7 +2386,7 @@ fn wire__crate__api__mix_observe_with_key_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_state_json = <String>::sse_decode(&mut deserializer);
             let api_chain_json = <String>::sse_decode(&mut deserializer);
-            let api_key_hex = <String>::sse_decode(&mut deserializer);
+            let api_key_bytes = <Vec<u8>>::sse_decode(&mut deserializer);
             let api_now_unix = <i64>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
@@ -2394,7 +2394,7 @@ fn wire__crate__api__mix_observe_with_key_impl(
                     let output_ok = crate::api::mix_observe_with_key(
                         api_state_json,
                         api_chain_json,
-                        api_key_hex,
+                        api_key_bytes,
                         api_now_unix,
                     )?;
                     Ok(output_ok)

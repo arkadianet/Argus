@@ -236,7 +236,7 @@ fn build_n2t_swap_sell_tree(
     let redeemer_prop_bytes = if let Some(recipient) = recipient_ergo_tree {
         hex_to_bytes(recipient)?
     } else {
-        hex_to_bytes(&format!("0008cd{}", user_pk))?
+        hex_to_bytes(&format!("0008cd{user_pk}"))?
     };
     let refund_prop = build_prove_dlog(user_pk)?;
 
@@ -245,41 +245,41 @@ fn build_n2t_swap_sell_tree(
             1,
             Constant::from(swap_templates::DEFAULT_EX_FEE_PER_TOKEN_DENOM as i64),
         )
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFeePerTokenDenom: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFeePerTokenDenom: {e}")))?
         .with_constant(2, Constant::from(0i64)) // Delta
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set Delta: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set Delta: {e}")))?
         .with_constant(3, Constant::from(base_amount as i64))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set BaseAmount: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set BaseAmount: {e}")))?
         .with_constant(4, Constant::from(pool.fee_num))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set FeeNum: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set FeeNum: {e}")))?
         .with_constant(5, Constant::from(refund_prop))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RefundProp: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RefundProp: {e}")))?
         .with_constant(10, Constant::from(false)) // SpectrumIsQuote
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set SpectrumIsQuote: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set SpectrumIsQuote: {e}")))?
         .with_constant(
             11,
             Constant::from(swap_templates::DEFAULT_MAX_EX_FEE as i64),
         )
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxExFee: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxExFee: {e}")))?
         .with_constant(13, Constant::from(pool_nft_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set PoolNFT: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set PoolNFT: {e}")))?
         .with_constant(14, Constant::from(redeemer_prop_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RedeemerPropBytes: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RedeemerPropBytes: {e}")))?
         .with_constant(15, Constant::from(quote_id_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set QuoteId: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set QuoteId: {e}")))?
         .with_constant(16, Constant::from(min_quote_amount as i64))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MinQuoteAmount: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MinQuoteAmount: {e}")))?
         .with_constant(23, Constant::from(spf_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set SpectrumId: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set SpectrumId: {e}")))?
         .with_constant(27, Constant::from(pool.fee_denom))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set FeeDenom: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set FeeDenom: {e}")))?
         .with_constant(28, Constant::from(miner_prop_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MinerPropBytes: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MinerPropBytes: {e}")))?
         .with_constant(
             31,
             Constant::from(swap_templates::DEFAULT_MAX_MINER_FEE as i64),
         )
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxMinerFee: {}", e)))?;
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxMinerFee: {e}")))?;
 
     serialize_ergo_tree(&tree)
 }
@@ -305,67 +305,67 @@ fn build_n2t_swap_buy_tree(
     let redeemer_prop_bytes = if let Some(recipient) = recipient_ergo_tree {
         hex_to_bytes(recipient)?
     } else {
-        hex_to_bytes(&format!("0008cd{}", user_pk))?
+        hex_to_bytes(&format!("0008cd{user_pk}"))?
     };
     let refund_prop = build_prove_dlog(user_pk)?;
 
     let tree = tree
         .with_constant(1, Constant::from(base_amount as i64))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set BaseAmount: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set BaseAmount: {e}")))?
         .with_constant(2, Constant::from(pool.fee_num))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set FeeNum: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set FeeNum: {e}")))?
         .with_constant(3, Constant::from(refund_prop))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RefundProp: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RefundProp: {e}")))?
         .with_constant(7, Constant::from(swap_templates::DEFAULT_MAX_EX_FEE as i64))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxExFee: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxExFee: {e}")))?
         .with_constant(
             8,
             Constant::from(swap_templates::DEFAULT_EX_FEE_PER_TOKEN_DENOM as i64),
         )
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFeePerTokenDenom: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFeePerTokenDenom: {e}")))?
         .with_constant(
             9,
             Constant::from(swap_templates::DEFAULT_EX_FEE_PER_TOKEN_NUM as i64),
         )
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFeePerTokenNum: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set ExFeePerTokenNum: {e}")))?
         .with_constant(11, Constant::from(pool_nft_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set PoolNFT: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set PoolNFT: {e}")))?
         .with_constant(12, Constant::from(redeemer_prop_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RedeemerPropBytes: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set RedeemerPropBytes: {e}")))?
         .with_constant(13, Constant::from(min_quote_amount as i64))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MinQuoteAmount: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MinQuoteAmount: {e}")))?
         .with_constant(16, Constant::from(spf_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set SpectrumId: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set SpectrumId: {e}")))?
         .with_constant(20, Constant::from(pool.fee_denom))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set FeeDenom: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set FeeDenom: {e}")))?
         .with_constant(21, Constant::from(miner_prop_bytes))
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MinerPropBytes: {}", e)))?
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MinerPropBytes: {e}")))?
         .with_constant(
             24,
             Constant::from(swap_templates::DEFAULT_MAX_MINER_FEE as i64),
         )
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxMinerFee: {}", e)))?;
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to set MaxMinerFee: {e}")))?;
 
     serialize_ergo_tree(&tree)
 }
 
 fn parse_ergo_tree(hex_str: &str) -> Result<ErgoTree, AmmError> {
     let bytes = hex::decode(hex_str)
-        .map_err(|e| AmmError::TxBuildError(format!("Invalid ErgoTree hex: {}", e)))?;
+        .map_err(|e| AmmError::TxBuildError(format!("Invalid ErgoTree hex: {e}")))?;
     ErgoTree::sigma_parse_bytes(&bytes)
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to parse ErgoTree: {}", e)))
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to parse ErgoTree: {e}")))
 }
 
 fn serialize_ergo_tree(tree: &ErgoTree) -> Result<String, AmmError> {
     let bytes = tree
         .sigma_serialize_bytes()
-        .map_err(|e| AmmError::TxBuildError(format!("Failed to serialize ErgoTree: {}", e)))?;
+        .map_err(|e| AmmError::TxBuildError(format!("Failed to serialize ErgoTree: {e}")))?;
     Ok(hex::encode(bytes))
 }
 
 fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>, AmmError> {
     hex::decode(hex_str)
-        .map_err(|e| AmmError::TxBuildError(format!("Invalid hex string '{}': {}", hex_str, e)))
+        .map_err(|e| AmmError::TxBuildError(format!("Invalid hex string '{hex_str}': {e}")))
 }
 
 fn build_prove_dlog(pk_hex: &str) -> Result<ProveDlog, AmmError> {
@@ -378,8 +378,7 @@ fn build_prove_dlog(pk_hex: &str) -> Result<ProveDlog, AmmError> {
     }
     let ec_point = EcPoint::from_base16_str(pk_hex.to_string()).ok_or_else(|| {
         AmmError::TxBuildError(format!(
-            "Failed to parse EC point from public key: {}",
-            pk_hex
+            "Failed to parse EC point from public key: {pk_hex}"
         ))
     })?;
     Ok(ProveDlog::new(ec_point))
@@ -582,8 +581,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Insufficient"),
-            "Should report insufficient funds: {}",
-            err
+            "Should report insufficient funds: {err}"
         );
     }
 
@@ -624,8 +622,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("Insufficient"),
-            "Should report insufficient tokens: {}",
-            err
+            "Should report insufficient tokens: {err}"
         );
     }
 
@@ -686,8 +683,7 @@ mod tests {
         let num_constants = tree.constants_len().unwrap();
         assert!(
             num_constants >= 32,
-            "N2T SwapSell should have at least 32 constants, got {}",
-            num_constants
+            "N2T SwapSell should have at least 32 constants, got {num_constants}"
         );
     }
 
@@ -697,8 +693,7 @@ mod tests {
         let num_constants = tree.constants_len().unwrap();
         assert!(
             num_constants >= 25,
-            "N2T SwapBuy should have at least 25 constants, got {}",
-            num_constants
+            "N2T SwapBuy should have at least 25 constants, got {num_constants}"
         );
     }
 

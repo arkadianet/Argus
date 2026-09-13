@@ -113,15 +113,29 @@ destination. That is the whole chain the mix exists to hide, linked to
 one IP, before any chain analysis. The half-box list is fetched whole,
 so the *pool* reads are not a fingerprint; the own-box reads are.
 
-**Mitigation.** (a) State plainly, in the Mix screen and the notes, that
-the node the app uses learns which boxes are yours, and that a mix is
-only as private as that node; recommend the user's own node. (b) Replace
-per-id lookups with whole-list reads where affordable: the unspent
-full-mix list is a few hundred boxes and already used by recovery, and a
-spent own box can be found by scanning the full list for our `gX` and
-`c2` rather than by asking about the box. (c) Never look up the
-withdrawal transaction by id; learn the height from the destination's
-own balance refresh, which the wallet does anyway.
+**Status (2026-09-13): partially mitigated.** The existing Mix screen and
+its notes already warn that the node learns which boxes are yours and
+recommend a personal node; the Security settings mixer note now does too.
+Routine snapshots already fetch the whole unspent half/full contract lists,
+including recovery, and do not request owned ids. Ownership is tested locally.
+
+Pool pagination now rejects capped or provably incomplete half/full lists
+instead of passing absence to observation/rollback. Pagination counts rows
+rather than unique ids; oversized responses and invalid/repeated pool ids
+are rejected. A short page with a larger advertised total continues; an
+empty page before that total fails. An incomplete node list can fall back
+to a complete explorer list. Fee/token lists may remain bounded: absence
+there only removes a candidate. Tests cover pool caps, fallback, recovery
+refusal, oversized/repeated responses and inconsistent empty pages.
+
+Historical staged-entry/funding recovery and positive spend checks still
+use ids, with comments explaining why an unspent list cannot answer them.
+Withdrawal confirmation still requests its transaction: the destination may
+be external and have no wallet balance refresh, and scanning all historical
+transactions on a phone is unaffordable. This still links the payout to the
+client. The node warning is a limitation, not a claim of network anonymity.
+Unspent pagination is not an atomic chain snapshot and cannot detect a server
+that silently omits data without indicating a larger total.
 
 ## 5. A token emission box with absurd prices
 
@@ -150,10 +164,42 @@ the device by Android's own means.
 forensic image) links the entire mix to the destination, the very thing
 the mix hid on chain. The seed is not there and no funds are at risk.
 
-**Fix.** Store the records through the same encrypted preferences the
-keys use (the Kotlin handler already wraps `EncryptedSharedPreferences`).
-It is a small change with no user-visible effect. Until then the current
-state is defensible for an alpha, and should be stated.
+**Status (2026-09-13): open; encryption deliberately not implemented.**
+The proposed reuse of the key store is unsafe for destinations.
+`SecureStorageHandler.getPrefs` uses AES256-SIV for preference keys and
+AES256-GCM for values under an Android Keystore master key, requesting
+StrongBox (availability and fallback depend on the device/library). It does
+not require user authentication for background access. On permanent key
+invalidation, the handler deletes both the entire encrypted preferences
+file and the master key before returning an error. Dart cannot salvage
+ciphertext that the platform has already deleted. Other storage errors are
+surfaced; hardware-backed availability is not guaranteed on every device.
+
+Recommended design, pending a key-management decision: keep versioned,
+authenticated ciphertext envelopes in the records preferences, with a
+dedicated record-encryption key and alias in a separate, non-destructive
+secure-store path. Never reset that key or delete ciphertext automatically.
+Authenticate wallet id and format version as associated data. On decryption
+failure preserve the exact original envelope durably in salvage storage
+before permitting any replacement; if salvage fails, refuse the replacement.
+Retain multiple unreadable generations rather than overwriting the last copy.
+Apply the same rules to foreground and background writes under their existing
+lease/merge protocol.
+
+Migration should read every plaintext record, encrypt, persist and verify
+the new envelope, then remove plaintext only after the new value is durable.
+A device unable to provide a key keeps using its plaintext records, with an
+honest privacy note. An unreadable existing ciphertext is not an empty record
+set and must never trigger plaintext fallback that overwrites it.
+
+The unresolved choice is recovery: a device-only key keeps background access
+simple but permanent key loss makes destinations unrecoverable even if the
+ciphertext survives. A recovery-phrase-derived wrapping key or user-managed
+encrypted backup can recover destinations, but needs a defined unlock/export
+flow and cannot by itself serve locked background jobs. Decide this before
+migration. No XOR helper, record storage change, decrypt test, or migration test is
+introduced in this finding: there is no new encryption path to test. Existing
+plaintext salvage behavior remains unchanged.
 
 ## 7. Notifications name the amount
 
@@ -174,9 +220,25 @@ are immutable and cannot be zeroised; the Rust side zeroises its copy.
 spend only that mix's boxes, and someone who can read process memory
 could read the keystore-decrypted value anyway. Hygiene, not a hole.
 
-**Mitigation.** Keep the key inside Rust: let the FFI read and write the
-keystore through a platform call, or pass bytes through a `Uint8List`
-the Dart side clears. Low priority.
+**Status (2026-09-13): partial hygiene mitigation implemented.**
+The exported FRB key is now `Vec<u8>` / `Uint8List`, and observation and
+advancement accept bytes. MixService clears its exported buffer after saving
+and its loaded buffer after each background step, in `finally` blocks on
+success and failure. Rust wraps incoming vectors in `Zeroizing` before any
+fallible state parsing. The binary key round-trip/build test remains, and
+Dart tests cover successful cleanup, failed storage/observe/plan/advance,
+legacy hex compatibility, and malformed stored keys. FRB bindings were
+regenerated from the repository root.
+
+This is not complete key erasure: `SecureStorageService` still encodes and
+decodes immutable Dart hex strings at the existing storage boundary.
+MethodChannel carries those strings, and Android's encrypted preferences API
+uses a JVM string. Neither those strings nor transient FRB/platform codec
+copies are guaranteed wiped. No key is added to records JSON. Keeping the
+existing platform format avoids migrating stored spending keys during this
+hygiene change; removing the remaining strings needs a separate binary
+platform-storage API. Dart buffer clearing reduces deliberate key retention
+but does not promise forensic erasure of runtime/GC copies.
 
 ## What was checked and found sound
 
@@ -270,3 +332,26 @@ that costs the tokens.
 5. Finding 4: the wording now; the whole-list reads when the full-box
    list is measured on device.
 6. Findings 5, 6, 7 and B6 as a hygiene batch.
+
+## The native libraries, and a guard that does not work
+
+Finding 8 changed the wire encoding of `mix_observe_with_key` and
+`mix_advance_with_key` from `String` to `Vec<u8>`, which made the tracked
+libraries under `app/android/app/src/main/jniLibs/` stale. **They were rebuilt
+in the same change**, against the convention of rebuilding only at release,
+because of how this particular staleness fails.
+
+`rustContentHash` in `frb_generated.dart` did not move — it is `-274834265`
+before and after — so the bridge's init-time check passes against a stale
+library. An APK built from the old `.so` would start normally and fail only
+when a background mix first calls one of those two functions, decoding a byte
+vector as a UTF-8 string. Compare the alpha.52 near-miss, where the hash *did*
+move: that build would have died at startup, loudly, on the first launch.
+
+The rebuild-at-release convention assumes the hash catches a miss. It does not
+always, and the miss is real: at alpha.52 the tracked libraries were already
+stale from two merged PRs and were caught only by looking.
+
+So a release check that compares `rustContentHash` against a fresh build is
+not sufficient. It has to rebuild the libraries and compare the binaries. That
+check does not exist yet and is worth building.

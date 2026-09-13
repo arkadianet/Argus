@@ -26,7 +26,7 @@ pub async fn fetch_sigmausd_state(
     )
     .await
     .map_err(|e| ProtocolError::BoxParseError {
-        message: format!("Oracle box not found: {}", e),
+        message: format!("Oracle box not found: {e}"),
     })?;
 
     let bank_data = parse_bank_box(&bank_box)?;
@@ -80,7 +80,7 @@ pub async fn fetch_oracle_price(
     )
     .await
     .map_err(|e| ProtocolError::BoxParseError {
-        message: format!("Oracle box not found: {}", e),
+        message: format!("Oracle box not found: {e}"),
     })?;
 
     let oracle_data = parse_oracle_box(&oracle_box)?;
@@ -123,7 +123,7 @@ pub async fn fetch_tx_context(
     )
     .await
     .map_err(|e| ProtocolError::BoxParseError {
-        message: format!("Bank box not found: {}", e),
+        message: format!("Bank box not found: {e}"),
     })?;
 
     let oracle_token_id = TokenId::new(&nft_ids.oracle_pool_nft);
@@ -132,7 +132,7 @@ pub async fn fetch_tx_context(
     )
     .await
     .map_err(|e| ProtocolError::BoxParseError {
-        message: format!("Oracle box not found: {}", e),
+        message: format!("Oracle box not found: {e}"),
     })?;
 
     let bank_data = parse_bank_box(&bank_box)?;
@@ -142,13 +142,13 @@ pub async fn fetch_tx_context(
     )
     .await
     .map_err(|e| ProtocolError::BoxParseError {
-        message: format!("Failed to get box creation info: {}", e),
+        message: format!("Failed to get box creation info: {e}"),
     })?;
     let oracle_tx_id = client.get_box_creation_info(&oracle_box.box_id().to_string(),
     )
     .await
     .map_err(|e| ProtocolError::BoxParseError {
-        message: format!("Failed to get box creation info: {}", e),
+        message: format!("Failed to get box creation info: {e}"),
     })?;
 
     let bank_input = Eip12InputBox::from_ergo_box(&bank_box, bank_tx_id.0, bank_tx_id.1);
@@ -265,11 +265,10 @@ mod tests {
             ProtocolError::BoxParseError { message } => {
                 assert!(
                     message.contains("R4"),
-                    "Expected R4 in error, got: {}",
-                    message
+                    "Expected R4 in error, got: {message}"
                 );
             }
-            other => panic!("Expected BoxParseError, got: {:?}", other),
+            other => panic!("Expected BoxParseError, got: {other:?}"),
         }
     }
 
@@ -283,11 +282,10 @@ mod tests {
             ProtocolError::BoxParseError { message } => {
                 assert!(
                     message.contains("R5"),
-                    "Expected R5 in error, got: {}",
-                    message
+                    "Expected R5 in error, got: {message}"
                 );
             }
-            other => panic!("Expected BoxParseError, got: {:?}", other),
+            other => panic!("Expected BoxParseError, got: {other:?}"),
         }
     }
 
@@ -306,11 +304,10 @@ mod tests {
             ProtocolError::BoxParseError { message } => {
                 assert!(
                     message.contains("R4"),
-                    "Expected R4 in error, got: {}",
-                    message
+                    "Expected R4 in error, got: {message}"
                 );
             }
-            other => panic!("Expected BoxParseError, got: {:?}", other),
+            other => panic!("Expected BoxParseError, got: {other:?}"),
         }
     }
 
@@ -333,11 +330,10 @@ mod tests {
             ProtocolError::BoxParseError { message } => {
                 assert!(
                     message.contains("R4"),
-                    "Expected R4 in error, got: {}",
-                    message
+                    "Expected R4 in error, got: {message}"
                 );
             }
-            other => panic!("Expected BoxParseError, got: {:?}", other),
+            other => panic!("Expected BoxParseError, got: {other:?}"),
         }
     }
 

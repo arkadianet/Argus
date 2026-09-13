@@ -87,8 +87,8 @@ fn store_preparation(prep: CachedPreparation) -> u64 {
     cache.retain(|_, p| p.handle_id != prep.handle_id);
     loop {
         let id = (rand::rngs::OsRng.next_u64() & 0x7FFF_FFFF_FFFF_FFFF).max(1);
-        if !cache.contains_key(&id) {
-            cache.insert(id, prep);
+        if let std::collections::hash_map::Entry::Vacant(e) = cache.entry(id) {
+            e.insert(prep);
             return id;
         }
     }
@@ -179,8 +179,8 @@ fn register_handle(handle: WalletHandle) -> u64 {
     let mut handles = recover(HANDLES.lock());
     loop {
         let id = (rand::rngs::OsRng.next_u64() & 0x7FFF_FFFF_FFFF_FFFF).max(1);
-        if !handles.contains_key(&id) {
-            handles.insert(id, handle);
+        if let std::collections::hash_map::Entry::Vacant(e) = handles.entry(id) {
+            e.insert(handle);
             return id;
         }
     }
@@ -759,7 +759,7 @@ fn balance_from_inputs(
         for b in boxes {
             if let Some(held) = b.tokens.as_ref() {
                 for t in held.iter() {
-                    let id: String = t.token_id.clone().into();
+                    let id: String = t.token_id.into();
                     let entry = by_id.entry(id).or_insert(0);
                     *entry = entry.saturating_add(*t.amount.as_u64());
                 }
@@ -782,7 +782,7 @@ fn balance_from_inputs(
                 if let Some(held) = b.tokens.as_ref() {
                     let held: Vec<(String, i64)> = held
                         .iter()
-                        .map(|t| (t.token_id.clone().into(), *t.amount.as_u64() as i64))
+                        .map(|t| (t.token_id.into(), *t.amount.as_u64() as i64))
                         .collect();
                     if !held.is_empty() {
                         confirmed_tokens.insert(b.box_id().to_string(), held);
@@ -2961,7 +2961,7 @@ pub async fn prepare_send_multi(
     // For input selection we need the total ERG + all token amounts
     let fee_for_required = fee_nano.unwrap_or(TX_FEE_NANO);
     // With a babel box paying the fee, the wallet's ERG covers only the
-    // recipients and a change box, and the fee's worth of the token joins
+    // recipients, app fee and a change box; the miner fee's worth of the token joins
     // what the send needs.
     let babel = match babel_token_id.as_deref().filter(|t| !t.is_empty()) {
         Some(t) => Some(find_babel(&client, t, fee_for_required).await?),
@@ -2972,14 +2972,8 @@ pub async fn prepare_send_multi(
         *entry = entry.saturating_add(pick.babel.tokens_for(fee_for_required));
     }
 
-    // Use UTXO selection: pick boxes covering total_send_erg + fee + min change,
-    // and which collectively hold the needed tokens.
-    let required = i64::checked_add(total_send_erg, if babel.is_some() { 0 } else { fee_for_required })
-        .and_then(|v| i64::checked_add(v, MIN_BOX_VALUE_NANO))
-        .filter(|v| *v > 0)
-        .ok_or_else(|| {
-            ArgusError::TxBuildFailed("recipient total amount out of range".into()).to_json_string()
-        })? as u64;
+    // Cover recipients, the wallet-paid miner fee, the app fee and minimum change.
+    let required = multi_send_required_erg(total_send_erg, fee_for_required, babel.is_some())?;
     // Coin control, as in prepare_send: the chosen boxes are the whole
     // input set, never a starting point the selector may extend.
     let mut selected = match input_box_ids.as_deref() {
@@ -3136,11 +3130,22 @@ pub async fn prepare_send_multi(
         "miner_fee": fee_for_required,
         "change_nano_erg": change_erg,
         "input_count": selected.len(),
-        "citadel_fee_nano": 0,
+        "citadel_fee_nano": built.summary.citadel_fee_nano,
         "input_boxes": input_boxes,
         "babel": babel_summary.as_ref().map(babel_json),
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+fn multi_send_required_erg(total_send_erg: i64, miner_fee: i64, babel: bool) -> Result<u64, String> {
+    i64::checked_add(total_send_erg, if babel { 0 } else { miner_fee })
+        .and_then(|v| v.checked_add(ergo_tx::dev_fee::resolved_config().budget()))
+        .and_then(|v| v.checked_add(MIN_BOX_VALUE_NANO))
+        .filter(|v| *v > 0)
+        .map(|v| v as u64)
+        .ok_or_else(|| {
+            ArgusError::TxBuildFailed("recipient total amount out of range".into()).to_json_string()
+        })
 }
 
 /// Select UTXOs that collectively hold enough ERG and tokens for a multi-send.
@@ -4600,6 +4605,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn multi_send_exact_selection_budget_covers_the_argus_fee() {
+        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        ergo_tx::dev_fee::with_test_dev_fee(
+            DevFeeConfig::custom(tree.clone(), ARGUS_FEE_NANO),
+            || {
+                let amount = 2_000_000_000;
+                let required = multi_send_required_erg(amount, TX_FEE_NANO, false).unwrap();
+                let make_box = |id: &str, value: i64| ergo_tx::Eip12InputBox {
+                    box_id: id.into(),
+                    transaction_id: "tx".into(),
+                    index: 0,
+                    value: value.to_string(),
+                    ergo_tree: tree.clone(),
+                    assets: vec![],
+                    creation_height: 1,
+                    additional_registers: Default::default(),
+                    extension: Default::default(),
+                };
+                // Selection visits the last box first. The old budget stops
+                // there, leaving the builder short of the app fee.
+                let inputs = vec![
+                    make_box("app-fee", ARGUS_FEE_NANO),
+                    make_box("send", amount + TX_FEE_NANO + MIN_BOX_VALUE_NANO),
+                ];
+                let selected = select_for_multi_send(&inputs, required, &HashMap::new()).unwrap();
+                assert_eq!(selected.len(), 2);
+                let recipients = vec![ergo_tx::RecipientSpec {
+                    ergo_tree: tree.clone(),
+                    amount_nano_erg: amount / 2,
+                    tokens: vec![],
+                }; 2];
+                let built = ergo_tx::build_multi_send_tx_with_fee(
+                    &selected, &recipients, &tree, TX_FEE_NANO, 100,
+                ).unwrap();
+                assert_eq!(built.summary.citadel_fee_nano, ARGUS_FEE_NANO);
+                assert_eq!(built.summary.change_erg, MIN_BOX_VALUE_NANO);
+                assert!(select_for_multi_send(&inputs[1..], required, &HashMap::new()).is_err());
+                assert_eq!(
+                    multi_send_required_erg(amount, TX_FEE_NANO, true).unwrap(),
+                    required - TX_FEE_NANO as u64,
+                );
+                assert!(multi_send_required_erg(i64::MAX, TX_FEE_NANO, false).is_err());
+            },
+        );
+    }
+
+    #[test]
     fn a_recipients_token_shapes_are_alternatives_not_a_sum() {
         // The app writes both shapes when a recipient gets one token, so
         // that the single-recipient path can read the pair. Reading both
@@ -4793,8 +4845,7 @@ mod tests {
             "creationHeight": input.creation_height, "assets": [], "additionalRegisters": {},
         });
         let err = serde_json::from_value::<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>(node)
-            .err()
-            .expect("a zero id never matches")
+            .expect_err("a zero id never matches")
             .to_string();
         err.rsplit(' ').next().unwrap().to_string()
     }
@@ -5396,16 +5447,16 @@ async fn broadcast_mix_move_with(
 // Background mixing: the same moves from a stored mix key, no wallet needed
 // ---------------------------------------------------------------------------
 
-/// The key for one mix, as hex, for the app's keystore. It derives every
+/// The key for one mix, as bytes, for the app's keystore. It derives every
 /// round of that mix and nothing else; see `zerojoin::MixKey`.
 #[flutter_rust_bridge::frb]
-pub fn mix_export_key(handle_id: u64, mix_id: u32) -> Result<String, String> {
+pub fn mix_export_key(handle_id: u64, mix_id: u32) -> Result<Vec<u8>, String> {
     with_handle(handle_id, "mix_export_key", |h| {
         let key = h.mix_key(mix_id).map_err(err_str)?;
         let bytes = key
             .to_bytes()
             .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-        Ok(hex::encode(&bytes[..]))
+        Ok(bytes.to_vec())
     })
 }
 
@@ -5414,12 +5465,13 @@ pub fn mix_export_key(handle_id: u64, mix_id: u32) -> Result<String, String> {
 pub fn mix_observe_with_key(
     state_json: String,
     chain_json: String,
-    key_hex: String,
+    key_bytes: Vec<u8>,
     now_unix: i64,
 ) -> Result<String, String> {
+    let key_bytes = zeroize::Zeroizing::new(key_bytes);
     let state = crate::api_mix_impl::parse_state(&state_json)?;
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
-    let key = crate::api_mix_impl::parse_key(&key_hex, state.mix_id)?;
+    let key = crate::api_mix_impl::parse_key(&key_bytes, state.mix_id)?;
     let secret = key
         .round_secret(state.round)
         .map_err(|e| ArgusError::SigningFailed(e.to_string()).to_json_string())?;
@@ -5439,12 +5491,13 @@ pub async fn mix_advance_with_key(
     node_url: Option<String>,
     fee_nano: Option<i64>,
     now_unix: i64,
-    key_hex: String,
+    key_bytes: Vec<u8>,
 ) -> Result<String, String> {
+    let key_bytes = zeroize::Zeroizing::new(key_bytes);
     let now = mix_now(now_unix);
     let state = crate::api_mix_impl::parse_state(&state_json)?;
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
-    let key = crate::api_mix_impl::parse_key(&key_hex, state.mix_id)?;
+    let key = crate::api_mix_impl::parse_key(&key_bytes, state.mix_id)?;
     let miner_fee = mix_miner_fee(fee_nano)?;
     let client = node_client(node_url).await?;
     let height = client

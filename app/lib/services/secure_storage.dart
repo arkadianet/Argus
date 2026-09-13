@@ -38,25 +38,41 @@ class SecureStorageService {
   static Future<void> saveMixKey({
     required String walletId,
     required int mixId,
-    required String keyHex,
+    required Uint8List keyBytes,
   }) async {
     try {
       await _channel.invokeMethod('saveMixKey', {
         'walletId': walletId,
         'mixId': mixId,
-        'key': keyHex,
+        // Legacy platform storage is string-based: this immutable hex copy
+        // and channel copies cannot be wiped. Only caller-owned bytes can.
+        'key': keyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(),
       });
     } on PlatformException catch (e) {
       throw _map(e, 'Failed to save mix key');
     }
   }
 
-  static Future<String?> loadMixKey({required String walletId, required int mixId}) async {
+  static Future<Uint8List?> loadMixKey({required String walletId, required int mixId}) async {
     try {
-      return await _channel.invokeMethod<String>('loadMixKey', {
+      final hex = await _channel.invokeMethod<String>('loadMixKey', {
         'walletId': walletId,
         'mixId': mixId,
       });
+      if (hex == null) return null;
+      if (hex.length.isOdd || !RegExp(r'^[0-9a-fA-F]+$').hasMatch(hex)) {
+        throw const FormatException('Invalid mix key encoding');
+      }
+      final bytes = Uint8List(hex.length ~/ 2);
+      try {
+        for (var i = 0; i < bytes.length; i++) {
+          bytes[i] = int.parse(hex.substring(i * 2, i * 2 + 2), radix: 16);
+        }
+        return bytes;
+      } catch (_) {
+        bytes.fillRange(0, bytes.length, 0);
+        rethrow;
+      }
     } on PlatformException catch (e) {
       throw _map(e, 'Failed to load mix key');
     }

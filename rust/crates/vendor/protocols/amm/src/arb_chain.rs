@@ -108,8 +108,7 @@ pub fn build_arb_chain(
 
     if projected_profit_nano < min_profit_nano {
         return Err(AmmError::TxBuildError(format!(
-            "Arb no longer profitable: projected {} nanoERG (minimum {})",
-            projected_profit_nano, min_profit_nano
+            "Arb no longer profitable: projected {projected_profit_nano} nanoERG (minimum {min_profit_nano})"
         )));
     }
 
@@ -169,14 +168,12 @@ pub fn build_split_chains(
     for (i, spec) in specs.iter().enumerate() {
         if spec.pools.is_empty() {
             return Err(AmmError::TxBuildError(format!(
-                "Split allocation {} has empty route",
-                i
+                "Split allocation {i} has empty route"
             )));
         }
         if spec.input_amount == 0 {
             return Err(AmmError::TxBuildError(format!(
-                "Split allocation {} has zero input",
-                i
+                "Split allocation {i} has zero input"
             )));
         }
         for (pool, _) in &spec.pools {
@@ -205,14 +202,13 @@ pub fn build_split_chains(
             user_ergo_tree,
             current_height,
         )
-        .map_err(|e| AmmError::TxBuildError(format!("Split allocation {}: {}", i, e)))?;
+        .map_err(|e| AmmError::TxBuildError(format!("Split allocation {i}: {e}")))?;
 
         match &final_token {
             None => final_token = Some(token.clone()),
             Some(expected) if expected != &token => {
                 return Err(AmmError::TxBuildError(format!(
-                    "Split allocations end in different tokens ({:?} vs {:?})",
-                    expected, token
+                    "Split allocations end in different tokens ({expected:?} vs {token:?})"
                 )));
             }
             _ => {}
@@ -233,8 +229,7 @@ pub fn build_split_chains(
     if let Some(min_out) = min_total_output {
         if total_output < min_out {
             return Err(AmmError::TxBuildError(format!(
-                "Built split output {} below minimum {} (pools moved since quote)",
-                total_output, min_out
+                "Built split output {total_output} below minimum {min_out} (pools moved since quote)"
             )));
         }
     }
@@ -312,7 +307,7 @@ fn build_chain_core(
 
         // Add this leg's user-owned outputs as spendable boxes for later legs.
         let (tx_id, output_boxes) = derive_output_boxes(&build.unsigned_tx)
-            .map_err(|e| AmmError::TxBuildError(format!("Chain derivation failed: {}", e)))?;
+            .map_err(|e| AmmError::TxBuildError(format!("Chain derivation failed: {e}")))?;
         available.extend(
             output_boxes
                 .into_iter()
@@ -493,9 +488,7 @@ mod tests {
             .collect();
         assert!(
             leg2_user_inputs.iter().all(|id| leg1_user_ids.contains(id)),
-            "leg 2 inputs {:?} not all from leg 1 outputs {:?}",
-            leg2_user_inputs,
-            leg1_user_ids
+            "leg 2 inputs {leg2_user_inputs:?} not all from leg 1 outputs {leg1_user_ids:?}"
         );
 
         // Leg 1 buys tokens with ERG; leg 2 sells all of them back.
@@ -551,8 +544,7 @@ mod tests {
             build_arb_chain(&pools, 1_000_000_000, &utxos, USER_TREE, 1_000_000, 0).unwrap_err();
         assert!(
             err.to_string().contains("no longer profitable"),
-            "unexpected error: {}",
-            err
+            "unexpected error: {err}"
         );
     }
 
@@ -711,8 +703,7 @@ mod tests {
         let err = build_split_chains(&specs, &utxos, USER_TREE, 1_000_000, None).unwrap_err();
         assert!(
             err.to_string().contains("share pool"),
-            "unexpected error: {}",
-            err
+            "unexpected error: {err}"
         );
     }
 

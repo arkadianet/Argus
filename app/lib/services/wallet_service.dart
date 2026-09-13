@@ -235,6 +235,7 @@ class SendPreview {
   final String? changeAddress;
   final int amountNanoErg;
   final int minerFee;
+  final int appFeeNano;
   final int changeNanoErg;
   final int inputCount;
   final String? tokenId;
@@ -253,6 +254,7 @@ class SendPreview {
     required this.recipient,
     required this.amountNanoErg,
     required this.minerFee,
+    this.appFeeNano = 0,
     required this.changeNanoErg,
     required this.inputCount,
     this.changeAddress,
@@ -282,6 +284,7 @@ class SendPreview {
       changeAddress: json['change_address'] as String?,
       amountNanoErg: _requireInt(json, 'amount_nano_erg'),
       minerFee: _requireInt(json, 'miner_fee'),
+      appFeeNano: (json['citadel_fee_nano'] as num?)?.toInt() ?? 0,
       changeNanoErg: _requireInt(json, 'change_nano_erg'),
       inputCount: _requireInt(json, 'input_count'),
       tokenId: json['token_id'] as String?,
@@ -1348,7 +1351,7 @@ class WalletService {
 
   /// The key for one mix, for the background job's keystore. It can spend
   /// that mix's boxes and nothing else.
-  Future<String> mixExportKey(int mixId) {
+  Future<Uint8List> mixExportKey(int mixId) {
     _requireUnlocked();
     return RustLib.instance.api.crateApiMixExportKey(handleId: _handleId!, mixId: mixId);
   }

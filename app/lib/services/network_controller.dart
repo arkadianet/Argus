@@ -492,7 +492,7 @@ class NetworkController extends ChangeNotifier {
 
   void setErgRate({required double? fiatPerErg, required double? usdPerErg}) {
     this.fiatPerErg = fiatPerErg;
-    usdPerErg = usdPerErg;
+    this.usdPerErg = usdPerErg;
     notifyListeners();
   }
 

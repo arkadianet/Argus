@@ -291,16 +291,15 @@ fn extract_i64_constant(tree: &ErgoTree, idx: usize, name: &str) -> Result<i64, 
     let constant = tree
         .get_constant(idx)
         .map_err(|e| {
-            AmmError::TxBuildError(format!("Failed to get {} at index {}: {}", name, idx, e))
+            AmmError::TxBuildError(format!("Failed to get {name} at index {idx}: {e}"))
         })?
         .ok_or_else(|| {
-            AmmError::TxBuildError(format!("No constant at index {} ({})", idx, name))
+            AmmError::TxBuildError(format!("No constant at index {idx} ({name})"))
         })?;
     match &constant.v {
         ergo_lib::ergotree_ir::mir::constant::Literal::Long(v) => Ok(*v),
         other => Err(AmmError::TxBuildError(format!(
-            "Expected Long at index {} ({}), got {:?}",
-            idx, name, other
+            "Expected Long at index {idx} ({name}), got {other:?}"
         ))),
     }
 }
@@ -313,10 +312,10 @@ fn extract_coll_byte_constant(
     let constant = tree
         .get_constant(idx)
         .map_err(|e| {
-            AmmError::TxBuildError(format!("Failed to get {} at index {}: {}", name, idx, e))
+            AmmError::TxBuildError(format!("Failed to get {name} at index {idx}: {e}"))
         })?
         .ok_or_else(|| {
-            AmmError::TxBuildError(format!("No constant at index {} ({})", idx, name))
+            AmmError::TxBuildError(format!("No constant at index {idx} ({name})"))
         })?;
     match &constant.v {
         ergo_lib::ergotree_ir::mir::constant::Literal::Coll(coll) => match coll {
@@ -324,13 +323,11 @@ fn extract_coll_byte_constant(
                 ergo_lib::ergotree_ir::mir::value::NativeColl::CollByte(bytes),
             ) => Ok(bytes.iter().map(|b| *b as u8).collect()),
             _ => Err(AmmError::TxBuildError(format!(
-                "Expected Coll[Byte] at index {} ({}), got non-byte collection",
-                idx, name
+                "Expected Coll[Byte] at index {idx} ({name}), got non-byte collection"
             ))),
         },
         other => Err(AmmError::TxBuildError(format!(
-            "Expected Coll at index {} ({}), got {:?}",
-            idx, name, other
+            "Expected Coll at index {idx} ({name}), got {other:?}"
         ))),
     }
 }
@@ -344,7 +341,7 @@ pub async fn find_pending_orders(
     let txs = node
         .get_recent_transactions(user_address, tx_limit)
         .await
-        .map_err(|e| AmmError::NodeError(format!("Failed to fetch transactions: {}", e)))?;
+        .map_err(|e| AmmError::NodeError(format!("Failed to fetch transactions: {e}")))?;
 
     let mut orders = Vec::new();
 

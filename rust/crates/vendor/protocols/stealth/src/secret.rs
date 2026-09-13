@@ -170,10 +170,10 @@ impl StealthSecret {
         Ok(DhTupleProverInput {
             w: self.scalar.clone(),
             common_input: ProveDhTuple::new(
-                tuple.gr.clone(),
-                tuple.gy.clone(),
-                tuple.ur.clone(),
-                tuple.uy.clone(),
+                tuple.gr,
+                tuple.gy,
+                tuple.ur,
+                tuple.uy,
             ),
         })
     }

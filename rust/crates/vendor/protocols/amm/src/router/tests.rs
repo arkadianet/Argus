@@ -15,7 +15,7 @@ fn make_n2t_pool(
     AmmPool {
         pool_id: pool_id.to_string(),
         pool_type: PoolType::N2T,
-        box_id: format!("box_{}", pool_id),
+        box_id: format!("box_{pool_id}"),
         erg_reserves: Some(erg_reserves),
         token_x: None,
         token_y: TokenAmount {
@@ -24,7 +24,7 @@ fn make_n2t_pool(
             decimals: Some(2),
             name: Some(token_name.to_string()),
         },
-        lp_token_id: format!("lp_{}", pool_id),
+        lp_token_id: format!("lp_{pool_id}"),
         lp_circulating: 1000,
         fee_num,
         fee_denom: 1000,
@@ -45,7 +45,7 @@ fn make_t2t_pool(
     AmmPool {
         pool_id: pool_id.to_string(),
         pool_type: PoolType::T2T,
-        box_id: format!("box_{}", pool_id),
+        box_id: format!("box_{pool_id}"),
         erg_reserves: Some(600_000),
         token_x: Some(TokenAmount {
             token_id: x_id.to_string(),
@@ -59,7 +59,7 @@ fn make_t2t_pool(
             decimals: Some(2),
             name: Some(y_name.to_string()),
         },
-        lp_token_id: format!("lp_{}", pool_id),
+        lp_token_id: format!("lp_{pool_id}"),
         lp_circulating: 1000,
         fee_num,
         fee_denom: 1000,
@@ -117,7 +117,7 @@ fn test_max_pools_per_pair_pruning() {
     let pools: Vec<AmmPool> = (0..5)
         .map(|i| {
             make_n2t_pool(
-                &format!("p{}", i),
+                &format!("p{i}"),
                 100_000_000_000 - i as u64 * 10_000_000_000,
                 "tok",
                 "Token",
@@ -319,9 +319,7 @@ fn test_depth_tiers_formula() {
     let expected = (100_000_000_000f64 * 0.01 / 0.99) as u64;
     assert!(
         (*max_input as i64 - expected as i64).unsigned_abs() < 2,
-        "Expected ~{}, got {}",
-        expected,
-        max_input
+        "Expected ~{expected}, got {max_input}"
     );
 }
 

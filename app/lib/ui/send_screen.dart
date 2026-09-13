@@ -777,7 +777,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
         )
       else
         ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
-      argusFeeRow(),
+      ConfirmTxRow('Argus fee', formatErg(preview.appFeeNano)),
       ConfirmTxRow(
         stealthChange ? 'Change to a new stealth address' : 'Change to you',
         formatErg(preview.changeNanoErg),

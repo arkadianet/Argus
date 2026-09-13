@@ -8,14 +8,14 @@ use ergo_lib::ergotree_ir::types::stype::SType;
 pub fn extract_long(constant: &Constant) -> Result<i64, String> {
     match &constant.v {
         Literal::Long(val) => Ok(*val),
-        other => Err(format!("Expected Long, got {:?}", other)),
+        other => Err(format!("Expected Long, got {other:?}")),
     }
 }
 
 pub fn extract_int(constant: &Constant) -> Result<i32, String> {
     match &constant.v {
         Literal::Int(val) => Ok(*val),
-        other => Err(format!("Expected Int, got {:?}", other)),
+        other => Err(format!("Expected Int, got {other:?}")),
     }
 }
 
@@ -24,15 +24,15 @@ pub fn extract_int_pair(constant: &Constant) -> Result<(i32, i32), String> {
         Literal::Tup(items) if items.len() == 2 => {
             let a = match &items.as_slice()[0] {
                 Literal::Int(v) => *v,
-                other => return Err(format!("Expected Int in tuple[0], got {:?}", other)),
+                other => return Err(format!("Expected Int in tuple[0], got {other:?}")),
             };
             let b = match &items.as_slice()[1] {
                 Literal::Int(v) => *v,
-                other => return Err(format!("Expected Int in tuple[1], got {:?}", other)),
+                other => return Err(format!("Expected Int in tuple[1], got {other:?}")),
             };
             Ok((a, b))
         }
-        other => Err(format!("Expected Tup(Int, Int), got {:?}", other)),
+        other => Err(format!("Expected Tup(Int, Int), got {other:?}")),
     }
 }
 
@@ -47,14 +47,14 @@ pub fn extract_long_coll(constant: &Constant) -> Result<Vec<i64>, String> {
                 for item in items.iter() {
                     match item {
                         Literal::Long(v) => result.push(*v),
-                        other => return Err(format!("Expected Long in Coll, got {:?}", other)),
+                        other => return Err(format!("Expected Long in Coll, got {other:?}")),
                     }
                 }
                 Ok(result)
             }
-            _ => Err(format!("Expected Coll[Long], got {:?}", coll)),
+            _ => Err(format!("Expected Coll[Long], got {coll:?}")),
         },
-        other => Err(format!("Expected Coll literal, got {:?}", other)),
+        other => Err(format!("Expected Coll literal, got {other:?}")),
     }
 }
 
@@ -73,17 +73,16 @@ pub fn extract_byte_array_coll(constant: &Constant) -> Result<Vec<Vec<u8>>, Stri
                         }
                         other => {
                             return Err(format!(
-                                "Expected Coll[Byte] in Coll[Coll[Byte]], got {:?}",
-                                other
+                                "Expected Coll[Byte] in Coll[Coll[Byte]], got {other:?}"
                             ))
                         }
                     }
                 }
                 Ok(result)
             }
-            _ => Err(format!("Expected Coll[Coll[Byte]], got {:?}", coll)),
+            _ => Err(format!("Expected Coll[Coll[Byte]], got {coll:?}")),
         },
-        other => Err(format!("Expected Coll literal, got {:?}", other)),
+        other => Err(format!("Expected Coll literal, got {other:?}")),
     }
 }
 
@@ -116,10 +115,10 @@ pub fn get_register(
         .additional_registers
         .get_constant(reg)
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("Register {:?} error: {}", reg, e),
+            message: format!("Register {reg:?} error: {e}"),
         })?
         .ok_or_else(|| ProtocolError::BoxParseError {
-            message: format!("Register {:?} not found", reg),
+            message: format!("Register {reg:?} not found"),
         })
 }
 
@@ -129,7 +128,7 @@ pub fn get_register_long(
 ) -> Result<i64, ProtocolError> {
     let constant = get_register(ergo_box, reg)?;
     extract_long(&constant).map_err(|msg| ProtocolError::BoxParseError {
-        message: format!("{:?}: {}", reg, msg),
+        message: format!("{reg:?}: {msg}"),
     })
 }
 
@@ -139,7 +138,7 @@ pub fn get_register_int(
 ) -> Result<i32, ProtocolError> {
     let constant = get_register(ergo_box, reg)?;
     extract_int(&constant).map_err(|msg| ProtocolError::BoxParseError {
-        message: format!("{:?}: {}", reg, msg),
+        message: format!("{reg:?}: {msg}"),
     })
 }
 
@@ -154,7 +153,7 @@ pub fn get_register_sigma_prop_hex(
     let bytes = constant
         .sigma_serialize_bytes()
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("Failed to serialize {:?}: {}", reg, e),
+            message: format!("Failed to serialize {reg:?}: {e}"),
         })?;
 
     let hex_str = hex::encode(&bytes);
@@ -179,7 +178,7 @@ pub fn get_register_coll_byte_hex(
     extract_coll_byte_raw(&constant)
         .map(hex::encode)
         .map_err(|msg| ProtocolError::BoxParseError {
-            message: format!("{:?}: {}", reg, msg),
+            message: format!("{reg:?}: {msg}"),
         })
 }
 
@@ -225,7 +224,7 @@ fn extract_coll_byte_raw(constant: &Constant) -> Result<Vec<u8>, String> {
                 _ => None,
             })
             .collect()),
-        other => Err(format!("Expected Coll[Byte], got {:?}", other)),
+        other => Err(format!("Expected Coll[Byte], got {other:?}")),
     }
 }
 
@@ -254,12 +253,11 @@ pub fn map_node_error(err: NodeError, protocol_name: &str, context: &str) -> Pro
     match err {
         NodeError::ExtraIndexRequired { .. } => ProtocolError::StateUnavailable {
             reason: format!(
-                "{} requires an indexed node with extraIndex enabled",
-                protocol_name
+                "{protocol_name} requires an indexed node with extraIndex enabled"
             ),
         },
         _ => ProtocolError::BoxParseError {
-            message: format!("{} not found: {}", context, err),
+            message: format!("{context} not found: {err}"),
         },
     }
 }

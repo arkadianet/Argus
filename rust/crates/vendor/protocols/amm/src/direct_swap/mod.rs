@@ -128,8 +128,7 @@ fn resolve_miner_fee(custom: Option<u64>) -> Result<u64, AmmError> {
     match custom {
         None => Ok(TX_FEE),
         Some(v) if v < MIN_FEE_NANO => Err(AmmError::TxBuildError(format!(
-            "Miner fee {} nano is below the network minimum {} nano",
-            v, MIN_FEE_NANO
+            "Miner fee {v} nano is below the network minimum {MIN_FEE_NANO} nano"
         ))),
         Some(v) => Ok(v),
     }

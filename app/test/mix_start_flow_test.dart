@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:argus_wallet/bridge/argus_error.dart';
 import 'package:argus_wallet/services/mix_service.dart';
@@ -32,16 +33,19 @@ class ScriptedGateway implements MixGateway {
   /// Keystore stand-in: "walletId:mixId" → key hex.
   final keys = <String, String>{};
   @override
-  Future<String> exportKey(int mixId) async {
+  Future<Uint8List> exportKey(int mixId) async {
     calls.add('exportKey:$mixId');
-    return 'key-$mixId';
+    return Uint8List.fromList(utf8.encode('key-$mixId'));
   }
   @override
-  Future<void> saveKey({required String walletId, required int mixId, required String keyHex}) async {
-    keys['$walletId:$mixId'] = keyHex;
+  Future<void> saveKey({required String walletId, required int mixId, required Uint8List keyBytes}) async {
+    keys['$walletId:$mixId'] = utf8.decode(keyBytes);
   }
   @override
-  Future<String?> loadKey({required String walletId, required int mixId}) async => keys['$walletId:$mixId'];
+  Future<Uint8List?> loadKey({required String walletId, required int mixId}) async {
+    final key = keys['$walletId:$mixId'];
+    return key == null ? null : Uint8List.fromList(utf8.encode(key));
+  }
   @override
   Future<void> deleteKey({required String walletId, required int mixId}) async {
     keys.remove('$walletId:$mixId');
@@ -123,9 +127,9 @@ class ScriptedGateway implements MixGateway {
   @override
   Future<void> notify({required String title, required String body, int? mixId}) async {}
   @override
-  Future<String> observeWithKey(String s, String c, String k, int n) async => s;
+  Future<String> observeWithKey(String s, String c, Uint8List k, int n) async => s;
   @override
-  Future<String> advanceWithKey(String s, String c, List<String> o, String? n, int t, String k) async => '{}';
+  Future<String> advanceWithKey(String s, String c, List<String> o, String? n, int t, Uint8List k) async => '{}';
 }
 
 Future<String> fakeExplorer(Uri uri) async {

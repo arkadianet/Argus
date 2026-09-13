@@ -567,6 +567,11 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
           'so a mix can take hours or days. Not every app store allows a '
           'wallet with a built-in mixer; it stays off until you turn it on.',
         ),
+        const SettingsNote(
+          'The node Argus uses learns which boxes are yours. A mix is only '
+          'as private as that node: use your own node where you can '
+          '(Settings → Network).',
+        ),
         ListenableBuilder(
           listenable: mixService,
           builder: (context, _) => mixService.backgroundEnabled

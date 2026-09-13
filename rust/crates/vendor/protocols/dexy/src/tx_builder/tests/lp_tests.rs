@@ -172,9 +172,9 @@ fn test_lp_deposit_rejects_zero_erg() {
     assert!(result.is_err());
     match result.unwrap_err() {
         TxError::BuildFailed { message } => {
-            assert!(message.contains("ERG"), "Got: {}", message);
+            assert!(message.contains("ERG"), "Got: {message}");
         }
-        other => panic!("Expected BuildFailed, got {:?}", other),
+        other => panic!("Expected BuildFailed, got {other:?}"),
     }
 }
 
@@ -200,9 +200,9 @@ fn test_lp_deposit_rejects_zero_dexy() {
     assert!(result.is_err());
     match result.unwrap_err() {
         TxError::BuildFailed { message } => {
-            assert!(message.contains("Dexy"), "Got: {}", message);
+            assert!(message.contains("Dexy"), "Got: {message}");
         }
-        other => panic!("Expected BuildFailed, got {:?}", other),
+        other => panic!("Expected BuildFailed, got {other:?}"),
     }
 }
 
@@ -335,9 +335,9 @@ fn test_lp_redeem_rejects_zero_lp() {
     assert!(result.is_err());
     match result.unwrap_err() {
         TxError::BuildFailed { message } => {
-            assert!(message.contains("positive"), "Got: {}", message);
+            assert!(message.contains("positive"), "Got: {message}");
         }
-        other => panic!("Expected BuildFailed, got {:?}", other),
+        other => panic!("Expected BuildFailed, got {other:?}"),
     }
 }
 
@@ -371,9 +371,9 @@ fn test_lp_redeem_blocked_by_oracle_gate() {
     assert!(result.is_err());
     match result.unwrap_err() {
         TxError::BuildFailed { message } => {
-            assert!(message.contains("depeg protection"), "Got: {}", message);
+            assert!(message.contains("depeg protection"), "Got: {message}");
         }
-        other => panic!("Expected BuildFailed, got {:?}", other),
+        other => panic!("Expected BuildFailed, got {other:?}"),
     }
 }
 
@@ -471,9 +471,9 @@ fn test_lp_redeem_no_oracle_fails() {
     assert!(result.is_err());
     match result.unwrap_err() {
         TxError::BuildFailed { message } => {
-            assert!(message.contains("Oracle"), "Got: {}", message);
+            assert!(message.contains("Oracle"), "Got: {message}");
         }
-        other => panic!("Expected BuildFailed, got {:?}", other),
+        other => panic!("Expected BuildFailed, got {other:?}"),
     }
 }
 

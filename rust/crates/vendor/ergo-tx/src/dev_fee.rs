@@ -129,7 +129,7 @@ pub fn resolved_config() -> DevFeeConfig {
     #[cfg(test)]
     {
         // No override → disabled in ergo-tx's own unit tests
-        return DevFeeConfig::disabled();
+        DevFeeConfig::disabled()
     }
     #[cfg(not(test))]
     {
@@ -155,6 +155,7 @@ pub fn with_test_dev_fee<R>(cfg: DevFeeConfig, f: impl FnOnce() -> R) -> R {
     })
 }
 
+#[cfg(not(test))]
 fn load_from_env_or_default() -> DevFeeConfig {
     if env_flag_false("CITADEL_DEV_FEE_ENABLED") {
         return DevFeeConfig::disabled();
@@ -232,6 +233,7 @@ fn address_to_tree(address: &str) -> Result<String, DevFeeError> {
     }
 }
 
+#[cfg(not(test))]
 fn tracing_warn_invalid(addr: &str, err: &DevFeeError) {
     // Avoid hard dependency on tracing in ergo-tx — eprintln is enough for misconfig.
     eprintln!(
