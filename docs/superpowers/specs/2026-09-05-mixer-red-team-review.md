@@ -333,21 +333,25 @@ that costs the tokens.
    list is measured on device.
 6. Findings 5, 6, 7 and B6 as a hygiene batch.
 
-## A release note this change earns
+## The native libraries, and a guard that does not work
 
 Finding 8 changed the wire encoding of `mix_observe_with_key` and
-`mix_advance_with_key` from `String` to `Vec<u8>`. The tracked native
-libraries under `app/android/app/src/main/jniLibs/` therefore no longer match
-the generated bindings and **must be rebuilt before the next release**.
+`mix_advance_with_key` from `String` to `Vec<u8>`, which made the tracked
+libraries under `app/android/app/src/main/jniLibs/` stale. **They were rebuilt
+in the same change**, against the convention of rebuilding only at release,
+because of how this particular staleness fails.
 
-The usual guard does not cover this one. `rustContentHash` in
-`frb_generated.dart` is unchanged by this edit — still `-274834265` — so the
-bridge's init-time check passes against a stale library. An APK built from the
-old `.so` would start normally and then fail only when a background mix first
-calls one of those two functions, decoding a byte vector as a UTF-8 string.
-That is quieter than the alpha.52 near-miss, where the hash did change and the
-app would have died at startup.
+`rustContentHash` in `frb_generated.dart` did not move — it is `-274834265`
+before and after — so the bridge's init-time check passes against a stale
+library. An APK built from the old `.so` would start normally and fail only
+when a background mix first calls one of those two functions, decoding a byte
+vector as a UTF-8 string. Compare the alpha.52 near-miss, where the hash *did*
+move: that build would have died at startup, loudly, on the first launch.
 
-So: a release check that compares `rustContentHash` against a freshly built
-library is not sufficient. The check has to rebuild the libraries and compare
-the binaries, or simply rebuild them every release.
+The rebuild-at-release convention assumes the hash catches a miss. It does not
+always, and the miss is real: at alpha.52 the tracked libraries were already
+stale from two merged PRs and were caught only by looking.
+
+So a release check that compares `rustContentHash` against a fresh build is
+not sufficient. It has to rebuild the libraries and compare the binaries. That
+check does not exist yet and is worth building.
