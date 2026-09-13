@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:argus_wallet/services/mix_service.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -48,17 +49,28 @@ class FakeGateway implements MixGateway {
 
   /// Keystore stand-in: "walletId:mixId" → key hex.
   final keys = <String, String>{};
+  final keyBuffers = <Uint8List>[];
+  bool failSaveKey = false;
+  Uint8List trackKey(String key) {
+    final bytes = Uint8List.fromList(utf8.encode(key));
+    keyBuffers.add(bytes);
+    return bytes;
+  }
   @override
-  Future<String> exportKey(int mixId) async {
+  Future<Uint8List> exportKey(int mixId) async {
     calls.add('exportKey:$mixId');
-    return 'key-$mixId';
+    return trackKey('key-$mixId');
   }
   @override
-  Future<void> saveKey({required String walletId, required int mixId, required String keyHex}) async {
-    keys['$walletId:$mixId'] = keyHex;
+  Future<void> saveKey({required String walletId, required int mixId, required Uint8List keyBytes}) async {
+    if (failSaveKey) throw StateError('save failed');
+    keys['$walletId:$mixId'] = utf8.decode(keyBytes);
   }
   @override
-  Future<String?> loadKey({required String walletId, required int mixId}) async => keys['$walletId:$mixId'];
+  Future<Uint8List?> loadKey({required String walletId, required int mixId}) async {
+    final key = keys['$walletId:$mixId'];
+    return key == null ? null : trackKey(key);
+  }
 
   /// Set to make listKeys throw, as an unreadable keystore would.
   bool keysUnreadable = false;
@@ -113,8 +125,8 @@ class FakeGateway implements MixGateway {
   Future<String> advance(String s, String c, List<String> own, String? n, int now) async =>
       jsonEncode(await _next('advance'));
   @override
-  Future<String> observeWithKey(String stateJson, String c, String keyHex, int now) async {
-    calls.add('withKey:$keyHex');
+  Future<String> observeWithKey(String stateJson, String c, Uint8List keyBytes, int now) async {
+    calls.add('withKey:${utf8.decode(keyBytes)}');
     final v = await _next('observe', log: false);
     return v == 'same' ? stateJson : jsonEncode(v);
   }
@@ -124,8 +136,8 @@ class FakeGateway implements MixGateway {
   Future<void> Function()? beforeAdvanceWithKey;
 
   @override
-  Future<String> advanceWithKey(String s, String c, List<String> own, String? n, int now, String keyHex) async {
-    calls.add('advanceWithKey:$keyHex');
+  Future<String> advanceWithKey(String s, String c, List<String> own, String? n, int now, Uint8List keyBytes) async {
+    calls.add('advanceWithKey:${utf8.decode(keyBytes)}');
     await beforeAdvanceWithKey?.call();
     return jsonEncode(await _next('advance', log: false));
   }
@@ -340,6 +352,58 @@ void main() {
     expect(ex.requests.where((r) => r.contains('byErgoTree/aa')).length, 2);
     expect(ex.requests.where((r) => r.contains('byErgoTree/bb')).length, 1,
         reason: 'full boxes are discovered without naming an owned box');
+  });
+
+  test('a capped pool list never reaches the engine as absence evidence', () async {
+    final gw = FakeGateway();
+    final ex = FakeExplorer()
+      ..lists['bb'] = List.generate(mixListCap + 1, (i) => {'boxId': 'f$i'});
+    final svc = await loaded(gw, ex, [state()]);
+    await expectLater(svc.snapshot(), throwsStateError);
+    gw.calls.clear();
+    await svc.tick();
+    expect(gw.calls, isNot(contains('observe')));
+    expect(svc.lastTickError, contains('incomplete'));
+  });
+
+  test('capped node lists fall back to complete explorer lists', () async {
+    final gw = FakeGateway()..node = 'http://node/';
+    final ex = FakeExplorer()
+      ..nodeLists = {'bb': List.generate(mixListCap + 1, (i) => {'boxId': 'f$i'})}
+      ..lists['bb'] = [{'boxId': 'live'}];
+    final svc = await loaded(gw, ex, []);
+    final snap = jsonDecode((await svc.snapshot()).json) as Map;
+    expect((snap['full_boxes'] as List).single['boxId'], 'live');
+    ex.lists['bb'] = ex.nodeLists!['bb']!;
+    await expectLater(svc.snapshot(), throwsStateError);
+    await expectLater(svc.recover(), throwsStateError);
+    expect(gw.calls, isNot(contains('recover')));
+  });
+
+  test('oversized and repeated pool pages are rejected', () async {
+    for (final page in [
+      List.generate(mixListCap + 1, (i) => {'boxId': 'f$i'}),
+      [{'boxId': 'repeat'}, {'boxId': 'repeat'}],
+    ]) {
+      final svc = MixService(gateway: FakeGateway(), get: (uri) async {
+        if (uri.path.contains('byErgoTree')) {
+          return jsonEncode({'items': page, 'total': page.length});
+        }
+        return jsonEncode({'height': 1500000});
+      });
+      await expectLater(svc.snapshot(), throwsStateError);
+    }
+  });
+
+  test('a short page with a larger total must continue or fail', () async {
+    final gw = FakeGateway();
+    final svc = MixService(gateway: gw, get: (uri) async {
+      if (uri.path.contains('byErgoTree')) {
+        return jsonEncode({'items': [], 'total': 1});
+      }
+      return jsonEncode({'height': 1500000});
+    });
+    await expectLater(svc.snapshot(), throwsStateError);
   });
 
   test('tick observes, plans and advances each active mix, announcing rounds', () async {
@@ -752,6 +816,7 @@ void main() {
 
     await svc.setBackgroundEnabled(true);
     expect(gw.keys, {'w1:0': 'key-0'}, reason: 'switching on exports every mix in the pool');
+    expect(gw.keyBuffers.single, everyElement(0));
     expect(wanted.last, isFalse, reason: 'in front, the foreground tick drives; no job yet');
     await svc.setForeground(false);
     expect(wanted.last, isTrue, reason: 'in the back, a job is wanted');
@@ -909,6 +974,8 @@ void main() {
     final svc = MixService(gateway: gw, get: ex.get, post: ex.post);
     await svc.tickHeadless();
 
+    expect(gw.keyBuffers, hasLength(2));
+    for (final bytes in gw.keyBuffers) { expect(bytes, everyElement(0)); }
     expect(gw.calls.where((c) => c.startsWith('withKey')), ['withKey:key-0', 'withKey:key-5']);
     expect(gw.calls.where((c) => c.startsWith('advanceWithKey')), ['advanceWithKey:key-0', 'advanceWithKey:key-5']);
     expect(gw.calls.where((c) => c == 'observe' || c == 'advance'), isEmpty, reason: 'never the wallet path');
@@ -922,6 +989,33 @@ void main() {
     expect((w2[0] as Map)['state']['rounds_done'], 2);
     expect((w2[1] as Map)['state']['rounds_done'], 1, reason: 'no key, untouched');
   });
+
+  test('exported key bytes are wiped when storage fails', () async {
+    final gw = FakeGateway()..failSaveKey = true;
+    final svc = await loaded(gw, FakeExplorer(), [state()]);
+    await expectLater(svc.setBackgroundEnabled(true), throwsStateError);
+    expect(gw.keyBuffers.single, everyElement(0));
+  });
+
+  for (final failure in ['observe', 'plan', 'advance']) {
+    test('headless key bytes are wiped when $failure fails', () async {
+      final gw = FakeGateway()
+        ..keys['w1:0'] = 'key-0'
+        ..script['observe'] = [state()]
+        ..script['plan'] = [{'action': 'withdraw'}]
+        ..script['advance'] = [{'state': state(), 'action': 'wait'}];
+      gw.script[failure] = [StateError('failed')];
+      SharedPreferences.setMockInitialValues({
+        'argus_mixing_enabled': true,
+        'argus_mixing_background': true,
+        'argus_mixes_v1_w1': jsonEncode([{'state': state()}]),
+      });
+      final ex = FakeExplorer();
+      final svc = MixService(gateway: gw, get: ex.get, post: ex.post);
+      await svc.tickHeadless();
+      expect(gw.keyBuffers.single, everyElement(0));
+    });
+  }
 
   test('the headless tick does nothing unless both switches are on', () async {
     final gw = FakeGateway()..keys['w1:0'] = 'key-0';
