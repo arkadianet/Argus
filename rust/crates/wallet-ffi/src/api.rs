@@ -464,6 +464,77 @@ pub fn stealth_address(handle_id: u64) -> Result<String, String> {
     })
 }
 
+/// The published `stealth…` string for stealth identity `index`.
+///
+/// Identity 0 is the one every wallet has always had and returns exactly what
+/// [`stealth_address`] does. Higher indices are the extra identities the user
+/// publishes for separate contexts; all of them regenerate from the seed, so
+/// nothing here has to be backed up separately.
+#[flutter_rust_bridge::frb]
+pub fn stealth_address_at(handle_id: u64, index: u32) -> Result<String, String> {
+    with_handle(handle_id, "stealth_address_at", |h| {
+        h.stealth_address_at(index).map_err(err_str)
+    })
+}
+
+/// Tell this session to scan and spend with stealth identities `0..=index`.
+///
+/// Dart owns the durable identity list; this is how that list reaches the
+/// keys. Only ever raises the frontier, and returns how many identities are
+/// in use afterwards. Call it after unlock, and again whenever an identity is
+/// added, *before* the next scan.
+#[flutter_rust_bridge::frb]
+pub fn stealth_use_identity(handle_id: u64, index: u32) -> Result<u32, String> {
+    with_handle(handle_id, "stealth_use_identity", |h| {
+        h.ensure_stealth_identity(index).map_err(err_str)
+    })
+}
+
+/// How many stealth identities this session is currently using.
+#[flutter_rust_bridge::frb]
+pub fn stealth_identity_count(handle_id: u64) -> Result<u32, String> {
+    with_handle(handle_id, "stealth_identity_count", |h| {
+        h.stealth_frontier().map_err(err_str)
+    })
+}
+
+/// Highest stealth identity index a wallet will derive.
+#[flutter_rust_bridge::frb(sync)]
+pub fn max_stealth_identity() -> u32 {
+    stealth::MAX_STEALTH_IDENTITY
+}
+
+/// Restore-time discovery: which stealth identities hold funds in this box
+/// set, as a JSON array of indices.
+///
+/// A stealth identity leaves no trace on chain until it is paid, so there is
+/// no "N empty in a row, stop" rule that terminates correctly — a published
+/// but unpaid identity would be missed forever. This answers the narrower,
+/// answerable question instead, over a bounded span of indices, and the
+/// caller turns the result into a frontier. An identity that was funded and
+/// then swept clean is not rediscovered; it holds nothing either way.
+#[flutter_rust_bridge::frb]
+pub fn stealth_discover_identities(
+    handle_id: u64,
+    explorer_boxes_json: String,
+) -> Result<String, String> {
+    let secrets = with_handle(handle_id, "stealth_discover_identities", |h| {
+        h.stealth_secrets(stealth::STEALTH_DISCOVERY_SPAN)
+            .map_err(err_str)
+    })?;
+    let all = stealth::parse_explorer_boxes(&explorer_boxes_json)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
+    let found = stealth::discover_funded_identities(&secrets, &all);
+    serde_json::to_string(&serde_json::json!({
+        "span": stealth::STEALTH_DISCOVERY_SPAN,
+        "funded": found,
+        // The frontier this implies: one past the highest funded identity,
+        // never below the always-present identity 0.
+        "frontier": found.iter().max().map(|m| m + 1).unwrap_or(1),
+    }))
+    .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
 /// `sha256` of the stealth script template — the path segment for the
 /// explorer's `boxes/unspent/byErgoTreeTemplateHash/{hash}` endpoint.
 #[flutter_rust_bridge::frb(sync)]
@@ -475,6 +546,12 @@ pub fn stealth_template_hash() -> String {
 #[flutter_rust_bridge::frb(sync)]
 pub fn stealth_derivation_path() -> String {
     stealth::STEALTH_DERIVATION_PATH.to_string()
+}
+
+/// The BIP-32 path of stealth identity `index`, for display in Settings.
+#[flutter_rust_bridge::frb(sync)]
+pub fn stealth_derivation_path_at(index: u32) -> String {
+    stealth::stealth_derivation_path(index)
 }
 
 /// Validate a `stealth…` string: prefix, Base58, length, blake2b checksum
@@ -523,16 +600,20 @@ pub fn stealth_self_change_target(stealth_address: String) -> Result<String, Str
 /// private half of detection.
 #[flutter_rust_bridge::frb]
 pub fn stealth_scan(handle_id: u64, explorer_boxes_json: String) -> Result<String, String> {
-    // Take the secret under the handle lock, then scan outside it: the box
+    // Take the secrets under the handle lock, then scan outside it: the box
     // list is sized by the network, and every other FFI call would block.
-    let secret = with_handle(handle_id, "stealth_scan", |h| {
-        h.stealth_secret().map_err(err_str)
+    let secrets = with_handle(handle_id, "stealth_scan", |h| {
+        h.stealth_secrets_in_use().map_err(err_str)
     })?;
-    crate::api_stealth_impl::scan(&secret, &explorer_boxes_json)
+    crate::api_stealth_impl::scan(&secrets, &explorer_boxes_json)
 }
 
-/// Prepare a transaction moving every owned stealth box to one of this
-/// wallet's own addresses. Confirm and broadcast it with `send_erg`.
+/// Prepare a transaction moving owned stealth boxes to one of this wallet's
+/// own addresses. Confirm and broadcast it with `send_erg`.
+///
+/// `only_identity` restricts the sweep to one stealth identity; `None` sweeps
+/// every identity in use, which is what a wallet with a single identity has
+/// always done.
 #[flutter_rust_bridge::frb]
 pub async fn prepare_stealth_sweep(
     handle_id: u64,
@@ -540,21 +621,30 @@ pub async fn prepare_stealth_sweep(
     destination_address: String,
     node_url: Option<String>,
     fee_nano: Option<i64>,
+    only_identity: Option<u32>,
 ) -> Result<String, String> {
-    // Only the ownership check and the secret need the handle lock; parsing
+    // Only the ownership check and the secrets need the handle lock; parsing
     // and per-box scalar work happen after it is released.
-    let secret = with_handle(handle_id, "prepare_stealth_sweep", |h| {
+    let secrets = with_handle(handle_id, "prepare_stealth_sweep", |h| {
         if !h.owns_address(&destination_address).map_err(err_str)? {
             return Err(ArgusError::InvalidAddress(
                 "stealth sweep destination is not an address of this wallet".into(),
             )
             .to_json_string());
         }
-        h.stealth_secret().map_err(err_str)
+        h.stealth_secrets_in_use().map_err(err_str)
     })?;
     let all = stealth::parse_explorer_boxes(&explorer_boxes_json)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-    let owned = stealth::detect_owned(&secret, &all);
+    // A sweep with no identity filter moves every identity's funds into one
+    // output, which merges them on chain. `only_identity` sweeps a single
+    // pocket instead, so two published contexts need not be linked to be
+    // spent.
+    let owned = stealth::detect_owned_multi(&secrets, &all)
+        .into_iter()
+        .filter(|o| only_identity.is_none_or(|i| o.identity == i))
+        .map(|o| o.owned)
+        .collect::<Vec<_>>();
     if owned.is_empty() {
         return Err(ArgusError::NoUtxos("no stealth boxes to sweep".into()).to_json_string());
     }
@@ -1655,8 +1745,10 @@ fn wallet_can_spend_change(h: &wallet_core::WalletHandle, address: &str) -> Resu
     if !stealth::is_stealth_tree(&tree) {
         return Ok(false);
     }
-    let secret = h.stealth_secret().map_err(err_str)?;
-    Ok(secret.owns_tree(&tree))
+    // Change may be sent to a one-time script of any identity in use, not
+    // only identity 0, so the whole set has to be offered the tree.
+    let secrets = h.stealth_secrets_in_use().map_err(err_str)?;
+    Ok(stealth::identity_for_tree(&secrets, &tree).is_some())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1718,10 +1810,15 @@ async fn prepare(
     // stealth key owns are added, and only chosen ones are ever spent.
     let stealth_owned = match stealth_boxes_json.as_deref() {
         Some(json) if !json.trim().is_empty() => {
-            let secret = with_handle(handle_id, "send", |h| h.stealth_secret().map_err(err_str))?;
+            let secrets = with_handle(handle_id, "send", |h| {
+                h.stealth_secrets_in_use().map_err(err_str)
+            })?;
             let all = stealth::parse_explorer_boxes(json)
                 .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-            stealth::detect_owned(&secret, &all)
+            stealth::detect_owned_multi(&secrets, &all)
+                .into_iter()
+                .map(|o| o.owned)
+                .collect()
         }
         _ => Vec::new(),
     };

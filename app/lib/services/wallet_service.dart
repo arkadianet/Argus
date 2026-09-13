@@ -1195,6 +1195,34 @@ class WalletService {
     return RustLib.instance.api.crateApiStealthAddress(handleId: _handleId!);
   }
 
+  /// The published `stealth…` string for stealth identity [index].
+  Future<String> stealthAddressAt(int index) {
+    _requireUnlocked();
+    return RustLib.instance.api
+        .crateApiStealthAddressAt(handleId: _handleId!, index: index);
+  }
+
+  /// Tell the handle to scan and spend with identities `0..=index`.
+  /// Returns how many identities are in use afterwards.
+  Future<int> stealthUseIdentity(int index) {
+    _requireUnlocked();
+    return RustLib.instance.api
+        .crateApiStealthUseIdentity(handleId: _handleId!, index: index);
+  }
+
+  /// Which stealth identities hold funds in [explorerBoxesJson], for a
+  /// restore that has no persisted identity list to go on.
+  Future<Map<String, dynamic>> stealthDiscoverIdentities(
+    String explorerBoxesJson,
+  ) async {
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiStealthDiscoverIdentities(
+      handleId: _handleId!,
+      explorerBoxesJson: explorerBoxesJson,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
+  }
+
   /// Which of the explorer's stealth boxes this wallet can spend.
   /// [explorerBoxesJson] is the raw body of the template-hash endpoint.
   Future<Map<String, dynamic>> stealthScan(String explorerBoxesJson) async {
@@ -1206,13 +1234,17 @@ class WalletService {
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
-  /// Prepare a sweep of every owned stealth box to one of our own addresses.
+  /// Prepare a sweep of owned stealth boxes to one of our own addresses.
   /// Broadcast it with [sendErg], like any other preparation.
+  ///
+  /// [onlyIdentity] sweeps a single stealth identity; null sweeps them all,
+  /// which merges their funds into one output and so links them on chain.
   Future<SendPreview> prepareStealthSweep({
     required String explorerBoxesJson,
     required String destinationAddress,
     String? nodeUrl,
     int? feeNanoErg,
+    int? onlyIdentity,
   }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiPrepareStealthSweep(
@@ -1221,6 +1253,7 @@ class WalletService {
       destinationAddress: destinationAddress,
       nodeUrl: nodeUrl,
       feeNano: feeNanoErg,
+      onlyIdentity: onlyIdentity,
     );
     return SendPreview.fromJson(jsonDecode(raw) as Map<String, dynamic>);
   }

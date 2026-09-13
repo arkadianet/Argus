@@ -23,6 +23,35 @@ use crate::tree::{parse_stealth_tree, StealthTuple};
 /// sequences, so the path is expressible verbatim.
 pub const STEALTH_DERIVATION_PATH: &str = "m/44'/429'/0'/3'/0";
 
+/// The branch every stealth identity hangs off. Identity `i` is the
+/// non-hardened child `i` of this hardened node.
+const STEALTH_BRANCH: &str = "m/44'/429'/0'/3'";
+
+/// Highest identity index the wallet will derive.
+///
+/// Not a protocol limit — a guard so a corrupted frontier cannot ask for
+/// millions of derivations, and the bound restore discovery scans within.
+pub const MAX_STEALTH_IDENTITY: u32 = 255;
+
+/// Bound for restore-time discovery: identities `0..STEALTH_DISCOVERY_SPAN`
+/// are tested against the box set when the frontier is unknown.
+///
+/// A stealth identity has no on-chain footprint until it is paid, so there is
+/// no gap-scan termination rule to lean on — only funded identities can be
+/// rediscovered, and this is how far we look for them.
+pub const STEALTH_DISCOVERY_SPAN: u32 = 32;
+
+/// The full derivation path of identity `index`.
+pub fn stealth_derivation_path(index: u32) -> String {
+    // Identity 0 keeps the literal historical string, so the constant and the
+    // function can never drift apart for the identity that is already
+    // published in the wild.
+    if index == 0 {
+        return STEALTH_DERIVATION_PATH.to_string();
+    }
+    format!("{STEALTH_BRANCH}/{index}")
+}
+
 /// A wallet's stealth identity: the secret `x` and everything derived from it.
 ///
 /// `x` never leaves this struct; `Debug` deliberately hides it.
@@ -30,21 +59,36 @@ pub const STEALTH_DERIVATION_PATH: &str = "m/44'/429'/0'/3'/0";
 pub struct StealthSecret {
     scalar: Wscalar,
     public: EcPoint,
+    index: u32,
 }
 
 impl core::fmt::Debug for StealthSecret {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("StealthSecret")
             .field("secret", &"*****")
+            .field("index", &self.index)
             .field("public", &self.public)
             .finish()
     }
 }
 
 impl StealthSecret {
-    /// Derive from a wallet root key on [`STEALTH_DERIVATION_PATH`].
+    /// Derive identity 0 from a wallet root key on [`STEALTH_DERIVATION_PATH`].
     pub fn derive(root: &ExtSecretKey) -> Result<Self, StealthError> {
-        let path = STEALTH_DERIVATION_PATH
+        Self::derive_at(root, 0)
+    }
+
+    /// Derive identity `index` from a wallet root key.
+    ///
+    /// Index 0 walks the exact historical path, so a string already published
+    /// by a wallet that only ever knew one identity does not move.
+    pub fn derive_at(root: &ExtSecretKey, index: u32) -> Result<Self, StealthError> {
+        if index > MAX_STEALTH_IDENTITY {
+            return Err(StealthError::Derivation(format!(
+                "stealth identity {index} is above the maximum {MAX_STEALTH_IDENTITY}"
+            )));
+        }
+        let path = stealth_derivation_path(index)
             .parse::<ergo_lib::wallet::derivation_path::DerivationPath>()
             .map_err(|e| StealthError::Derivation(e.to_string()))?;
         let child = root
@@ -56,13 +100,32 @@ impl StealthSecret {
         let scalar = scalar.ok_or_else(|| {
             StealthError::Derivation("derived stealth key is not a valid scalar".into())
         })?;
-        Ok(Self::from_scalar(scalar))
+        Ok(Self::from_scalar_at(scalar, index))
+    }
+
+    /// Every identity `0..count`, in order. `count` of 0 yields nothing.
+    pub fn derive_range(root: &ExtSecretKey, count: u32) -> Result<Vec<Self>, StealthError> {
+        (0..count).map(|i| Self::derive_at(root, i)).collect()
     }
 
     /// Build from a raw scalar. Used by tests and by fixed test vectors.
     pub fn from_scalar(scalar: Wscalar) -> Self {
+        Self::from_scalar_at(scalar, 0)
+    }
+
+    /// Build from a raw scalar, labelled with the identity index it came from.
+    pub fn from_scalar_at(scalar: Wscalar, index: u32) -> Self {
         let public = exponentiate_gen(scalar.as_scalar_ref());
-        Self { scalar, public }
+        Self {
+            scalar,
+            public,
+            index,
+        }
+    }
+
+    /// Which identity this is: the final, non-hardened path element.
+    pub fn index(&self) -> u32 {
+        self.index
     }
 
     /// The published key `u = g^x`.
@@ -249,6 +312,94 @@ mod tests {
             .parse_address_from_str(address)
             .ok()?;
         addr.script().ok()?.sigma_serialize_bytes().ok().map(hex::encode)
+    }
+
+    /// The whole point of `derive_at`: identity 0 must be the byte-for-byte
+    /// same key it was before multiple identities existed, or every already
+    /// published string would move and funds paid to it would be stranded.
+    #[test]
+    fn identity_zero_is_the_historical_path_untouched() {
+        let seed = Mnemonic::to_seed(APPKIT, "");
+        let root = ExtSecretKey::derive_master(seed).unwrap();
+
+        assert_eq!(stealth_derivation_path(0), "m/44'/429'/0'/3'/0");
+        assert_eq!(stealth_derivation_path(1), "m/44'/429'/0'/3'/1");
+        assert_eq!(stealth_derivation_path(7), "m/44'/429'/0'/3'/7");
+
+        let legacy = StealthSecret::derive(&root).unwrap();
+        let at_zero = StealthSecret::derive_at(&root, 0).unwrap();
+        assert_eq!(legacy.public_key(), at_zero.public_key());
+        assert_eq!(
+            legacy.stealth_address().unwrap(),
+            at_zero.stealth_address().unwrap()
+        );
+        assert_eq!(at_zero.index(), 0);
+    }
+
+    #[test]
+    fn identities_are_distinct_deterministic_and_seed_recoverable() {
+        let seed = Mnemonic::to_seed(APPKIT, "");
+        let root = ExtSecretKey::derive_master(seed).unwrap();
+        let first = StealthSecret::derive_range(&root, 5).unwrap();
+
+        // Distinct: no two identities share a published string.
+        let strings: Vec<String> = first
+            .iter()
+            .map(|s| s.stealth_address().unwrap())
+            .collect();
+        let unique: std::collections::BTreeSet<&String> = strings.iter().collect();
+        assert_eq!(unique.len(), strings.len());
+        assert!(strings.iter().all(|s| s.starts_with("stealth")));
+
+        // Seed-recoverable: the same phrase regenerates the same strings.
+        let root_again = ExtSecretKey::derive_master(Mnemonic::to_seed(APPKIT, "")).unwrap();
+        let again = StealthSecret::derive_range(&root_again, 5).unwrap();
+        for (a, b) in first.iter().zip(&again) {
+            assert_eq!(a.stealth_address().unwrap(), b.stealth_address().unwrap());
+            assert_eq!(a.index(), b.index());
+        }
+
+        // A different seed shares none of them.
+        let other_root =
+            ExtSecretKey::derive_master(Mnemonic::to_seed(
+                "race relax argue hair sorry riot there spirit ready fetch food hedgehog hybrid mobile pretty",
+                "",
+            ))
+            .unwrap();
+        for s in StealthSecret::derive_range(&other_root, 5).unwrap() {
+            assert!(!strings.contains(&s.stealth_address().unwrap()));
+        }
+    }
+
+    /// Every identity sits under the hardened `3'` node, so none of them can
+    /// collide with a P2PK signing key and no account-level xpub can walk in.
+    #[test]
+    fn no_identity_collides_with_a_payment_key() {
+        let seed = Mnemonic::to_seed(APPKIT, "");
+        let root = ExtSecretKey::derive_master(seed).unwrap();
+        let payment: Vec<_> = (0..8u32)
+            .map(|i| {
+                root.derive(format!("m/44'/429'/0'/0/{i}").parse().unwrap())
+                    .unwrap()
+                    .secret_key_bytes()
+            })
+            .collect();
+        for i in 0..8u32 {
+            let stealth = root
+                .derive(stealth_derivation_path(i).parse().unwrap())
+                .unwrap()
+                .secret_key_bytes();
+            assert!(payment.iter().all(|p| p != &stealth));
+            assert!(stealth_derivation_path(i).starts_with("m/44'/429'/0'/3'/"));
+        }
+    }
+
+    #[test]
+    fn an_index_above_the_maximum_is_refused() {
+        let seed = Mnemonic::to_seed(APPKIT, "");
+        let root = ExtSecretKey::derive_master(seed).unwrap();
+        assert!(StealthSecret::derive_at(&root, MAX_STEALTH_IDENTITY).is_ok());
+        assert!(StealthSecret::derive_at(&root, MAX_STEALTH_IDENTITY + 1).is_err());
     }
 
     #[test]

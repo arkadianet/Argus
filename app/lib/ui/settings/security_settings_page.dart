@@ -2,12 +2,14 @@ import '../widgets/error_sheet.dart';
 import 'package:flutter/material.dart';
 
 import '../../bridge/argus_error.dart';
+import '../../format.dart';
 import '../../services/privacy_service.dart';
 import '../../services/secure_storage.dart';
 import '../../services/session_lock.dart';
 import '../../services/battery_service.dart';
 import '../../services/mix_service.dart';
 import '../widgets/battery_note.dart';
+import '../../services/stealth_identities.dart';
 import '../../services/stealth_service.dart';
 import '../../services/wallet_service.dart';
 import '../pin_fields.dart';
@@ -83,6 +85,78 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
   void _snack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// What one stealth identity holds, or why we cannot say.
+  String _stealthIdentitySubtitle(int index) {
+    final address = stealthService.addressOf(index);
+    final where = address == null
+        ? 'Unlock to see this address'
+        : shortStealth(address);
+    if (!stealthService.scanEnabled) return '$where · scanning off';
+    final scan = stealthService.lastScan;
+    if (scan == null) return '$where · balance unknown';
+    final balance = scan.balanceOf(index);
+    return balance.ownedCount == 0
+        ? '$where · no payments'
+        : '$where · ${formatErg(balance.totalNanoErg)} in '
+            '${balance.ownedCount} box${balance.ownedCount == 1 ? '' : 'es'}';
+  }
+
+  Future<void> _renameStealthIdentity(StealthIdentity id) async {
+    final controller = TextEditingController(text: id.label);
+    final label = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename stealth address'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 40,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: const InputDecoration(
+            labelText: 'Label',
+            helperText: 'The address itself does not change.',
+          ),
+          onSubmitted: (v) => Navigator.pop(context, v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    controller.dispose();
+    if (label == null) return;
+    try {
+      await stealthService.renameIdentity(id.index, label);
+    } catch (_) {
+      _snack('Could not save the label');
+    }
+  }
+
+  /// Adopt stealth identities that hold funds but are missing from this
+  /// device's list — the restore case, where the labels were lost with the
+  /// old device but the money is still findable.
+  Future<void> _discoverStealthIdentities() async {
+    setState(() => _busy = true);
+    try {
+      final found = await stealthService.discoverIdentities();
+      _snack(
+        found.isEmpty
+            ? 'No stealth addresses with funds beyond the ones already listed'
+            : 'Found ${found.length} stealth '
+                'address${found.length == 1 ? '' : 'es'} with funds',
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _disableBiometric() async {
@@ -392,6 +466,21 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
                   },
                 ),
               ),
+              for (final id in stealthService.identities)
+                SettingsRow(
+                  icon: Icons.alternate_email,
+                  title: id.displayLabel,
+                  subtitle: _stealthIdentitySubtitle(id.index),
+                  onTap: () => _renameStealthIdentity(id),
+                ),
+              SettingsRow(
+                icon: Icons.travel_explore_outlined,
+                title: 'Find stealth addresses with funds',
+                subtitle:
+                    'After restoring, looks for paid stealth addresses this '
+                    'device does not know about yet',
+                onTap: _discoverStealthIdentities,
+              ),
             ],
           ),
         ),
@@ -399,6 +488,12 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
           'The scan fetches the public list of stealth boxes from the '
           'explorer and tests it on your phone. The explorer learns that '
           'someone asked for the list, never which boxes are yours.',
+        ),
+        const SettingsNote(
+          'Every stealth address comes back from your recovery phrase, so '
+          'none of them needs its own backup. Labels are the exception: they '
+          'live on this device only, and a restore finds an address by its '
+          'payments, so one that was never paid comes back unnamed.',
         ),
         ListenableBuilder(
           listenable: mixService,

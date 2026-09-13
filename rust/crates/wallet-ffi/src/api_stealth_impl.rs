@@ -24,19 +24,27 @@ fn err(e: impl std::fmt::Display) -> String {
 
 /// Derive one DH-tuple secret per stealth input.
 ///
-/// Fails loudly if a tree is not ours, rather than producing a transaction
-/// that cannot be signed.
+/// Each tree is resolved against every identity in use, not just identity 0:
+/// a box paid to a later identity is detected by that identity's key and must
+/// be signed with it. Fails loudly if a tree belongs to none of them, rather
+/// than producing a transaction that cannot be signed.
 pub fn dht_secrets_for(
     handle: &WalletHandle,
     stealth_trees: &[String],
 ) -> Result<Vec<SecretKey>, String> {
-    let secret = handle
-        .stealth_secret()
+    let secrets = handle
+        .stealth_secrets_in_use()
         .map_err(|e| ArgusError::SigningFailed(e.to_string()).to_json_string())?;
     stealth_trees
         .iter()
         .map(|tree| {
-            secret
+            stealth::identity_for_tree(&secrets, tree)
+                .ok_or_else(|| {
+                    ArgusError::SigningFailed(
+                        "a stealth input belongs to no identity of this wallet".into(),
+                    )
+                    .to_json_string()
+                })?
                 .dht_prover_input_for_tree(tree)
                 .map(SecretKey::DhtSecretKey)
                 .map_err(|e| ArgusError::SigningFailed(e.to_string()).to_json_string())
@@ -62,21 +70,59 @@ pub fn owned_box_json(b: &stealth::StealthBox) -> serde_json::Value {
     })
 }
 
+/// The same box, tagged with the identity that owns it.
+fn owned_box_json_with_identity(o: &stealth::OwnedStealthBox) -> serde_json::Value {
+    let mut json = owned_box_json(&o.owned);
+    json["identity"] = serde_json::json!(o.identity);
+    json
+}
+
+fn token_totals_json(tokens: &std::collections::BTreeMap<String, u128>) -> serde_json::Value {
+    serde_json::json!(tokens
+        .iter()
+        .map(|(id, amount)| serde_json::json!({
+            "token_id": id,
+            "amount": amount.to_string(),
+        }))
+        .collect::<Vec<_>>())
+}
+
 /// Scan a batch of explorer boxes and report the ones we can spend.
-pub fn scan(secret: &stealth::StealthSecret, explorer_json: &str) -> Result<String, String> {
+///
+/// Totals are reported both as a wallet-wide figure — what the balance card
+/// shows, unchanged from when there was one identity — and broken down per
+/// identity, which is what the privacy settings list needs.
+pub fn scan(secrets: &[stealth::StealthSecret], explorer_json: &str) -> Result<String, String> {
     let all = stealth::parse_explorer_boxes(explorer_json)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-    let owned = stealth::detect_owned(secret, &all);
-    let (erg, tokens) = stealth::totals(&owned);
+    let owned = stealth::detect_owned_multi(secrets, &all);
+    let flat: Vec<stealth::StealthBox> = owned.iter().map(|o| o.owned.clone()).collect();
+    let (erg, tokens) = stealth::totals(&flat);
+
+    // Every identity in use gets a row, funded or not: an identity with no
+    // payments yet is exactly the case the UI has to be able to show.
+    let per_identity = secrets.iter().map(|s| {
+        let mine: Vec<stealth::StealthBox> = owned
+            .iter()
+            .filter(|o| o.identity == s.index())
+            .map(|o| o.owned.clone())
+            .collect();
+        let (erg, tokens) = stealth::totals(&mine);
+        serde_json::json!({
+            "index": s.index(),
+            "owned_count": mine.len(),
+            "total_nano_erg": erg,
+            "tokens": token_totals_json(&tokens),
+        })
+    });
+
     serde_json::to_string(&serde_json::json!({
         "scanned": all.len(),
         "owned_count": owned.len(),
         "total_nano_erg": erg,
-        "tokens": tokens.iter().map(|(id, amount)| serde_json::json!({
-            "token_id": id,
-            "amount": amount.to_string(),
-        })).collect::<Vec<_>>(),
-        "boxes": owned.iter().map(owned_box_json).collect::<Vec<_>>(),
+        "tokens": token_totals_json(&tokens),
+        "boxes": owned.iter().map(owned_box_json_with_identity).collect::<Vec<_>>(),
+        "identities": per_identity.collect::<Vec<_>>(),
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
@@ -249,18 +295,29 @@ mod tests {
         include_str!("../../vendor/protocols/stealth/test/fixtures/unspent_stealth_boxes.json");
     const APPKIT: &str = "slow silly start wash bundle suffer bulb ancient height spin express remind today effort helmet";
 
-    fn secret() -> stealth::StealthSecret {
-        let seed = Mnemonic::to_seed(APPKIT, "");
-        stealth::StealthSecret::derive(&ExtSecretKey::derive_master(seed).unwrap()).unwrap()
+    fn root() -> ExtSecretKey {
+        ExtSecretKey::derive_master(Mnemonic::to_seed(APPKIT, "")).unwrap()
     }
 
-    fn my_box(value: i64, tokens: &[(&str, &str)]) -> stealth::StealthBox {
+    fn secret() -> stealth::StealthSecret {
+        stealth::StealthSecret::derive(&root()).unwrap()
+    }
+
+    fn identities(count: u32) -> Vec<stealth::StealthSecret> {
+        stealth::StealthSecret::derive_range(&root(), count).unwrap()
+    }
+
+    fn box_for(
+        who: &stealth::StealthSecret,
+        value: i64,
+        tokens: &[(&str, &str)],
+    ) -> stealth::StealthBox {
         stealth::StealthBox {
-            box_id: format!("{:064x}", value),
+            box_id: format!("{:064x}", value + who.index() as i64),
             transaction_id: "b".repeat(64),
             index: 0,
             value,
-            ergo_tree: stealth::build_payment_tree_hex(secret().public_key()).unwrap(),
+            ergo_tree: stealth::build_payment_tree_hex(who.public_key()).unwrap(),
             creation_height: 1_000_000,
             assets: tokens
                 .iter()
@@ -273,29 +330,93 @@ mod tests {
         }
     }
 
+    fn my_box(value: i64, tokens: &[(&str, &str)]) -> stealth::StealthBox {
+        box_for(&secret(), value, tokens)
+    }
+
+    /// Boxes plus the fixture's strangers, as an explorer body.
+    fn body_with(boxes: &[stealth::StealthBox]) -> String {
+        let mut items: Vec<serde_json::Value> = serde_json::from_str::<serde_json::Value>(FIXTURE)
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .clone();
+        for b in boxes {
+            items.push(b.to_node_json());
+        }
+        serde_json::json!({ "items": items }).to_string()
+    }
+
     #[test]
     fn scan_reports_nothing_for_a_stranger_wallet() {
-        let out = scan(&secret(), FIXTURE).unwrap();
+        let out = scan(&[secret()], FIXTURE).unwrap();
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["scanned"], 3);
         assert_eq!(v["owned_count"], 0);
         assert_eq!(v["total_nano_erg"], 0);
     }
 
+    /// The wallet-wide totals must not change shape or meaning now that they
+    /// are summed across identities — the balance card reads them.
     #[test]
-    fn scan_reports_our_own_boxes_with_totals() {
-        let mut items: Vec<serde_json::Value> = serde_json::from_str::<serde_json::Value>(FIXTURE)
-            .unwrap()["items"]
+    fn scan_totals_span_every_identity_and_each_box_names_its_owner() {
+        let ids = identities(4);
+        let body = body_with(&[
+            box_for(&ids[0], 1_000_000, &[("aa", "2")]),
+            box_for(&ids[2], 3_000_000, &[("aa", "5"), ("bb", "1")]),
+            box_for(&ids[2], 500_000, &[]),
+        ]);
+
+        let v: serde_json::Value = serde_json::from_str(&scan(&ids, &body).unwrap()).unwrap();
+        assert_eq!(v["scanned"], 6);
+        assert_eq!(v["owned_count"], 3);
+        assert_eq!(v["total_nano_erg"], 4_500_000);
+
+        let owners: Vec<u64> = v["boxes"]
             .as_array()
             .unwrap()
-            .clone();
-        let mine = my_box(1_500_000, &[("aa", "7")]);
-        items.push(
-            serde_json::from_str(&serde_json::to_string(&mine.to_node_json()).unwrap()).unwrap(),
-        );
-        let json = serde_json::json!({ "items": items }).to_string();
+            .iter()
+            .map(|b| b["identity"].as_u64().unwrap())
+            .collect();
+        assert_eq!(owners, vec![0, 2, 2]);
 
-        let v: serde_json::Value = serde_json::from_str(&scan(&secret(), &json).unwrap()).unwrap();
+        // Every identity in use gets a row, funded or not.
+        let rows = v["identities"].as_array().unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0]["total_nano_erg"], 1_000_000);
+        assert_eq!(rows[1]["total_nano_erg"], 0);
+        assert_eq!(rows[1]["owned_count"], 0);
+        assert_eq!(rows[2]["total_nano_erg"], 3_500_000);
+        assert_eq!(rows[2]["owned_count"], 2);
+        assert_eq!(rows[2]["tokens"][0]["token_id"], "aa");
+        assert_eq!(rows[2]["tokens"][0]["amount"], "5");
+        assert_eq!(rows[3]["owned_count"], 0);
+    }
+
+    /// A session that has not raised its frontier must not see, or claim,
+    /// funds sitting on an identity it does not know about.
+    #[test]
+    fn a_narrower_identity_set_leaves_higher_identities_alone() {
+        let ids = identities(4);
+        let body = body_with(&[box_for(&ids[3], 9_000_000, &[])]);
+
+        let narrow: serde_json::Value =
+            serde_json::from_str(&scan(&ids[..1], &body).unwrap()).unwrap();
+        assert_eq!(narrow["owned_count"], 0);
+        assert_eq!(narrow["total_nano_erg"], 0);
+        assert_eq!(narrow["identities"].as_array().unwrap().len(), 1);
+
+        let wide: serde_json::Value = serde_json::from_str(&scan(&ids, &body).unwrap()).unwrap();
+        assert_eq!(wide["owned_count"], 1);
+        assert_eq!(wide["total_nano_erg"], 9_000_000);
+    }
+
+    #[test]
+    fn scan_reports_our_own_boxes_with_totals() {
+        let mine = my_box(1_500_000, &[("aa", "7")]);
+        let json = body_with(&[mine.clone()]);
+
+        let v: serde_json::Value = serde_json::from_str(&scan(&[secret()], &json).unwrap()).unwrap();
         assert_eq!(v["scanned"], 4);
         assert_eq!(v["owned_count"], 1);
         assert_eq!(v["total_nano_erg"], 1_500_000);
@@ -307,7 +428,7 @@ mod tests {
 
     #[test]
     fn scan_of_an_unreachable_explorer_body_is_an_error_not_a_panic() {
-        assert!(scan(&secret(), "<html>502 Bad Gateway</html>").is_err());
+        assert!(scan(&[secret()], "<html>502 Bad Gateway</html>").is_err());
     }
 
     #[test]
@@ -359,6 +480,42 @@ mod tests {
     fn sweep_refuses_a_fee_below_the_protocol_minimum() {
         let inputs = vec![to_input(&my_box(10_000_000, &[]))];
         assert!(build_sweep(&inputs, "00", 1, Some(1)).is_err());
+    }
+
+    /// The bug this guards: detection finds a box paid to identity 2, but
+    /// signing derives identity 0's key, so the transaction cannot be signed
+    /// and the funds are stuck. Every identity in use must be tried.
+    #[test]
+    fn signing_resolves_a_box_to_the_identity_that_owns_it() {
+        use wallet_core::seed::MnemonicPhrase;
+
+        let handle = WalletHandle::create(MnemonicPhrase::parse(APPKIT).unwrap(), "").unwrap();
+        let ids = identities(3);
+        let trees: Vec<String> = ids
+            .iter()
+            .map(|s| stealth::build_payment_tree_hex(s.public_key()).unwrap())
+            .collect();
+
+        // Only identity 0 is in use: its own box signs, the others do not.
+        assert_eq!(dht_secrets_for(&handle, &trees[..1]).unwrap().len(), 1);
+        let err = dht_secrets_for(&handle, &trees).unwrap_err();
+        assert!(err.contains("no identity of this wallet"), "{err}");
+
+        // Once the frontier covers them, all three sign.
+        handle.ensure_stealth_identity(2).unwrap();
+        assert_eq!(dht_secrets_for(&handle, &trees).unwrap().len(), 3);
+
+        // A stranger's box is still refused, loudly, at build time.
+        let stranger = stealth::StealthSecret::derive(
+            &ExtSecretKey::derive_master(Mnemonic::to_seed(
+                "race relax argue hair sorry riot there spirit ready fetch food hedgehog hybrid mobile pretty",
+                "",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let theirs = stealth::build_payment_tree_hex(stranger.public_key()).unwrap();
+        assert!(dht_secrets_for(&handle, &[theirs]).is_err());
     }
 
     #[test]

@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../bridge/frb_generated.dart';
 import 'network_controller.dart';
+import 'stealth_identities.dart';
 import 'wallet_service.dart';
 
 /// A token sitting in stealth boxes.
@@ -29,6 +30,7 @@ class StealthOwnedBox {
     required this.creationHeight,
     required this.tokens,
     this.ergoTree = '',
+    this.identity = 0,
   });
 
   final String boxId;
@@ -40,18 +42,53 @@ class StealthOwnedBox {
   /// The one-time script, used to retire a self-change record once spent.
   final String ergoTree;
 
+  /// Which stealth identity of this wallet was paid.
+  final int identity;
+
   factory StealthOwnedBox.fromJson(Map<String, dynamic> json) => StealthOwnedBox(
         boxId: json['box_id']?.toString() ?? '',
         transactionId: json['transaction_id']?.toString() ?? '',
         valueNanoErg: (json['value_nano_erg'] as num?)?.toInt() ?? 0,
         creationHeight: (json['creation_height'] as num?)?.toInt() ?? 0,
         ergoTree: json['ergo_tree']?.toString() ?? '',
+        identity: (json['identity'] as num?)?.toInt() ?? 0,
         tokens: [
           for (final a in (json['assets'] as List? ?? const []))
             if (a is Map)
               StealthToken(
                 id: a['token_id']?.toString() ?? '',
                 amount: BigInt.tryParse(a['amount']?.toString() ?? '') ?? BigInt.zero,
+              ),
+        ],
+      );
+}
+
+/// What one stealth identity holds, as the last scan saw it.
+class StealthIdentityBalance {
+  const StealthIdentityBalance({
+    required this.index,
+    required this.ownedCount,
+    required this.totalNanoErg,
+    required this.tokens,
+  });
+
+  final int index;
+  final int ownedCount;
+  final int totalNanoErg;
+  final List<StealthToken> tokens;
+
+  static StealthIdentityBalance fromJson(Map<String, dynamic> json) =>
+      StealthIdentityBalance(
+        index: (json['index'] as num?)?.toInt() ?? 0,
+        ownedCount: (json['owned_count'] as num?)?.toInt() ?? 0,
+        totalNanoErg: (json['total_nano_erg'] as num?)?.toInt() ?? 0,
+        tokens: [
+          for (final t in (json['tokens'] as List? ?? const []))
+            if (t is Map)
+              StealthToken(
+                id: t['token_id']?.toString() ?? '',
+                amount:
+                    BigInt.tryParse(t['amount']?.toString() ?? '') ?? BigInt.zero,
               ),
         ],
       );
@@ -65,6 +102,7 @@ class StealthScanResult {
     required this.tokens,
     required this.boxIds,
     this.boxes = const [],
+    this.identities = const [],
   });
 
   /// How many stealth boxes the explorer returned in total.
@@ -79,7 +117,36 @@ class StealthScanResult {
   /// Every owned box as detection saw it, for the activity list.
   final List<StealthOwnedBox> boxes;
 
+  /// One row per identity that was scanned, funded or not.
+  final List<StealthIdentityBalance> identities;
+
   bool get isEmpty => ownedCount == 0;
+
+  /// What identity [index] holds, or a zero row if it was not scanned.
+  ///
+  /// A result carrying no per-identity rows came from a scan that knew only
+  /// one identity, so its wallet-wide totals *are* identity 0's. Reporting
+  /// zero there would hide real funds from the balance line and take the
+  /// sweep button away with them.
+  StealthIdentityBalance balanceOf(int index) {
+    if (identities.isEmpty) {
+      return StealthIdentityBalance(
+        index: index,
+        ownedCount: index == 0 ? ownedCount : 0,
+        totalNanoErg: index == 0 ? totalNanoErg : 0,
+        tokens: index == 0 ? tokens : const [],
+      );
+    }
+    return identities.firstWhere(
+      (i) => i.index == index,
+      orElse: () => StealthIdentityBalance(
+        index: index,
+        ownedCount: 0,
+        totalNanoErg: 0,
+        tokens: const [],
+      ),
+    );
+  }
 
   static const empty = StealthScanResult(
     scanned: 0,
@@ -111,6 +178,11 @@ class StealthScanResult {
           for (final b in (json['boxes'] as List? ?? const []))
             if (b is Map && b['box_id'] != null)
               StealthOwnedBox.fromJson(b.cast<String, dynamic>()),
+        ],
+        identities: [
+          for (final i in (json['identities'] as List? ?? const []))
+            if (i is Map)
+              StealthIdentityBalance.fromJson(i.cast<String, dynamic>()),
         ],
       );
 }
@@ -207,8 +279,31 @@ class StealthService extends ChangeNotifier {
   /// Whether each sync queries the explorer for stealth boxes. Default on.
   bool scanEnabled = true;
 
-  /// The wallet's published `stealth…` string, or null while locked.
+  /// The wallet's published `stealth…` string for the default identity, or
+  /// null while locked. Kept as the plain `address` it always was: the
+  /// balance card, the change target and every existing caller mean this one.
   String? address;
+
+  /// Every stealth identity of the active wallet, lowest index first.
+  /// Always holds at least identity 0.
+  List<StealthIdentity> identities = const [
+    StealthIdentity(index: 0, label: ''),
+  ];
+
+  /// Published string per identity index, filled in as they are derived.
+  final Map<int, String> _addressByIdentity = {};
+
+  /// The published string for [index], or null if it has not been derived
+  /// yet (or the wallet is locked).
+  String? addressOf(int index) =>
+      index == 0 ? address ?? _addressByIdentity[0] : _addressByIdentity[index];
+
+  /// How many identities the wallet handle should scan with.
+  int get frontier => StealthIdentityStore.frontierOf(identities);
+
+  /// True once the user has more than the one identity every wallet has, so
+  /// the UI can stay exactly as it was for everyone else.
+  bool get hasMultipleIdentities => identities.length > 1;
 
   /// Last successful scan. Null means "never scanned this session".
   StealthScanResult? lastScan;
@@ -259,10 +354,147 @@ class StealthService extends ChangeNotifier {
   void reset() {
     _generation++;
     address = null;
+    identities = const [StealthIdentity(index: 0, label: '')];
+    _identitiesLoaded = false;
+    _addressByIdentity.clear();
     lastScan = null;
     lastScanFailed = false;
     _lastBoxesJson = null;
     notifyListeners();
+  }
+
+  /// Load the persisted identity list, tell the wallet handle about it, and
+  /// derive each published string.
+  ///
+  /// Call after unlock and before the first scan: until the handle knows the
+  /// frontier it scans with identity 0 alone, which would report funds on a
+  /// later identity as missing rather than as someone else's.
+  Future<List<StealthIdentity>> loadIdentities() async {
+    final walletId = _wallet.activeWalletId;
+    if (walletId == null || !_wallet.isUnlocked) return identities;
+    final gen = _generation;
+    final loaded = await StealthIdentityStore.load(walletId);
+    if (gen != _generation) return identities;
+    identities = loaded;
+    _identitiesLoaded = true;
+    await _syncFrontier(gen);
+    if (gen != _generation) return identities;
+    notifyListeners();
+    return identities;
+  }
+
+  /// False until the persisted list has been read for the current wallet.
+  /// [scan] checks it rather than trusting a call site to have loaded first:
+  /// scanning with a frontier of 1 when the user has more identities would
+  /// report their funds as absent.
+  bool _identitiesLoaded = false;
+
+  /// Push the frontier into the handle and derive any string we are missing.
+  Future<void> _syncFrontier(int gen) async {
+    if (!_wallet.isUnlocked) return;
+    try {
+      await _wallet.stealthUseIdentity(frontier - 1);
+    } catch (_) {
+      // The handle keeps whatever frontier it had: scanning narrow is the
+      // safe failure. The next unlock or add retries.
+      return;
+    }
+    for (final id in identities) {
+      if (gen != _generation) return;
+      if (_addressByIdentity.containsKey(id.index)) continue;
+      try {
+        final addr = await _wallet.stealthAddressAt(id.index);
+        if (gen != _generation) return;
+        _addressByIdentity[id.index] = addr;
+        if (id.index == 0) address = addr;
+      } catch (_) {
+        // Leave it unfilled; the row shows as unavailable rather than wrong.
+      }
+    }
+  }
+
+  /// Publish a new identity under [label] and start scanning for it.
+  ///
+  /// Returns the created identity; its string is available from [addressOf]
+  /// once this completes.
+  Future<StealthIdentity> addIdentity(String label) async {
+    final walletId = _wallet.activeWalletId;
+    if (walletId == null || !_wallet.isUnlocked) {
+      throw StateError('Unlock the wallet to add a stealth address');
+    }
+    final gen = _generation;
+    final created = await StealthIdentityStore.add(walletId, label);
+    if (gen != _generation) return created;
+    identities = [...identities, created]
+      ..sort((a, b) => a.index.compareTo(b.index));
+    await _syncFrontier(gen);
+    if (gen != _generation) return created;
+    notifyListeners();
+    return created;
+  }
+
+  /// Rename an identity. The label is local metadata; the string does not
+  /// change and anything already published stays valid.
+  Future<void> renameIdentity(int index, String label) async {
+    final walletId = _wallet.activeWalletId;
+    if (walletId == null) return;
+    final gen = _generation;
+    await StealthIdentityStore.rename(walletId, index, label);
+    if (gen != _generation) return;
+    identities = [
+      for (final i in identities)
+        if (i.index == index) i.copyWith(label: label.trim()) else i,
+    ];
+    notifyListeners();
+  }
+
+  /// Restore-time discovery: find identities that hold funds but are not in
+  /// this device's list, and adopt them.
+  ///
+  /// This exists because a stealth identity has no on-chain footprint until
+  /// it is paid, so there is no gap-scan that terminates correctly. Only
+  /// funded identities can be found — an identity that was published but
+  /// never paid is simply re-derived the next time the user adds one, at the
+  /// same index and so with the same string.
+  ///
+  /// Returns the indices newly adopted.
+  Future<List<int>> discoverIdentities({String? explorerBase}) async {
+    final walletId = _wallet.activeWalletId;
+    if (walletId == null || !_wallet.isUnlocked) return const [];
+    final gen = _generation;
+    String body;
+    try {
+      body = _lastBoxesJson ?? await _fetch(explorerBase ?? networkController.explorer);
+    } catch (_) {
+      return const [];
+    }
+    if (gen != _generation) return const [];
+    // A truncated list is not a complete view, so an identity missing from
+    // it would be wrongly read as unfunded and left out.
+    if (isTruncatedScan(body)) return const [];
+
+    final List<int> funded;
+    try {
+      final result = await _wallet.stealthDiscoverIdentities(body);
+      funded = [
+        for (final i in (result['funded'] as List? ?? const []))
+          if (i is num) i.toInt(),
+      ];
+    } catch (_) {
+      return const [];
+    }
+    if (gen != _generation) return const [];
+
+    final known = {for (final i in identities) i.index};
+    final fresh = funded.where((i) => !known.contains(i)).toList()..sort();
+    if (fresh.isEmpty) return const [];
+
+    identities = await StealthIdentityStore.merge(walletId, fresh);
+    if (gen != _generation) return fresh;
+    await _syncFrontier(gen);
+    if (gen != _generation) return fresh;
+    notifyListeners();
+    return fresh;
   }
 
   /// Loads (and caches) this wallet's published stealth string, and
@@ -280,6 +512,7 @@ class StealthService extends ChangeNotifier {
     }
     if (gen != _generation) return null;
     address = found;
+    if (found != null) _addressByIdentity[0] = found;
     if (found != null && walletId != null) {
       try {
         final prefs = await SharedPreferences.getInstance();
@@ -310,6 +543,9 @@ class StealthService extends ChangeNotifier {
   /// the previous result in place.
   Future<StealthScanResult?> scan({String? explorerBase}) async {
     if (!scanEnabled || !_wallet.isUnlocked) return null;
+    // The handle must know every identity before the scan, or funds on a
+    // later identity read as missing rather than as somebody else's.
+    if (!_identitiesLoaded) await loadIdentities();
     final gen = _generation;
     try {
       final base = explorerBase ?? networkController.explorer;
@@ -334,13 +570,19 @@ class StealthService extends ChangeNotifier {
     }
   }
 
-  /// Prepare a sweep of every owned stealth box to [destinationAddress].
+  /// Prepare a sweep of owned stealth boxes to [destinationAddress].
   ///
   /// Re-fetches the box list so the sweep never builds on a stale set.
+  ///
+  /// [onlyIdentity] limits the sweep to one identity. Leaving it null sweeps
+  /// every identity into a single output, which puts their funds in one
+  /// transaction and so links the contexts the user kept apart — offer that
+  /// only when they have asked for it.
   Future<SendPreview> prepareSweep({
     required String destinationAddress,
     String? nodeUrl,
     int? feeNanoErg,
+    int? onlyIdentity,
   }) async {
     var body = _lastBoxesJson;
     try {
@@ -367,6 +609,7 @@ class StealthService extends ChangeNotifier {
       destinationAddress: destinationAddress,
       nodeUrl: nodeUrl,
       feeNanoErg: feeNanoErg,
+      onlyIdentity: onlyIdentity,
     );
   }
 
@@ -397,6 +640,21 @@ class StealthService extends ChangeNotifier {
   /// Used by tests to prime the box list without a fetch.
   @visibleForTesting
   set cachedBoxesJson(String? value) => _lastBoxesJson = value;
+
+  /// Used by widget tests to prime an identity list without a wallet handle.
+  @visibleForTesting
+  void debugSetIdentities(
+    List<StealthIdentity> list,
+    Map<int, String> addresses,
+  ) {
+    identities = list;
+    _identitiesLoaded = true;
+    _addressByIdentity
+      ..clear()
+      ..addAll(addresses);
+    if (addresses.containsKey(0)) address = addresses[0];
+    notifyListeners();
+  }
 }
 
 /// True for a well-formed `stealth…` string (prefix, Base58, checksum).
