@@ -417,12 +417,12 @@ abstract class RustLibApi extends BaseApi {
     String? nodeUrl,
     PlatformInt64? feeNano,
     required PlatformInt64 nowUnix,
-    required String keyHex,
+    required List<int> keyBytes,
   });
 
   String crateApiMixContractTrees();
 
-  Future<String> crateApiMixExportKey({
+  Future<Uint8List> crateApiMixExportKey({
     required BigInt handleId,
     required int mixId,
   });
@@ -467,7 +467,7 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiMixObserveWithKey({
     required String stateJson,
     required String chainJson,
-    required String keyHex,
+    required List<int> keyBytes,
     required PlatformInt64 nowUnix,
   });
 
@@ -2922,7 +2922,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     String? nodeUrl,
     PlatformInt64? feeNano,
     required PlatformInt64 nowUnix,
-    required String keyHex,
+    required List<int> keyBytes,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -2934,7 +2934,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_opt_String(nodeUrl, serializer);
           sse_encode_opt_box_autoadd_i_64(feeNano, serializer);
           sse_encode_i_64(nowUnix, serializer);
-          sse_encode_String(keyHex, serializer);
+          sse_encode_list_prim_u_8_loose(keyBytes, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -2954,7 +2954,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           nodeUrl,
           feeNano,
           nowUnix,
-          keyHex,
+          keyBytes,
         ],
         apiImpl: this,
       ),
@@ -2970,7 +2970,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       "nodeUrl",
       "feeNano",
       "nowUnix",
-      "keyHex",
+      "keyBytes",
     ],
   );
 
@@ -2997,7 +2997,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       const TaskConstMeta(debugName: "mix_contract_trees", argNames: []);
 
   @override
-  Future<String> crateApiMixExportKey({
+  Future<Uint8List> crateApiMixExportKey({
     required BigInt handleId,
     required int mixId,
   }) {
@@ -3015,7 +3015,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           );
         },
         codec: SseCodec(
-          decodeSuccessData: sse_decode_String,
+          decodeSuccessData: sse_decode_list_prim_u_8_strict,
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiMixExportKeyConstMeta,
@@ -3253,7 +3253,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<String> crateApiMixObserveWithKey({
     required String stateJson,
     required String chainJson,
-    required String keyHex,
+    required List<int> keyBytes,
     required PlatformInt64 nowUnix,
   }) {
     return handler.executeNormal(
@@ -3262,7 +3262,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(stateJson, serializer);
           sse_encode_String(chainJson, serializer);
-          sse_encode_String(keyHex, serializer);
+          sse_encode_list_prim_u_8_loose(keyBytes, serializer);
           sse_encode_i_64(nowUnix, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
@@ -3276,7 +3276,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiMixObserveWithKeyConstMeta,
-        argValues: [stateJson, chainJson, keyHex, nowUnix],
+        argValues: [stateJson, chainJson, keyBytes, nowUnix],
         apiImpl: this,
       ),
     );
@@ -3284,7 +3284,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiMixObserveWithKeyConstMeta => const TaskConstMeta(
     debugName: "mix_observe_with_key",
-    argNames: ["stateJson", "chainJson", "keyHex", "nowUnix"],
+    argNames: ["stateJson", "chainJson", "keyBytes", "nowUnix"],
   );
 
   @override

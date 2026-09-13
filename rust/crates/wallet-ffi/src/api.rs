@@ -5447,16 +5447,16 @@ async fn broadcast_mix_move_with(
 // Background mixing: the same moves from a stored mix key, no wallet needed
 // ---------------------------------------------------------------------------
 
-/// The key for one mix, as hex, for the app's keystore. It derives every
+/// The key for one mix, as bytes, for the app's keystore. It derives every
 /// round of that mix and nothing else; see `zerojoin::MixKey`.
 #[flutter_rust_bridge::frb]
-pub fn mix_export_key(handle_id: u64, mix_id: u32) -> Result<String, String> {
+pub fn mix_export_key(handle_id: u64, mix_id: u32) -> Result<Vec<u8>, String> {
     with_handle(handle_id, "mix_export_key", |h| {
         let key = h.mix_key(mix_id).map_err(err_str)?;
         let bytes = key
             .to_bytes()
             .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
-        Ok(hex::encode(&bytes[..]))
+        Ok(bytes.to_vec())
     })
 }
 
@@ -5465,12 +5465,13 @@ pub fn mix_export_key(handle_id: u64, mix_id: u32) -> Result<String, String> {
 pub fn mix_observe_with_key(
     state_json: String,
     chain_json: String,
-    key_hex: String,
+    key_bytes: Vec<u8>,
     now_unix: i64,
 ) -> Result<String, String> {
+    let key_bytes = zeroize::Zeroizing::new(key_bytes);
     let state = crate::api_mix_impl::parse_state(&state_json)?;
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
-    let key = crate::api_mix_impl::parse_key(&key_hex, state.mix_id)?;
+    let key = crate::api_mix_impl::parse_key(&key_bytes, state.mix_id)?;
     let secret = key
         .round_secret(state.round)
         .map_err(|e| ArgusError::SigningFailed(e.to_string()).to_json_string())?;
@@ -5490,12 +5491,13 @@ pub async fn mix_advance_with_key(
     node_url: Option<String>,
     fee_nano: Option<i64>,
     now_unix: i64,
-    key_hex: String,
+    key_bytes: Vec<u8>,
 ) -> Result<String, String> {
+    let key_bytes = zeroize::Zeroizing::new(key_bytes);
     let now = mix_now(now_unix);
     let state = crate::api_mix_impl::parse_state(&state_json)?;
     let view = crate::api_mix_impl::parse_view(&chain_json)?;
-    let key = crate::api_mix_impl::parse_key(&key_hex, state.mix_id)?;
+    let key = crate::api_mix_impl::parse_key(&key_bytes, state.mix_id)?;
     let miner_fee = mix_miner_fee(fee_nano)?;
     let client = node_client(node_url).await?;
     let height = client

@@ -1123,21 +1123,24 @@ Future<String> mixPrepareEntry({
   nowUnix: nowUnix,
 );
 
-/// The key for one mix, as hex, for the app's keystore. It derives every
+/// The key for one mix, as bytes, for the app's keystore. It derives every
 /// round of that mix and nothing else; see `zerojoin::MixKey`.
-Future<String> mixExportKey({required BigInt handleId, required int mixId}) =>
+Future<Uint8List> mixExportKey({
+  required BigInt handleId,
+  required int mixId,
+}) =>
     RustLib.instance.api.crateApiMixExportKey(handleId: handleId, mixId: mixId);
 
 /// `mix_observe` from a stored key instead of the unlocked wallet.
 Future<String> mixObserveWithKey({
   required String stateJson,
   required String chainJson,
-  required String keyHex,
+  required List<int> keyBytes,
   required PlatformInt64 nowUnix,
 }) => RustLib.instance.api.crateApiMixObserveWithKey(
   stateJson: stateJson,
   chainJson: chainJson,
-  keyHex: keyHex,
+  keyBytes: keyBytes,
   nowUnix: nowUnix,
 );
 
@@ -1151,7 +1154,7 @@ Future<String> mixAdvanceWithKey({
   String? nodeUrl,
   PlatformInt64? feeNano,
   required PlatformInt64 nowUnix,
-  required String keyHex,
+  required List<int> keyBytes,
 }) => RustLib.instance.api.crateApiMixAdvanceWithKey(
   stateJson: stateJson,
   chainJson: chainJson,
@@ -1159,7 +1162,7 @@ Future<String> mixAdvanceWithKey({
   nodeUrl: nodeUrl,
   feeNano: feeNano,
   nowUnix: nowUnix,
-  keyHex: keyHex,
+  keyBytes: keyBytes,
 );
 
 /// Advance a mix already in the pool by one move: remix as Bob or Alice,
