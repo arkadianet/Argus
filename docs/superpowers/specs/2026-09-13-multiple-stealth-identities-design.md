@@ -71,15 +71,39 @@ an absent identity there is not evidence of an unfunded one.
 
 ## Storage, and what that means for labels
 
-There is no SQL database in Argus. `WalletDatabaseService` is SharedPreferences
-behind an XOR obfuscation that its own header calls "NOT encryption". Identity
-records go through the same door, under `argus_stealth_identities_v1_<walletId>`.
+There is no SQL database in Argus. Identity records are plaintext
+SharedPreferences under `argus_stealth_identities_v1_<walletId>`, matching
+`AddressLabelService` and `ContactsService` — the two nearest neighbours, both
+of which store user-authored labels attached to addresses the same way.
+
+They deliberately do *not* go through `WalletDatabaseService`'s XOR helper.
+That helper's own header calls itself "NOT encryption … only deters casual
+greps", so routing through it would buy no real protection while making this
+the odd one out among the label stores. (A review flagged the opposite, on the
+strength of an earlier draft of this file's own comment claiming the helper was
+used. The comment was wrong; the code was consistent with its neighbours.)
 
 An index and a label are not secrets in the key sense — an index buys an
 attacker nothing they could not get by scanning, and the published strings are
-published. But a **label is user metadata** and is only obfuscated at rest, on
-iOS inside device backups. The Settings note says labels live on the device
-only; nothing that must actually stay private should go in one.
+published on purpose. But a **label is user metadata**, readable by anyone with
+file access, and on iOS it rides along in device backups. The Settings note
+says labels live on the device only; nothing that must actually stay private
+should go in one.
+
+### Mutations are serialized per wallet
+
+`add`, `rename` and `merge` each load the whole list, change it, and save the
+whole list back, so interleaved they lose each other's writes. The reachable
+case is not exotic: discovery is a network round trip started from Settings,
+and the user can add an identity on Receive while it is in flight — discovery's
+save then drops the new row, *after* its string was shown and possibly
+published. Two concurrent `add`s can likewise pick the same index for two
+labels.
+
+`StealthIdentityStore._locked` chains one future per wallet id around each
+complete read-modify-write. `merge` re-reads inside the lock for exactly this
+reason. Tests cover all three pairings and were confirmed to fail with the lock
+removed.
 
 ## Cost
 
@@ -148,3 +172,17 @@ surfaces in the picker, and never advances the frontier.
   identity set is decided rather than five call sites that could each forget.
   It resets to 1 on lock, which is the safe direction: a session that never
   raises it behaves exactly as a single-identity wallet.
+- **A failed frontier push does not count as "identities loaded".**
+  `_syncFrontier` returns whether the handle accepted the frontier, and
+  `_identitiesLoaded` is set from that. Scanning narrow is the safe failure,
+  but remembering the failure as success would make it permanent for the
+  session — funds on later identities would stay hidden until the next unlock.
+  A missing *address string* does not block the flag: the frontier is already
+  in, so detection still works; only the QR is unavailable.
+- **Discovery is three-valued, not a list.** "Searched and found nothing" and
+  "could not search" must not collapse into one answer. `StealthDiscovery`
+  distinguishes found / failed / superseded, because this runs at the moment a
+  user is asking whether a restore recovered their money, and reporting an
+  unreachable explorer as "no funds found" is the worst available lie. The
+  truncated-list case is a failure too: an identity absent from partial data is
+  not evidence of an unfunded identity.

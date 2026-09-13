@@ -63,6 +63,41 @@ class StealthOwnedBox {
       );
 }
 
+/// The outcome of a restore-time search for funded stealth identities.
+///
+/// Deliberately three-valued. "Searched, found nothing" is reassuring;
+/// "could not search" is not, and a user checking whether a restore recovered
+/// their money must be able to tell the two apart.
+class StealthDiscovery {
+  /// The search ran over a complete box list. [adopted] may be empty.
+  const StealthDiscovery.found(this.adopted)
+      : error = null,
+        superseded = false;
+
+  /// The search could not run, or ran on data too partial to conclude from.
+  const StealthDiscovery.failed(String this.error)
+      : adopted = const [],
+        superseded = false;
+
+  /// The wallet changed underneath the search, so its answer is void. Not a
+  /// failure to report: whatever replaced it will run its own search.
+  const StealthDiscovery.superseded()
+      : adopted = const [],
+        error = null,
+        superseded = true;
+
+  /// Indices newly adopted into the identity list.
+  final List<int> adopted;
+
+  /// Why the search could not conclude, or null if it did.
+  final String? error;
+
+  final bool superseded;
+
+  /// True only when the search actually covered the whole box list.
+  bool get isComplete => error == null && !superseded;
+}
+
 /// What one stealth identity holds, as the last scan saw it.
 class StealthIdentityBalance {
   const StealthIdentityBalance({
@@ -376,41 +411,50 @@ class StealthService extends ChangeNotifier {
     final loaded = await StealthIdentityStore.load(walletId);
     if (gen != _generation) return identities;
     identities = loaded;
-    _identitiesLoaded = true;
-    await _syncFrontier(gen);
+    // Only once the handle has actually accepted the frontier. If that call
+    // failed, the flag stays false so the next scan retries instead of
+    // scanning narrow for the rest of the session.
+    _identitiesLoaded = await _syncFrontier(gen);
     if (gen != _generation) return identities;
     notifyListeners();
     return identities;
   }
 
-  /// False until the persisted list has been read for the current wallet.
-  /// [scan] checks it rather than trusting a call site to have loaded first:
-  /// scanning with a frontier of 1 when the user has more identities would
-  /// report their funds as absent.
+  /// False until the persisted list has been read *and* pushed to the wallet
+  /// handle for the current wallet. [scan] checks it rather than trusting a
+  /// call site to have loaded first: scanning with a frontier of 1 when the
+  /// user has more identities would report their funds as absent.
   bool _identitiesLoaded = false;
 
   /// Push the frontier into the handle and derive any string we are missing.
-  Future<void> _syncFrontier(int gen) async {
-    if (!_wallet.isUnlocked) return;
+  ///
+  /// Returns whether the handle now covers every identity we know about.
+  /// False means a later scan would miss funds, so the caller must not treat
+  /// the identities as loaded.
+  Future<bool> _syncFrontier(int gen) async {
+    if (!_wallet.isUnlocked) return false;
     try {
       await _wallet.stealthUseIdentity(frontier - 1);
     } catch (_) {
-      // The handle keeps whatever frontier it had: scanning narrow is the
-      // safe failure. The next unlock or add retries.
-      return;
+      // The handle keeps whatever frontier it had, so this session scans
+      // narrow — the safe direction — but the caller must be able to retry.
+      return false;
     }
     for (final id in identities) {
-      if (gen != _generation) return;
+      if (gen != _generation) return false;
       if (_addressByIdentity.containsKey(id.index)) continue;
       try {
         final addr = await _wallet.stealthAddressAt(id.index);
-        if (gen != _generation) return;
+        if (gen != _generation) return false;
         _addressByIdentity[id.index] = addr;
         if (id.index == 0) address = addr;
       } catch (_) {
-        // Leave it unfilled; the row shows as unavailable rather than wrong.
+        // A missing string costs a QR, not a detection: the frontier is
+        // already in, so the scan still finds this identity's boxes. The row
+        // shows as unavailable and the next load retries the derivation.
       }
     }
+    return true;
   }
 
   /// Publish a new identity under [label] and start scanning for it.
@@ -457,21 +501,37 @@ class StealthService extends ChangeNotifier {
   /// never paid is simply re-derived the next time the user adds one, at the
   /// same index and so with the same string.
   ///
-  /// Returns the indices newly adopted.
-  Future<List<int>> discoverIdentities({String? explorerBase}) async {
+  /// Returns what was adopted, or why nothing could be concluded.
+  ///
+  /// "Looked everywhere and found nothing" and "could not look" must not
+  /// collapse into the same answer: this runs at the moment a user is asking
+  /// whether their money survived a restore, and an unreachable explorer
+  /// reported as "no funds found" is the worst possible lie to tell there.
+  Future<StealthDiscovery> discoverIdentities({String? explorerBase}) async {
     final walletId = _wallet.activeWalletId;
-    if (walletId == null || !_wallet.isUnlocked) return const [];
+    if (walletId == null || !_wallet.isUnlocked) {
+      return const StealthDiscovery.failed('Unlock the wallet first');
+    }
     final gen = _generation;
     String body;
     try {
-      body = _lastBoxesJson ?? await _fetch(explorerBase ?? networkController.explorer);
+      body = _lastBoxesJson ??
+          await _fetch(explorerBase ?? networkController.explorer);
     } catch (_) {
-      return const [];
+      return const StealthDiscovery.failed(
+        'Could not reach the explorer to list stealth boxes',
+      );
     }
-    if (gen != _generation) return const [];
-    // A truncated list is not a complete view, so an identity missing from
-    // it would be wrongly read as unfunded and left out.
-    if (isTruncatedScan(body)) return const [];
+    if (gen != _generation) return const StealthDiscovery.superseded();
+    // A truncated list is not a complete view, so an identity missing from it
+    // would be wrongly read as unfunded. Say that, rather than report a clean
+    // sheet drawn from partial data.
+    if (isTruncatedScan(body)) {
+      return const StealthDiscovery.failed(
+        'The stealth box list is larger than one scan can cover, so this '
+        'search would be incomplete',
+      );
+    }
 
     final List<int> funded;
     try {
@@ -481,20 +541,20 @@ class StealthService extends ChangeNotifier {
           if (i is num) i.toInt(),
       ];
     } catch (_) {
-      return const [];
+      return const StealthDiscovery.failed('Could not search for stealth addresses');
     }
-    if (gen != _generation) return const [];
+    if (gen != _generation) return const StealthDiscovery.superseded();
 
     final known = {for (final i in identities) i.index};
     final fresh = funded.where((i) => !known.contains(i)).toList()..sort();
-    if (fresh.isEmpty) return const [];
+    if (fresh.isEmpty) return const StealthDiscovery.found([]);
 
     identities = await StealthIdentityStore.merge(walletId, fresh);
-    if (gen != _generation) return fresh;
+    if (gen != _generation) return StealthDiscovery.found(fresh);
     await _syncFrontier(gen);
-    if (gen != _generation) return fresh;
+    if (gen != _generation) return StealthDiscovery.found(fresh);
     notifyListeners();
-    return fresh;
+    return StealthDiscovery.found(fresh);
   }
 
   /// Loads (and caches) this wallet's published stealth string, and

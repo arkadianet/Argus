@@ -147,7 +147,15 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
   Future<void> _discoverStealthIdentities() async {
     setState(() => _busy = true);
     try {
-      final found = await stealthService.discoverIdentities();
+      final result = await stealthService.discoverIdentities();
+      if (result.superseded) return;
+      // "Could not look" must never be shown as "looked and found nothing":
+      // the user is asking whether a restore recovered their money.
+      if (result.error != null) {
+        _snack(result.error!);
+        return;
+      }
+      final found = result.adopted;
       _snack(
         found.isEmpty
             ? 'No stealth addresses with funds beyond the ones already listed'

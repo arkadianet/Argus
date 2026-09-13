@@ -105,6 +105,81 @@ void main() {
     });
   });
 
+  // add/rename/merge each load the whole list, change it, and save it whole.
+  // Interleaved, they lose each other's writes — and a dropped row is a
+  // string that was shown to the user, and possibly published.
+  group('concurrent mutations', () {
+    test('two overlapping adds get distinct indices', () async {
+      final results = await Future.wait([
+        StealthIdentityStore.add(_wallet, 'One'),
+        StealthIdentityStore.add(_wallet, 'Two'),
+        StealthIdentityStore.add(_wallet, 'Three'),
+      ]);
+      expect(results.map((i) => i.index).toSet(), {1, 2, 3});
+
+      final stored = await StealthIdentityStore.load(_wallet);
+      expect(stored.map((i) => i.index), [0, 1, 2, 3]);
+      expect(
+        stored.map((i) => i.label).where((l) => l.isNotEmpty).toSet(),
+        {'One', 'Two', 'Three'},
+      );
+    });
+
+    test('a discovery landing during an add keeps both', () async {
+      // The realistic race: discovery is slow (a network round trip), the
+      // user adds an identity on Receive while it is in flight.
+      final merge = StealthIdentityStore.merge(_wallet, [5]);
+      final add = StealthIdentityStore.add(_wallet, 'Donations');
+      await Future.wait([merge, add]);
+
+      final stored = await StealthIdentityStore.load(_wallet);
+      expect(stored.map((i) => i.index), containsAll([0, 5]));
+      expect(
+        stored.where((i) => i.label == 'Donations'),
+        hasLength(1),
+        reason: 'the added identity must survive the concurrent merge',
+      );
+    });
+
+    test('a rename is not lost to a concurrent add', () async {
+      await StealthIdentityStore.add(_wallet, 'Original');
+      await Future.wait([
+        StealthIdentityStore.rename(_wallet, 1, 'Renamed'),
+        StealthIdentityStore.add(_wallet, 'Second'),
+      ]);
+
+      final stored = await StealthIdentityStore.load(_wallet);
+      expect(stored.firstWhere((i) => i.index == 1).label, 'Renamed');
+      expect(stored.firstWhere((i) => i.index == 2).label, 'Second');
+    });
+
+    test('a throwing mutation does not stall the ones behind it', () async {
+      SharedPreferences.setMockInitialValues({
+        'argus_stealth_identities_v1_$_wallet': jsonEncode([
+          {'index': maxStealthIdentity, 'label': 'Last'},
+        ]),
+      });
+      // This one throws (the index ceiling); the rename behind it must run.
+      final doomed = StealthIdentityStore.add(_wallet, 'Too many');
+      final rename = StealthIdentityStore.rename(_wallet, 0, 'Still works');
+
+      await expectLater(doomed, throwsStateError);
+      await rename;
+      final stored = await StealthIdentityStore.load(_wallet);
+      expect(stored.firstWhere((i) => i.index == 0).label, 'Still works');
+    });
+
+    test('mutations on different wallets do not block each other', () async {
+      final results = await Future.wait([
+        StealthIdentityStore.add(_wallet, 'A'),
+        StealthIdentityStore.add(_other, 'B'),
+      ]);
+      expect(results.map((i) => i.index), [1, 1]);
+      expect((await StealthIdentityStore.load(_wallet)).length, 2);
+      expect((await StealthIdentityStore.load(_other)).length, 2);
+    });
+  });
+
   group('restore discovery', () {
     test('adopts funded indices and leaves existing labels alone', () async {
       await StealthIdentityStore.add(_wallet, 'Donations'); // index 1

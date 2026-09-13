@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
@@ -65,12 +66,19 @@ const maxStealthIdentity = 255;
 
 /// The durable list of stealth identities, per wallet.
 ///
-/// Argus has no SQL database — [WalletDatabaseService] is SharedPreferences
-/// with an obfuscating XOR, explicitly not encryption. Identity records go
-/// through the same door, and carry the same caveat: an index and a label are
-/// not secrets in the key sense (they buy an attacker nothing they could not
-/// get by scanning), but a label is user metadata and is only obfuscated.
-/// Never put anything here that must actually stay private.
+/// Argus has no SQL database. This is plaintext SharedPreferences, keyed per
+/// wallet, matching `AddressLabelService` and `ContactsService` — the two
+/// nearest neighbours, both of which also store user-authored labels attached
+/// to addresses. It deliberately does *not* use `WalletDatabaseService`'s XOR
+/// helper: that helper's own header calls itself "NOT encryption … only
+/// deters casual greps", so routing through it would buy no real protection
+/// while making this the odd one out among label stores.
+///
+/// What that means in practice: an index and a label are not secrets in the
+/// key sense — an index buys an attacker nothing they could not get by
+/// scanning, and the strings are published on purpose — but a label is user
+/// metadata readable by anyone with file access, and on iOS it rides along in
+/// device backups. Never put anything here that must actually stay private.
 ///
 /// What is stored is deliberately minimal: indices and labels. The frontier
 /// is `max(index) + 1`, derived rather than stored, so the two cannot drift.
@@ -78,6 +86,35 @@ class StealthIdentityStore {
   static const _prefix = 'argus_stealth_identities_v1_';
 
   static String _key(String walletId) => '$_prefix$walletId';
+
+  /// Serializes each read-modify-write per wallet.
+  ///
+  /// [add], [rename] and [merge] all load the whole list, change it, and save
+  /// the whole list back. Interleaved, two of them lose each other's writes:
+  /// a discovery pass started in Settings can load the list, the user can add
+  /// an identity on Receive, and discovery's save then drops the new row —
+  /// after its string was shown to the user and possibly published. Two
+  /// concurrent [add]s can likewise pick the same index for two labels.
+  ///
+  /// One chained future per wallet id. The tail is dropped once it is the
+  /// last link, so this does not grow with wallet count.
+  static final Map<String, Future<void>> _mutations = {};
+
+  /// Run [action] with no other mutation for [walletId] in flight.
+  static Future<T> _locked<T>(String walletId, Future<T> Function() action) {
+    final pending = _mutations[walletId] ?? Future<void>.value();
+    // A thrown mutation must not poison the chain for the ones behind it, so
+    // the tail swallows outcomes; the caller still sees its own error.
+    final result = pending.then((_) => action());
+    final tail = result.then((_) {}, onError: (_) {});
+    _mutations[walletId] = tail;
+    unawaited(tail.whenComplete(() {
+      // Clear only if nothing queued behind us, or a waiting mutation would
+      // lose its predecessor and run unserialized.
+      if (identical(_mutations[walletId], tail)) _mutations.remove(walletId);
+    }));
+    return result;
+  }
 
   /// Every identity for [walletId], lowest index first.
   ///
@@ -128,33 +165,36 @@ class StealthIdentityStore {
     String walletId,
     String label, {
     DateTime? now,
-  }) async {
-    final existing = await load(walletId);
-    final next = existing.map((i) => i.index).reduce((a, b) => a > b ? a : b) + 1;
-    if (next > maxStealthIdentity) {
-      throw StateError(
-        'This wallet already has the maximum of ${maxStealthIdentity + 1} '
-        'stealth identities',
-      );
-    }
-    final created = StealthIdentity(
-      index: next,
-      label: label.trim(),
-      publishedAt: now ?? DateTime.now(),
-    );
-    await _save(walletId, [...existing, created]);
-    return created;
-  }
+  }) =>
+      _locked(walletId, () async {
+        final existing = await load(walletId);
+        final next =
+            existing.map((i) => i.index).reduce((a, b) => a > b ? a : b) + 1;
+        if (next > maxStealthIdentity) {
+          throw StateError(
+            'This wallet already has the maximum of ${maxStealthIdentity + 1} '
+            'stealth identities',
+          );
+        }
+        final created = StealthIdentity(
+          index: next,
+          label: label.trim(),
+          publishedAt: now ?? DateTime.now(),
+        );
+        await _save(walletId, [...existing, created]);
+        return created;
+      });
 
   /// Rename an existing identity. Unknown indices are ignored.
-  static Future<void> rename(String walletId, int index, String label) async {
-    final existing = await load(walletId);
-    if (!existing.any((i) => i.index == index)) return;
-    await _save(walletId, [
-      for (final i in existing)
-        if (i.index == index) i.copyWith(label: label.trim()) else i,
-    ]);
-  }
+  static Future<void> rename(String walletId, int index, String label) =>
+      _locked(walletId, () async {
+        final existing = await load(walletId);
+        if (!existing.any((i) => i.index == index)) return;
+        await _save(walletId, [
+          for (final i in existing)
+            if (i.index == index) i.copyWith(label: label.trim()) else i,
+        ]);
+      });
 
   /// Record identities found by restore-time discovery.
   ///
@@ -165,22 +205,26 @@ class StealthIdentityStore {
   static Future<List<StealthIdentity>> merge(
     String walletId,
     Iterable<int> indices,
-  ) async {
-    final existing = await load(walletId);
-    final known = {for (final i in existing) i.index};
-    final fresh = indices
-        .where((i) => i >= 0 && i <= maxStealthIdentity && !known.contains(i))
-        .toSet()
-        .toList()
-      ..sort();
-    if (fresh.isEmpty) return existing;
-    final merged = [
-      ...existing,
-      for (final i in fresh) StealthIdentity(index: i, label: ''),
-    ]..sort((a, b) => a.index.compareTo(b.index));
-    await _save(walletId, merged);
-    return merged;
-  }
+  ) =>
+      _locked(walletId, () async {
+        // Re-read inside the lock: discovery's network round trip may have
+        // taken long enough for the user to add an identity meanwhile, and
+        // saving the list this call started with would drop it.
+        final existing = await load(walletId);
+        final known = {for (final i in existing) i.index};
+        final fresh = indices
+            .where((i) => i >= 0 && i <= maxStealthIdentity && !known.contains(i))
+            .toSet()
+            .toList()
+          ..sort();
+        if (fresh.isEmpty) return existing;
+        final merged = [
+          ...existing,
+          for (final i in fresh) StealthIdentity(index: i, label: ''),
+        ]..sort((a, b) => a.index.compareTo(b.index));
+        await _save(walletId, merged);
+        return merged;
+      });
 
   /// One past the highest known index: how many identities to derive.
   static int frontierOf(List<StealthIdentity> identities) => identities.isEmpty
