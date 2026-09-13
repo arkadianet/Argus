@@ -157,11 +157,11 @@ pub fn parse_parameters(value: &serde_json::Value) -> Result<Parameters, String>
 pub fn address_to_ergo_tree(address: &str) -> Result<String, String> {
     let encoder = AddressEncoder::new(NetworkPrefix::Mainnet);
     let addr = encoder.parse_address_from_str(address)
-        .map_err(|e| format!("Invalid address: {}", e))?;
+        .map_err(|e| format!("Invalid address: {e}"))?;
     let tree = addr.script()
-        .map_err(|e| format!("Address script error: {}", e))?;
+        .map_err(|e| format!("Address script error: {e}"))?;
     let bytes = tree.sigma_serialize_bytes()
-        .map_err(|e| format!("Serialization error: {}", e))?;
+        .map_err(|e| format!("Serialization error: {e}"))?;
     Ok(base16::encode_lower(&bytes))
 }
 
@@ -339,7 +339,7 @@ impl ErgoNodeClient {
     pub async fn new(config: NodeConfig) -> Result<Self, String> {
         let node = NodeInterface::from_url_str(&config.api_key, &config.url)
             .await
-            .map_err(|e| format!("Failed to connect to node: {}", e))?;
+            .map_err(|e| format!("Failed to connect to node: {e}"))?;
         Ok(ErgoNodeClient {
             inner: Arc::new(node),
             url: config.url,
@@ -372,7 +372,7 @@ impl ErgoNodeClient {
         self.inner
             .current_block_height()
             .await
-            .map_err(|e| format!("Failed to get height: {}", e))
+            .map_err(|e| format!("Failed to get height: {e}"))
     }
 
     pub async fn unspent_boxes_by_address(
@@ -382,25 +382,24 @@ impl ErgoNodeClient {
         limit: u64,
     ) -> Result<Vec<ErgoBox>, String> {
         let endpoint = format!(
-            "/blockchain/box/unspent/byAddress?offset={}&limit={}",
-            offset, limit
+            "/blockchain/box/unspent/byAddress?offset={offset}&limit={limit}"
         );
         let body =
-            serde_json::to_string(address).map_err(|e| format!("JSON serialize: {}", e))?;
+            serde_json::to_string(address).map_err(|e| format!("JSON serialize: {e}"))?;
         let response = self
             .inner
             .send_post_req(&endpoint, body)
             .await
-            .map_err(|e| format!("Node request: {}", e))?;
+            .map_err(|e| format!("Node request: {e}"))?;
         let text = response
             .text()
             .await
-            .map_err(|e| format!("Read: {}", e))?;
+            .map_err(|e| format!("Read: {e}"))?;
         if text.is_empty() {
             return Ok(Vec::new());
         }
         let value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| format!("Parse: {}", e))?;
+            serde_json::from_str(&text).map_err(|e| format!("Parse: {e}"))?;
         let items = match value {
             serde_json::Value::Array(arr) => arr,
             serde_json::Value::Object(ref map) => map
@@ -432,25 +431,24 @@ impl ErgoNodeClient {
         limit: u64,
     ) -> Result<Vec<serde_json::Value>, String> {
         let endpoint = format!(
-            "/blockchain/box/unspent/byErgoTree?offset={}&limit={}",
-            offset, limit
+            "/blockchain/box/unspent/byErgoTree?offset={offset}&limit={limit}"
         );
         let body =
-            serde_json::to_string(ergo_tree).map_err(|e| format!("JSON serialize: {}", e))?;
+            serde_json::to_string(ergo_tree).map_err(|e| format!("JSON serialize: {e}"))?;
         let response = self
             .inner
             .send_post_req(&endpoint, body)
             .await
-            .map_err(|e| format!("Node request: {}", e))?;
+            .map_err(|e| format!("Node request: {e}"))?;
         let text = response
             .text()
             .await
-            .map_err(|e| format!("Read: {}", e))?;
+            .map_err(|e| format!("Read: {e}"))?;
         if text.is_empty() {
             return Ok(Vec::new());
         }
         let value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| format!("Parse: {}", e))?;
+            serde_json::from_str(&text).map_err(|e| format!("Parse: {e}"))?;
         let items = match value {
             serde_json::Value::Array(arr) => arr,
             serde_json::Value::Object(ref map) => map
@@ -477,7 +475,7 @@ impl ErgoNodeClient {
         let mut headers: Vec<Header> = inner
             .get_last_block_headers(HEADERS_COUNT as u32)
             .await
-            .map_err(|e| format!("Failed to get headers: {}", e))?;
+            .map_err(|e| format!("Failed to get headers: {e}"))?;
 
         if headers.len() < HEADERS_COUNT {
             return Err(format!(
@@ -571,22 +569,21 @@ impl ErgoNodeClient {
     pub async fn mempool_txs_for(&self, ergo_tree: &str) -> Result<Vec<serde_json::Value>, String> {
         const MEMPOOL_LIMIT: usize = 100;
         let endpoint = format!(
-            "/transactions/unconfirmed/byErgoTree?offset=0&limit={}",
-            MEMPOOL_LIMIT
+            "/transactions/unconfirmed/byErgoTree?offset=0&limit={MEMPOOL_LIMIT}"
         );
         let body =
-            serde_json::to_string(ergo_tree).map_err(|e| format!("JSON serialize: {}", e))?;
+            serde_json::to_string(ergo_tree).map_err(|e| format!("JSON serialize: {e}"))?;
         let response = self
             .inner
             .send_post_req(&endpoint, body)
             .await
-            .map_err(|e| format!("Node request: {}", e))?;
-        let text = response.text().await.map_err(|e| format!("Read: {}", e))?;
+            .map_err(|e| format!("Node request: {e}"))?;
+        let text = response.text().await.map_err(|e| format!("Read: {e}"))?;
         if text.is_empty() {
             return Ok(Vec::new());
         }
         let value: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| format!("Parse: {}", e))?;
+            serde_json::from_str(&text).map_err(|e| format!("Parse: {e}"))?;
         let items = match value {
             serde_json::Value::Array(arr) => arr,
             serde_json::Value::Object(ref map) => map
@@ -686,25 +683,25 @@ impl ErgoNodeClient {
             limit.min(100)
         );
         let body = serde_json::to_string(address)
-            .map_err(|e| format!("JSON serialize: {}", e))?;
+            .map_err(|e| format!("JSON serialize: {e}"))?;
         let response = self
             .inner
             .send_post_req(&endpoint, body)
             .await
-            .map_err(|e| format!("Node request: {}", e))?;
+            .map_err(|e| format!("Node request: {e}"))?;
         let status = response.status();
         let text = response
             .text()
             .await
-            .map_err(|e| format!("Read: {}", e))?;
+            .map_err(|e| format!("Read: {e}"))?;
         if status.as_u16() == 404 || text.is_empty() {
             return Ok(Vec::new());
         }
         if !status.is_success() {
-            return Err(format!("Tx history failed ({}): {}", status, text));
+            return Err(format!("Tx history failed ({status}): {text}"));
         }
         let value: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| format!("Parse: {}", e))?;
+            .map_err(|e| format!("Parse: {e}"))?;
         let items = value["items"].as_array().cloned().unwrap_or_default();
         let summaries = items
             .iter()
@@ -714,50 +711,50 @@ impl ErgoNodeClient {
     }
 
     pub async fn get_blockchain_box_by_id(&self, box_id: &str) -> Result<serde_json::Value, String> {
-        let endpoint = format!("/blockchain/box/byId/{}", box_id);
+        let endpoint = format!("/blockchain/box/byId/{box_id}");
         let response = self
             .inner
             .send_get_req(&endpoint)
             .await
-            .map_err(|e| format!("Node request: {}", e))?;
+            .map_err(|e| format!("Node request: {e}"))?;
         let status = response.status();
-        let text = response.text().await.map_err(|e| format!("Read: {}", e))?;
+        let text = response.text().await.map_err(|e| format!("Read: {e}"))?;
         if status.is_success() && !text.is_empty() {
-            serde_json::from_str(&text).map_err(|e| format!("Parse box: {}", e))
+            serde_json::from_str(&text).map_err(|e| format!("Parse box: {e}"))
         } else {
             // Fallback to /utxo/byId if /blockchain/box/byId is not indexed
-            let utxo_endpoint = format!("/utxo/byId/{}", box_id);
+            let utxo_endpoint = format!("/utxo/byId/{box_id}");
             let utxo_resp = self
                 .inner
                 .send_get_req(&utxo_endpoint)
                 .await
-                .map_err(|e| format!("Node utxo request: {}", e))?;
-            let utxo_text = utxo_resp.text().await.map_err(|e| format!("Read: {}", e))?;
-            serde_json::from_str(&utxo_text).map_err(|e| format!("Parse utxo box (status {}): {}", status, e))
+                .map_err(|e| format!("Node utxo request: {e}"))?;
+            let utxo_text = utxo_resp.text().await.map_err(|e| format!("Read: {e}"))?;
+            serde_json::from_str(&utxo_text).map_err(|e| format!("Parse utxo box (status {status}): {e}"))
         }
     }
 
     pub async fn get_transaction_by_id(&self, tx_id: &str) -> Result<serde_json::Value, String> {
-        let endpoint = format!("/blockchain/transaction/byId/{}", tx_id);
+        let endpoint = format!("/blockchain/transaction/byId/{tx_id}");
         let response = self
             .inner
             .send_get_req(&endpoint)
             .await
-            .map_err(|e| format!("Node request: {}", e))?;
+            .map_err(|e| format!("Node request: {e}"))?;
         let status = response.status();
-        let text = response.text().await.map_err(|e| format!("Read: {}", e))?;
+        let text = response.text().await.map_err(|e| format!("Read: {e}"))?;
         if status.is_success() && !text.is_empty() {
-            serde_json::from_str(&text).map_err(|e| format!("Parse tx: {}", e))
+            serde_json::from_str(&text).map_err(|e| format!("Parse tx: {e}"))
         } else {
             // Fallback to /transactions/
-            let fallback_endpoint = format!("/transactions/{}", tx_id);
+            let fallback_endpoint = format!("/transactions/{tx_id}");
             let fb_resp = self
                 .inner
                 .send_get_req(&fallback_endpoint)
                 .await
-                .map_err(|e| format!("Node tx request: {}", e))?;
-            let fb_text = fb_resp.text().await.map_err(|e| format!("Read: {}", e))?;
-            serde_json::from_str(&fb_text).map_err(|e| format!("Parse tx (status {}): {}", status, e))
+                .map_err(|e| format!("Node tx request: {e}"))?;
+            let fb_text = fb_resp.text().await.map_err(|e| format!("Read: {e}"))?;
+            serde_json::from_str(&fb_text).map_err(|e| format!("Parse tx (status {status}): {e}"))
         }
     }
 
@@ -793,8 +790,7 @@ impl ErgoNodeClient {
 
             if !has_token {
                 return Err(format!(
-                    "Box {} does not contain singleton token {}",
-                    cur_box_id, singleton_token_id
+                    "Box {cur_box_id} does not contain singleton token {singleton_token_id}"
                 ));
             }
 
@@ -829,7 +825,7 @@ impl ErgoNodeClient {
                     let outputs = tx
                         .get("outputs")
                         .and_then(|v| v.as_array())
-                        .ok_or_else(|| format!("Spending tx {} has no outputs array", tx_id))?;
+                        .ok_or_else(|| format!("Spending tx {tx_id} has no outputs array"))?;
 
                     let next_box = outputs.iter().find(|out| {
                         out.get("assets")
@@ -858,8 +854,7 @@ impl ErgoNodeClient {
                         }
                         None => {
                             return Err(format!(
-                                "Singleton token {} not found in outputs of spending tx {}",
-                                singleton_token_id, tx_id
+                                "Singleton token {singleton_token_id} not found in outputs of spending tx {tx_id}"
                             ));
                         }
                     }
@@ -870,17 +865,17 @@ impl ErgoNodeClient {
 
     pub async fn submit_transaction(&self, tx_json: &serde_json::Value) -> Result<String, String> {
         let body =
-            serde_json::to_string(tx_json).map_err(|e| format!("Serialize tx: {}", e))?;
+            serde_json::to_string(tx_json).map_err(|e| format!("Serialize tx: {e}"))?;
         let response = self
             .inner
             .send_post_req("/transactions", body)
             .await
-            .map_err(|e| format!("Submit: {}", e))?;
+            .map_err(|e| format!("Submit: {e}"))?;
         let status = response.status();
         let text = response
             .text()
             .await
-            .map_err(|e| format!("Read: {}", e))?;
+            .map_err(|e| format!("Read: {e}"))?;
         transaction_response(status.as_u16(), text, tx_json)
     }
 }

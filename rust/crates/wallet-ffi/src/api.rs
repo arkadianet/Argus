@@ -87,8 +87,8 @@ fn store_preparation(prep: CachedPreparation) -> u64 {
     cache.retain(|_, p| p.handle_id != prep.handle_id);
     loop {
         let id = (rand::rngs::OsRng.next_u64() & 0x7FFF_FFFF_FFFF_FFFF).max(1);
-        if !cache.contains_key(&id) {
-            cache.insert(id, prep);
+        if let std::collections::hash_map::Entry::Vacant(e) = cache.entry(id) {
+            e.insert(prep);
             return id;
         }
     }
@@ -179,8 +179,8 @@ fn register_handle(handle: WalletHandle) -> u64 {
     let mut handles = recover(HANDLES.lock());
     loop {
         let id = (rand::rngs::OsRng.next_u64() & 0x7FFF_FFFF_FFFF_FFFF).max(1);
-        if !handles.contains_key(&id) {
-            handles.insert(id, handle);
+        if let std::collections::hash_map::Entry::Vacant(e) = handles.entry(id) {
+            e.insert(handle);
             return id;
         }
     }
@@ -759,7 +759,7 @@ fn balance_from_inputs(
         for b in boxes {
             if let Some(held) = b.tokens.as_ref() {
                 for t in held.iter() {
-                    let id: String = t.token_id.clone().into();
+                    let id: String = t.token_id.into();
                     let entry = by_id.entry(id).or_insert(0);
                     *entry = entry.saturating_add(*t.amount.as_u64());
                 }
@@ -782,7 +782,7 @@ fn balance_from_inputs(
                 if let Some(held) = b.tokens.as_ref() {
                     let held: Vec<(String, i64)> = held
                         .iter()
-                        .map(|t| (t.token_id.clone().into(), *t.amount.as_u64() as i64))
+                        .map(|t| (t.token_id.into(), *t.amount.as_u64() as i64))
                         .collect();
                     if !held.is_empty() {
                         confirmed_tokens.insert(b.box_id().to_string(), held);
@@ -4845,8 +4845,7 @@ mod tests {
             "creationHeight": input.creation_height, "assets": [], "additionalRegisters": {},
         });
         let err = serde_json::from_value::<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>(node)
-            .err()
-            .expect("a zero id never matches")
+            .expect_err("a zero id never matches")
             .to_string();
         err.rsplit(' ').next().unwrap().to_string()
     }

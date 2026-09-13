@@ -101,11 +101,11 @@ impl SigmaUsdState {
 /// R5 = SigRSV circulating (Sigma Long)
 pub fn parse_bank_registers(r4_hex: &str, r5_hex: &str) -> Result<(i64, i64), ProtocolError> {
     let sigusd = decode_sigma_long(r4_hex).map_err(|e| ProtocolError::BoxParseError {
-        message: format!("Failed to parse R4 (SigUSD circulating): {}", e),
+        message: format!("Failed to parse R4 (SigUSD circulating): {e}"),
     })?;
 
     let sigrsv = decode_sigma_long(r5_hex).map_err(|e| ProtocolError::BoxParseError {
-        message: format!("Failed to parse R5 (SigRSV circulating): {}", e),
+        message: format!("Failed to parse R5 (SigRSV circulating): {e}"),
     })?;
 
     Ok((sigusd, sigrsv))
@@ -116,7 +116,7 @@ pub fn parse_bank_registers(r4_hex: &str, r5_hex: &str) -> Result<(i64, i64), Pr
 /// R4 = nanoERG per 1 USD (Sigma Long)
 pub fn parse_oracle_register(r4_hex: &str) -> Result<i64, ProtocolError> {
     decode_sigma_long(r4_hex).map_err(|e| ProtocolError::BoxParseError {
-        message: format!("Failed to parse oracle R4 (ERG/USD rate): {}", e),
+        message: format!("Failed to parse oracle R4 (ERG/USD rate): {e}"),
     })
 }
 

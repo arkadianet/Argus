@@ -148,20 +148,19 @@ impl NodeClient {
         limit: u64,
     ) -> Result<Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>> {
         let endpoint = format!(
-            "/blockchain/box/unspent/byAddress?offset={}&limit={}",
-            offset, limit
+            "/blockchain/box/unspent/byAddress?offset={offset}&limit={limit}"
         );
         let response =
             timed_request(self.inner.send_post_req(&endpoint, json_quoted(address))).await?;
         let text = response.text().await.map_err(|e| NodeError::ApiError {
-            message: format!("Failed to read unspent response: {}", e),
+            message: format!("Failed to read unspent response: {e}"),
         })?;
         if text.is_empty() {
             return Ok(Vec::new());
         }
         let value: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| NodeError::ApiError {
-                message: format!("Failed to parse unspent response: {}", e),
+                message: format!("Failed to parse unspent response: {e}"),
             })?;
         let items = json_array_items(value);
         let mut boxes = Vec::with_capacity(items.len());
@@ -187,14 +186,13 @@ impl NodeClient {
         limit: u64,
     ) -> Result<Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>> {
         let endpoint = format!(
-            "/blockchain/box/unspent/byErgoTree?offset={}&limit={}",
-            offset, limit
+            "/blockchain/box/unspent/byErgoTree?offset={offset}&limit={limit}"
         );
         let response =
             timed_request(self.inner.send_post_req(&endpoint, json_quoted(ergo_tree))).await?;
         let status = response.status();
         let text = response.text().await.map_err(|e| NodeError::ApiError {
-            message: format!("Failed to read byErgoTree response: {}", e),
+            message: format!("Failed to read byErgoTree response: {e}"),
         })?;
         if status.as_u16() == 404 || text.is_empty() {
             return Ok(Vec::new());
@@ -210,7 +208,7 @@ impl NodeClient {
         }
         let value: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| NodeError::ApiError {
-                message: format!("Failed to parse byErgoTree response: {}", e),
+                message: format!("Failed to parse byErgoTree response: {e}"),
             })?;
         let items = json_array_items(value);
         let mut boxes = Vec::with_capacity(items.len());
@@ -269,22 +267,21 @@ impl NodeClient {
         for page in 0..max_pages {
             let offset = (page as u64) * PAGE_SIZE;
             let endpoint = format!(
-                "/blockchain/box/unspent/byAddress?offset={}&limit={}",
-                offset, PAGE_SIZE
+                "/blockchain/box/unspent/byAddress?offset={offset}&limit={PAGE_SIZE}"
             );
             // POST body must be a JSON-quoted address string (Scala also accepts
             // bare text; ergo-rust-node / Axum require a real JSON string).
             let response =
                 timed_request(self.inner.send_post_req(&endpoint, json_quoted(address))).await?;
             let text = response.text().await.map_err(|e| NodeError::ApiError {
-                message: format!("Failed to read unspent response: {}", e),
+                message: format!("Failed to read unspent response: {e}"),
             })?;
             if text.is_empty() {
                 break;
             }
             let value: serde_json::Value =
                 serde_json::from_str(&text).map_err(|e| NodeError::ApiError {
-                    message: format!("Failed to parse unspent response: {}", e),
+                    message: format!("Failed to parse unspent response: {e}"),
                 })?;
             let items = json_array_items(value);
 
@@ -308,11 +305,11 @@ impl NodeClient {
     }
 
     pub async fn get_token_info(&self, token_id: &str) -> Result<TokenInfo> {
-        let endpoint = format!("/blockchain/token/byId/{}", token_id);
+        let endpoint = format!("/blockchain/token/byId/{token_id}");
         let response = timed_request(self.inner.send_get_req(&endpoint)).await?;
 
         let json: serde_json::Value = response.json().await.map_err(|e| NodeError::ApiError {
-            message: format!("Failed to parse token info: {}", e),
+            message: format!("Failed to parse token info: {e}"),
         })?;
 
         Ok(TokenInfo {
@@ -382,11 +379,11 @@ impl NodeClient {
 
     /// Raw JSON variant that preserves all node fields (unlike the typed version).
     pub async fn get_last_block_headers_raw(&self, count: u32) -> Result<Vec<serde_json::Value>> {
-        let endpoint = format!("/blocks/lastHeaders/{}", count);
+        let endpoint = format!("/blocks/lastHeaders/{count}");
         let response = timed_request(self.inner.send_get_req(&endpoint)).await?;
         let json: Vec<serde_json::Value> =
             response.json().await.map_err(|e| NodeError::ApiError {
-                message: format!("Failed to parse block headers: {}", e),
+                message: format!("Failed to parse block headers: {e}"),
             })?;
         Ok(json)
     }
@@ -397,10 +394,10 @@ impl NodeClient {
 
     /// Raw blockchain box (includes spentTransactionId, unlike UTXO-set lookups).
     pub async fn get_blockchain_box_by_id(&self, box_id: &str) -> Result<serde_json::Value> {
-        let endpoint = format!("/blockchain/box/byId/{}", box_id);
+        let endpoint = format!("/blockchain/box/byId/{box_id}");
         let response = timed_request(self.inner.send_get_req(&endpoint)).await?;
         response.json().await.map_err(|e| NodeError::ApiError {
-            message: format!("Failed to parse box: {}", e),
+            message: format!("Failed to parse box: {e}"),
         })
     }
 
@@ -414,14 +411,13 @@ impl NodeClient {
         limit: u64,
     ) -> Result<(Vec<serde_json::Value>, u64)> {
         let endpoint = format!(
-            "/blockchain/transaction/byAddress?offset={}&limit={}",
-            offset, limit
+            "/blockchain/transaction/byAddress?offset={offset}&limit={limit}"
         );
         let response =
             timed_request(self.inner.send_post_req(&endpoint, json_quoted(address))).await?;
         let status = response.status();
         let text = response.text().await.map_err(|e| NodeError::ApiError {
-            message: format!("Failed to read transactions response: {}", e),
+            message: format!("Failed to read transactions response: {e}"),
         })?;
         if status.as_u16() == 404 {
             return Ok((Vec::new(), 0));
@@ -431,7 +427,7 @@ impl NodeClient {
         }
         let res_json: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| NodeError::ApiError {
-                message: format!("Failed to parse transactions response: {}", e),
+                message: format!("Failed to parse transactions response: {e}"),
             })?;
         if !status.is_success() {
             let detail = res_json
@@ -456,7 +452,7 @@ impl NodeClient {
         address: &str,
     ) -> Result<Vec<serde_json::Value>> {
         let ergo_tree_hex = address_to_ergo_tree(address).ok_or_else(|| NodeError::ApiError {
-            message: format!("Could not derive ergoTree from address: {}", address),
+            message: format!("Could not derive ergoTree from address: {address}"),
         })?;
 
         self.get_unconfirmed_by_ergo_tree(&ergo_tree_hex).await
@@ -471,7 +467,7 @@ impl NodeClient {
             timed_request(self.inner.send_post_req(endpoint, json_quoted(ergo_tree_hex))).await?;
 
         let text = response.text().await.map_err(|e| NodeError::ApiError {
-            message: format!("Failed to read mempool response: {}", e),
+            message: format!("Failed to read mempool response: {e}"),
         })?;
 
         if text.is_empty() {
@@ -480,7 +476,7 @@ impl NodeClient {
 
         let value: serde_json::Value =
             serde_json::from_str(&text).map_err(|e| NodeError::ApiError {
-                message: format!("Failed to parse mempool response: {}", e),
+                message: format!("Failed to parse mempool response: {e}"),
             })?;
 
         match value {
@@ -519,7 +515,7 @@ impl NodeClient {
             CapabilityTier::Full | CapabilityTier::IndexLagging => {
                 let ergo_token_id: ergo_lib::ergotree_ir::chain::token::TokenId =
                     token_id.as_str().parse().map_err(|e| NodeError::ApiError {
-                        message: format!("Invalid token ID format: {}", e),
+                        message: format!("Invalid token ID format: {e}"),
                     })?;
 
                 let boxes = timed_request(self.inner.unspent_boxes_by_token_id(
@@ -573,28 +569,28 @@ impl NodeClient {
             .cloned()
             .or_else(|| boxes.into_iter().next())
             .ok_or_else(|| NodeError::BoxNotFound {
-                box_id: format!("box with token {}", token_id),
+                box_id: format!("box with token {token_id}"),
             })
     }
 
     /// Returns (transactionId, output index) for EIP-12 input construction.
     pub async fn get_box_creation_info(&self, box_id: &str) -> Result<(String, u16)> {
-        let endpoint = format!("/blockchain/box/byId/{}", box_id);
+        let endpoint = format!("/blockchain/box/byId/{box_id}");
         let response = timed_request(self.inner.send_get_req(&endpoint)).await?;
 
         let json: serde_json::Value = response.json().await.map_err(|e| NodeError::ApiError {
-            message: format!("Failed to parse box response: {}", e),
+            message: format!("Failed to parse box response: {e}"),
         })?;
 
         let tx_id = json["transactionId"]
             .as_str()
             .ok_or_else(|| NodeError::ApiError {
-                message: format!("Missing transactionId in box {} response", box_id),
+                message: format!("Missing transactionId in box {box_id} response"),
             })?
             .to_string();
 
         let index = json["index"].as_u64().ok_or_else(|| NodeError::ApiError {
-            message: format!("Missing index in box {} response", box_id),
+            message: format!("Missing index in box {box_id} response"),
         })? as u16;
 
         Ok((tx_id, index))
@@ -754,12 +750,12 @@ impl NodeClient {
     /// exact already-known response acknowledges prior admission.
     pub async fn check_transaction(&self, tx_json: &serde_json::Value) -> Result<String> {
         let body = serde_json::to_string(tx_json).map_err(|e| NodeError::ApiError {
-            message: format!("Failed to serialize tx for check: {}", e),
+            message: format!("Failed to serialize tx for check: {e}"),
         })?;
         let response = timed_request(self.inner.send_post_req("/transactions/check", body)).await?;
         let status = response.status();
         let text = response.text().await.map_err(|e| NodeError::ApiError {
-            message: format!("Failed to read /transactions/check response: {}", e),
+            message: format!("Failed to read /transactions/check response: {e}"),
         })?;
         transaction_response(status.as_u16(), text, tx_json)
             .map_err(|message| NodeError::ApiError { message })
@@ -771,12 +767,12 @@ impl NodeClient {
     /// need no wallet. Prefer [`Self::check_transaction`] first.
     pub async fn submit_transaction(&self, tx_json: &serde_json::Value) -> Result<String> {
         let body = serde_json::to_string(tx_json).map_err(|e| NodeError::ApiError {
-            message: format!("Failed to serialize tx for submit: {}", e),
+            message: format!("Failed to serialize tx for submit: {e}"),
         })?;
         let response = timed_request(self.inner.send_post_req("/transactions", body)).await?;
         let status = response.status();
         let text = response.text().await.map_err(|e| NodeError::ApiError {
-            message: format!("Failed to read /transactions response: {}", e),
+            message: format!("Failed to read /transactions response: {e}"),
         })?;
         transaction_response(status.as_u16(), text, tx_json)
             .map_err(|message| NodeError::ApiError { message })
@@ -806,7 +802,7 @@ impl NodeClient {
 
         let json: Vec<serde_json::Value> =
             response.json().await.map_err(|e| NodeError::ApiError {
-                message: format!("Failed to parse peers response: {}", e),
+                message: format!("Failed to parse peers response: {e}"),
             })?;
 
         let peers = json
@@ -892,7 +888,7 @@ async fn timed_request<T, E: std::fmt::Display>(
 
 /// JSON-string body for POST endpoints that take a single address / ergoTree.
 fn json_quoted(s: &str) -> String {
-    serde_json::to_string(s).unwrap_or_else(|_| format!("\"{}\"", s))
+    serde_json::to_string(s).unwrap_or_else(|_| format!("\"{s}\""))
 }
 
 /// Bare array or `{items: [...]}` — both appear across node versions.
@@ -913,7 +909,7 @@ pub fn address_to_ergo_tree(address: &str) -> Option<String> {
     let addr = encoder.parse_address_from_str(address).ok()?;
     let tree = addr.script().ok()?;
     let bytes = tree.sigma_serialize_bytes().ok()?;
-    Some(bytes.iter().map(|b| format!("{:02x}", b)).collect())
+    Some(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Build an Eip12InputBox from a `/blockchain/box/...` JSON item.

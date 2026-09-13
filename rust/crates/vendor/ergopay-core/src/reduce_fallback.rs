@@ -42,7 +42,7 @@ pub fn reduce_transaction_fallback(eip12_tx: &Eip12UnsignedTx) -> Result<Vec<u8>
     // 3. For each input: SigmaBoolean + VLQ(u64) cost
     for input in &eip12_tx.inputs {
         let tree_bytes = hex::decode(&input.ergo_tree).map_err(|e| {
-            ReductionError::InvalidErgoTree(format!("Invalid input ErgoTree hex: {}", e))
+            ReductionError::InvalidErgoTree(format!("Invalid input ErgoTree hex: {e}"))
         })?;
 
         write_sigma_boolean_for_tree(&mut out, &tree_bytes);
@@ -114,12 +114,12 @@ fn write_output_candidate(
     let value: u64 = output
         .value
         .parse()
-        .map_err(|e| ReductionError::InvalidValue(format!("output value: {}", e)))?;
+        .map_err(|e| ReductionError::InvalidValue(format!("output value: {e}")))?;
     vlq_put_u64(w, value);
 
     // ErgoTree: raw bytes, NO length prefix (self-describing)
     let tree_bytes = hex::decode(&output.ergo_tree).map_err(|e| {
-        ReductionError::InvalidErgoTree(format!("Invalid output ErgoTree hex: {}", e))
+        ReductionError::InvalidErgoTree(format!("Invalid output ErgoTree hex: {e}"))
     })?;
     w.extend_from_slice(&tree_bytes);
 
@@ -142,7 +142,7 @@ fn write_output_candidate(
         let amount: u64 = asset
             .amount
             .parse()
-            .map_err(|e| ReductionError::InvalidToken(format!("token amount: {}", e)))?;
+            .map_err(|e| ReductionError::InvalidToken(format!("token amount: {e}")))?;
         vlq_put_u64(w, amount); // VLQ(u64) amount
     }
 
@@ -163,12 +163,11 @@ fn write_context_extension(
     let mut entries: Vec<(u8, Vec<u8>)> = Vec::new();
     for (key, value) in extension {
         let key_num: u8 = key.parse().map_err(|_| {
-            ReductionError::TransactionError(format!("Invalid extension key: {}", key))
+            ReductionError::TransactionError(format!("Invalid extension key: {key}"))
         })?;
         let bytes = hex::decode(value).map_err(|e| {
             ReductionError::TransactionError(format!(
-                "Invalid extension hex for key {}: {}",
-                key, e
+                "Invalid extension hex for key {key}: {e}"
             ))
         })?;
         entries.push((key_num, bytes));
@@ -199,7 +198,7 @@ fn write_registers(
     for name in &reg_names {
         if let Some(hex_val) = registers.get(*name) {
             let bytes = hex::decode(hex_val).map_err(|e| {
-                ReductionError::InvalidRegister(format!("{}: invalid hex: {}", name, e))
+                ReductionError::InvalidRegister(format!("{name}: invalid hex: {e}"))
             })?;
             reg_bytes.push(bytes);
             count += 1;

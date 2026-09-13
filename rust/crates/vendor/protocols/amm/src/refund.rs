@@ -41,8 +41,7 @@ pub fn build_refund_tx_eip12(
 
     if total_input_erg <= REFUND_TX_FEE {
         return Err(AmmError::RefundError(format!(
-            "Insufficient ERG for miner fee: have {} nanoERG, need more than {}",
-            total_input_erg, REFUND_TX_FEE
+            "Insufficient ERG for miner fee: have {total_input_erg} nanoERG, need more than {REFUND_TX_FEE}"
         )));
     }
 

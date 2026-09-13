@@ -67,9 +67,8 @@ pub fn validate_free_mint_preflight(
         let lp_pct_of_oracle = (lp_rate as f64 / oracle_rate as f64) * 100.0;
         return Err(TxError::BuildFailed {
             message: format!(
-                "FreeMint rate condition not met: LP rate ({} nanoERG/token, {:.2}% of oracle) must be > 98% of oracle rate ({} nanoERG/token). \
-                Wait for LP/oracle prices to converge or use LP swap instead.",
-                lp_rate, lp_pct_of_oracle, oracle_rate
+                "FreeMint rate condition not met: LP rate ({lp_rate} nanoERG/token, {lp_pct_of_oracle:.2}% of oracle) must be > 98% of oracle rate ({oracle_rate} nanoERG/token). \
+                Wait for LP/oracle prices to converge or use LP swap instead."
             ),
         });
     }

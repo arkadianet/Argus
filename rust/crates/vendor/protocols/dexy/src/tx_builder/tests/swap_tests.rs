@@ -189,9 +189,9 @@ fn test_swap_rejects_zero_input() {
     let err = result.unwrap_err();
     match err {
         TxError::BuildFailed { message } => {
-            assert!(message.contains("positive"), "Got: {}", message);
+            assert!(message.contains("positive"), "Got: {message}");
         }
-        _ => panic!("Expected BuildFailed, got {:?}", err),
+        _ => panic!("Expected BuildFailed, got {err:?}"),
     }
 }
 
@@ -219,9 +219,9 @@ fn test_swap_rejects_insufficient_erg() {
     assert!(result.is_err());
     match result.unwrap_err() {
         TxError::BuildFailed { message } => {
-            assert!(message.contains("Insufficient ERG"), "Got: {}", message);
+            assert!(message.contains("Insufficient ERG"), "Got: {message}");
         }
-        other => panic!("Expected BuildFailed, got {:?}", other),
+        other => panic!("Expected BuildFailed, got {other:?}"),
     }
 }
 
@@ -240,9 +240,9 @@ fn test_swap_rejects_insufficient_dexy_tokens() {
     assert!(result.is_err());
     match result.unwrap_err() {
         TxError::BuildFailed { message } => {
-            assert!(message.contains("Insufficient token"), "Got: {}", message);
+            assert!(message.contains("Insufficient token"), "Got: {message}");
         }
-        other => panic!("Expected BuildFailed, got {:?}", other),
+        other => panic!("Expected BuildFailed, got {other:?}"),
     }
 }
 
@@ -260,9 +260,9 @@ fn test_swap_rejects_slippage_violation() {
     assert!(result.is_err());
     match result.unwrap_err() {
         TxError::BuildFailed { message } => {
-            assert!(message.contains("below minimum"), "Got: {}", message);
+            assert!(message.contains("below minimum"), "Got: {message}");
         }
-        other => panic!("Expected BuildFailed, got {:?}", other),
+        other => panic!("Expected BuildFailed, got {other:?}"),
     }
 }
 
@@ -440,9 +440,9 @@ fn test_dexy_to_erg_insufficient_erg_for_fees() {
     assert!(result.is_err());
     match result.unwrap_err() {
         TxError::BuildFailed { message } => {
-            assert!(message.contains("Insufficient ERG"), "Got: {}", message);
+            assert!(message.contains("Insufficient ERG"), "Got: {message}");
         }
-        other => panic!("Expected BuildFailed, got {:?}", other),
+        other => panic!("Expected BuildFailed, got {other:?}"),
     }
 }
 

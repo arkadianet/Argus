@@ -33,7 +33,7 @@ pub fn derive_output_boxes(tx: &Eip12UnsignedTx) -> Result<(String, Vec<Eip12Inp
     let mut boxes = Vec::with_capacity(tx.outputs.len());
     for (idx, candidate) in unsigned.output_candidates.iter().enumerate() {
         let ergo_box = ErgoBox::from_box_candidate(candidate, tx_id, idx as u16)
-            .map_err(|e| format!("Failed to derive output box {}: {}", idx, e))?;
+            .map_err(|e| format!("Failed to derive output box {idx}: {e}"))?;
         boxes.push(Eip12InputBox::from_ergo_box(
             &ergo_box,
             tx_id_str.clone(),
@@ -66,7 +66,7 @@ pub fn to_unsigned_transaction(tx: &Eip12UnsignedTx) -> Result<UnsignedTransacti
             .iter()
             .map(|d| parse_box_id(&d.box_id).map(DataInput::from))
             .collect::<Result<_, String>>()?;
-        Some(TxIoVec::from_vec(dis).map_err(|e| format!("Data inputs: {}", e))?)
+        Some(TxIoVec::from_vec(dis).map_err(|e| format!("Data inputs: {e}"))?)
     };
 
     let outputs: Vec<_> = tx
@@ -75,8 +75,8 @@ pub fn to_unsigned_transaction(tx: &Eip12UnsignedTx) -> Result<UnsignedTransacti
         .map(output_to_candidate)
         .collect::<Result<_, String>>()?;
 
-    let inputs = TxIoVec::from_vec(inputs).map_err(|e| format!("Inputs: {}", e))?;
-    let outputs = TxIoVec::from_vec(outputs).map_err(|e| format!("Outputs: {}", e))?;
+    let inputs = TxIoVec::from_vec(inputs).map_err(|e| format!("Inputs: {e}"))?;
+    let outputs = TxIoVec::from_vec(outputs).map_err(|e| format!("Outputs: {e}"))?;
 
     UnsignedTransaction::new(inputs, data_inputs, outputs).map_err(|e| e.to_string())
 }
@@ -87,13 +87,13 @@ fn output_to_candidate(
     let value: u64 = output
         .value
         .parse()
-        .map_err(|e| format!("Cannot parse output value: {}", e))?;
-    let box_value = BoxValue::try_from(value).map_err(|e| format!("Invalid box value: {}", e))?;
+        .map_err(|e| format!("Cannot parse output value: {e}"))?;
+    let box_value = BoxValue::try_from(value).map_err(|e| format!("Invalid box value: {e}"))?;
 
     let tree_bytes =
-        hex::decode(&output.ergo_tree).map_err(|e| format!("Invalid ergoTree hex: {}", e))?;
+        hex::decode(&output.ergo_tree).map_err(|e| format!("Invalid ergoTree hex: {e}"))?;
     let ergo_tree = ErgoTree::sigma_parse_bytes(&tree_bytes)
-        .map_err(|e| format!("ErgoTree parse error: {}", e))?;
+        .map_err(|e| format!("ErgoTree parse error: {e}"))?;
 
     let mut builder =
         ErgoBoxCandidateBuilder::new(box_value, ergo_tree, output.creation_height as u32);
@@ -103,9 +103,9 @@ fn output_to_candidate(
         let amount: u64 = asset
             .amount
             .parse()
-            .map_err(|e| format!("Cannot parse token amount: {}", e))?;
+            .map_err(|e| format!("Cannot parse token amount: {e}"))?;
         let token_amount =
-            TokenAmount::try_from(amount).map_err(|e| format!("Invalid token amount: {}", e))?;
+            TokenAmount::try_from(amount).map_err(|e| format!("Invalid token amount: {e}"))?;
         builder.add_token(Token {
             token_id,
             amount: token_amount,
@@ -122,20 +122,20 @@ fn output_to_candidate(
     ];
     for (name, reg_id) in reg_ids {
         if let Some(hex_val) = output.additional_registers.get(name) {
-            let bytes = hex::decode(hex_val).map_err(|e| format!("Invalid {} hex: {}", name, e))?;
+            let bytes = hex::decode(hex_val).map_err(|e| format!("Invalid {name} hex: {e}"))?;
             let constant = Constant::sigma_parse_bytes(&bytes)
-                .map_err(|e| format!("Invalid {} constant: {}", name, e))?;
+                .map_err(|e| format!("Invalid {name} constant: {e}"))?;
             builder.set_register_value(reg_id, constant);
         }
     }
 
     builder
         .build()
-        .map_err(|e| format!("Failed to build output candidate: {}", e))
+        .map_err(|e| format!("Failed to build output candidate: {e}"))
 }
 
 fn parse_box_id(hex_str: &str) -> Result<BoxId, String> {
-    let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid box id hex: {}", e))?;
+    let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid box id hex: {e}"))?;
     let arr: [u8; 32] = bytes
         .try_into()
         .map_err(|_| "Box id must be 32 bytes".to_string())?;
@@ -143,7 +143,7 @@ fn parse_box_id(hex_str: &str) -> Result<BoxId, String> {
 }
 
 fn parse_token_id(hex_str: &str) -> Result<TokenId, String> {
-    let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid token id hex: {}", e))?;
+    let bytes = hex::decode(hex_str).map_err(|e| format!("Invalid token id hex: {e}"))?;
     let arr: [u8; 32] = bytes
         .try_into()
         .map_err(|_| "Token id must be 32 bytes".to_string())?;

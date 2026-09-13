@@ -448,7 +448,7 @@ mod tests {
             let rhs = (delta_y as i128)
                 * ((reserves_x as i128) * contract_fee_denom
                     + (delta_x as i128) * contract_fee_num);
-            assert!(lhs >= rhs, "Contract validation failed: {} < {}", lhs, rhs);
+            assert!(lhs >= rhs, "Contract validation failed: {lhs} < {rhs}");
         }
 
         #[test]
@@ -479,7 +479,7 @@ mod tests {
                 3,
                 1000,
             );
-            assert!(impact < 1.0, "Impact too high: {}", impact);
+            assert!(impact < 1.0, "Impact too high: {impact}");
         }
 
         #[test]
@@ -491,7 +491,7 @@ mod tests {
                 3,
                 1000,
             );
-            assert!(impact > 1.0, "Impact too low for large trade: {}", impact);
+            assert!(impact > 1.0, "Impact too low for large trade: {impact}");
         }
     }
 

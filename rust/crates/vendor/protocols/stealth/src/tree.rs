@@ -162,13 +162,12 @@ mod tests {
         let addr = stealth_tree_to_address(LIVE_TREE).unwrap();
         // P2S mainnet addresses carry the 0x10 prefix byte.
         assert!(addr.len() > 50);
-        assert_eq!(
+        assert!(
             ergo_lib::ergotree_ir::chain::address::AddressEncoder::new(
                 ergo_lib::ergotree_ir::chain::address::NetworkPrefix::Mainnet
             )
             .parse_address_from_str(&addr)
-            .is_ok(),
-            true
+            .is_ok()
         );
     }
 }

@@ -70,7 +70,7 @@ pub(crate) fn summarize_unsigned(
     let mut input_total: u64 = 0;
     let mut all_inputs_owned = true;
     for (i, input) in tx.inputs.iter().enumerate() {
-        let box_id: String = input.box_id.clone().into();
+        let box_id: String = input.box_id.into();
         let json = input_boxes.get(i).and_then(|b| b.as_ref());
         match json {
             Some(b) => {

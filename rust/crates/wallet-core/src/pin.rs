@@ -39,7 +39,7 @@ impl Drop for PinWrappedKey {
 
 fn validate_pin(pin: &str) -> Result<(), CoreError> {
     let n = pin.chars().count();
-    if n < 6 || n > 32 {
+    if !(6..=32).contains(&n) {
         return Err(CoreError::Encryption("PIN must be 6-32 characters".into()));
     }
     Ok(())

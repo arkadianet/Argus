@@ -27,7 +27,7 @@ pub async fn fetch_dexy_state(
         .get_box_by_token_id(capabilities, &oracle_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("Oracle box not found: {}", e),
+            message: format!("Oracle box not found: {e}"),
         })?;
 
     let lp_token_id = TokenId::new(&ids.lp_nft);
@@ -35,7 +35,7 @@ pub async fn fetch_dexy_state(
         .get_box_by_token_id(capabilities, &lp_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("LP box not found: {}", e),
+            message: format!("LP box not found: {e}"),
         })?;
 
     let free_mint_token_id = TokenId::new(&ids.free_mint_nft);
@@ -43,7 +43,7 @@ pub async fn fetch_dexy_state(
         .get_box_by_token_id(capabilities, &free_mint_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("FreeMint box not found: {}", e),
+            message: format!("FreeMint box not found: {e}"),
         })?;
 
     let current_height = capabilities.chain_height as i32;
@@ -53,7 +53,7 @@ pub async fn fetch_dexy_state(
             .get_token_info(&ids.dexy_token)
             .await
             .map_err(|e| ProtocolError::BoxParseError {
-                message: format!("Failed to get Dexy token info: {}", e),
+                message: format!("Failed to get Dexy token info: {e}"),
             })?;
     let total_supply = token_info.emission_amount.unwrap_or(0);
 
@@ -142,7 +142,7 @@ pub fn parse_free_mint_box_data(ergo_box: &ErgoBox) -> Result<DexyFreeMintBoxDat
 
 fn map_box_creation_info_err(e: impl std::fmt::Display) -> ProtocolError {
     ProtocolError::BoxParseError {
-        message: format!("Failed to get box creation info: {}", e),
+        message: format!("Failed to get box creation info: {e}"),
     }
 }
 
@@ -153,7 +153,7 @@ fn serialize_ergo_tree(ergo_box: &ErgoBox) -> Result<String, ProtocolError> {
         .sigma_serialize_bytes()
         .map(|bytes| base16::encode_lower(&bytes))
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("Failed to serialize ErgoTree: {}", e),
+            message: format!("Failed to serialize ErgoTree: {e}"),
         })
 }
 
@@ -217,7 +217,7 @@ pub async fn fetch_tx_context(
         .get_box_by_token_id(capabilities, &free_mint_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("FreeMint box not found: {}", e),
+            message: format!("FreeMint box not found: {e}"),
         })?;
 
     let bank_token_id = TokenId::new(&ids.bank_nft);
@@ -225,7 +225,7 @@ pub async fn fetch_tx_context(
         .get_box_by_token_id(capabilities, &bank_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("Bank box not found: {}", e),
+            message: format!("Bank box not found: {e}"),
         })?;
 
     let buyback_token_id = TokenId::new(&ids.buyback_nft);
@@ -233,7 +233,7 @@ pub async fn fetch_tx_context(
         .get_box_by_token_id(capabilities, &buyback_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("Buyback box not found: {}", e),
+            message: format!("Buyback box not found: {e}"),
         })?;
 
     let oracle_token_id = TokenId::new(&ids.oracle_pool_nft);
@@ -241,7 +241,7 @@ pub async fn fetch_tx_context(
         .get_box_by_token_id(capabilities, &oracle_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("Oracle box not found: {}", e),
+            message: format!("Oracle box not found: {e}"),
         })?;
 
     let lp_token_id = TokenId::new(&ids.lp_nft);
@@ -249,7 +249,7 @@ pub async fn fetch_tx_context(
         .get_box_by_token_id(capabilities, &lp_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("LP box not found: {}", e),
+            message: format!("LP box not found: {e}"),
         })?;
 
     let free_mint_data = parse_free_mint_box_data(&free_mint_box)?;
@@ -344,7 +344,7 @@ pub async fn fetch_swap_tx_context(
         .get_box_by_token_id(capabilities, &lp_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("LP box not found: {}", e),
+            message: format!("LP box not found: {e}"),
         })?;
 
     let (lp_tx_id, lp_index) = client
@@ -361,7 +361,7 @@ pub async fn fetch_swap_tx_context(
         .get_box_by_token_id(capabilities, &swap_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("LP Swap NFT box not found: {}", e),
+            message: format!("LP Swap NFT box not found: {e}"),
         })?;
 
     let (swap_tx_id, swap_index) = client
@@ -428,7 +428,7 @@ pub async fn fetch_lp_tx_context(
         .get_box_by_token_id(capabilities, &lp_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("LP box not found: {}", e),
+            message: format!("LP box not found: {e}"),
         })?;
 
     let (lp_tx_id, lp_index) = client
@@ -454,7 +454,7 @@ pub async fn fetch_lp_tx_context(
         .get_box_by_token_id(capabilities, &action_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("{} box not found: {}", action_label, e),
+            message: format!("{action_label} box not found: {e}"),
         })?;
 
     let (action_tx_id, action_index) = client
@@ -474,7 +474,7 @@ pub async fn fetch_lp_tx_context(
                 .get_box_by_token_id(capabilities, &oracle_token_id)
                 .await
                 .map_err(|e| ProtocolError::BoxParseError {
-                    message: format!("Oracle box not found: {}", e),
+                    message: format!("Oracle box not found: {e}"),
                 })?;
 
             let oracle_data = parse_oracle_box(&oracle_box)?;
@@ -526,7 +526,7 @@ pub async fn fetch_oracle_price(
         .get_box_by_token_id(capabilities, &oracle_token_id)
         .await
         .map_err(|e| ProtocolError::BoxParseError {
-            message: format!("Oracle box not found: {}", e),
+            message: format!("Oracle box not found: {e}"),
         })?;
 
     let oracle_data = parse_oracle_box(&oracle_box)?;
@@ -662,11 +662,10 @@ mod tests {
             ProtocolError::BoxParseError { message } => {
                 assert!(
                     message.contains("R4"),
-                    "Expected R4 in error, got: {}",
-                    message
+                    "Expected R4 in error, got: {message}"
                 );
             }
-            other => panic!("Expected BoxParseError, got: {:?}", other),
+            other => panic!("Expected BoxParseError, got: {other:?}"),
         }
     }
 
@@ -721,11 +720,10 @@ mod tests {
             ProtocolError::BoxParseError { message } => {
                 assert!(
                     message.contains("not found"),
-                    "Expected 'not found' in error, got: {}",
-                    message
+                    "Expected 'not found' in error, got: {message}"
                 );
             }
-            other => panic!("Expected BoxParseError, got: {:?}", other),
+            other => panic!("Expected BoxParseError, got: {other:?}"),
         }
     }
 
@@ -790,11 +788,10 @@ mod tests {
             ProtocolError::BoxParseError { message } => {
                 assert!(
                     message.contains("R4"),
-                    "Expected R4 in error, got: {}",
-                    message
+                    "Expected R4 in error, got: {message}"
                 );
             }
-            other => panic!("Expected BoxParseError, got: {:?}", other),
+            other => panic!("Expected BoxParseError, got: {other:?}"),
         }
     }
 
@@ -809,11 +806,10 @@ mod tests {
             ProtocolError::BoxParseError { message } => {
                 assert!(
                     message.contains("R5"),
-                    "Expected R5 in error, got: {}",
-                    message
+                    "Expected R5 in error, got: {message}"
                 );
             }
-            other => panic!("Expected BoxParseError, got: {:?}", other),
+            other => panic!("Expected BoxParseError, got: {other:?}"),
         }
     }
 

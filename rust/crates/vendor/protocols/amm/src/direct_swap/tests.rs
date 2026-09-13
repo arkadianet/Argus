@@ -255,8 +255,7 @@ fn test_direct_swap_slippage_exceeded() {
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("below minimum") || err.contains("Output below minimum"),
-        "Got: {}",
-        err
+        "Got: {err}"
     );
 }
 
@@ -603,8 +602,7 @@ fn test_direct_swap_t2t_wrong_token() {
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("does not match") || err.contains("Invalid token"),
-        "Expected token mismatch error, got: {}",
-        err
+        "Expected token mismatch error, got: {err}"
     );
 }
 
@@ -634,8 +632,7 @@ fn test_direct_swap_t2t_erg_input_rejected() {
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("ERG input") || err.contains("not valid for T2T"),
-        "Expected ERG rejection error, got: {}",
-        err
+        "Expected ERG rejection error, got: {err}"
     );
 }
 
@@ -696,8 +693,7 @@ fn test_direct_swap_token_to_erg_small_change_folded_into_output() {
             .sum();
         assert_eq!(
             total_input_erg, total_output_erg,
-            "ERG inputs ({}) must equal outputs ({})",
-            total_input_erg, total_output_erg
+            "ERG inputs ({total_input_erg}) must equal outputs ({total_output_erg})"
         );
 
         let change_erg = 1_956_185u64 - TX_FEE;
@@ -745,7 +741,6 @@ fn test_direct_swap_token_to_erg_rejects_pool_dust_breach() {
     let err = result.unwrap_err().to_string();
     assert!(
         err.contains("minimum ERG") || err.contains("max extractable"),
-        "unexpected error: {}",
-        err
+        "unexpected error: {err}"
     );
 }

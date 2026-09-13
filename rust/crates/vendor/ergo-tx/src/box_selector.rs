@@ -32,8 +32,7 @@ impl fmt::Display for BoxSelectorError {
             } => {
                 write!(
                     f,
-                    "Insufficient ERG: need {} nanoERG, have {}",
-                    required, available
+                    "Insufficient ERG: need {required} nanoERG, have {available}"
                 )
             }
             BoxSelectorError::InsufficientTokens {
@@ -43,8 +42,7 @@ impl fmt::Display for BoxSelectorError {
             } => {
                 write!(
                     f,
-                    "Insufficient token balance: need {} of {}, have {}",
-                    required, token_id, available
+                    "Insufficient token balance: need {required} of {token_id}, have {available}"
                 )
             }
             BoxSelectorError::InsufficientMultiTokens { shortfalls } => {

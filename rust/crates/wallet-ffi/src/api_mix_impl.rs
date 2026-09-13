@@ -231,6 +231,7 @@ pub fn rings_json(view: &ChainView) -> serde_json::Value {
 
 /// What a funding box must hold to enter an ERG ring of `denomination`
 /// at `level`.
+#[cfg(test)]
 pub fn funding_requirement(
     view: &ChainView,
     denomination: i64,

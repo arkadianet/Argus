@@ -93,7 +93,7 @@ pub fn reduce_transaction_with_context(
             .collect();
         Some(
             TxIoVec::from_vec(dis)
-                .map_err(|e| ReductionError::TransactionError(format!("Data inputs: {}", e)))?,
+                .map_err(|e| ReductionError::TransactionError(format!("Data inputs: {e}")))?,
         )
     };
 
@@ -109,11 +109,11 @@ pub fn reduce_transaction_with_context(
         .collect();
 
     let inputs = TxIoVec::from_vec(unsigned_inputs)
-        .map_err(|e| ReductionError::TransactionError(format!("Inputs: {}", e)))?;
+        .map_err(|e| ReductionError::TransactionError(format!("Inputs: {e}")))?;
 
     // Build output candidates vector
     let outputs = TxIoVec::from_vec(output_candidates)
-        .map_err(|e| ReductionError::TransactionError(format!("Outputs: {}", e)))?;
+        .map_err(|e| ReductionError::TransactionError(format!("Outputs: {e}")))?;
 
     // Create UnsignedTransaction
     let unsigned_tx = UnsignedTransaction::new(inputs, data_inputs, outputs)
@@ -143,7 +143,7 @@ fn parse_box_id(
     use ergo_lib::ergotree_ir::chain::ergo_box::BoxId;
 
     let bytes = hex::decode(hex_str)
-        .map_err(|e| ReductionError::InvalidBoxId(format!("Invalid hex: {}", e)))?;
+        .map_err(|e| ReductionError::InvalidBoxId(format!("Invalid hex: {e}")))?;
 
     let arr: [u8; 32] = bytes.try_into().map_err(|_| {
         ReductionError::InvalidBoxId("Box ID must be 32 bytes (64 hex chars)".to_string())
@@ -161,15 +161,15 @@ fn convert_output_to_candidate(
     let value: u64 = output
         .value
         .parse()
-        .map_err(|e| ReductionError::InvalidValue(format!("Cannot parse value: {}", e)))?;
+        .map_err(|e| ReductionError::InvalidValue(format!("Cannot parse value: {e}")))?;
     let box_value = BoxValue::try_from(value)
-        .map_err(|e| ReductionError::InvalidValue(format!("Invalid box value: {}", e)))?;
+        .map_err(|e| ReductionError::InvalidValue(format!("Invalid box value: {e}")))?;
 
     // Parse ErgoTree
     let ergo_tree_bytes = hex::decode(&output.ergo_tree)
-        .map_err(|e| ReductionError::InvalidErgoTree(format!("Invalid hex: {}", e)))?;
+        .map_err(|e| ReductionError::InvalidErgoTree(format!("Invalid hex: {e}")))?;
     let ergo_tree = ErgoTree::sigma_parse_bytes(&ergo_tree_bytes)
-        .map_err(|e| ReductionError::InvalidErgoTree(format!("Parse error: {}", e)))?;
+        .map_err(|e| ReductionError::InvalidErgoTree(format!("Parse error: {e}")))?;
 
     // Build using ErgoBoxCandidateBuilder
     let mut builder = ErgoBoxCandidateBuilder::new(box_value, ergo_tree, creation_height);
@@ -180,9 +180,9 @@ fn convert_output_to_candidate(
         let amount: u64 = asset
             .amount
             .parse()
-            .map_err(|e| ReductionError::InvalidToken(format!("Cannot parse amount: {}", e)))?;
+            .map_err(|e| ReductionError::InvalidToken(format!("Cannot parse amount: {e}")))?;
         let token_amount = TokenAmount::try_from(amount)
-            .map_err(|e| ReductionError::InvalidToken(format!("Invalid amount: {}", e)))?;
+            .map_err(|e| ReductionError::InvalidToken(format!("Invalid amount: {e}")))?;
 
         builder.add_token(Token {
             token_id,
@@ -196,13 +196,13 @@ fn convert_output_to_candidate(
     // Build the candidate
     builder
         .build()
-        .map_err(|e| ReductionError::TransactionError(format!("Failed to build candidate: {}", e)))
+        .map_err(|e| ReductionError::TransactionError(format!("Failed to build candidate: {e}")))
 }
 
 /// Parse a hex string to TokenId
 fn parse_token_id(hex_str: &str) -> Result<TokenId, ReductionError> {
     let bytes = hex::decode(hex_str)
-        .map_err(|e| ReductionError::InvalidToken(format!("Invalid hex: {}", e)))?;
+        .map_err(|e| ReductionError::InvalidToken(format!("Invalid hex: {e}")))?;
 
     let arr: [u8; 32] = bytes.try_into().map_err(|_| {
         ReductionError::InvalidToken("Token ID must be 32 bytes (64 hex chars)".to_string())
@@ -267,10 +267,10 @@ fn add_registers_to_builder(
     for (name, reg_id) in reg_ids {
         if let Some(value) = registers.get(name) {
             let bytes = hex::decode(value).map_err(|e| {
-                ReductionError::InvalidRegister(format!("{}: invalid hex: {}", name, e))
+                ReductionError::InvalidRegister(format!("{name}: invalid hex: {e}"))
             })?;
             let constant = Constant::sigma_parse_bytes(&bytes).map_err(|e| {
-                ReductionError::InvalidRegister(format!("{}: parse error: {}", name, e))
+                ReductionError::InvalidRegister(format!("{name}: parse error: {e}"))
             })?;
 
             builder.set_register_value(reg_id, constant);

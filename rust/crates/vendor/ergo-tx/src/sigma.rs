@@ -148,15 +148,13 @@ impl std::fmt::Display for SigmaDecodeError {
             Self::InvalidTypeTag { expected, found } => {
                 write!(
                     f,
-                    "Invalid type tag: expected 0x{:02x}, found 0x{:02x}",
-                    expected, found
+                    "Invalid type tag: expected 0x{expected:02x}, found 0x{found:02x}"
                 )
             }
             Self::InvalidLength { expected, found } => {
                 write!(
                     f,
-                    "Invalid length: expected {} bytes, found {}",
-                    expected, found
+                    "Invalid length: expected {expected} bytes, found {found}"
                 )
             }
             Self::Overflow => write!(f, "Value overflow during VLQ decoding"),
@@ -266,7 +264,7 @@ mod tests {
         for value in test_values {
             let encoded = encode_sigma_long(value);
             let decoded = decode_sigma_long(&encoded).unwrap();
-            assert_eq!(decoded, value, "Failed roundtrip for {}", value);
+            assert_eq!(decoded, value, "Failed roundtrip for {value}");
         }
     }
 

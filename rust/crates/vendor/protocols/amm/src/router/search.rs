@@ -403,5 +403,5 @@ pub(crate) fn make_pool_display_name(
         .unwrap_or_else(|| token_in[..8.min(token_in.len())].to_string());
     let out_name = resolve_token_name(pool, token_out)
         .unwrap_or_else(|| token_out[..8.min(token_out.len())].to_string());
-    Some(format!("{}/{}", in_name, out_name))
+    Some(format!("{in_name}/{out_name}"))
 }
