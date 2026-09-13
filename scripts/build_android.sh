@@ -26,26 +26,36 @@ echo "Using NDK: $ANDROID_NDK_HOME"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUST_DIR="$SCRIPT_DIR/../rust"
 FLUTTER_APP_DIR="$SCRIPT_DIR/../app"
+# Callers (release_check.sh) may build to a scratch directory instead.
+OUT_DIR="${OUT_DIR:-$FLUTTER_APP_DIR/android/app/src/main/jniLibs}"
 
 cd "$RUST_DIR"
 
+# Reproducible output: without these the absolute build path is baked into the
+# binary, so the same source built from a worktree and from the main checkout
+# produce different bytes. scripts/release_check.sh compares a fresh build
+# against the tracked libraries, and that comparison is only meaningful if the
+# build is deterministic. Verified byte-identical across two path lengths.
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$REPO_ROOT=/argus --remap-path-prefix=$HOME/.cargo=/cargo"
+
 echo "=== Building wallet-ffi for aarch64-linux-android ==="
-cargo ndk -t aarch64-linux-android -o "$FLUTTER_APP_DIR/android/app/src/main/jniLibs" build --release -p wallet-ffi 2>&1
+cargo ndk -t aarch64-linux-android -o "$OUT_DIR" build --release -p wallet-ffi 2>&1
 
 echo "=== Building wallet-ffi for x86_64-linux-android ==="
-cargo ndk -t x86_64-linux-android -o "$FLUTTER_APP_DIR/android/app/src/main/jniLibs" build --release -p wallet-ffi 2>&1
+cargo ndk -t x86_64-linux-android -o "$OUT_DIR" build --release -p wallet-ffi 2>&1
 
 # cargo-ndk copies every cdylib; the app only loads libwallet_ffi.so
-find "$FLUTTER_APP_DIR/android/app/src/main/jniLibs" -name '*.so' ! -name 'libwallet_ffi.so' -delete
+find "$OUT_DIR" -name '*.so' ! -name 'libwallet_ffi.so' -delete
 
 echo "=== Done ==="
 echo "Outputs:"
-find "$FLUTTER_APP_DIR/android/app/src/main/jniLibs" -name "*.so" 2>/dev/null || echo "(no .so files found)"
+find "$OUT_DIR" -name "*.so" 2>/dev/null || echo "(no .so files found)"
 
 # Optional: verify no ergo-node/ergo-state objects were linked
 echo "=== Symbol check ==="
 for abi in arm64-v8a x86_64; do
-    so="$FLUTTER_APP_DIR/android/app/src/main/jniLibs/$abi/libwallet_ffi.so"
+    so="$OUT_DIR/$abi/libwallet_ffi.so"
     if [ -f "$so" ]; then
         echo "$abi: $(ls -lh "$so" | awk '{print $5}')"
         if nm -D "$so" 2>/dev/null | grep -q "ergo_node\|ergo_state"; then
