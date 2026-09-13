@@ -16,7 +16,9 @@ class TxResultHarness {
   TxResultHarness(WidgetTester tester) {
     final messenger = tester.binding.defaultBinaryMessenger;
     final previousExplorer = networkController.explorer;
+    final previousSite = networkController.explorerSiteId;
     networkController.explorer = 'https://api.sigmaspace.io';
+    networkController.explorerSiteId = 'sigmaspace';
     messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
       if (call.method == 'Clipboard.setData') {
         copied = (call.arguments as Map)['text'] as String;
@@ -33,6 +35,7 @@ class TxResultHarness {
     });
     addTearDown(() {
       networkController.explorer = previousExplorer;
+      networkController.explorerSiteId = previousSite;
       messenger.setMockMethodCallHandler(SystemChannels.platform, null);
       messenger.setMockMethodCallHandler(channel, null);
     });

@@ -44,12 +44,12 @@ class DappEntry {
   final String blurb;
 }
 
-// Checked 2026-09-06: Spectrum's interface closed in favour of ErgoDEX,
-// Duckpools moved to its main site, SkyHarbor is shutting down and
-// ErgoAuctions' server is down, so those two are gone.
+// Checked 2026-09-13: ergodex.io no longer resolves, so Crux Finance takes
+// its place. Earlier: Spectrum's interface closed, Duckpools moved to its
+// main site, SkyHarbor is shutting down and ErgoAuctions' server is down.
 const knownDapps = [
   DappEntry('SigmaFi', 'https://sigmafi.app', 'Peer-to-peer bonds'),
-  DappEntry('ErgoDEX', 'https://ergodex.io', 'Swaps and liquidity'),
+  DappEntry('Crux Finance', 'https://cruxfinance.io', 'Swaps, charts and portfolio'),
   DappEntry('Duckpools', 'https://www.duckpools.io', 'Lending pools'),
   DappEntry('Rosen Bridge', 'https://app.rosen.tech', 'Bridge to other chains'),
   DappEntry('Mew Finance', 'https://mewfinance.com', 'Mew Finance dApps'),

@@ -57,22 +57,22 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('dApp list'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('ErgoDEX'));
+    await tester.tap(find.text('Crux Finance'));
     await tester.pumpAndSettle();
-    expect(platform.views.last.params.initialUrlRequest?.url.toString(), 'https://ergodex.io');
+    expect(platform.views.last.params.initialUrlRequest?.url.toString(), 'https://cruxfinance.io');
     expect(platform.views.first.controller.loads, isEmpty);
     await tester.tap(find.byType(PopupMenuButton<String>));
     await tester.pumpAndSettle();
     await tester.tap(find.text('dApp list'));
     await tester.pumpAndSettle();
     await tester.dragUntilVisible(
-        find.textContaining('Back to https://ergodex.io'),
+        find.textContaining('Back to https://cruxfinance.io'),
         find.ancestor(of: find.text('SigmaFi'), matching: find.byType(Scrollable)).first,
         const Offset(0, -120));
     await tester.pumpAndSettle();
-    await tester.tap(find.textContaining('Back to https://ergodex.io'));
+    await tester.tap(find.textContaining('Back to https://cruxfinance.io'));
     await tester.pumpAndSettle();
-    expect(platform.views.last.params.initialUrlRequest?.url.toString(), 'https://ergodex.io');
+    expect(platform.views.last.params.initialUrlRequest?.url.toString(), 'https://cruxfinance.io');
     expect(tester.takeException(), isNull);
   });
 }
