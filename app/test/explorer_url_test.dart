@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   _presetTests();
+  _hostBoundaryTests();
   test('sigmaspace token url', () {
     expect(explorerTokenUrl('https://api.sigmaspace.io', 'abc'),
         'https://sigmaspace.io/en/token/abc');
@@ -51,5 +52,18 @@ void _presetTests() {
       explorerTxLink(siteId: 'kadia', custom: 'https://x.example', txId: 'abc'),
       'https://explorer.kadia.io/tx/abc',
     );
+  });
+}
+
+void _hostBoundaryTests() {
+  test('a look-alike host is not treated as a preset API', () {
+    expect(explorerSiteForApi('https://notsigmaspace.io'), isNull);
+    expect(explorerSiteForApi('https://api.sigmaspace.io.evil.example'), isNull);
+    expect(explorerSiteForApi(''), isNull);
+  });
+  test('the bare domain and its subdomains still map to the site', () {
+    expect(explorerSiteForApi('https://sigmaspace.io'), sigmaSpaceSite);
+    expect(explorerSiteForApi('https://API.Sigmaspace.io'), sigmaSpaceSite);
+    expect(explorerSiteForApi('https://ergoplatform.com'), ergoPlatformSite);
   });
 }

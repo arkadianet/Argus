@@ -93,12 +93,14 @@ ExplorerSite? explorerSiteById(String? id) {
 /// The site whose API is [api], if any: used to pick a sensible link
 /// target for installs that saved an explorer API before sites existed.
 ExplorerSite? explorerSiteForApi(String api) {
-  final host = Uri.tryParse(api)?.host ?? '';
+  final host = Uri.tryParse(api)?.host.toLowerCase() ?? '';
+  if (host.isEmpty) return null;
   for (final s in explorerSites) {
-    final apiHost = s.api == null ? null : Uri.parse(s.api!).host;
-    if (apiHost != null && host.endsWith(apiHost.replaceFirst('api.', ''))) {
-      return s;
-    }
+    if (s.api == null) continue;
+    // The registrable domain, so api.sigmaspace.io and sigmaspace.io both
+    // match, while a look-alike such as notsigmaspace.io does not.
+    final domain = Uri.parse(s.api!).host.toLowerCase().replaceFirst('api.', '');
+    if (host == domain || host.endsWith('.$domain')) return s;
   }
   return null;
 }

@@ -199,7 +199,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
                       on: networkController.explorer == site.api,
                       title: site.name,
                       subtitle: Uri.parse(site.api!).host,
-                      onTap: () => networkController.setExplorer(site.api!),
+                      onTap: () => _useExplorerApi(site.api!),
                     ),
                   _choiceRow(
                     context,
@@ -235,6 +235,13 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
         );
       },
     );
+  }
+
+  /// Keeps the URL field showing what is actually in use: a preset row
+  /// sets the API, and a stale field would overwrite it on the next save.
+  Future<void> _useExplorerApi(String url) async {
+    _explorerCtrl.text = url;
+    await networkController.setExplorer(url);
   }
 
   Widget _choiceRow(
