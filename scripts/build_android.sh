@@ -28,6 +28,14 @@ RUST_DIR="$SCRIPT_DIR/../rust"
 FLUTTER_APP_DIR="$SCRIPT_DIR/../app"
 # Callers (release_check.sh) may build to a scratch directory instead.
 OUT_DIR="${OUT_DIR:-$FLUTTER_APP_DIR/android/app/src/main/jniLibs}"
+# The default jniLibs directory is ours to prune; a caller-supplied one is only
+# safe to prune if we created its contents.
+if [ "$OUT_DIR" = "$FLUTTER_APP_DIR/android/app/src/main/jniLibs" ] \
+   || [ -z "$(ls -A "$OUT_DIR" 2>/dev/null)" ]; then
+  OUT_DIR_WAS_EMPTY=1
+else
+  OUT_DIR_WAS_EMPTY=""
+fi
 
 cd "$RUST_DIR"
 
@@ -45,8 +53,14 @@ cargo ndk -t aarch64-linux-android -o "$OUT_DIR" build --release -p wallet-ffi 2
 echo "=== Building wallet-ffi for x86_64-linux-android ==="
 cargo ndk -t x86_64-linux-android -o "$OUT_DIR" build --release -p wallet-ffi 2>&1
 
-# cargo-ndk copies every cdylib; the app only loads libwallet_ffi.so
-find "$OUT_DIR" -name '*.so' ! -name 'libwallet_ffi.so' -delete
+# cargo-ndk copies every cdylib; the app only loads libwallet_ffi.so. OUT_DIR is
+# caller-settable, so only prune a directory this build actually produced —
+# pointed at a populated directory this would delete unrelated libraries.
+if [ -n "$OUT_DIR_WAS_EMPTY" ]; then
+  find "$OUT_DIR" -name '*.so' ! -name 'libwallet_ffi.so' -delete
+else
+  echo "OUT_DIR was not empty before the build; leaving other .so files alone."
+fi
 
 echo "=== Done ==="
 echo "Outputs:"

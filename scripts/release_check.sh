@@ -107,12 +107,25 @@ check_apks() {
   local aapt apksigner
   aapt="$(sdk_tool aapt2)"; apksigner="$(sdk_tool apksigner)"
   [ -n "$aapt" ] || { fail "aapt2 not found; cannot inspect APKs"; return; }
+  # Without apksigner the signing check would simply not run, and the whole
+  # check could report success having never looked at a certificate. Refuse.
+  [ -n "$apksigner" ] || { fail "apksigner not found; cannot verify signing (install Android build-tools)"; return; }
 
   # universal first, so its certificate becomes the expected one
   local expect_cert="" order=(universal "${ABIS[@]}")
   for kind in "${order[@]}"; do
-    local apk; apk="$(ls "$dir"/*"$kind"*.apk 2>/dev/null | head -1)"
-    if [ -z "$apk" ]; then fail "$kind: no APK matching *$kind*.apk in $dir"; continue; fi
+    # Exactly one candidate. Release directories accumulate: with a previous
+    # release's APK still present, taking the first match silently inspects
+    # the wrong file — alpha.52 sorts before alpha.53.
+    local -a found=(); local f
+    for f in "$dir"/*"$kind"*.apk; do [ -f "$f" ] && found+=("$f"); done
+    if [ "${#found[@]}" -eq 0 ]; then
+      fail "$kind: no APK matching *$kind*.apk in $dir"; continue
+    elif [ "${#found[@]}" -gt 1 ]; then
+      fail "$kind: ${#found[@]} APKs match *$kind*.apk — leave only the one being released:"
+      printf '          %s\n' "${found[@]##*/}"; continue
+    fi
+    local apk="${found[0]}"
 
     local want=$BASE_CODE
     [ "$kind" != universal ] && want=$(( BASE_CODE + ${ABI_OFFSET[$kind]} ))
@@ -141,18 +154,16 @@ check_apks() {
         || fail "$kind: carries '$abis', expected only '$kind'"
     fi
 
-    if [ -n "$apksigner" ]; then
-      local cert
-      cert="$("$apksigner" verify --print-certs "$apk" 2>/dev/null | sed -n 's/.*SHA-256 digest: //p' | head -1)"
-      if [ -z "$cert" ]; then
-        fail "$kind: unsigned, or the signature could not be read"
-      elif [ -z "$expect_cert" ]; then
-        expect_cert="$cert"; pass "universal: signed, cert ${cert:0:16}…"
-      elif [ "$cert" = "$expect_cert" ]; then
-        pass "$kind: same signing cert"
-      else
-        fail "$kind: cert ${cert:0:16}… differs from universal's ${expect_cert:0:16}… — these will not install over each other"
-      fi
+    local cert
+    cert="$("$apksigner" verify --print-certs "$apk" 2>/dev/null | sed -n 's/.*SHA-256 digest: //p' | head -1)"
+    if [ -z "$cert" ]; then
+      fail "$kind: unsigned, or the signature could not be read"
+    elif [ -z "$expect_cert" ]; then
+      expect_cert="$cert"; pass "universal: signed, cert ${cert:0:16}…"
+    elif [ "$cert" = "$expect_cert" ]; then
+      pass "$kind: same signing cert"
+    else
+      fail "$kind: cert ${cert:0:16}… differs from universal's ${expect_cert:0:16}… — these will not install over each other"
     fi
   done
   [ -n "$expect_cert" ] && printf '\n  Compare against the previous release before publishing:\n    apksigner verify --print-certs <previous.apk>\n    this release: %s\n' "$expect_cert"
