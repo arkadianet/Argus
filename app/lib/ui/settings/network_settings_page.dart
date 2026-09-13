@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../services/explorer_presets.dart';
 import '../../services/network_controller.dart';
 import '../../theme/argus_theme.dart';
 import '../widgets/soft_card.dart';
@@ -15,17 +16,20 @@ class NetworkSettingsPage extends StatefulWidget {
 class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
   final _nodeCtrl = TextEditingController();
   final _explorerCtrl = TextEditingController();
+  final _explorerWebCtrl = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _explorerCtrl.text = networkController.explorer;
+    _explorerWebCtrl.text = networkController.explorerWeb ?? '';
   }
 
   @override
   void dispose() {
     _nodeCtrl.dispose();
     _explorerCtrl.dispose();
+    _explorerWebCtrl.dispose();
     super.dispose();
   }
 
@@ -133,30 +137,133 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
               ),
             ),
             const SizedBox(height: 24),
-            const SectionLabel('Explorer', scope: 'App-wide'),
+            const SectionLabel('Open in explorer', scope: 'App-wide'),
             const SizedBox(height: 10),
             SoftCard(
-              child: TextField(
-                controller: _explorerCtrl,
-                decoration: InputDecoration(
-                  labelText: 'Explorer API URL',
-                  hintText: 'https://api.sigmaspace.io',
-                  suffixIcon: IconButton(
-                    tooltip: 'Save',
-                    onPressed: () => networkController.setExplorer(_explorerCtrl.text),
-                    icon: const Icon(Icons.check),
+              padding: EdgeInsets.zero,
+              child: DividedColumn(
+                indent: 16,
+                children: [
+                  for (final site in explorerSites)
+                    _choiceRow(
+                      context,
+                      on: networkController.explorerSiteId == site.id,
+                      title: site.name,
+                      subtitle: Uri.parse(site.web).host,
+                      onTap: () => networkController.setExplorerSite(site.id),
+                    ),
+                  _choiceRow(
+                    context,
+                    on: networkController.explorerSiteId == customExplorerSiteId,
+                    title: 'Custom',
+                    subtitle: networkController.explorerWeb == null
+                        ? 'A website using the Ergo Platform explorer paths'
+                        : Uri.tryParse(networkController.explorerWeb!)?.host ??
+                            networkController.explorerWeb!,
+                    onTap: () => networkController.setExplorerSite(customExplorerSiteId),
                   ),
-                ),
-                onSubmitted: networkController.setExplorer,
+                  if (networkController.explorerSiteId == customExplorerSiteId)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                      child: TextField(
+                        controller: _explorerWebCtrl,
+                        decoration: InputDecoration(
+                          labelText: 'Explorer website',
+                          hintText: 'https://explorer.example',
+                          suffixIcon: IconButton(
+                            tooltip: 'Save',
+                            onPressed: () => networkController.setExplorerWeb(_explorerWebCtrl.text),
+                            icon: const Icon(Icons.check),
+                          ),
+                        ),
+                        onSubmitted: networkController.setExplorerWeb,
+                      ),
+                    ),
+                ],
               ),
             ),
             const SizedBox(height: 8),
             const SettingsNote(
-              'Token names and decimals come from extraIndex nodes first, then this explorer as a fallback. It is also used for Open in explorer.',
+              'Where transaction and token links open. This changes no data the wallet reads.',
+            ),
+            const SectionLabel('Explorer API', scope: 'App-wide'),
+            const SizedBox(height: 10),
+            SoftCard(
+              padding: EdgeInsets.zero,
+              child: DividedColumn(
+                indent: 16,
+                children: [
+                  for (final site in explorerApiSites)
+                    _choiceRow(
+                      context,
+                      on: networkController.explorer == site.api,
+                      title: site.name,
+                      subtitle: Uri.parse(site.api!).host,
+                      onTap: () => networkController.setExplorer(site.api!),
+                    ),
+                  _choiceRow(
+                    context,
+                    on: !explorerApiSites.any((s) => s.api == networkController.explorer),
+                    title: 'Custom',
+                    subtitle: 'Any server speaking the Ergo Platform explorer API',
+                    onTap: null,
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                    child: TextField(
+                      controller: _explorerCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'Explorer API URL',
+                        hintText: 'https://api.sigmaspace.io',
+                        suffixIcon: IconButton(
+                          tooltip: 'Save',
+                          onPressed: () => networkController.setExplorer(_explorerCtrl.text),
+                          icon: const Icon(Icons.check),
+                        ),
+                      ),
+                      onSubmitted: networkController.setExplorer,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            const SettingsNote(
+              'The data source for stealth scans, mixing, lending, bridging and token metadata when nodes lack it. ErgExplorer and Kadia use their own APIs, so they cannot be chosen here.',
             ),
           ],
         );
       },
+    );
+  }
+
+  Widget _choiceRow(
+    BuildContext context, {
+    required bool on,
+    required String title,
+    required String subtitle,
+    required VoidCallback? onTap,
+  }) {
+    return InkWell(
+      onTap: on ? null : onTap,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        child: Row(
+          children: [
+            _radio(context, on),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: Theme.of(context).textTheme.titleMedium),
+                  Text(subtitle, style: Theme.of(context).textTheme.bodySmall),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 

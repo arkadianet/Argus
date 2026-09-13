@@ -32,8 +32,8 @@ void main() {
     );
     await harness.verifyReceipt(tester);
     expect(find.text('The dApp could not be notified.'), findsOneWidget);
-    // Resolve at click time through the controller, including host mappings.
-    networkController.explorer = 'https://api.ergoplatform.com';
+    // Resolve at click time through the controller's chosen link site.
+    networkController.explorerSiteId = 'ergoplatform';
     await tester.tap(find.text('View on explorer'));
     await tester.pump();
     expect(

@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../bridge/frb_generated.dart';
+import 'explorer_presets.dart';
 
 class NodeEntry {
   String url;
@@ -142,6 +143,8 @@ class NetworkController extends ChangeNotifier {
   static const defaultExplorer = 'https://api.sigmaspace.io';
   static const _nodesKey = 'argus_nodes';
   static const _explorerKey = 'argus_explorer';
+  static const _explorerSiteKey = 'argus_explorer_site';
+  static const _explorerWebKey = 'argus_explorer_web';
   static const _lastGoodKey = 'argus_last_good_node';
   static const _preferredKey = 'argus_preferred_node';
 
@@ -224,8 +227,25 @@ class NetworkController extends ChangeNotifier {
     return '${(host != null && host.isNotEmpty) ? host : activeUrl}  ·  #$height';
   }
 
-  String explorerTx(String txId) => explorerTransactionUrl(explorer, txId);
-  String explorerToken(String tokenId) => explorerTokenUrl(explorer, tokenId);
+  /// Website "Open in explorer" links go to: an [explorerSites] id, or
+  /// [customExplorerSiteId] with [explorerWeb] holding the address.
+  String explorerSiteId = sigmaSpaceSite.id;
+
+  /// The hand-typed website, used when [explorerSiteId] is custom. Falls
+  /// back to the API origin, which is what links used before sites existed.
+  String? explorerWeb;
+
+  ExplorerSite? get explorerSite => explorerSiteById(explorerSiteId);
+
+  String get _linkBase => explorerWeb ?? explorer;
+
+  String explorerTx(String txId) =>
+      explorerTxLink(siteId: explorerSiteId, custom: _linkBase, txId: txId);
+  String explorerToken(String tokenId) => explorerTokenLink(
+        siteId: explorerSiteId,
+        custom: _linkBase,
+        tokenId: tokenId,
+      );
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -242,6 +262,12 @@ class NetworkController extends ChangeNotifier {
       } catch (_) {}
     }
     explorer = prefs.getString(_explorerKey) ?? defaultExplorer;
+    explorerWeb = prefs.getString(_explorerWebKey);
+    // Installs from before link sites existed opened links on the API's
+    // own site; keep doing that rather than jumping to the default.
+    explorerSiteId = prefs.getString(_explorerSiteKey) ??
+        explorerSiteForApi(explorer)?.id ??
+        customExplorerSiteId;
     lastGood = prefs.getString(_lastGoodKey);
     preferredUrl = prefs.getString(_preferredKey);
     await _loadFiatCurrency();
@@ -255,6 +281,12 @@ class NetworkController extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_nodesKey, jsonEncode(nodes.map((n) => n.toJson()).toList()));
     await prefs.setString(_explorerKey, explorer);
+    await prefs.setString(_explorerSiteKey, explorerSiteId);
+    if (explorerWeb == null) {
+      await prefs.remove(_explorerWebKey);
+    } else {
+      await prefs.setString(_explorerWebKey, explorerWeb!);
+    }
     if (lastGood != null && lastGood!.isNotEmpty) {
       await prefs.setString(_lastGoodKey, lastGood!);
     }
@@ -521,6 +553,24 @@ class NetworkController extends ChangeNotifier {
     } catch (_) {}
     notifyListeners();
   }
+
+  /// Chooses where links open. Affects no data read, so nothing re-applies.
+  Future<void> setExplorerSite(String id) async {
+    if (id != customExplorerSiteId && explorerSiteById(id) == null) return;
+    explorerSiteId = id;
+    await persist();
+    notifyListeners();
+  }
+
+  /// Sets the hand-typed website and selects it.
+  Future<void> setExplorerWeb(String url) async {
+    final clean = url.trim().replaceAll(RegExp(r'/$'), '');
+    if (clean.isEmpty || !isAbsoluteHttpUrl(clean)) return;
+    explorerWeb = clean;
+    explorerSiteId = customExplorerSiteId;
+    await persist();
+    notifyListeners();
+  }
 }
 
 bool isAbsoluteHttpUrl(String url) {
@@ -538,27 +588,19 @@ List<String> probeOrder(List<String> urls, String? lastGood) {
   return [lastGood, ...urls.where((u) => u != lastGood)];
 }
 
-String explorerTransactionUrl(String explorer, String txId) {
-  final host = Uri.tryParse(explorer)?.host ?? '';
-  if (host.endsWith('sigmaspace.io')) {
-    return 'https://sigmaspace.io/en/transaction/$txId';
-  }
-  if (host.endsWith('ergoplatform.com')) {
-    return 'https://explorer.ergoplatform.com/en/transactions/$txId';
-  }
-  return '${explorer.replaceAll(RegExp(r'/$'), '')}/en/transactions/$txId';
-}
+/// Link for a transaction given only an explorer API: the API's own site
+/// when it has one, else the Ergo Platform path shape on that origin.
+String explorerTransactionUrl(String explorer, String txId) => explorerTxLink(
+      siteId: explorerSiteForApi(explorer)?.id,
+      custom: explorer,
+      txId: txId,
+    );
 
-String explorerTokenUrl(String explorer, String tokenId) {
-  final host = Uri.tryParse(explorer)?.host ?? '';
-  if (host.endsWith('sigmaspace.io')) {
-    return 'https://sigmaspace.io/en/token/$tokenId';
-  }
-  if (host.endsWith('ergoplatform.com')) {
-    return 'https://explorer.ergoplatform.com/en/token/$tokenId';
-  }
-  return '${explorer.replaceAll(RegExp(r'/$'), '')}/en/token/$tokenId';
-}
+String explorerTokenUrl(String explorer, String tokenId) => explorerTokenLink(
+      siteId: explorerSiteForApi(explorer)?.id,
+      custom: explorer,
+      tokenId: tokenId,
+    );
 
 /// Accepts `https://host` or a bare `host[:port]` (upgraded to https).
 ///
