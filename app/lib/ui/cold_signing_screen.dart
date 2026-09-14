@@ -379,6 +379,22 @@ class _ColdWatchSendScreenState extends State<ColdWatchSendScreen> {
         throw StateError('Refresh the watched account first.');
       final node = networkController.activeUrl;
       if (node == null) throw StateError('Choose an online node first.');
+      final amountNano = int.tryParse(amount.text.trim());
+      if (amountNano == null || amountNano <= 0) {
+        setState(
+          () => error = 'Enter a positive whole number for Amount (nanoERG).',
+        );
+        return;
+      }
+      final tokenId = token.text.trim();
+      final tokenAmount = BigInt.tryParse(quantity.text.trim());
+      if ((tokenId.isNotEmpty || quantity.text.trim().isNotEmpty) &&
+          (tokenAmount == null || tokenAmount <= BigInt.zero)) {
+        setState(
+          () => error = 'Enter a positive whole number for Token quantity.',
+        );
+        return;
+      }
       final raw =
           jsonDecode(
                 await api.coldPrepareWatch(
@@ -386,11 +402,9 @@ class _ColdWatchSendScreenState extends State<ColdWatchSendScreen> {
                   addressCount: snapshot.addresses.length,
                   changeIndex: snapshot.highestUsed + 1,
                   recipient: recipient.text.trim(),
-                  amountNano: int.parse(amount.text.trim()),
-                  tokenId: token.text.trim().isEmpty ? null : token.text.trim(),
-                  tokenAmount: quantity.text.trim().isEmpty
-                      ? null
-                      : BigInt.parse(quantity.text.trim()),
+                  amountNano: amountNano,
+                  tokenId: tokenId.isEmpty ? null : tokenId,
+                  tokenAmount: tokenAmount,
                   nodeUrl: node,
                 ),
               )
