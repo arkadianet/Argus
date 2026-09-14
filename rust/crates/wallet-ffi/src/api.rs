@@ -1698,6 +1698,46 @@ struct PreparedManagement<S> {
     summary: S,
 }
 
+/// Index only the prefix needed by the selected IDs, retaining first matches.
+/// A single input keeps the allocation-free early-exit search. For multiple
+/// inputs each candidate is formatted/indexed at most once, even on a miss.
+fn selected_ergo_boxes(
+    boxes: &[ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox],
+    selected: &[ergo_tx::Eip12InputBox],
+) -> Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox> {
+    if selected.len() <= 1 {
+        return selected
+            .iter()
+            .filter_map(|e| {
+                boxes
+                    .iter()
+                    .find(|b| b.box_id().to_string() == e.box_id)
+                    .cloned()
+            })
+            .collect();
+    }
+    let mut index: HashMap<String, &ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox> =
+        HashMap::new();
+    let mut remaining = boxes.iter();
+    selected
+        .iter()
+        .filter_map(|e| {
+            if let Some(b) = index.get(e.box_id.as_str()) {
+                return Some((*b).clone());
+            }
+            for b in remaining.by_ref() {
+                let id = b.box_id().to_string();
+                let found = id == e.box_id;
+                index.entry(id).or_insert(b);
+                if found {
+                    return Some(b.clone());
+                }
+            }
+            None
+        })
+        .collect()
+}
+
 fn filter_selected_inputs(
     inputs: Vec<ergo_tx::Eip12InputBox>,
     selected_box_ids: &[String],
@@ -2026,16 +2066,7 @@ async fn prepare(
         None => None,
     };
 
-    let ergo_boxes = selected
-        .boxes
-        .iter()
-        .filter_map(|eip| {
-            boxes
-                .iter()
-                .find(|b| b.box_id().to_string() == eip.box_id)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
+    let ergo_boxes = selected_ergo_boxes(&boxes, &selected.boxes);
     if ergo_boxes.len() != selected.boxes.len() {
         return Err(ArgusError::TxBuildFailed("UTXO set mismatch".into()).to_json_string());
     }
@@ -3170,15 +3201,7 @@ pub async fn prepare_send_multi(
     };
 
     // Get the ErgoBox representations for signing
-    let ergo_boxes = selected
-        .iter()
-        .filter_map(|eip| {
-            boxes
-                .iter()
-                .find(|b| b.box_id().to_string() == eip.box_id)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
+    let ergo_boxes = selected_ergo_boxes(&boxes, &selected);
     if ergo_boxes.len() != selected.len() {
         return Err(ArgusError::TxBuildFailed("UTXO set mismatch".into()).to_json_string());
     }
@@ -4699,6 +4722,7 @@ mod tests {
     use super::*;
 
     mod concurrent_gather;
+    mod selected_lookup;
 
     // Documents the mechanism and pins the arithmetic: with the old budget a
     // MAX send selects one box short and the builder returns the exact error
