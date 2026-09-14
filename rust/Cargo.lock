@@ -3092,6 +3092,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm",
  "argon2",
+ "base64",
  "citadel-core",
  "ergo-chain-types",
  "ergo-lib",
