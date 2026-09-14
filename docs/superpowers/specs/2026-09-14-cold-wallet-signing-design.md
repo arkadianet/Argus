@@ -1,10 +1,31 @@
 # Watch-only transactions and EIP-19 cold signing
 
 Date: 2026-09-14
-Status: Rust transport and P2PK return verification implemented; application flow deferred
-Base: `perf/concurrent-gather`, not `main`
+Status: Argus hot/cold application flow implemented for the bounded mainnet P2PK policy; real-device interoperability pending
+Base for this completion: `perf/safe-wins`, not `main`
 
-## Decision
+## Current implementation
+
+The same build now supports both roles. A watched xpub account can prepare an
+ERG payment with an optional token transfer, display CSR QR pages, collect CSTX,
+verify the exact payment and all signatures, and explicitly broadcast through
+the retained node. Settings → Offline signing collects CSR, reviews the actual
+outputs using local key ownership, signs only after confirmation, and displays
+CSTX pages. No secrets or unlocked handle are used by public preparation.
+
+The supported policy is deliberately narrow: mainnet, external EIP-3 indices
+0–512, 1–256 P2PK spending inputs, 1–256 outputs, canonical P2PK output trees
+and the standard mainnet miner-fee tree (delay 720). Ordinary token quantities
+and change are supported. Registers, context extensions, data inputs, other
+scripts and other miner-fee policies are refused before general binary parsing.
+This is an application policy, not a modified EIP-19 format.
+
+See **Implementation record — application completion** below for review,
+recovery, verification, validation results and remaining release checks.
+The earlier records describe the historical stopping point and are superseded
+by that record where they say there is no application flow.
+
+## Original staged decision (historical)
 
 Support the hot side of EIP-19 first: build a simple P2PK payment in Argus,
 show its request as QR pages, scan the signed transaction from Ergo Wallet
@@ -420,3 +441,166 @@ collection` and `Verify EIP-19 returns against prepared P2PK transactions`.
 The first staging attempt failed creating the shared Git worktree's
 `index.lock` on a read-only filesystem; all changes remain uncommitted, per the
 requested fallback. Nothing was pushed and no PR was opened.
+
+
+## Implementation record — application completion
+
+### Public watch preparation and key metadata
+
+`WatchContext` retains depth 3 (account key) versus depth 4 (external-chain key),
+each public address index and its full `m/44'/429'/0'/0/i` path. The native session
+retains selected input ownership in transaction order, the watched context,
+exact request/binding, node URL and creation time. Both xpub depths derive the
+same payment paths; an external-chain export gets only `/i` appended. No metadata
+is added to CSR or flattened into `sender`. The cold wallet independently finds
+and loads the matching local EIP-3 keys, bounded to indices 0–512. A sender hint
+never establishes ownership. Stealth branches remain excluded.
+
+The watched-account action uses the existing multi-send selector, fee budget,
+builder and reducer. Change is derived from the watched key at the first unused
+index confirmed by discovery. Inputs are gathered without a wallet handle;
+selected input bodies and ownership must match. The cold parsing/review policy
+is applied before export, so unsupported transactions are refused on the hot
+side as well. This separate API does not alter `prepare_send`, ordinary local
+signing, or the ordinary send screen. Mainnet P2PK ERG payments and one optional
+token transfer are exposed; unrelated input tokens return as change.
+
+### Defensive request boundary and cold review
+
+`cold_request::parse_request` adds a complete preflight grammar before the
+pinned library's general binary parser. A slice cursor checks canonical VLQs,
+overflow, actual remaining bytes, bounded counts and complete consumption.
+Input proofs/extensions, data inputs and registers must be empty. Every tree is
+a fixed-length canonical P2PK tree or byte-identical to the locally serialized
+standard miner-fee tree; reductions must be fixed P2PK propositions. Only then
+are reduced transactions and boxes parsed, and their canonical reserialization
+must reproduce every byte. The existing preparation checks recompute input box
+IDs, require their exact order and uniqueness, and match reductions to scripts.
+No panic-catching substitute is used for length or grammar validation.
+
+The review requires every spending input to belong to the selected unlocked
+seed wallet. It checks ERG conservation and exactly one nonzero miner fee with
+no tokens, and computes token burns/creation from complete input/output totals.
+Unsupported or incomplete requests never reach a partial review. Signing
+rechecks ownership/unlocked state and verifies its own resulting proofs.
+
+Before signing, the cold device displays:
+
+- The explicit mainnet policy and every output, including miner and application
+  fee outputs; full destination addresses and exact ERG values to nine decimals.
+- Every token's full ID and integer base-unit quantity, without trusting names,
+  labels or decimal metadata supplied by the online wallet.
+- Locally verified “Your address” ownership, described as change or self-payment,
+  rather than asserting an output is change based on the sender hint.
+- Miner fee, the locally recognized Argus application-fee destination, and every
+  token burn or creation (or “None”).
+
+The user must check the review acknowledgement and explicitly choose “Confirm
+and sign offline.” The cold endpoints make no network calls. Locking or changing
+the selected wallet prevents signing with the previous review handle. Existing
+watch-only accounts still have no local signing capability.
+
+### Flutter QR, recovery and broadcast
+
+Settings → Offline signing is available in the same build as watched-account
+“Send with offline signer.” Receive's `qr_flutter` renderer and the existing
+`ScanScreen`/`mobile_scanner` camera are reused; no dependency was added.
+The camera scans one code per visit. The collection screen shows received/total
+and exact missing page numbers. QR display has code/total, previous, next,
+auto-repeat and pause. The hot side can redisplay the original request without
+losing response collection progress.
+
+A retained native collector accepts out-of-order pages and identical duplicates;
+conflicts latch until reset. Malformed envelopes, hostile binaries and failed
+verification show a refusal and require an explicit scan reset in the UI.
+A missing page disables review/verification. Closing the scanner or navigating
+back retains collection; returning to the action resumes it. There is one cold
+signer draft and one draft per watched account in Flutter, with a native limit
+of eight sessions. Unsigned sessions expire after 30 minutes. Drafts are memory
+only: closing the app discards them. Verified hot returns are retained beyond
+unsigned expiry for retry, until explicit discard or process exit.
+
+The hot session's `cold_verify` calls the existing `verify_response`. Only its
+`VerifiedColdTransaction` can provide bytes/JSON to `cold_broadcast`; that API
+accepts a session ID, never scanned transaction JSON. A failed check clears the
+verified capability and there is no fallback to raw scanned data. Broadcast
+uses the retained node, checks the live UTXO set via `/transactions/check`, then
+submits the unchanged verified transaction. On check/submission errors it looks
+up the same transaction ID to handle an already-known/confirmed transaction;
+otherwise it preserves the verified return and ID for retry. An unexpected node
+ID is refused. The broadcast action appears only after successful verification.
+
+### Compatibility and remaining scope
+
+CSR/CSTX JSON, padded standard Base64, EIP-43 reduced bytes, full input boxes,
+full signed responses and legacy paging are unchanged. No compression, fountain
+codes, proof-only returns, derivation fields or new envelope fields were added.
+The two pinned Appkit request fixtures still round-trip byte-identically through
+sigma-rust in the existing trusted-fixture parity tests.
+
+Those fixtures are **not evidence that the production cold policy accepts every
+Appkit request**: fixture 1 uses a non-default miner delay of 72, and fixture 2
+also carries registers. Production cold parsing explicitly refuses them under
+the narrow policy above. Locally generated standard-mainnet requests exercise
+the complete safe parse/review/sign path, including multiple input indices and
+token transfers/burns. No signed Appkit fixture or actual ergo-wallet-app device
+round trip has been performed. Compatibility at the wire format is maintained;
+end-to-end interoperability with ergo-wallet-app remains unverified.
+
+Remaining: real phones in both roles (camera readability and lifecycle), an
+actual offline ergo-wallet-app round trip, signed Appkit response fixture parity,
+and live node broadcast/uncertain-retry acceptance. Tests cover native sessions
+and mocked Flutter actions, not a real financial broadcast. Extended script and
+register support needs a separately bounded parser/review policy. Other networks,
+indices above 512, dApp cold signing, durable cross-launch drafts, and exporting
+an Argus seed wallet's xpub are not part of this completion. An existing watched
+xpub and its matching seed wallet are the setup prerequisites.
+
+FRB bindings were regenerated from the repository root. Tracked JNI `.so` files
+were not rebuilt, as permitted; an installed build needs the updated native
+library to use these APIs. All tooling/build outputs/logs stay under `rust/target`
+or Flutter's existing build directories. `/tmp` was not used and no ignore rules
+were added.
+
+Final validation (commands run from the worktree root; `TMPDIR` is worktree-local):
+
+```sh
+(cd rust && CARGO_TARGET_DIR="$PWD/target" TMPDIR="$PWD/target/tmp" cargo test --workspace)
+(cd app && CI=true FLUTTER_SUPPRESS_ANALYTICS=true DART_SUPPRESS_ANALYTICS=true TMPDIR="$PWD/../rust/target/tmp" ../rust/target/tools/flutter/bin/flutter analyze)
+(cd app && CI=true FLUTTER_SUPPRESS_ANALYTICS=true DART_SUPPRESS_ANALYTICS=true TMPDIR="$PWD/../rust/target/tmp" ../rust/target/tools/flutter/bin/flutter test)
+PATH="$PWD/rust/target/tools/flutter/bin:$PATH" CARGO_TARGET_DIR="$PWD/rust/target" TMPDIR="$PWD/rust/target/tmp" CI=true FLUTTER_SUPPRESS_ANALYTICS=true DART_SUPPRESS_ANALYTICS=true flutter_rust_bridge_codegen generate
+```
+
+Results: Rust workspace **828 passed, 0 failed, 13 ignored**. Flutter analysis:
+**no issues**. Flutter tests: **824 passed, 1 skipped** (including ten new cold
+widget tests). A second root binding generation produced byte-identical files,
+checked with SHA-256. `git diff --check` passed.
+
+The new native integration test uses the production public builder/reducer and
+session path with locally supplied boxes/context, across indices 0, 3 and 20,
+then CSR collection, offline review/sign, CSTX collection and return verification.
+Native tests also exercise expiry, missing pages, duplicates, conflicts, no
+signing before review and no broadcast without a verified capability. Core tests
+cover every truncation and single-byte input-box mutation, reduced-byte mutation,
+oversized/overflowing lengths, a deterministic malformed corpus, token quantities,
+burns, foreign recipients and locked/foreign wallets. Widget tests exercise both
+directions' progress, missing/duplicate/conflicting/hostile scans, navigation
+resume, explicit review approval, QR controls and verification failure refusing
+to broadcast.
+
+Failures found and corrected during validation: the disclosure test's obsolete
+“Cannot spend” assertion; scroll targeting in a new widget test; and a new native
+test resolving the global fee configuration before the existing init test. The
+native test now uses the existing thread-local fee override. The attempted
+production acceptance assertion for Appkit fixture 1 was replaced by an explicit
+refusal regression for its non-default miner-fee policy; trusted binary parity
+coverage remains unchanged.
+
+The first layer staging attempt failed creating
+`/home/rkadias/coding/arkadianet/Argus/.git/worktrees/coldui/index.lock` because the
+shared Git directory is read-only. Per the requested fallback, all completion
+changes remain uncommitted. Intended coherent layers: “Parse and review bounded
+cold signing requests”, “Prepare watched payments and gate cold session
+broadcasts”, and “Complete both cold signing QR flows”. Nothing was pushed and no
+PR was opened. Comparison is against `perf/safe-wins`; newer base-only commits
+are not part of this worktree's changes.
