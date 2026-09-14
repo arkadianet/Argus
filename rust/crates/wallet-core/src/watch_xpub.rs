@@ -42,6 +42,50 @@ pub fn addresses(input: &str, start: u32, count: u32) -> Result<Vec<String>, Str
         .collect())
 }
 
+/// Local ownership metadata, never added to the EIP-19 wire envelope.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WatchAddress {
+    pub address: String,
+    pub index: u32,
+    pub path: String,
+}
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct WatchContext {
+    pub key_depth: u8,
+    pub addresses: Vec<WatchAddress>,
+}
+impl WatchContext {
+    pub fn new(input: &str, count: u32) -> Result<Self, String> {
+        if count == 0 || count > 513 {
+            return Err("Cold preparation supports address indices 0–512".into());
+        }
+        let key = parse(input)?;
+        let key_depth = if key.derivation_path.to_string() == "m/44'/429'/0'" {
+            3
+        } else {
+            4
+        };
+        let mut entries = Vec::new();
+        for start in (0..count).step_by(100) {
+            for (offset, address) in addresses(input, start, (count - start).min(100))?
+                .into_iter()
+                .enumerate()
+            {
+                let index = start + offset as u32;
+                entries.push(WatchAddress {
+                    address,
+                    index,
+                    path: format!("m/44'/429'/0'/0/{index}"),
+                });
+            }
+        }
+        Ok(Self {
+            key_depth,
+            addresses: entries,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,6 +102,12 @@ mod tests {
             .public_key()
             .unwrap();
         assert_eq!(parse(KEY).unwrap(), chain);
+        let context = WatchContext::new(KEY, 21).unwrap();
+        assert_eq!(context.key_depth, 4);
+        assert_eq!(context.addresses[20].index, 20);
+        assert_eq!(context.addresses[20].path, "m/44'/429'/0'/0/20");
+        assert!(WatchContext::new(KEY, 514).is_err());
+        assert!(WatchContext::new(KEY, 0).is_err());
         assert_eq!(
             addresses(KEY, 0, 3).unwrap(),
             [
@@ -83,7 +133,11 @@ mod tests {
         raw[13..45].copy_from_slice(&account.chain_code());
         raw[45..].copy_from_slice(&account.pub_key_bytes());
         assert_eq!(
-            addresses(&hex::encode(raw), 0, 20).unwrap(),
+            WatchContext::new(&hex::encode(&raw), 21).unwrap().key_depth,
+            3
+        );
+        assert_eq!(
+            addresses(&hex::encode(&raw), 0, 20).unwrap(),
             addresses(KEY, 0, 20).unwrap()
         );
     }

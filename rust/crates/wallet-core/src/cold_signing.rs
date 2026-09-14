@@ -1,5 +1,5 @@
 //! Trusted preparation export and a fail-closed EIP-19 return gate for P2PK inputs.
-//! This module does not parse/sign cold requests, prepare watch accounts or broadcast.
+//! Request preflight lives in `cold_request`; application sessions own approval.
 use crate::cold_transport::{decode_response, invalid, ColdError, RequestBytes, MAX_INNER_BYTES};
 use ergo_lib::chain::transaction::{reduced::ReducedTransaction, Transaction};
 use ergo_lib::ergotree_ir::{
@@ -60,6 +60,119 @@ impl PreparedColdTransaction {
             boxes,
             message,
         })
+    }
+    /// Exact outputs for offline review. Ownership must come from local keys,
+    /// never from the optional sender or a label supplied by the hot device.
+    pub fn review(
+        &self,
+        mut owns: impl FnMut(&str) -> Result<bool, ColdError>,
+    ) -> Result<ColdReview, ColdError> {
+        use ergo_lib::ergotree_ir::chain::address::{NetworkAddress, NetworkPrefix};
+        use std::collections::BTreeMap;
+        let fee_tree = ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS
+            .script()
+            .map_err(invalid)?;
+        let mut input_erg = 0u128;
+        let mut output_erg = 0u128;
+        let mut assets: BTreeMap<String, i128> = BTreeMap::new();
+        for b in &self.boxes {
+            let address = Address::recreate_from_ergo_tree(&b.ergo_tree).map_err(invalid)?;
+            let address = NetworkAddress::new(NetworkPrefix::Mainnet, &address).to_base58();
+            if !owns(&address)? {
+                return Err(invalid(
+                    "a spending input does not belong to this cold wallet",
+                ));
+            }
+            input_erg += u64::from(b.value) as u128;
+            if let Some(tokens) = &b.tokens {
+                for t in tokens.iter() {
+                    *assets.entry(hex::encode(t.token_id.as_ref())).or_default() +=
+                        u64::from(t.amount) as i128;
+                }
+            }
+        }
+        let mut outputs = Vec::new();
+        let mut fee_count = 0;
+        let mut fee_nano = 0;
+        for b in self.reduced.unsigned_tx.output_candidates.iter() {
+            let is_fee = b.ergo_tree == fee_tree;
+            let (address, owned) = if is_fee {
+                fee_count += 1;
+                fee_nano = u64::from(b.value);
+                if b.tokens.is_some() {
+                    return Err(invalid("miner fee must not carry tokens"));
+                }
+                (None, false)
+            } else {
+                let address = Address::recreate_from_ergo_tree(&b.ergo_tree).map_err(invalid)?;
+                if !matches!(address, Address::P2Pk(_)) {
+                    return Err(invalid("unsupported output script"));
+                }
+                let address = NetworkAddress::new(NetworkPrefix::Mainnet, &address).to_base58();
+                let owned = owns(&address)?;
+                (Some(address), owned)
+            };
+            if !b.additional_registers.is_empty() {
+                return Err(invalid("unsupported output registers"));
+            }
+            output_erg += u64::from(b.value) as u128;
+            let mut tokens = Vec::new();
+            if let Some(ts) = &b.tokens {
+                for t in ts.iter() {
+                    let id = hex::encode(t.token_id.as_ref());
+                    let amount = u64::from(t.amount);
+                    *assets.entry(id.clone()).or_default() -= amount as i128;
+                    tokens.push(ColdToken {
+                        id,
+                        amount: amount.to_string(),
+                    });
+                }
+            }
+            outputs.push(ColdOutput {
+                address,
+                owned,
+                is_fee,
+                nano_erg: u64::from(b.value).to_string(),
+                tokens,
+            });
+        }
+        if input_erg != output_erg || fee_count != 1 || fee_nano == 0 {
+            return Err(invalid("unbalanced ERG or missing/ambiguous miner fee"));
+        }
+        let mut burns = Vec::new();
+        let mut mints = Vec::new();
+        for (id, delta) in assets {
+            if delta > 0 {
+                burns.push(ColdToken {
+                    id,
+                    amount: delta.to_string(),
+                });
+            } else if delta < 0 {
+                if id != self.boxes[0].box_id().to_string() {
+                    return Err(invalid("invalid token creation"));
+                }
+                mints.push(ColdToken {
+                    id,
+                    amount: (-delta).to_string(),
+                });
+            }
+        }
+        Ok(ColdReview {
+            network: "Mainnet".into(),
+            outputs,
+            fee_nano: fee_nano.to_string(),
+            burns,
+            mints,
+        })
+    }
+    /// Caller must show the immutable review and obtain explicit approval first.
+    /// Rechecks local ownership and unlocked state; watch accounts have no handle.
+    pub fn sign_reviewed(&self, handle: &crate::WalletHandle) -> Result<Vec<u8>, ColdError> {
+        self.review(|address| handle.owns_address(address).map_err(invalid))?;
+        let signed = handle.sign_reduced(self.reduced.clone()).map_err(invalid)?;
+        let bytes = signed.sigma_serialize_bytes().map_err(invalid)?;
+        self.verify_bytes(&bytes)?;
+        Ok(bytes)
     }
     /// Sender is only an optional EIP-19 display hint, never proof of ownership.
     pub fn request(&self, sender: Option<String>) -> Result<RequestBytes, ColdError> {
@@ -142,6 +255,28 @@ fn vlq(mut n: usize) -> Vec<u8> {
         }
     }
     result
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ColdToken {
+    pub id: String,
+    pub amount: String,
+}
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ColdOutput {
+    pub address: Option<String>,
+    pub owned: bool,
+    pub is_fee: bool,
+    pub nano_erg: String,
+    pub tokens: Vec<ColdToken>,
+}
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ColdReview {
+    pub network: String,
+    pub outputs: Vec<ColdOutput>,
+    pub fee_nano: String,
+    pub burns: Vec<ColdToken>,
+    pub mints: Vec<ColdToken>,
 }
 
 /// The only node-JSON conversion exposed here requires successful matching and proofs.
@@ -485,6 +620,178 @@ mod tests {
         let (mut wrong_reduction, _) = preparation(&other, 1);
         wrong_reduction.unsigned_tx = make(42, 123, 456, false, true).unsigned_tx;
         assert!(PreparedColdTransaction::new(wrong_reduction, boxes).is_err());
+    }
+
+    #[test]
+    fn bounded_request_review_and_sign() {
+        let h = WalletHandle::create(MnemonicPhrase::parse(PHRASE).unwrap(), "").unwrap();
+        let (r, boxes) = preparation(&h, 1);
+        let request = PreparedColdTransaction::new(r, boxes)
+            .unwrap()
+            .request(None)
+            .unwrap();
+        let json = request.encode().unwrap();
+        let parsed = crate::cold_request::parse_request(&json).unwrap();
+        let review = parsed
+            .review(|a| h.owns_address(a).map_err(invalid))
+            .unwrap();
+        assert_eq!(review.outputs.len(), 2);
+        assert_eq!(
+            review.outputs[0].address,
+            Some(h.derive_address(1).unwrap())
+        );
+        assert_eq!(review.outputs[0].nano_erg, "2998900000");
+        assert!(review.outputs[0].owned);
+        assert_eq!(review.fee_nano, "1100000");
+        assert!(parsed.review(|_| Ok(false)).is_err());
+        parsed
+            .verify_bytes(&parsed.sign_reviewed(&h).unwrap())
+            .unwrap();
+        // Every truncation, every single-byte mutation, and oversized declared
+        // message lengths exercise the untrusted entry point (no panic catcher).
+        for n in 0..request.reduced_tx.len() {
+            let mut raw = RequestBytes::decode(&json).unwrap();
+            raw.reduced_tx.truncate(n);
+            assert!(crate::cold_request::parse_request(&raw.encode().unwrap()).is_err());
+        }
+        for i in 0..request.reduced_tx.len() {
+            let mut raw = RequestBytes::decode(&json).unwrap();
+            raw.reduced_tx[i] ^= 255;
+            let _ = crate::cold_request::parse_request(&raw.encode().unwrap());
+        }
+        for b in 0..request.inputs.len() {
+            for n in 0..request.inputs[b].len() {
+                let mut raw = RequestBytes::decode(&json).unwrap();
+                raw.inputs[b].truncate(n);
+                assert!(crate::cold_request::parse_request(&raw.encode().unwrap()).is_err());
+            }
+        }
+        for bytes in [vec![255; 10], vec![255, 255, 255, 255, 15], vec![128, 0]] {
+            let mut raw = RequestBytes::decode(&json).unwrap();
+            raw.reduced_tx = bytes;
+            assert!(crate::cold_request::parse_request(&raw.encode().unwrap()).is_err());
+        }
+        h.lock();
+        assert!(parsed.sign_reviewed(&h).is_err());
+    }
+
+    #[test]
+    fn bounded_policy_tokens_burns_and_external_recipients() {
+        use ergo_lib::ergotree_ir::chain::token::{Token, TokenId};
+        let h = WalletHandle::create(MnemonicPhrase::parse(PHRASE).unwrap(), "").unwrap();
+        let foreign =
+            WalletHandle::create(MnemonicPhrase::parse(PHRASE).unwrap(), "other").unwrap();
+        let (r, mut boxes) = preparation(&h, 1);
+        let id = TokenId::from(boxes[0].box_id());
+        boxes[0] = ErgoBox::new(
+            boxes[0].value,
+            tree(&h, 0),
+            Some(
+                vec![Token {
+                    token_id: id,
+                    amount: 42u64.try_into().unwrap(),
+                }]
+                .try_into()
+                .unwrap(),
+            ),
+            NonMandatoryRegisters::empty(),
+            1000,
+            TxId::zero(),
+            0,
+        )
+        .unwrap();
+        let mut output = ErgoBoxCandidateBuilder::new(
+            BoxValue::try_from(2_998_900_000u64).unwrap(),
+            tree(&foreign, 1),
+            2000,
+        );
+        output.add_token(Token {
+            token_id: id,
+            amount: 40u64.try_into().unwrap(),
+        });
+        let unsigned = UnsignedTransaction::new_from_vec(
+            boxes
+                .iter()
+                .map(|b| UnsignedInput::new(b.box_id(), ContextExtension::empty()))
+                .collect(),
+            vec![],
+            vec![
+                output.build().unwrap(),
+                r.unsigned_tx.output_candidates.get(1).unwrap().clone(),
+            ],
+        )
+        .unwrap();
+        let reduced =
+            build_reduced_transaction(unsigned, boxes.clone(), vec![], &dummy_state_context(2000))
+                .unwrap();
+        let json = PreparedColdTransaction::new(reduced, boxes)
+            .unwrap()
+            .request(None)
+            .unwrap()
+            .encode()
+            .unwrap();
+        let p = crate::cold_request::parse_request(&json).unwrap();
+        let review = p.review(|a| h.owns_address(a).map_err(invalid)).unwrap();
+        assert!(!review.outputs[0].owned);
+        assert_eq!(
+            review.outputs[0].address,
+            Some(foreign.derive_address(1).unwrap())
+        );
+        assert_eq!(review.outputs[0].tokens[0].id, hex::encode(id.as_ref()));
+        assert_eq!(review.outputs[0].tokens[0].amount, "40");
+        assert_eq!(review.burns[0].amount, "2");
+        assert!(review.mints.is_empty());
+        p.verify_bytes(&p.sign_reviewed(&h).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn bounded_policy_rejects_unsupported_appkit_and_hostile_bytes() {
+        // The first upstream test uses a non-default miner delay (72, not
+        // mainnet's 720). Keep format parity tests, but refuse that fee policy.
+        assert!(crate::cold_request::parse_request(include_str!(
+            "../tests/fixtures/eip19/appkit-request-1.json"
+        ))
+        .is_err());
+        // This pinned fixture carries registers: transport-compatible, explicitly
+        // outside the initial offline policy rather than partially summarized.
+        let json = include_str!("../tests/fixtures/eip19/appkit-request-2.json");
+        assert!(crate::cold_request::parse_request(json).is_err());
+        let h = WalletHandle::create(MnemonicPhrase::parse(PHRASE).unwrap(), "").unwrap();
+        let (r, boxes) = preparation(&h, 1);
+        let json = PreparedColdTransaction::new(r, boxes)
+            .unwrap()
+            .request(None)
+            .unwrap()
+            .encode()
+            .unwrap();
+        let mut raw = RequestBytes::decode(&json).unwrap();
+        raw.reduced_tx.push(0);
+        assert!(crate::cold_request::parse_request(&raw.encode().unwrap()).is_err());
+        let mut raw = RequestBytes::decode(&json).unwrap();
+        raw.inputs.swap(0, 1);
+        assert!(crate::cold_request::parse_request(&raw.encode().unwrap()).is_err());
+        for index in 0..3 {
+            let original = RequestBytes::decode(&json).unwrap();
+            for byte in 0..original.inputs[index].len() {
+                let mut raw = RequestBytes::decode(&json).unwrap();
+                raw.inputs[index][byte] ^= 255;
+                assert!(crate::cold_request::parse_request(&raw.encode().unwrap()).is_err());
+            }
+        }
+        // Deterministic malformed corpus; no catch_unwind can disguise a panic.
+        let mut n = 1234567u64;
+        for size in 0..1024 {
+            let mut raw = RequestBytes::decode(&json).unwrap();
+            raw.reduced_tx = (0..size)
+                .map(|_| {
+                    n ^= n << 13;
+                    n ^= n >> 7;
+                    n ^= n << 17;
+                    n as u8
+                })
+                .collect();
+            assert!(crate::cold_request::parse_request(&raw.encode().unwrap()).is_err());
+        }
     }
 
     #[test]
