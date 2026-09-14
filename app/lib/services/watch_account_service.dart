@@ -39,6 +39,24 @@ class WatchAccountSnapshot {
   final int highestUsed;
 }
 
+/// Bound node pressure and retain submission order, including on failures.
+const watchAddressConcurrency = 4;
+const watchAccountConcurrency = 2;
+
+Future<List<R>> watchMapOrdered<T, R>(
+  List<T> items,
+  Future<R> Function(T) read, {
+  required int concurrency,
+}) async {
+  final results = <R>[];
+  for (var start = 0; start < items.length; start += concurrency) {
+    results.addAll(
+      await Future.wait(items.skip(start).take(concurrency).map(read)),
+    );
+  }
+  return results;
+}
+
 /// History, not balance, defines use: a spent address must reset the gap too.
 /// Reads fail closed; no partial totals or fresh Receive on an incomplete scan.
 Future<WatchAccountSnapshot> scanWatchAccount({
@@ -60,44 +78,58 @@ Future<WatchAccountSnapshot> scanWatchAccount({
     final count = (maxAddresses - start).clamp(0, gap);
     final batch = await derive(start, count);
     if (batch.length != count) throw StateError('Incomplete derivation');
-    for (final address in batch) {
-      final index = addresses.length;
-      final rows = await history(address);
-      final funds = await balance(address);
-      final nano = (funds['balance_nano_erg'] as num).toInt();
-      final assets = funds['tokens'] as List;
-      final used = rows.isNotEmpty || nano != 0 || assets.isNotEmpty;
-      addresses.add(address);
-      total += nano;
-      for (final asset in assets) {
-        final id = asset['id'] as String;
-        tokens[id] = (tokens[id] ?? 0) + (asset['amount'] as num).toInt();
-      }
-      for (final row in rows) {
-        final tx = Map<String, dynamic>.from(row as Map);
-        transactions[tx['tx_id'] as String] = tx;
-      }
-      if (used) {
-        lastUsed = index > lastUsed ? index : lastUsed;
-        empty = 0;
-      } else {
-        empty++;
-      }
-      if (empty >= gap && index >= lastUsed + gap) {
-        final sorted = transactions.values.toList()
-          ..sort(
-            (a, b) => ((b['timestamp'] as num?) ?? 0).compareTo(
-              (a['timestamp'] as num?) ?? 0,
-            ),
+    for (
+      var offset = 0;
+      offset < batch.length;
+      offset += watchAddressConcurrency
+    ) {
+      final group = batch.skip(offset).take(watchAddressConcurrency).toList();
+      final results = await watchMapOrdered(group, (address) async {
+        final values = await Future.wait<Object>([
+          history(address),
+          balance(address),
+        ]);
+        return (values[0] as List<dynamic>, values[1] as Map<String, dynamic>);
+      }, concurrency: watchAddressConcurrency);
+      for (var i = 0; i < group.length; i++) {
+        final address = group[i];
+        final index = addresses.length;
+        final (rows, funds) = results[i];
+        final nano = (funds['balance_nano_erg'] as num).toInt();
+        final assets = funds['tokens'] as List;
+        final used = rows.isNotEmpty || nano != 0 || assets.isNotEmpty;
+        addresses.add(address);
+        total += nano;
+        for (final asset in assets) {
+          final id = asset['id'] as String;
+          tokens[id] = (tokens[id] ?? 0) + (asset['amount'] as num).toInt();
+        }
+        for (final row in rows) {
+          final tx = Map<String, dynamic>.from(row as Map);
+          transactions[tx['tx_id'] as String] = tx;
+        }
+        if (used) {
+          lastUsed = index > lastUsed ? index : lastUsed;
+          empty = 0;
+        } else {
+          empty++;
+        }
+        if (empty >= gap && index >= lastUsed + gap) {
+          final sorted = transactions.values.toList()
+            ..sort(
+              (a, b) => ((b['timestamp'] as num?) ?? 0).compareTo(
+                (a['timestamp'] as num?) ?? 0,
+              ),
+            );
+          return WatchAccountSnapshot(
+            addresses,
+            addresses[lastUsed + 1],
+            total,
+            tokens,
+            sorted,
+            lastUsed,
           );
-        return WatchAccountSnapshot(
-          addresses,
-          addresses[lastUsed + 1],
-          total,
-          tokens,
-          sorted,
-          lastUsed,
-        );
+        }
       }
     }
   }
@@ -107,6 +139,33 @@ Future<WatchAccountSnapshot> scanWatchAccount({
 }
 
 class WatchAccountService extends ChangeNotifier {
+  WatchAccountService({NetworkController? network})
+    : _network = network ?? networkController {
+    _node = _network.activeUrl;
+    _network.addListener(_onNetworkChanged);
+  }
+
+  final NetworkController _network;
+  String? _node;
+  int _nodeGeneration = 0;
+
+  void _onNetworkChanged() {
+    if (_node == _network.activeUrl) return;
+    _node = _network.activeUrl;
+    _nodeGeneration++;
+    for (final account in accounts) {
+      account.snapshot = null;
+      account.error = 'Node changed. Refresh the account before receiving.';
+    }
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _network.removeListener(_onNetworkChanged);
+    super.dispose();
+  }
+
   static const storageKey = 'argus_watch_only_accounts_v1';
   final List<WatchAccount> accounts = [];
   Future<void> load() async {
@@ -132,19 +191,31 @@ class WatchAccountService extends ChangeNotifier {
     if (accounts.any((a) => a.key == key)) return false;
     final account = WatchAccount(key);
     accounts.add(account);
-    await _save();
+    try {
+      await _save();
+    } catch (_) {
+      accounts.remove(account);
+      rethrow;
+    }
     unawaited(refresh(account));
     return true;
   }
 
   Future<void> remove(WatchAccount account) async {
-    accounts.remove(account);
-    await _save();
+    final index = accounts.indexOf(account);
+    if (index < 0) return;
+    accounts.removeAt(index);
+    try {
+      await _save();
+    } catch (_) {
+      accounts.insert(index.clamp(0, accounts.length), account);
+      rethrow;
+    }
   }
 
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
+    final saved = await prefs.setString(
       storageKey,
       jsonEncode([
         for (final a in accounts)
@@ -155,6 +226,10 @@ class WatchAccountService extends ChangeNotifier {
           },
       ]),
     );
+    if (!saved) {
+      await prefs.reload();
+      throw StateError('Could not save watched accounts. Please try again.');
+    }
     notifyListeners();
   }
 
@@ -163,7 +238,8 @@ class WatchAccountService extends ChangeNotifier {
     account.busy = true;
     account.error = null;
     notifyListeners();
-    final node = networkController.activeUrl;
+    final node = _network.activeUrl;
+    final generation = _nodeGeneration;
     try {
       final result = await scanWatchAccount(
         highestUsed: account.highestUsed,
@@ -184,7 +260,7 @@ class WatchAccountService extends ChangeNotifier {
         balance: (address) => walletService.getBalance(address, nodeUrl: node),
       );
       if (!accounts.contains(account)) return;
-      if (networkController.activeUrl != node)
+      if (_network.activeUrl != node || _nodeGeneration != generation)
         throw StateError('Node changed during scan; refresh again.');
       account.snapshot = result;
       account.highestUsed = result.highestUsed;

@@ -70,10 +70,12 @@ class _ImportAccountDialogState extends State<_ImportAccountDialog> {
                       busy = false;
                     });
                   }
-                } catch (_) {
+                } catch (e) {
                   if (context.mounted)
                     setState(() {
-                      error = watchAccountExpected;
+                      error = e is StateError
+                          ? e.message.toString()
+                          : watchAccountExpected;
                       busy = false;
                     });
                 }
@@ -187,7 +189,19 @@ class WatchAccountList extends StatelessWidget {
                         ),
                       ),
                       TextButton(
-                        onPressed: () => watchAccountService.remove(account),
+                        onPressed: () async {
+                          try {
+                            await watchAccountService.remove(account);
+                          } catch (e) {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Could not stop watching: $e'),
+                                ),
+                              );
+                            }
+                          }
+                        },
                         child: const Text('Stop watching'),
                       ),
                     ],

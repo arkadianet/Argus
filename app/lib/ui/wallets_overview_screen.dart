@@ -150,41 +150,35 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
     if (_refreshing) return;
     setState(() => _refreshing = true);
     try {
-      await publicWalletSync.tick(
-        wallets: {for (final w in _wallets) w.walletId: w.displayAddress},
-        controller: walletSyncController,
-        activeId: walletService.activeWalletId,
-        unlocked: () => walletService.isUnlocked,
-      );
-      final futures = _wallets.map(
-        (w) async => (
-          w,
-          await overviewWalletBalance(
-            w,
-            selectedWalletId: widget.selectedWalletId,
-            activeBalanceNano: widget.activeBalanceNano,
-          ),
-        ),
-      );
-      for (final account in List.of(watchAccountService.accounts)) {
-        await watchAccountService.refresh(account);
-      }
       final watchAddrs = watchOnlyService.addresses;
-      final watchFutures = watchAddrs.map(
-        (a) async => (a, await _addressBalance(a)),
-      );
-      final results = await Future.wait(futures);
-      final watchResults = await Future.wait(watchFutures);
-      if (!mounted) return;
-      setState(() {
-        for (final (w, bal) in results) {
-          _balances[w.walletId] = bal;
-        }
-        _watchBalances.removeWhere((k, _) => !watchAddrs.contains(k));
-        for (final (a, bal) in watchResults) {
-          _watchBalances[a] = bal;
-        }
-      });
+      await Future.wait<void>([
+        () async {
+          await publicWalletSync.tick(
+            wallets: {for (final w in _wallets) w.walletId: w.displayAddress},
+            controller: walletSyncController,
+            activeId: walletService.activeWalletId,
+            unlocked: () => walletService.isUnlocked,
+          );
+          await _onPublicChanged();
+        }(),
+        () async {
+          final results = await Future.wait(watchAddrs.map(
+            (a) async => (a, await _addressBalance(a)),
+          ));
+          if (!mounted) return;
+          setState(() {
+            _watchBalances.removeWhere((k, _) => !watchAddrs.contains(k));
+            for (final (a, balance) in results) {
+              _watchBalances[a] = balance;
+            }
+          });
+        }(),
+        watchMapOrdered(
+          List.of(watchAccountService.accounts),
+          watchAccountService.refresh,
+          concurrency: watchAccountConcurrency,
+        ),
+      ]);
     } finally {
       if (mounted) setState(() => _refreshing = false);
     }
@@ -555,10 +549,10 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
     final bool added;
     try {
       added = await watchOnlyService.add(text);
-    } catch (_) {
+    } catch (e) {
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not validate right now. Please try again.')),
+        SnackBar(content: Text('Could not add watched address: $e')),
       );
       return;
     }
@@ -578,7 +572,13 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
         ],
       ),
     );
-    if (ok == true) await watchOnlyService.remove(address);
+    if (ok == true) {
+      try {
+        await watchOnlyService.remove(address);
+      } catch (e) {
+        _snack('Could not stop watching: $e');
+      }
+    }
   }
 
   Future<void> _confirmDelete(WalletInfo w) async {
