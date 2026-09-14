@@ -1,8 +1,55 @@
 # Token send flow options
 
-The author has not chosen a direction. This item proposes a redesign and does
-not implement one. The separate duplicate-selection fix preserves the existing
-flow, including primary-token MAX and fixed one-unit NFT sends.
+**Decision: A was chosen and built.** The send form now has a searchable,
+multi-select holdings picker followed by quantity entry. B and C below remain
+as the alternatives considered.
+
+## Implementation notes
+
+- Selection is a set of token IDs, independent of the search results. The sheet
+  uses lazily built token tiles, a persistent selected count, and explicit Done;
+  dismissing it cancels the selection edits.
+- Quantities are reconciled by token ID, including when removing the first token
+  promotes another into the existing primary serializer slot. Retained extra
+  tokens reuse their controllers. New fungible selections start blank; NFTs have
+  no quantity field and continue to serialize as exactly one unit.
+- Every chosen fungible token has balance, MAX, and remove controls. More than ten
+  selections show a compact count and ten quantity rows per page; quantities stay
+  in controllers across pages. The confirmation uses a token count above ten
+  instead of a long inline suffix. Existing full-draft validation still checks
+  amounts on other pages, and the transaction builder still enforces its existing
+  output/transaction constraints. Selection does not guarantee a transaction fits.
+- The old main-recipient dropdowns are gone. Their duplicate-selection fix is
+  subsumed by set membership and deduplicated holdings rows; equivalent tests
+  replace the old dropdown-options test.
+- Buy-and-send remains a separate mode, available through “ERG or buy and send”
+  when no held tokens or additional recipients are selected. The holdings picker
+  never silently chooses a buy route. Additional recipients retain their existing
+  independent single-fungible-token controls; main-recipient selection edits do
+  not reset their addresses or amounts. Multi-token selection applies to the main
+  recipient, as the old extra-token rows did.
+- No Rust, bridge, recipient serializer, or builder changes were needed. A widget
+  test captures the existing single-send bridge call and checks the token ID,
+  base-unit amount, minimum ERG, and addresses. This verifies the request boundary,
+  not a live node transaction.
+
+### What the proposal got right and wrong
+
+Amount retention was a real risk because the original form has a special primary
+controller plus extra-token controllers. Reconciling by ID made it manageable,
+but testing only additions would have missed primary-token promotion. Buy-mode
+separation was also real: the old picker automatically chooses a buy route for
+some held assets. Reusing that sheet unchanged would have crossed the boundary.
+The reusable part was its token tile, not its selection logic or eager list.
+
+NFT defaults and multi-recipient isolation were cheaper than a redesign of the
+transaction layer: the existing serializer and separate recipient state already
+provide them. Tests now exercise these assumptions. The original compact-summary
+advice was underspecified: a count alone does not let someone edit 100 amounts,
+so quantity entry also needs paging and validation of off-page drafts. Ten rows
+per page is the implemented cutoff, not a transaction-size limit. These findings
+refine the original 2–3 day planning estimate; automated tests do not substitute
+for device usability testing with large wallets.
 
 ## A. Searchable multi-select picker, followed by quantity entry (recommended)
 
@@ -66,10 +113,9 @@ addresses the reported frustration.
 
 ## Recommendation
 
-Choose A. It directly removes repeated token-picking trips while keeping amount
+A was selected because it directly removes repeated token-picking trips while keeping amount
 entry and validation visible on the send form. B makes the holdings browser into
-a more complicated form; C retains most of the repetition. This is a product
-choice rather than an obvious small fix, so no redesign was implemented.
+a more complicated form; C retains most of the repetition. The implemented choice keeps the transaction APIs intact.
 
 Estimates assume the current UI components and Rust transaction APIs are retained;
 they are planning estimates, not delivery commitments.

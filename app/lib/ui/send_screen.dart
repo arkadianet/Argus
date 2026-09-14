@@ -28,6 +28,7 @@ import 'ergopay_screen.dart';
 import 'offline_banner.dart';
 import 'scan_screen.dart';
 import 'send_recipients.dart';
+import 'widgets/held_token_picker.dart';
 import 'widgets/amount_entry.dart';
 import 'widgets/asset_picker_sheet.dart';
 
@@ -924,83 +925,135 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
     ].join('  ·  ');
   }
 
-  /// The tokens added to the main recipient beyond the picked asset, each
-  /// with its own amount, and the button that adds one more.
-  List<Widget> _extraTokenRows(TokenBalance? picked) {
-    final choices = _args.tokens.where((t) => t.id != picked?.id).toList();
-    if (choices.isEmpty && _extraTokens.isEmpty) return const [];
-    return [
-      for (final (i, e) in _extraTokens.indexed) ...[
-        const SizedBox(height: 12),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              flex: 5,
-              child: DropdownButtonFormField<String>(
-                // Keyed by the entry, not its index: removing a row must not
-                // hand its field state to the row that shifts up.
-                key: ObjectKey(e),
-                initialValue: e.tokenId,
-                decoration: const InputDecoration(labelText: 'Another token'),
-                items: [
-                  for (final t in choices.where((t) =>
-                      t.id == e.tokenId || !_extraTokens.any((other) => other != e && other.tokenId == t.id)))
-                    DropdownMenuItem(value: t.id, child: Text(t.label, overflow: TextOverflow.ellipsis)),
-                ],
-                onChanged: (v) => setState(() => e.tokenId = v),
-                validator: (v) => v == null ? 'Pick a token' : null,
-              ),
-            ),
-            const SizedBox(width: 8),
-            if (_tokenById(e.tokenId) case final t? when !t.isNft)
+  int _tokenPage = 0;
+
+  Map<String, TextEditingController> get _heldAmounts => {
+    if (_selectedToken case final t?) t.id: _tokenAmtCtrl,
+    for (final e in _extraTokens) e.tokenId!: e.amountCtrl,
+  };
+
+  // Reconcile by identity before changing the primary slot used by the existing
+  // serializer. In particular, removing the first token cannot erase the next.
+  void _selectHeld(Set<String> ids) {
+    final amounts = {for (final e in _heldAmounts.entries) e.key: e.value.text};
+    final old = [..._extraTokens];
+    setState(() {
+      _extraTokens.clear();
+      _assetId = ids.firstOrNull;
+      _tokenAmtCtrl.text = amounts[_assetId] ?? '';
+      for (final id in ids.skip(1)) {
+        final entry =
+            old.where((e) => e.tokenId == id).firstOrNull ??
+            (_TokenEntry()..tokenId = id);
+        entry.amountCtrl.text = amounts[id] ?? '';
+        _extraTokens.add(entry);
+      }
+      _tokenPage = 0;
+      _quotes.clear();
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      for (final e in old) {
+        if (!_extraTokens.contains(e)) e.dispose();
+      }
+    });
+  }
+
+  Widget _heldTokenRows() {
+    final entries = _heldAmounts.entries.toList();
+    const pageSize = 10;
+    final pages = (entries.length / pageSize).ceil();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (pages > 1)
+          Row(
+            children: [
               Expanded(
-                flex: 4,
-                child: TextFormField(
-                  controller: e.amountCtrl,
-                  decoration: InputDecoration(
-                    labelText: 'Amount',
-                    helperText: 'Have ${formatTokenAmount(t.amount, t.decimals)}',
-                    helperMaxLines: 1,
-                  ),
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  onChanged: (_) => setState(() {}),
-                  validator: (v) {
-                    final n = parseDecimalToBase(v ?? '', t.decimals);
-                    if (n == null || n <= 0) return 'Amount';
-                    if (n > t.amount) return 'Too much';
-                    return null;
-                  },
+                child: Text(
+                  '${entries.length} tokens selected · Page ${_tokenPage + 1} of $pages',
                 ),
               ),
-            IconButton(
-              tooltip: 'Remove',
-              icon: const Icon(Icons.close, size: 18),
-              onPressed: () {
-                setState(() => _extraTokens.removeAt(i));
-                WidgetsBinding.instance.addPostFrameCallback((_) => e.dispose());
-              },
-            ),
-          ],
-        ),
-      ],
-      if (!_extraTokens.any((e) => e.tokenId == null) &&
-          choices.any((t) => !_extraTokens.any((e) => e.tokenId == t.id)))
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            onPressed: () => setState(() => _extraTokens.add(_TokenEntry())),
-            icon: const Icon(Icons.add, size: 18),
-            label: Text(picked == null ? 'Also send a token' : 'Add another token'),
+              IconButton(
+                tooltip: 'Previous tokens',
+                onPressed: _tokenPage > 0
+                    ? () => setState(() => _tokenPage--)
+                    : null,
+                icon: const Icon(Icons.chevron_left),
+              ),
+              IconButton(
+                tooltip: 'Next tokens',
+                onPressed: _tokenPage + 1 < pages
+                    ? () => setState(() => _tokenPage++)
+                    : null,
+                icon: const Icon(Icons.chevron_right),
+              ),
+            ],
           ),
-        ),
-    ];
+        for (final e in entries.skip(_tokenPage * pageSize).take(pageSize))
+          _heldTokenRow(_tokenById(e.key)!, e.value),
+      ],
+    );
+  }
+
+  Widget _heldTokenRow(TokenBalance token, TextEditingController controller) {
+    return Padding(
+      key: ValueKey('amount-row-${token.id}'),
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: token.isNft
+                ? Text('Sends 1 ${token.label} · Available 1')
+                : TextFormField(
+                    key: ValueKey('amount-${token.id}'),
+                    controller: controller,
+                    decoration: InputDecoration(
+                      labelText: '${token.label} amount',
+                      helperText:
+                          'Available ${formatTokenAmount(token.amount, token.decimals)}',
+                      suffixIcon: TextButton(
+                        onPressed: () {
+                          if (token.id == _assetId) {
+                            _applyMaxToken();
+                          } else {
+                            setState(
+                              () => controller.text = formatTokenAmount(
+                                token.amount,
+                                token.decimals,
+                              ),
+                            );
+                          }
+                        },
+                        child: const Text('MAX'),
+                      ),
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    validator: (v) {
+                      final n = parseDecimalToBase(v ?? '', token.decimals);
+                      if (n == null || n <= 0) return 'Enter an amount';
+                      if (n > token.amount) return 'Too much';
+                      return null;
+                    },
+                  ),
+          ),
+          IconButton(
+            tooltip: 'Remove ${token.label}',
+            icon: const Icon(Icons.close),
+            onPressed: () =>
+                _selectHeld(_heldAmounts.keys.toSet()..remove(token.id)),
+          ),
+        ],
+      ),
+    );
   }
 
   /// " + 5 kushti + 1 Ape" for a recipient's tokens, or nothing.
   String _tokensSuffix(Map<String, dynamic> r) {
     final list = r['tokens'];
     if (list is List && list.isNotEmpty) {
+      if (list.length > 10) return ' + ${list.length} tokens';
       return [
         for (final t in list.cast<Map>()) ' + ${_tokenLabel((t['amount'] as num?)?.toInt() ?? 0, t['token_id'] as String)}',
       ].join();
@@ -1087,7 +1140,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
         final extraIds = _extraTokens.map((e) => e.tokenId).toSet();
         final choice = await showAssetPicker(
           context,
-          held: _args.tokens.where((t) => !extraIds.contains(t.id)).toList(),
+          held: const [],
           buyable: _buyable.where((t) => !extraIds.contains(t.id)).toList(),
           current: _assetId,
         );
@@ -1100,7 +1153,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
       },
       borderRadius: BorderRadius.circular(buttonRadius),
       child: InputDecorator(
-        decoration: const InputDecoration(labelText: 'Asset', suffixIcon: Icon(Icons.expand_more)),
+        decoration: const InputDecoration(labelText: 'ERG or buy and send', suffixIcon: Icon(Icons.expand_more)),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1272,7 +1325,18 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                     const SizedBox(height: 24),
                     const SectionLabel('Asset'),
                     const SizedBox(height: 12),
-                    _assetPickerButton(token, swapVariant),
+                    if (swapVariant == null) ...[
+                      Align(alignment: Alignment.centerLeft, child: FilledButton.icon(
+                        onPressed: () async {
+                          final ids = await showHeldTokenPicker(context, tokens: _args.tokens, selected: _heldAmounts.keys.toSet());
+                          if (ids != null && mounted) _selectHeld(ids);
+                        },
+                        icon: const Icon(Icons.checklist),
+                        label: Text(_heldAmounts.isEmpty ? 'Choose tokens' : 'Choose tokens (${_heldAmounts.length})'),
+                      )),
+                      if (_heldAmounts.isEmpty && !_multiRecipient)
+                        _assetPickerButton(token, swapVariant),
+                    ] else _assetPickerButton(token, swapVariant),
                     if (swapVariant != null)
                       _buildSwapSection(swapVariant)
                     else ...[
@@ -1290,27 +1354,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                             return null;
                           },
                         ),
-                      if (token != null && !token.isNft)
-                        TextFormField(
-                          controller: _tokenAmtCtrl,
-                          decoration: InputDecoration(
-                            labelText: '${token.label} amount',
-                            helperText:
-                                'Available ${formatTokenAmount(token.amount, token.decimals)} ${token.label}',
-                            suffixIcon: TextButton(onPressed: _applyMaxToken, child: const Text('MAX')),
-                          ),
-                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                          validator: (v) {
-                            final n = parseDecimalToBase(v ?? '', token.decimals);
-                            if (n == null || n <= 0) return 'Enter an amount';
-                            if (n > token.amount) {
-                              return 'You hold ${formatTokenAmount(token.amount, token.decimals)}';
-                            }
-                            return null;
-                          },
-                        ),
-                      if (token != null && token.isNft)
-                        Text('Sends 1 ${token.label}', style: Theme.of(context).textTheme.bodySmall),
+                      _heldTokenRows(),
                       // A token send may carry ERG too, and more tokens: they
                       // all travel in the recipient's one box.
                       if (token != null) ...[
@@ -1329,7 +1373,6 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                           },
                         ),
                       ],
-                      ..._extraTokenRows(token),
                     ],
                     const SizedBox(height: 16),
                     if (_multiRecipient && swapVariant == null)
