@@ -1838,12 +1838,9 @@ async fn prepare(
         Some(t) => Some(find_babel(&client, t, fee_for_required).await?),
         None => None,
     };
-    let required = i64::checked_add(amount_nano_erg, if babel.is_some() { 0 } else { fee_for_required })
-        .and_then(|v| i64::checked_add(v, MIN_BOX_VALUE_NANO))
-        .filter(|v| *v > 0)
-        .ok_or_else(|| {
-            ArgusError::TxBuildFailed("send amount out of range".into()).to_json_string()
-        })? as u64;
+    // Use the same complete budget as multi-send: the builder also charges
+    // the app fee. Omitting it lets selection stop before MAX is funded.
+    let required = multi_send_required_erg(amount_nano_erg, fee_for_required, babel.is_some())?;
     let token_ref = send_token.as_ref().map(|(id, amt)| (id.as_str(), *amt));
     // Coin control: when the user chose boxes, spend exactly those. Falling
     // back to automatic selection here would silently pull in a box they
@@ -4603,6 +4600,57 @@ pub async fn amm_build_swap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Documents the mechanism and pins the arithmetic: with the old budget a
+    // MAX send selects one box short and the builder returns the exact error
+    // that was reported. It does NOT guard prepare()'s use of the shared
+    // budget — prepare() is async and needs a node client, so reverting it to
+    // an inline computation still passes this. Verified: the fix was reverted
+    // and this test stayed green.
+    #[test]
+    fn single_send_max_selects_enough_for_the_reported_shortfall() {
+        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        ergo_tx::dev_fee::with_test_dev_fee(
+            DevFeeConfig::custom(tree.clone(), ARGUS_FEE_NANO),
+            || {
+                let make_box = |id: &str, value: i64| ergo_tx::Eip12InputBox {
+                    box_id: id.into(),
+                    transaction_id: "tx".into(),
+                    index: 0,
+                    value: value.to_string(),
+                    ergo_tree: tree.clone(),
+                    assets: vec![],
+                    creation_height: 1,
+                    additional_registers: Default::default(),
+                    extension: Default::default(),
+                };
+                let inputs = vec![make_box("large", 996_727_888), make_box("small", 1_072_065)];
+                let balance = 997_799_953;
+                let amount = balance - TX_FEE_NANO - ARGUS_FEE_NANO - MIN_BOX_VALUE_NANO;
+                let old_required = (amount + TX_FEE_NANO + MIN_BOX_VALUE_NANO) as u64;
+                let (old, _) = select_preferring_one_pocket(&inputs, &[], old_required, None).unwrap();
+                let fee = ergo_tx::resolved_dev_fee_config();
+                assert!(matches!(
+                    build_send_tx_with_fee(&old.boxes, &tree, &tree, amount, None, 100, &fee),
+                    Err(ergo_tx::send::SendError::InsufficientErg { have: 996_727_888, need: 996_799_953 })
+                ));
+                for miner in [TX_FEE_NANO, TX_FEE_NANO + 500_000] {
+                    let amount = balance - miner - ARGUS_FEE_NANO - MIN_BOX_VALUE_NANO;
+                    let required = multi_send_required_erg(amount, miner, false).unwrap();
+                    assert_eq!(required, balance as u64);
+                    // Public, stealth-only and combined-pocket selection all
+                    // receive this budget. Exact coin control cannot top up.
+                    for stealth in [vec![], vec!["large".into(), "small".into()], vec!["small".into()]] {
+                        let (selected, _) = select_preferring_one_pocket(&inputs, &stealth, required, None).unwrap();
+                        assert_eq!(selected.total_erg, balance as u64);
+                        let built = build_send_tx_with_fee(&selected.boxes, &tree, &tree, amount, None, 100, &fee).unwrap();
+                        assert_eq!(built.summary.change_erg, MIN_BOX_VALUE_NANO + miner - TX_FEE_NANO);
+                    }
+                    assert!(select_exact(&inputs, &["large".into()], required, None).is_err());
+                }
+            },
+        );
+    }
 
     #[test]
     fn multi_send_exact_selection_budget_covers_the_argus_fee() {

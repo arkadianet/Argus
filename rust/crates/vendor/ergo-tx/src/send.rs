@@ -280,6 +280,25 @@ mod tests {
     }
 
     #[test]
+    fn max_budget_must_include_app_fee_before_selecting_inputs() {
+        let fee = DevFeeConfig::custom(USER_TREE.into(), 1_100_000);
+        let mut small = make_box("1072065", vec![]);
+        small.box_id = "small".into();
+        let inputs = vec![make_box("996727888", vec![]), small];
+        let balance = 997_799_953;
+        let amount = balance - TX_FEE - fee.budget() - MIN_BOX_VALUE;
+        let old = crate::select_erg_boxes(&inputs, (amount + TX_FEE + MIN_BOX_VALUE) as u64).unwrap();
+        let error = build_send_tx_with_fee(&old.boxes, RECIPIENT_TREE, USER_TREE, amount, None, 1, &fee).unwrap_err();
+        assert_eq!(error.to_string(), "Insufficient ERG: have 996727888 nanoERG, need 996799953 nanoERG");
+        let required = amount + TX_FEE + fee.budget() + MIN_BOX_VALUE;
+        let selected = crate::select_erg_boxes(&inputs, required as u64).unwrap();
+        assert_eq!(selected.total_erg, balance as u64);
+        let built = build_send_tx_with_fee(&selected.boxes, RECIPIENT_TREE, USER_TREE, amount, None, 1, &fee).unwrap();
+        assert_eq!(built.summary.change_erg, MIN_BOX_VALUE);
+        assert_eq!(built.unsigned_tx.outputs.iter().map(|o| o.value.parse::<i64>().unwrap()).sum::<i64>(), balance);
+    }
+
+    #[test]
     fn send_erg_only() {
         let inputs = vec![make_box("10000000000", vec![])]; // 10 ERG
         let result = build_send_tx(
