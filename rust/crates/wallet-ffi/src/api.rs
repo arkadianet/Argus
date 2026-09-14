@@ -1584,26 +1584,79 @@ async fn gather_unspent_all(
     ),
     String,
 > {
+    gather_unspent_ordered(
+        handle_id,
+        addresses,
+        GATHER_ADDRESS_CONCURRENCY,
+        |addr| async move {
+            client
+                .get_effective_unspent(addr)
+                .await
+                .map_err(|e| ArgusError::NodeError(e).to_json_string())
+        },
+    )
+    .await
+}
+
+// Four address sequences overlap latency without unbounded load on a user's node.
+// Each sequence still runs all confirmed pages before its mempool lookup.
+const GATHER_ADDRESS_CONCURRENCY: usize = 4;
+
+type GatheredBoxes = (
+    Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+    Vec<ergo_tx::Eip12InputBox>,
+);
+
+async fn gather_unspent_ordered<'a, F, Fut>(
+    handle_id: u64,
+    addresses: &'a [String],
+    concurrency: usize,
+    fetch: F,
+) -> Result<GatheredBoxes, String>
+where
+    F: Fn(&'a str) -> Fut,
+    Fut: std::future::Future<Output = Result<GatheredBoxes, String>>,
+{
+    use futures::{stream::FuturesOrdered, StreamExt};
+
+    let mut pending = FuturesOrdered::new();
+    let mut next_address = 0;
+    let mut stopped = false;
     let mut boxes = Vec::new();
     let mut eip12 = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for addr in addresses {
-        if addr.is_empty() {
-            continue;
-        }
-        with_handle(handle_id, "send", |h| {
-            if !h.owns_address(addr).map_err(err_str)? {
-                return Err(ArgusError::InvalidAddress(
-                    "spend address is not an address of this wallet".into(),
-                )
-                .to_json_string());
+    loop {
+        // Admission is synchronous and ordered, before constructing each fetch.
+        // Stop at a foreign address, delivering its error in input order so an
+        // earlier node failure retains the serial loop's error precedence.
+        while !stopped && pending.len() < concurrency && next_address < addresses.len() {
+            let addr = &addresses[next_address];
+            next_address += 1;
+            if addr.is_empty() {
+                continue;
             }
-            Ok(())
-        })?;
-        let (b, e) = client
-            .get_effective_unspent(addr)
-            .await
-            .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+            let ownership = with_handle(handle_id, "send", |h| {
+                if !h.owns_address(addr).map_err(err_str)? {
+                    return Err(ArgusError::InvalidAddress(
+                        "spend address is not an address of this wallet".into(),
+                    )
+                    .to_json_string());
+                }
+                Ok(())
+            });
+            stopped = ownership.is_err();
+            let fetch = &fetch;
+            pending.push_back(async move {
+                ownership?;
+                fetch(addr).await
+            });
+        }
+        // FuturesOrdered yields in the caller's sorted order, irrespective of
+        // completion order. Error/cancellation drops all outstanding futures.
+        let Some(result) = pending.next().await else {
+            break;
+        };
+        let (b, e) = result?;
         for (bx, input) in b.into_iter().zip(e.into_iter()) {
             if seen.insert(input.box_id.clone()) {
                 boxes.push(bx);
@@ -4644,6 +4697,8 @@ pub async fn amm_build_swap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod concurrent_gather;
 
     // Documents the mechanism and pins the arithmetic: with the old budget a
     // MAX send selects one box short and the builder returns the exact error

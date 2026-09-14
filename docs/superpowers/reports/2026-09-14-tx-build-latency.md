@@ -2,7 +2,7 @@
 
 The measured node work already costs roughly 1 second on kadia or 2.6 seconds on eutxo for a warm, one-address send, and prepare repeats the unspent-plus-mempool sequence serially for every spend address; local box processing adds a separate scaling problem for large input sets.
 
-This is an investigation of `perf/tx-build-investigation` at `d2b22c7`. No production implementation, fetch policy, preview, transaction or bridge was changed. Before and after counts are identical: **3 HTTP requests warm / 5 cold** for one address with fewer than 500 confirmed boxes, ordinary ERG fee, successful first node. The author's phone and wallet were not available. The measurements below establish real endpoint/client costs and synthetic local costs, not a measured button-to-sheet time on that phone.
+The original investigation below examined `perf/tx-build-investigation` at `d2b22c7`, without changing production behavior. **Rank 1 is now implemented on `perf/concurrent-gather`, based on `feat/watch-xpub`; see the implementation follow-up at the end for measurements and verification.** Before and after counts are identical: **3 HTTP requests warm / 5 cold** for one address with fewer than 500 confirmed boxes, ordinary ERG fee, successful first node. The author's phone and wallet were not available. The measurements below establish real endpoint/client costs and synthetic local costs, not a measured button-to-sheet time on that phone.
 
 ## Call graph and await ledger
 
@@ -172,7 +172,7 @@ Ownership is already cached by address (`wallet-core/src/wallet.rs:31,128`). A f
 - **Prices/routes:** `initState` starts `buyableTokens()` asynchronously; quote requests are scheduled only for the buy-and-send option. Ordinary send uses cached balances, token labels and fiat. Buy-and-send branches into `_sendViaRoute` / `tokenRouter.build`, a different protocol build path; the 3/5-request count does not describe it. Background sync/quotes/scans can contend for network/CPU but are not awaited by ordinary prepare; contention was not measured.
 - **Preview/signing:** unsigned inputs/outputs and full selected boxes are retained in `CachedPreparation`; sign uses that preparation after approval. There is no ordinary prepare-time transaction reduction or signing crypto. A stale input is generally rejected by validation rather than magically made spendable, but it can still produce a misleading preview and a signature over a transaction that will fail. Fresh enumeration is itself non-atomic across pages/addresses and can race new spends. Performance work must not expand that race silently.
 
-## Ranked improvements (proposals, none implemented)
+## Original ranked improvements (rank 1 implemented in the follow-up)
 
 Savings below are conditional estimates from the samples and dependency structure unless explicitly marked measured. They are not additive guarantees. “Safe” here means preserving candidate data, ownership checks, selection order and final preview/signing behavior for the same node snapshot; live requests never form an atomic wallet snapshot.
 
@@ -192,10 +192,60 @@ Confirmed pages, mempool and height all supply necessary information for the cur
 
 No proposal should replace immutable-box caching with an “unspent for 60 seconds” cache. Fresh membership and a reviewed immutable preparation are distinct requirements. Preserve ownership checks, reservations, exact coin control, token/pocket policies, and the requirement that the user approves precisely what gets signed.
 
-## Validation and next work
+## Original investigation validation and next work
 
 `cargo test --manifest-path rust/Cargo.toml --workspace` passed: **803 passed, 0 failed, 12 ignored**, including the workspace doc-test summaries. It used worktree-local `CARGO_TARGET_DIR` and `TMPDIR`. The temporary example was removed before this run.
 
 `flutter analyze --no-pub` and `flutter test --no-pub` could not start: the installed Flutter launcher tries to write `/home/rkadias/coding/development/flutter/bin/cache/engine.stamp`, which is read-only in this sandbox. These are environment blocks, not passing Flutter checks. FRB codegen-match was not rerun; production Rust, Dart, generated bindings and API signatures are byte-for-byte unchanged in the final diff. `git diff --check` passed. The final deliverable is this report only. Staging it failed because Git could not create `/home/rkadias/coding/arkadianet/Argus/.git/worktrees/perf/index.lock` on the read-only filesystem outside this worktree. Per the task instructions, the report is left uncommitted; nothing was pushed and no PR was opened.
 
 Next, capture a release-build phone trace with actual connected URL, cache age/hit, address count, per-address page/box counts, mempool durations, local stage durations, bridge completion and first sheet frame. Log counts/times rather than private addresses or secrets. Include public ERG, token, explicit-input, stealth and multi-send cases. This will distinguish the author's likely node/address fan-out delay from large-box/stealth CPU cost or platform/bridge delays. Then test bounded inter-address concurrency with deterministic delayed responses and block/mempool race fixtures, plus K=1 versus larger-K lookup benchmarks, before choosing an implementation.
+
+## Implementation follow-up — bounded address gather, 2026-09-14
+
+Implemented rank 1 on `perf/concurrent-gather`, with the diff reviewed against `feat/watch-xpub`. `gather_unspent_all` now admits at most **four** address sequences through `FuturesOrdered`. The adjacent `GATHER_ADDRESS_CONCURRENCY` constant makes the limit easy to find. Four overlaps several network waits while keeping per-gather load modest even on a user's own node; it is a conservative choice, not a measured optimal limit. The bound includes completed results waiting behind an earlier address, so a slow first address can reduce utilization. It also bounds buffered address results. Independent simultaneous gathers can each use four slots; this is not a global node rate limiter.
+
+Ownership checks still call `with_handle` synchronously in input order, before each address's fetch. A failed check stops admission, including all addresses after the foreign address. Its error is delivered in address order, preserving an earlier address's node-error precedence. Owned addresses already admitted can run concurrently, but no foreign boxes are fetched or returned. The first error in original address order aborts the entire gather and drops outstanding futures; no partial tuple reaches selection. Some later owned requests may already have reached the server when an earlier request fails, an unavoidable consequence of overlap. Caller cancellation also drops pending futures without detached tasks.
+
+Each future calls the unchanged `get_effective_unspent`, retaining confirmed pages → mempool order, request contents, paging limits and node choice. Results are merged in the caller's original sorted address order, using the original paired zip and first-box-ID-wins deduplication. Reservation filtering remains after the complete gather. Height, babel, node selection, caching, selected-input lookups, EIP-12 conversion and bridge signatures were left alone. No optional optimization was bundled.
+
+### Ordering and behavior proof
+
+`rust/crates/wallet-ffi/src/api/tests/concurrent_gather.rs` contains an independent copy of the old serial merge as the test oracle. A delayed ten-address fixture makes later addresses finish first, verifies that four fetches actually overlap, and compares **serialized bytes of the entire `(boxes, eip12)` tuple** against the serial reference. Duplicate boxes occur under every address. The same result is then filtered through real mix funding reservations, checking exclusion without disturbing the other boxes.
+
+A threaded local HTTP node exercises the real `ErgoNodeClient` and production `gather_unspent_all`: address A has 500 confirmed boxes and a second empty page; mempool transactions spend A → B → A. B finishes first. The test checks that the spent confirmed box and intermediate B output are absent, the final A output is present, both tuple representations match the serial reference byte-for-byte, and each address's request log is pages followed by mempool. Separate tests cover single-address/empty-string handling and fetch count, a mid-gather error with a later error finishing first, dropping outstanding fetches on failure and caller cancellation, and actual wallet ownership rejection without fetching the foreign or subsequent addresses. An earlier node error still wins over a later ownership error.
+
+### Measurement method
+
+The retained opt-in `live_gather_benchmark` test uses the real Rust client in release mode and ten distinct, sorted owned addresses derived from the deterministic test seed `[42; 64]`. Each host is constructed directly with `ErgoNodeClient::new`, so there is no fallback ambiguity and no production network configuration change. A complete warmup gather precedes timing. Connection and wallet construction are excluded; ownership checks, requests, parsing, merge and deduplication are included. The serial baseline runs the same gather helper with concurrency **1**, reproducing the old per-address await schedule; the new setting is **4**. This is a scheduling comparison, not two historical binaries. Three trials alternate order (1→4, 4→1, 1→4) for A=1 and A=10. Every returned box set was empty, and each serial/concurrent pair had identical serialized tuple bytes. Thus successful request counts remain 2 and 20 respectively, with no height or babel request in the timed interval.
+
+Reproduce from the repository root (build output and temporary files remain in the worktree):
+
+```bash
+mkdir -p rust/target/tmp
+CARGO_TARGET_DIR="$PWD/rust/target" TMPDIR="$PWD/rust/target/tmp" \
+  cargo test --manifest-path rust/Cargo.toml -p wallet-ffi --release \
+  live_gather_benchmark -- --ignored --nocapture
+```
+
+These are development-host gather timings, not phone button-to-preview timings or a funded wallet benchmark. Empty addresses are relevant because historical/frontier addresses still perform both requests. Nonempty, duplicate, multi-page and chained box behavior is covered by deterministic tests, not claimed as a live performance measurement. No transaction was signed or submitted.
+
+### Measured results
+
+Release timings in milliseconds, three trials in trial-number order:
+
+| Node | Addresses | Serial (limit 1) | Concurrent (limit 4) | Median serial → concurrent | Median saving |
+|---|---:|---|---|---|---|
+| node.kadia.io | 1 | 678.545 / 677.938 / 680.974 | 681.439 / 679.911 / 677.155 | 678.545 → 679.911 | -1.366 |
+| node.kadia.io | 10 | 6807.323 / 6803.472 / 6803.032 | 2037.474 / 2038.367 / 2038.815 | 6803.472 → 2038.367 | 4765.105 |
+| ergo-node.eutxo.de | 1 | 2364.322 / 2367.224 / 2364.369 | 2654.080 / 2446.669 / 2361.841 | 2364.369 → 2446.669 | -82.300 |
+| ergo-node.eutxo.de | 10 | 32177.129 / 23793.763 / 23829.356 | 7238.516 / 7132.576 / 7213.233 | 23829.356 → 7213.233 | 16616.123 |
+
+The ten-address median saving is **4.765 s on kadia** and **16.616 s on eutxo**, compared with the original inferred 4.5 s and 16.9 s. The estimates were close for these samples, but the first eutxo serial run took 32.177 s; three samples do not characterize tail latency. The one-address kadia medians differ by 1.366 ms; eutxo's concurrent median was 82.300 ms slower, with individual samples spanning 2.362–2.654 s. With only one address, both limit settings execute the same request sequence and queue operations. These noisy live samples show no benefit and do not establish statistical non-regression against the historical implementation. The single-address correctness test proves the same bytes and fetch count. The benchmark completed successfully, including all tuple equality assertions.
+
+### Verification and scope corrections
+
+`cd rust && cargo test --workspace` passed on the final Rust sources: **814 passed, 0 failed, 13 ignored**, including doc tests. Six new deterministic tests passed; the live benchmark is explicitly ignored in the default suite and run separately. `cd app && flutter analyze` and `cd app && flutter test` both failed before analysis/testing: Flutter's launcher attempted to write `/home/rkadias/coding/development/flutter/bin/cache/engine.stamp`, outside the writable sandbox. These are blocked checks, not passes. No bridge signature changed, so bindings were not regenerated. This Rust change **does land in the native library**: tracked `jniLibs/*.so` were not rebuilt, and `scripts/release_check.sh libs` was not run; the binaries still need rebuilding for release. All build output, temporary files and logs used the existing ignored `rust/target` directory, with no ignore-rule changes and nothing under `/tmp`.
+
+The original equal-latency `ceil(A/4) × g` estimate is a useful approximation, not a guarantee: live endpoint variation and waiting for the oldest outstanding address can affect the result. Single-address wallets have no latency overlap to exploit. The shared gather also serves callers other than button-press prepare, including the coin-control listing and mix funding path. The original report's successful request-count ledger remains valid. Its existing warning about mempool failures still applies: `get_effective_unspent` catches those failures and returns confirmed-only boxes. The new gather aborts every error actually returned by that method; this work neither fixes nor introduces the client's pre-existing fallback. Live enumeration remains non-atomic, so byte equality is guaranteed for identical address responses, not for two queries separated by a chain or mempool change.
+
+`git diff --check` and formatting validation of the new test module passed. Staging the implementation, tests and report failed with `Unable to create '/home/rkadias/coding/arkadianet/Argus/.git/worktrees/conc/index.lock': Read-only file system`. Per the requested failure policy, all work remains uncommitted on `perf/concurrent-gather`; no push or PR was attempted. Intended commit message: `Gather wallet addresses with bounded concurrency`.
