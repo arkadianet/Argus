@@ -1,3 +1,4 @@
+import 'services/watch_account_service.dart';
 import 'package:flutter/material.dart';
 
 import 'services/address_label_service.dart';
@@ -50,6 +51,7 @@ Future<void> main() async {
     contactsService.load().catchError((_) {}),
     addressLabelService.load().catchError((_) {}),
     watchOnlyService.load().catchError((_) {}),
+    watchAccountService.load().catchError((_) {}),
     privacyService.load().catchError((_) {}),
     stealthService.load().catchError((_) {}),
     tokenPricer.load().catchError((_) {}),

@@ -85,6 +85,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
   String _currentSignature() => activitySignature(walletSyncController.displayActivity);
 
   List<Map<String, dynamic>> _withLocal(List<Map<String, dynamic>> rows) {
+    if (_args.watchOnly) return rows;
     final ids = {for (final row in rows) row['tx_id']};
     final merged = mergeStealthActivity(mergeMixActivity([
       ...rows,

@@ -1,3 +1,4 @@
+import '../services/watch_account_service.dart';
 import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -433,7 +434,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
           const SizedBox(height: 8),
           Text(
             args.watchOnly
-                ? 'Payments to this address go to the watched wallet.'
+                ? args.watchAccount
+                    ? 'Unused payment address. A new one is offered after payment. $watchAccountLimitations'
+                    : 'Payments to this address go to the watched wallet.'
                 : fresh
                 ? 'A new address is shown after this one is used.'
                 : 'This address stays the same. Turn on Fresh addresses in Settings to use a new one after each payment.',

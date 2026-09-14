@@ -24,6 +24,23 @@ class ReceiveApi extends RustLibApi {
 
 void main() {
   setUpAll(() => RustLib.initMock(api: ReceiveApi()));
+  testWidgets('account Receive states stealth exclusion and uses supplied fresh address', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      onGenerateRoute: (_) => MaterialPageRoute<void>(
+        settings: const RouteSettings(arguments: WalletRouteArgs(
+          watchOnly: true, watchAccount: true,
+          senderAddress: 'other', receiveAddress: watched, changeAddress: watched,
+        )),
+        builder: (_) => const ReceiveScreen(),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Cannot see stealth identities'), findsOneWidget);
+    expect(tester.widget<QrImageView>(find.byType(QrImageView)).semanticsLabel, watched);
+    expect(find.byKey(const Key('stealth-qr')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('watched Receive opens while locked and overrides active wallet scope', (tester) async {
     SharedPreferences.setMockInitialValues({
       'argus_watch_only_addresses': jsonEncode([watched]),

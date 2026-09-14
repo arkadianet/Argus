@@ -150,6 +150,7 @@ class WalletArgsScope extends InheritedWidget {
 
 class WalletRouteArgs {
   final bool watchOnly;
+  final bool watchAccount;
   final String senderAddress;
   final String receiveAddress;
   final String changeAddress;
@@ -160,6 +161,7 @@ class WalletRouteArgs {
 
   const WalletRouteArgs({
     this.watchOnly = false,
+    this.watchAccount = false,
     required this.senderAddress,
     required this.receiveAddress,
     required this.changeAddress,
@@ -209,6 +211,7 @@ class WalletRouteArgs {
       spendableNano: spendableNano,
       transaction: transaction ?? this.transaction,
       watchOnly: watchOnly,
+      watchAccount: watchAccount,
     );
   }
 }

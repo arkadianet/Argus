@@ -1,3 +1,4 @@
+import '../widgets/watch_account_list.dart';
 import 'package:flutter/material.dart';
 
 import '../../format.dart';
@@ -65,6 +66,8 @@ class WatchOnlyPage extends StatelessWidget {
         return SettingsPage(
           title: 'Watch-only',
           children: [
+            const WatchAccountList(),
+            const SizedBox(height: 16),
             const SectionLabel('Watched addresses', scope: 'App-wide'),
             const SizedBox(height: 10),
             if (addrs.isEmpty)

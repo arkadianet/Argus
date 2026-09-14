@@ -1,3 +1,5 @@
+import '../services/watch_account_service.dart';
+import 'widgets/watch_account_list.dart';
 import '../services/public_wallet_sync.dart';
 import '../services/wallet_sync_controller.dart';
 import 'package:flutter/material.dart';
@@ -14,7 +16,12 @@ import 'widgets/empty_state.dart';
 import 'widgets/soft_card.dart';
 
 /// "2 wallets · 3 watch-only" headline for the overview summary card.
-String overviewHeadline({required int wallets, required int watchOnly}) {
+String overviewHeadline({required int wallets, required int watchOnly, int accounts = 0}) {
+  if (accounts > 0) {
+    final accountText = '$accounts watched ${accounts == 1 ? 'account' : 'accounts'}';
+    if (wallets == 0 && watchOnly == 0) return accountText;
+    return '${overviewHeadline(wallets: wallets, watchOnly: watchOnly)} · $accountText';
+  }
   if (wallets == 0) {
     return '$watchOnly watch-only ${watchOnly == 1 ? 'address' : 'addresses'}';
   }
@@ -82,6 +89,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
   void initState() {
     super.initState();
     watchOnlyService.addListener(_onWatchChanged);
+    watchAccountService.addListener(_onAccountChanged);
     publicWalletSync.addListener(_onPublicChanged);
     _load();
   }
@@ -89,9 +97,12 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
   @override
   void dispose() {
     watchOnlyService.removeListener(_onWatchChanged);
+    watchAccountService.removeListener(_onAccountChanged);
     publicWalletSync.removeListener(_onPublicChanged);
     super.dispose();
   }
+
+  void _onAccountChanged() { if (mounted) setState(() {}); }
 
   void _onWatchChanged() {
     if (mounted) _refreshBalances();
@@ -155,6 +166,9 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
           ),
         ),
       );
+      for (final account in List.of(watchAccountService.accounts)) {
+        await watchAccountService.refresh(account);
+      }
       final watchAddrs = watchOnlyService.addresses;
       final watchFutures = watchAddrs.map(
         (a) async => (a, await _addressBalance(a)),
@@ -214,9 +228,10 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _refreshBalances,
-              child: _wallets.isEmpty && watchOnlyService.addresses.isEmpty
+              child: _wallets.isEmpty && watchOnlyService.addresses.isEmpty && watchAccountService.accounts.isEmpty
                   ? ListView(
                       children: const [
+                        WatchAccountList(),
                         EmptyState(
                           icon: Icons.account_balance_wallet_outlined,
                           title: 'No wallets yet',
@@ -230,6 +245,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                           40 + MediaQuery.paddingOf(context).bottom),
                       children: [
                         _summaryCard(context),
+                        const WatchAccountList(),
                         const SizedBox(height: 8),
                         ..._wallets.map(_walletTile),
                         if (watchOnlyService.addresses.isNotEmpty) ...[
@@ -274,6 +290,12 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
         total += bal;
       }
     }
+    for (final account in watchAccountService.accounts) {
+      if (account.snapshot != null) {
+        known++;
+        total += account.snapshot!.balance;
+      }
+    }
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
@@ -288,6 +310,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
             overviewHeadline(
               wallets: _wallets.length,
               watchOnly: watchOnlyService.addresses.length,
+              accounts: watchAccountService.accounts.length,
             ),
             style: Theme.of(context).textTheme.headlineSmall,
           ),
