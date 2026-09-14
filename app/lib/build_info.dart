@@ -1,5 +1,5 @@
 /// Build identity shown in Settings → About. Bumped with pubspec.yaml at
 /// each release (see the release steps in the repo memory / plan).
-const appVersion = '1.0.0-alpha.53';
-const appBuildNumber = 4054;
+const appVersion = '1.0.0-alpha.54';
+const appBuildNumber = 4055;
 const releasesUrl = 'https://github.com/arkadianet/Argus/releases';
