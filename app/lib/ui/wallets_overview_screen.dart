@@ -479,6 +479,16 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
             ],
           ),
           IconButton(
+            tooltip: 'Receive',
+            icon: const Icon(Icons.south_west),
+            onPressed: () => Navigator.pushNamed(context, '/receive', arguments: WalletRouteArgs(
+              watchOnly: true,
+              senderAddress: address,
+              receiveAddress: address,
+              changeAddress: address,
+            )),
+          ),
+          IconButton(
             icon: const Icon(Icons.close, size: 18),
             tooltip: 'Stop watching',
             onPressed: () => _confirmUnwatch(address),
@@ -506,7 +516,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
               controller: ctrl,
               autofocus: true,
               style: monoStyle(ctx, size: 13),
-              decoration: const InputDecoration(labelText: 'Ergo address'),
+              decoration: const InputDecoration(labelText: 'Address or public key', helperText: 'Mainnet key hex: 02/03… or 0008cd02/03…', helperMaxLines: 2),
             ),
           ],
         ),
@@ -519,9 +529,18 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
     final text = ctrl.text.trim();
     ctrl.dispose();
     if (ok != true || text.isEmpty) return;
-    final added = await watchOnlyService.add(text);
+    final bool added;
+    try {
+      added = await watchOnlyService.add(text);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not validate right now. Please try again.')),
+      );
+      return;
+    }
     if (!mounted) return;
-    _snack(added ? 'Now watching ${shorten(text, head: 8, tail: 6)}' : 'Not a valid Ergo address, or already watched');
+    _snack(added ? 'Watch-only address added' : 'Already watched or invalid input. Use an Ergo address, a 33-byte compressed public key, or its 0008cd P2PK tree (hex, no 0x). Raw keys use mainnet.');
   }
 
   Future<void> _confirmUnwatch(String address) async {

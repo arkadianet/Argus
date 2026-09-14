@@ -731,6 +731,50 @@ pub fn validate_ergo_address(address: String) -> bool {
     address_to_ergo_tree(&address).is_ok()
 }
 
+/// Accept a checksummed address or an exact compressed P2PK key/tree hex.
+/// Raw keys have no network marker; Argus imports them as mainnet addresses.
+#[flutter_rust_bridge::frb]
+pub fn normalize_watch_input(input: String) -> Option<String> {
+    let input = input.trim();
+    if address_to_ergo_tree(input).is_ok() {
+        return Some(input.to_owned());
+    }
+    let lower = input.to_ascii_lowercase();
+    let key = match lower.len() {
+        66 => lower.as_str(),
+        72 if lower.starts_with("0008cd") => &lower[6..],
+        _ => return None,
+    };
+    if !(key.starts_with("02") || key.starts_with("03"))
+        || !key.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let tree = format!("0008cd{key}");
+    let address = ergo_tx::address::ergo_tree_to_address(&tree).ok()?;
+    // Require a canonical, fully consumed P2PK tree and a valid curve point.
+    (address_to_ergo_tree(&address).ok()? == tree).then_some(address)
+}
+
+#[cfg(test)]
+mod watch_input_tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_public_keys_and_preserves_addresses() {
+        let address = "9hY16vzHmmfyVBwKeFGHvb2bMFsG94A1u7To1QWtUokACyFVENQ";
+        let tree = address_to_ergo_tree(address).unwrap();
+        for input in [address.to_owned(), tree.clone(), tree[6..].to_owned(), tree.to_uppercase()] {
+            assert_eq!(normalize_watch_input(format!(" {input} ")), Some(address.to_owned()));
+        }
+        for input in ["".to_owned(), "not an address".to_owned(), format!("{tree}00"),
+            format!("04{}", &tree[8..]), format!("02{}", "ff".repeat(32)),
+            format!("0x{}", &tree[6..]), "00".repeat(32)] {
+            assert_eq!(normalize_watch_input(input.clone()), None, "{input}");
+        }
+    }
+}
+
 #[flutter_rust_bridge::frb]
 pub async fn get_balance(address: String, node_url: Option<String>) -> Result<String, String> {
     let client = node_client(node_url).await?;

@@ -259,6 +259,11 @@ Future<String> generateMnemonic({required int strength}) =>
 Future<bool> validateErgoAddress({required String address}) =>
     RustLib.instance.api.crateApiValidateErgoAddress(address: address);
 
+/// Accept a checksummed address or an exact compressed P2PK key/tree hex.
+/// Raw keys have no network marker; Argus imports them as mainnet addresses.
+Future<String?> normalizeWatchInput({required String input}) =>
+    RustLib.instance.api.crateApiNormalizeWatchInput(input: input);
+
 Future<String> getBalance({required String address, String? nodeUrl}) =>
     RustLib.instance.api.crateApiGetBalance(address: address, nodeUrl: nodeUrl);
 
