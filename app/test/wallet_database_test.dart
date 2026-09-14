@@ -24,6 +24,22 @@ void main() {
     expect(await WalletDatabaseService.lastKnownBalance('nope'), isNull);
   });
 
+  test('token snapshots distinguish missing holdings from known empty holdings', () async {
+    await WalletDatabaseService.savePublicSnapshot('legacy', {
+      'wallet_id': 'legacy', 'balance_nano_erg': 100,
+    }, () => true);
+    expect((await WalletDatabaseService.lastKnownBalance('legacy'))!.tokensKnown, isFalse);
+    await save('empty', 100);
+    expect((await WalletDatabaseService.lastKnownBalance('empty'))!.tokensKnown, isTrue);
+    await WalletDatabaseService.savePublicSnapshot('held', {
+      'wallet_id': 'held', 'balance_nano_erg': 100,
+      'tokens': [{'id': 'nft', 'amount': 1, 'decimals': 0}],
+    }, () => true);
+    final held = (await WalletDatabaseService.lastKnownBalance('held'))!;
+    expect(held.tokensKnown, isTrue);
+    expect(held.tokens.single.id, 'nft');
+  });
+
   test('deleting a wallet drops its snapshot', () async {
     await save('w1', 100);
     await WalletDatabaseService.clearWallet('w1');

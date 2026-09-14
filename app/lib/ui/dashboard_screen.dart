@@ -48,6 +48,7 @@ import 'wallet_dialogs.dart';
 import 'wallets_overview_screen.dart';
 import 'widgets/activity_tile.dart';
 import 'widgets/asset_tile.dart';
+import 'widgets/wallet_token_count.dart';
 import 'discover_screen.dart';
 import 'widgets/discover_sheet.dart';
 import 'widgets/action_row.dart';
@@ -1886,6 +1887,15 @@ class _DashboardScreenState extends State<DashboardScreen>
                 balance,
                 isActive ? _sync.isSyncing : false,
                 asOf: asOf,
+                tokenHoldings: isActive
+                    ? (_sync.balanceNano == null ? null : [
+                        for (final t in (_sync.stealthBalanceUnknown ? _sync.tokens : _sync.displayTokens))
+                          (id: t.id, amount: t.amount),
+                      ])
+                    : (known == null || !known.tokensKnown ? null : [
+                        for (final t in known.tokens) (id: t.id, amount: t.amount),
+                      ]),
+                publicTokensOnly: !isActive || _sync.stealthBalanceUnknown,
                 note: isActive ? stealthNote : lockedStealthNote,
                 tokens: isActive
                     ? [
@@ -1956,6 +1966,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     bool loading, {
     String? asOf,
     String? note,
+    Iterable<({String id, int amount})>? tokenHoldings,
+    bool publicTokensOnly = true,
     Iterable<({String id, int amount, int decimals})> tokens = const [],
   }) {
     final colors = ArgusColors.of(context);
@@ -1990,6 +2002,11 @@ class _DashboardScreenState extends State<DashboardScreen>
             const SizedBox(width: 4),
             Text('ERG', style: TextStyle(fontSize: 12, color: colors.muted)),
           ],
+        ),
+        WalletTokenCount(
+          holdings: tokenHoldings,
+          publicOnly: publicTokensOnly,
+          hidden: _balanceHidden,
         ),
         if (fiat.isNotEmpty)
           Text(
