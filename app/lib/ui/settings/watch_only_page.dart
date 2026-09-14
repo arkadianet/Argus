@@ -1,3 +1,4 @@
+import '../widgets/watch_account_list.dart';
 import 'package:flutter/material.dart';
 
 import '../../format.dart';
@@ -26,7 +27,7 @@ class WatchOnlyPage extends StatelessWidget {
               controller: ctrl,
               autofocus: true,
               style: monoStyle(ctx, size: 13),
-              decoration: const InputDecoration(labelText: 'Ergo address', hintText: '9...'),
+              decoration: const InputDecoration(labelText: 'Address or public key', helperText: 'Mainnet key hex: 02/03… or 0008cd02/03…', helperMaxLines: 2, hintText: '9...'),
             ),
           ],
         ),
@@ -39,10 +40,19 @@ class WatchOnlyPage extends StatelessWidget {
     final addr = ctrl.text.trim();
     ctrl.dispose();
     if (ok != true || addr.isEmpty) return;
-    final saved = await watchOnlyService.add(addr);
+    final bool saved;
+    try {
+      saved = await watchOnlyService.add(addr);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Could not validate right now. Please try again.')),
+      );
+      return;
+    }
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(saved ? 'Now watching ${shorten(addr, head: 8, tail: 6)}' : 'Not a valid Ergo address, or already watched')),
+      SnackBar(content: Text(saved ? 'Watch-only address added' : 'Already watched or invalid input. Use an Ergo address, a 33-byte compressed public key, or its 0008cd P2PK tree (hex, no 0x). Raw keys use mainnet.')),
     );
   }
 
@@ -56,6 +66,8 @@ class WatchOnlyPage extends StatelessWidget {
         return SettingsPage(
           title: 'Watch-only',
           children: [
+            const WatchAccountList(),
+            const SizedBox(height: 16),
             const SectionLabel('Watched addresses', scope: 'App-wide'),
             const SizedBox(height: 10),
             if (addrs.isEmpty)

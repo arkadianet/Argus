@@ -623,29 +623,7 @@ impl ErgoNodeClient {
             }
         };
 
-        let spent = crate::mempool::spent_box_ids(&txs);
-        let (confirmed, _) = confirmed_boxes;
-
-        // Confirmed boxes already spent by a mempool transaction are gone;
-        // their unconfirmed replacements arrive below.
-        let mut boxes: Vec<ErgoBox> = confirmed
-            .into_iter()
-            .filter(|b| !spent.contains(&b.box_id().to_string()))
-            .collect();
-
-        // Chained spends: an unconfirmed output may itself already be spent by
-        // a later mempool transaction, so filter the additions by the same set.
-        for b in crate::mempool::owned_outputs(&txs, &tree) {
-            if !spent.contains(&b.box_id().to_string()) {
-                boxes.push(b);
-            }
-        }
-
-        let eip12 = boxes
-            .iter()
-            .map(|b| ergo_tx::Eip12InputBox::from_ergo_box(b, b.transaction_id.to_string(), b.index))
-            .collect();
-        Ok((boxes, eip12))
+        Ok(crate::mempool::merge_confirmed(confirmed_boxes, &txs, &tree))
     }
 
     pub async fn address_has_transactions(&self, address: &str) -> Result<bool, String> {

@@ -731,6 +731,50 @@ pub fn validate_ergo_address(address: String) -> bool {
     address_to_ergo_tree(&address).is_ok()
 }
 
+/// Accept a checksummed address or an exact compressed P2PK key/tree hex.
+/// Raw keys have no network marker; Argus imports them as mainnet addresses.
+#[flutter_rust_bridge::frb]
+pub fn normalize_watch_input(input: String) -> Option<String> {
+    let input = input.trim();
+    if address_to_ergo_tree(input).is_ok() {
+        return Some(input.to_owned());
+    }
+    let lower = input.to_ascii_lowercase();
+    let key = match lower.len() {
+        66 => lower.as_str(),
+        72 if lower.starts_with("0008cd") => &lower[6..],
+        _ => return None,
+    };
+    if !(key.starts_with("02") || key.starts_with("03"))
+        || !key.bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    let tree = format!("0008cd{key}");
+    let address = ergo_tx::address::ergo_tree_to_address(&tree).ok()?;
+    // Require a canonical, fully consumed P2PK tree and a valid curve point.
+    (address_to_ergo_tree(&address).ok()? == tree).then_some(address)
+}
+
+#[cfg(test)]
+mod watch_input_tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_public_keys_and_preserves_addresses() {
+        let address = "9hY16vzHmmfyVBwKeFGHvb2bMFsG94A1u7To1QWtUokACyFVENQ";
+        let tree = address_to_ergo_tree(address).unwrap();
+        for input in [address.to_owned(), tree.clone(), tree[6..].to_owned(), tree.to_uppercase()] {
+            assert_eq!(normalize_watch_input(format!(" {input} ")), Some(address.to_owned()));
+        }
+        for input in ["".to_owned(), "not an address".to_owned(), format!("{tree}00"),
+            format!("04{}", &tree[8..]), format!("02{}", "ff".repeat(32)),
+            format!("0x{}", &tree[6..]), "00".repeat(32)] {
+            assert_eq!(normalize_watch_input(input.clone()), None, "{input}");
+        }
+    }
+}
+
 #[flutter_rust_bridge::frb]
 pub async fn get_balance(address: String, node_url: Option<String>) -> Result<String, String> {
     let client = node_client(node_url).await?;
@@ -1540,26 +1584,79 @@ async fn gather_unspent_all(
     ),
     String,
 > {
+    gather_unspent_ordered(
+        handle_id,
+        addresses,
+        GATHER_ADDRESS_CONCURRENCY,
+        |addr| async move {
+            client
+                .get_effective_unspent(addr)
+                .await
+                .map_err(|e| ArgusError::NodeError(e).to_json_string())
+        },
+    )
+    .await
+}
+
+// Four address sequences overlap latency without unbounded load on a user's node.
+// Each sequence still runs all confirmed pages before its mempool lookup.
+const GATHER_ADDRESS_CONCURRENCY: usize = 4;
+
+type GatheredBoxes = (
+    Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+    Vec<ergo_tx::Eip12InputBox>,
+);
+
+async fn gather_unspent_ordered<'a, F, Fut>(
+    handle_id: u64,
+    addresses: &'a [String],
+    concurrency: usize,
+    fetch: F,
+) -> Result<GatheredBoxes, String>
+where
+    F: Fn(&'a str) -> Fut,
+    Fut: std::future::Future<Output = Result<GatheredBoxes, String>>,
+{
+    use futures::{stream::FuturesOrdered, StreamExt};
+
+    let mut pending = FuturesOrdered::new();
+    let mut next_address = 0;
+    let mut stopped = false;
     let mut boxes = Vec::new();
     let mut eip12 = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for addr in addresses {
-        if addr.is_empty() {
-            continue;
-        }
-        with_handle(handle_id, "send", |h| {
-            if !h.owns_address(addr).map_err(err_str)? {
-                return Err(ArgusError::InvalidAddress(
-                    "spend address is not an address of this wallet".into(),
-                )
-                .to_json_string());
+    loop {
+        // Admission is synchronous and ordered, before constructing each fetch.
+        // Stop at a foreign address, delivering its error in input order so an
+        // earlier node failure retains the serial loop's error precedence.
+        while !stopped && pending.len() < concurrency && next_address < addresses.len() {
+            let addr = &addresses[next_address];
+            next_address += 1;
+            if addr.is_empty() {
+                continue;
             }
-            Ok(())
-        })?;
-        let (b, e) = client
-            .get_effective_unspent(addr)
-            .await
-            .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+            let ownership = with_handle(handle_id, "send", |h| {
+                if !h.owns_address(addr).map_err(err_str)? {
+                    return Err(ArgusError::InvalidAddress(
+                        "spend address is not an address of this wallet".into(),
+                    )
+                    .to_json_string());
+                }
+                Ok(())
+            });
+            stopped = ownership.is_err();
+            let fetch = &fetch;
+            pending.push_back(async move {
+                ownership?;
+                fetch(addr).await
+            });
+        }
+        // FuturesOrdered yields in the caller's sorted order, irrespective of
+        // completion order. Error/cancellation drops all outstanding futures.
+        let Some(result) = pending.next().await else {
+            break;
+        };
+        let (b, e) = result?;
         for (bx, input) in b.into_iter().zip(e.into_iter()) {
             if seen.insert(input.box_id.clone()) {
                 boxes.push(bx);
@@ -1599,6 +1696,46 @@ struct PreparedManagement<S> {
     preparation_id: u64,
     input_boxes: Vec<serde_json::Value>,
     summary: S,
+}
+
+/// Index only the prefix needed by the selected IDs, retaining first matches.
+/// A single input keeps the allocation-free early-exit search. For multiple
+/// inputs each candidate is formatted/indexed at most once, even on a miss.
+fn selected_ergo_boxes(
+    boxes: &[ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox],
+    selected: &[ergo_tx::Eip12InputBox],
+) -> Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox> {
+    if selected.len() <= 1 {
+        return selected
+            .iter()
+            .filter_map(|e| {
+                boxes
+                    .iter()
+                    .find(|b| b.box_id().to_string() == e.box_id)
+                    .cloned()
+            })
+            .collect();
+    }
+    let mut index: HashMap<String, &ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox> =
+        HashMap::new();
+    let mut remaining = boxes.iter();
+    selected
+        .iter()
+        .filter_map(|e| {
+            if let Some(b) = index.get(e.box_id.as_str()) {
+                return Some((*b).clone());
+            }
+            for b in remaining.by_ref() {
+                let id = b.box_id().to_string();
+                let found = id == e.box_id;
+                index.entry(id).or_insert(b);
+                if found {
+                    return Some(b.clone());
+                }
+            }
+            None
+        })
+        .collect()
 }
 
 fn filter_selected_inputs(
@@ -1838,12 +1975,9 @@ async fn prepare(
         Some(t) => Some(find_babel(&client, t, fee_for_required).await?),
         None => None,
     };
-    let required = i64::checked_add(amount_nano_erg, if babel.is_some() { 0 } else { fee_for_required })
-        .and_then(|v| i64::checked_add(v, MIN_BOX_VALUE_NANO))
-        .filter(|v| *v > 0)
-        .ok_or_else(|| {
-            ArgusError::TxBuildFailed("send amount out of range".into()).to_json_string()
-        })? as u64;
+    // Use the same complete budget as multi-send: the builder also charges
+    // the app fee. Omitting it lets selection stop before MAX is funded.
+    let required = multi_send_required_erg(amount_nano_erg, fee_for_required, babel.is_some())?;
     let token_ref = send_token.as_ref().map(|(id, amt)| (id.as_str(), *amt));
     // Coin control: when the user chose boxes, spend exactly those. Falling
     // back to automatic selection here would silently pull in a box they
@@ -1932,16 +2066,7 @@ async fn prepare(
         None => None,
     };
 
-    let ergo_boxes = selected
-        .boxes
-        .iter()
-        .filter_map(|eip| {
-            boxes
-                .iter()
-                .find(|b| b.box_id().to_string() == eip.box_id)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
+    let ergo_boxes = selected_ergo_boxes(&boxes, &selected.boxes);
     if ergo_boxes.len() != selected.boxes.len() {
         return Err(ArgusError::TxBuildFailed("UTXO set mismatch".into()).to_json_string());
     }
@@ -3076,15 +3201,7 @@ pub async fn prepare_send_multi(
     };
 
     // Get the ErgoBox representations for signing
-    let ergo_boxes = selected
-        .iter()
-        .filter_map(|eip| {
-            boxes
-                .iter()
-                .find(|b| b.box_id().to_string() == eip.box_id)
-                .cloned()
-        })
-        .collect::<Vec<_>>();
+    let ergo_boxes = selected_ergo_boxes(&boxes, &selected);
     if ergo_boxes.len() != selected.len() {
         return Err(ArgusError::TxBuildFailed("UTXO set mismatch".into()).to_json_string());
     }
@@ -4603,6 +4720,60 @@ pub async fn amm_build_swap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod concurrent_gather;
+    mod selected_lookup;
+
+    // Documents the mechanism and pins the arithmetic: with the old budget a
+    // MAX send selects one box short and the builder returns the exact error
+    // that was reported. It does NOT guard prepare()'s use of the shared
+    // budget — prepare() is async and needs a node client, so reverting it to
+    // an inline computation still passes this. Verified: the fix was reverted
+    // and this test stayed green.
+    #[test]
+    fn single_send_max_selects_enough_for_the_reported_shortfall() {
+        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        ergo_tx::dev_fee::with_test_dev_fee(
+            DevFeeConfig::custom(tree.clone(), ARGUS_FEE_NANO),
+            || {
+                let make_box = |id: &str, value: i64| ergo_tx::Eip12InputBox {
+                    box_id: id.into(),
+                    transaction_id: "tx".into(),
+                    index: 0,
+                    value: value.to_string(),
+                    ergo_tree: tree.clone(),
+                    assets: vec![],
+                    creation_height: 1,
+                    additional_registers: Default::default(),
+                    extension: Default::default(),
+                };
+                let inputs = vec![make_box("large", 996_727_888), make_box("small", 1_072_065)];
+                let balance = 997_799_953;
+                let amount = balance - TX_FEE_NANO - ARGUS_FEE_NANO - MIN_BOX_VALUE_NANO;
+                let old_required = (amount + TX_FEE_NANO + MIN_BOX_VALUE_NANO) as u64;
+                let (old, _) = select_preferring_one_pocket(&inputs, &[], old_required, None).unwrap();
+                let fee = ergo_tx::resolved_dev_fee_config();
+                assert!(matches!(
+                    build_send_tx_with_fee(&old.boxes, &tree, &tree, amount, None, 100, &fee),
+                    Err(ergo_tx::send::SendError::InsufficientErg { have: 996_727_888, need: 996_799_953 })
+                ));
+                for miner in [TX_FEE_NANO, TX_FEE_NANO + 500_000] {
+                    let amount = balance - miner - ARGUS_FEE_NANO - MIN_BOX_VALUE_NANO;
+                    let required = multi_send_required_erg(amount, miner, false).unwrap();
+                    assert_eq!(required, balance as u64);
+                    // Public, stealth-only and combined-pocket selection all
+                    // receive this budget. Exact coin control cannot top up.
+                    for stealth in [vec![], vec!["large".into(), "small".into()], vec!["small".into()]] {
+                        let (selected, _) = select_preferring_one_pocket(&inputs, &stealth, required, None).unwrap();
+                        assert_eq!(selected.total_erg, balance as u64);
+                        let built = build_send_tx_with_fee(&selected.boxes, &tree, &tree, amount, None, 100, &fee).unwrap();
+                        assert_eq!(built.summary.change_erg, MIN_BOX_VALUE_NANO + miner - TX_FEE_NANO);
+                    }
+                    assert!(select_exact(&inputs, &["large".into()], required, None).is_err());
+                }
+            },
+        );
+    }
 
     #[test]
     fn multi_send_exact_selection_budget_covers_the_argus_fee() {
@@ -6952,3 +7123,39 @@ mod paideia_tracking_tests {
 #[cfg(test)]
 #[path = "sync_tests.rs"]
 mod sync_tests;
+
+/// Derive public payment addresses from an Ergo Wallet App hex extended key.
+#[flutter_rust_bridge::frb]
+pub fn derive_watch_addresses(input: String, start: u32, count: u32) -> Result<Vec<String>, String> {
+    wallet_core::watch_xpub::addresses(&input, start, count)
+}
+
+
+#[path = "api_cold_impl.rs"]
+mod cold;
+
+/// Create an offline CSR scan, retained in memory for 30 minutes.
+#[flutter_rust_bridge::frb]
+pub fn cold_start() -> Result<String, String> { cold::start() }
+#[flutter_rust_bridge::frb]
+pub fn cold_discard(session: String) { cold::discard(session) }
+#[flutter_rust_bridge::frb]
+pub fn cold_reset(session: String) -> Result<(), String> { cold::reset(session) }
+#[flutter_rust_bridge::frb]
+pub fn cold_add_page(session: String, page: String) -> Result<String, String> { cold::add(session, page) }
+#[flutter_rust_bridge::frb]
+pub fn cold_review(session: String, handle_id: u64) -> Result<String, String> { cold::review(session, handle_id) }
+/// Explicit user confirmation of the previously returned review is required.
+#[flutter_rust_bridge::frb]
+pub fn cold_sign(session: String, handle_id: u64) -> Result<(), String> { cold::sign(session, handle_id) }
+#[flutter_rust_bridge::frb]
+pub fn cold_qr_pages(session: String, low_density: bool) -> Result<Vec<String>, String> { cold::qr(session, low_density) }
+#[flutter_rust_bridge::frb]
+pub fn cold_verify(session: String) -> Result<String, String> { cold::verify(session) }
+/// Only the session's cryptographically verified bytes can reach submission.
+#[flutter_rust_bridge::frb]
+pub async fn cold_broadcast(session: String) -> Result<String, String> { cold::broadcast(session).await }
+#[flutter_rust_bridge::frb]
+pub async fn cold_prepare_watch(key: String, address_count: u32, change_index: u32, recipient: String, amount_nano: i64, token_id: Option<String>, token_amount: Option<u64>, node_url: String) -> Result<String, String> {
+    cold::prepare(key, address_count, change_index, recipient, amount_nano, token_id, token_amount, node_url).await
+}

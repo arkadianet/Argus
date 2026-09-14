@@ -45,6 +45,37 @@ pub fn owned_outputs(txs: &[serde_json::Value], ergo_tree: &str) -> Vec<ErgoBox>
     owned
 }
 
+/// Merge the paired confirmed representations without converting retained boxes again.
+/// The pair is produced by `get_unspent`, with one EIP-12 input per box in order.
+pub(crate) fn merge_confirmed(
+    confirmed: (Vec<ErgoBox>, Vec<ergo_tx::Eip12InputBox>),
+    txs: &[serde_json::Value],
+    tree: &str,
+) -> (Vec<ErgoBox>, Vec<ergo_tx::Eip12InputBox>) {
+    let spent = spent_box_ids(txs);
+    let mut boxes = Vec::new();
+    let mut inputs = Vec::new();
+    for (b, input) in confirmed.0.into_iter().zip(confirmed.1) {
+        if !spent.contains(&b.box_id().to_string()) {
+            boxes.push(b);
+            inputs.push(input);
+        }
+    }
+    for b in owned_outputs(txs, tree) {
+        if !spent.contains(&b.box_id().to_string()) {
+            inputs.push(ergo_tx::Eip12InputBox::from_ergo_box(
+                &b, b.transaction_id.to_string(), b.index,
+            ));
+            boxes.push(b);
+        }
+    }
+    (boxes, inputs)
+}
+
+#[cfg(test)]
+#[path = "mempool_merge_tests.rs"]
+mod merge_tests;
+
 /// Net nanoERG change from unconfirmed transactions for `ergo_tree`.
 ///
 /// Mempool inputs carry no value — only a `boxId` and a spending proof — so

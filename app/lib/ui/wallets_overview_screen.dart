@@ -1,3 +1,5 @@
+import '../services/watch_account_service.dart';
+import 'widgets/watch_account_list.dart';
 import '../services/public_wallet_sync.dart';
 import '../services/wallet_sync_controller.dart';
 import 'package:flutter/material.dart';
@@ -14,7 +16,12 @@ import 'widgets/empty_state.dart';
 import 'widgets/soft_card.dart';
 
 /// "2 wallets · 3 watch-only" headline for the overview summary card.
-String overviewHeadline({required int wallets, required int watchOnly}) {
+String overviewHeadline({required int wallets, required int watchOnly, int accounts = 0}) {
+  if (accounts > 0) {
+    final accountText = '$accounts watched ${accounts == 1 ? 'account' : 'accounts'}';
+    if (wallets == 0 && watchOnly == 0) return accountText;
+    return '${overviewHeadline(wallets: wallets, watchOnly: watchOnly)} · $accountText';
+  }
   if (wallets == 0) {
     return '$watchOnly watch-only ${watchOnly == 1 ? 'address' : 'addresses'}';
   }
@@ -82,6 +89,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
   void initState() {
     super.initState();
     watchOnlyService.addListener(_onWatchChanged);
+    watchAccountService.addListener(_onAccountChanged);
     publicWalletSync.addListener(_onPublicChanged);
     _load();
   }
@@ -89,9 +97,12 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
   @override
   void dispose() {
     watchOnlyService.removeListener(_onWatchChanged);
+    watchAccountService.removeListener(_onAccountChanged);
     publicWalletSync.removeListener(_onPublicChanged);
     super.dispose();
   }
+
+  void _onAccountChanged() { if (mounted) setState(() {}); }
 
   void _onWatchChanged() {
     if (mounted) _refreshBalances();
@@ -139,38 +150,35 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
     if (_refreshing) return;
     setState(() => _refreshing = true);
     try {
-      await publicWalletSync.tick(
-        wallets: {for (final w in _wallets) w.walletId: w.displayAddress},
-        controller: walletSyncController,
-        activeId: walletService.activeWalletId,
-        unlocked: () => walletService.isUnlocked,
-      );
-      final futures = _wallets.map(
-        (w) async => (
-          w,
-          await overviewWalletBalance(
-            w,
-            selectedWalletId: widget.selectedWalletId,
-            activeBalanceNano: widget.activeBalanceNano,
-          ),
-        ),
-      );
       final watchAddrs = watchOnlyService.addresses;
-      final watchFutures = watchAddrs.map(
-        (a) async => (a, await _addressBalance(a)),
-      );
-      final results = await Future.wait(futures);
-      final watchResults = await Future.wait(watchFutures);
-      if (!mounted) return;
-      setState(() {
-        for (final (w, bal) in results) {
-          _balances[w.walletId] = bal;
-        }
-        _watchBalances.removeWhere((k, _) => !watchAddrs.contains(k));
-        for (final (a, bal) in watchResults) {
-          _watchBalances[a] = bal;
-        }
-      });
+      await Future.wait<void>([
+        () async {
+          await publicWalletSync.tick(
+            wallets: {for (final w in _wallets) w.walletId: w.displayAddress},
+            controller: walletSyncController,
+            activeId: walletService.activeWalletId,
+            unlocked: () => walletService.isUnlocked,
+          );
+          await _onPublicChanged();
+        }(),
+        () async {
+          final results = await Future.wait(watchAddrs.map(
+            (a) async => (a, await _addressBalance(a)),
+          ));
+          if (!mounted) return;
+          setState(() {
+            _watchBalances.removeWhere((k, _) => !watchAddrs.contains(k));
+            for (final (a, balance) in results) {
+              _watchBalances[a] = balance;
+            }
+          });
+        }(),
+        watchMapOrdered(
+          List.of(watchAccountService.accounts),
+          watchAccountService.refresh,
+          concurrency: watchAccountConcurrency,
+        ),
+      ]);
     } finally {
       if (mounted) setState(() => _refreshing = false);
     }
@@ -214,9 +222,10 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _refreshBalances,
-              child: _wallets.isEmpty && watchOnlyService.addresses.isEmpty
+              child: _wallets.isEmpty && watchOnlyService.addresses.isEmpty && watchAccountService.accounts.isEmpty
                   ? ListView(
                       children: const [
+                        WatchAccountList(),
                         EmptyState(
                           icon: Icons.account_balance_wallet_outlined,
                           title: 'No wallets yet',
@@ -230,6 +239,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
                           40 + MediaQuery.paddingOf(context).bottom),
                       children: [
                         _summaryCard(context),
+                        const WatchAccountList(),
                         const SizedBox(height: 8),
                         ..._wallets.map(_walletTile),
                         if (watchOnlyService.addresses.isNotEmpty) ...[
@@ -274,6 +284,12 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
         total += bal;
       }
     }
+    for (final account in watchAccountService.accounts) {
+      if (account.snapshot != null) {
+        known++;
+        total += account.snapshot!.balance;
+      }
+    }
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
@@ -288,6 +304,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
             overviewHeadline(
               wallets: _wallets.length,
               watchOnly: watchOnlyService.addresses.length,
+              accounts: watchAccountService.accounts.length,
             ),
             style: Theme.of(context).textTheme.headlineSmall,
           ),
@@ -479,6 +496,16 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
             ],
           ),
           IconButton(
+            tooltip: 'Receive',
+            icon: const Icon(Icons.south_west),
+            onPressed: () => Navigator.pushNamed(context, '/receive', arguments: WalletRouteArgs(
+              watchOnly: true,
+              senderAddress: address,
+              receiveAddress: address,
+              changeAddress: address,
+            )),
+          ),
+          IconButton(
             icon: const Icon(Icons.close, size: 18),
             tooltip: 'Stop watching',
             onPressed: () => _confirmUnwatch(address),
@@ -506,7 +533,7 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
               controller: ctrl,
               autofocus: true,
               style: monoStyle(ctx, size: 13),
-              decoration: const InputDecoration(labelText: 'Ergo address'),
+              decoration: const InputDecoration(labelText: 'Address or public key', helperText: 'Mainnet key hex: 02/03… or 0008cd02/03…', helperMaxLines: 2),
             ),
           ],
         ),
@@ -519,9 +546,18 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
     final text = ctrl.text.trim();
     ctrl.dispose();
     if (ok != true || text.isEmpty) return;
-    final added = await watchOnlyService.add(text);
+    final bool added;
+    try {
+      added = await watchOnlyService.add(text);
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not add watched address: $e')),
+      );
+      return;
+    }
     if (!mounted) return;
-    _snack(added ? 'Now watching ${shorten(text, head: 8, tail: 6)}' : 'Not a valid Ergo address, or already watched');
+    _snack(added ? 'Watch-only address added' : 'Already watched or invalid input. Use an Ergo address, a 33-byte compressed public key, or its 0008cd P2PK tree (hex, no 0x). Raw keys use mainnet.');
   }
 
   Future<void> _confirmUnwatch(String address) async {
@@ -536,7 +572,13 @@ class _WalletOverviewScreenState extends State<WalletOverviewScreen> {
         ],
       ),
     );
-    if (ok == true) await watchOnlyService.remove(address);
+    if (ok == true) {
+      try {
+        await watchOnlyService.remove(address);
+      } catch (e) {
+        _snack('Could not stop watching: $e');
+      }
+    }
   }
 
   Future<void> _confirmDelete(WalletInfo w) async {

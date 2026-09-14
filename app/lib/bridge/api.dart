@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `apply_mixed_rule`, `babel_json`, `balance_from_inputs`, `broadcast_mix_move_with`, `broadcast_mix_move`, `clear_node_clients`, `covers`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent_all`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_leave_destination`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `mixed_rule`, `multi_send_required_erg`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pending_from_inputs`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `revalidate_paideia`, `revalidate_stake_recovery`, `select_for_multi_send`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `wallet_delta_nano_erg`, `with_handle`, `without_reserved`
+// These functions are ignored because they are not marked as `pub`: `apply_custom_fee`, `apply_mixed_rule`, `babel_json`, `balance_from_inputs`, `broadcast_mix_move_with`, `broadcast_mix_move`, `clear_node_clients`, `covers`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent_all`, `gather_unspent_ordered`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_leave_destination`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `mixed_rule`, `multi_send_required_erg`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pending_from_inputs`, `pool_setup_params`, `prepare_management`, `prepare`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `revalidate_paideia`, `revalidate_stake_recovery`, `select_for_multi_send`, `selected_ergo_boxes`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `wallet_delta_nano_erg`, `with_handle`, `without_reserved`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `BabelPick`, `CachedPreparation`, `FundingReservation`, `ManagementBuild`, `PaideiaPreflight`, `ParsedRecipient`, `PreparedManagement`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_receiver_is_total_eq`, `clone`, `eq`, `fmt`
 
@@ -258,6 +258,11 @@ Future<String> generateMnemonic({required int strength}) =>
 /// Validate an Ergo address (base58) against the checksum and network prefix.
 Future<bool> validateErgoAddress({required String address}) =>
     RustLib.instance.api.crateApiValidateErgoAddress(address: address);
+
+/// Accept a checksummed address or an exact compressed P2PK key/tree hex.
+/// Raw keys have no network marker; Argus imports them as mainnet addresses.
+Future<String?> normalizeWatchInput({required String input}) =>
+    RustLib.instance.api.crateApiNormalizeWatchInput(input: input);
 
 Future<String> getBalance({required String address, String? nodeUrl}) =>
     RustLib.instance.api.crateApiGetBalance(address: address, nodeUrl: nodeUrl);
@@ -1591,4 +1596,74 @@ String stakeRecoveryProxyRecord({
   handleId: handleId,
   signedTxJson: signedTxJson,
   recipientAddress: recipientAddress,
+);
+
+/// Derive public payment addresses from an Ergo Wallet App hex extended key.
+Future<List<String>> deriveWatchAddresses({
+  required String input,
+  required int start,
+  required int count,
+}) => RustLib.instance.api.crateApiDeriveWatchAddresses(
+  input: input,
+  start: start,
+  count: count,
+);
+
+/// Create an offline CSR scan, retained in memory for 30 minutes.
+Future<String> coldStart() => RustLib.instance.api.crateApiColdStart();
+
+Future<void> coldDiscard({required String session}) =>
+    RustLib.instance.api.crateApiColdDiscard(session: session);
+
+Future<void> coldReset({required String session}) =>
+    RustLib.instance.api.crateApiColdReset(session: session);
+
+Future<String> coldAddPage({required String session, required String page}) =>
+    RustLib.instance.api.crateApiColdAddPage(session: session, page: page);
+
+Future<String> coldReview({
+  required String session,
+  required BigInt handleId,
+}) => RustLib.instance.api.crateApiColdReview(
+  session: session,
+  handleId: handleId,
+);
+
+/// Explicit user confirmation of the previously returned review is required.
+Future<void> coldSign({required String session, required BigInt handleId}) =>
+    RustLib.instance.api.crateApiColdSign(session: session, handleId: handleId);
+
+Future<List<String>> coldQrPages({
+  required String session,
+  required bool lowDensity,
+}) => RustLib.instance.api.crateApiColdQrPages(
+  session: session,
+  lowDensity: lowDensity,
+);
+
+Future<String> coldVerify({required String session}) =>
+    RustLib.instance.api.crateApiColdVerify(session: session);
+
+/// Only the session's cryptographically verified bytes can reach submission.
+Future<String> coldBroadcast({required String session}) =>
+    RustLib.instance.api.crateApiColdBroadcast(session: session);
+
+Future<String> coldPrepareWatch({
+  required String key,
+  required int addressCount,
+  required int changeIndex,
+  required String recipient,
+  required PlatformInt64 amountNano,
+  String? tokenId,
+  BigInt? tokenAmount,
+  required String nodeUrl,
+}) => RustLib.instance.api.crateApiColdPrepareWatch(
+  key: key,
+  addressCount: addressCount,
+  changeIndex: changeIndex,
+  recipient: recipient,
+  amountNano: amountNano,
+  tokenId: tokenId,
+  tokenAmount: tokenAmount,
+  nodeUrl: nodeUrl,
 );

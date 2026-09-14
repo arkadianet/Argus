@@ -1,3 +1,4 @@
+import '../services/watch_account_service.dart';
 import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -35,13 +36,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
     super.initState();
     _amountCtrl.addListener(_updateQr);
     privacyService.addListener(_privacyChanged);
-    // The published string is derived from the seed, so it is available as
-    // soon as the wallet is unlocked; no network call.
-    if (stealthService.address == null) {
-      stealthService.loadAddress();
-    }
-    stealthService.loadIdentities();
   }
+
+  bool _loadedStealth = false;
 
   /// Which stealth identity the section is showing. Identity 0 for a wallet
   /// that has never added one, which is every wallet until it does.
@@ -50,6 +47,11 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (!WalletRouteArgs.of(context).watchOnly && !_loadedStealth) {
+      _loadedStealth = true;
+      if (stealthService.address == null) stealthService.loadAddress();
+      stealthService.loadIdentities();
+    }
     _updateQr();
   }
 
@@ -418,6 +420,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
   Widget build(BuildContext context) {
     final args = WalletRouteArgs.of(context);
     final address = args.receiveAddress;
+    final fresh = !args.watchOnly &&
+        privacyService.useUnusedChangeAddress(walletService.activeWalletId);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Receive')),
@@ -425,11 +429,15 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
         padding: EdgeInsets.fromLTRB(
                 28, 16, 28, 40 + MediaQuery.paddingOf(context).bottom),
         children: [
-          SectionLabel(privacyService.useUnusedChangeAddress(walletService.activeWalletId)
+          SectionLabel(fresh
               ? 'Unused address' : 'Receive address'),
           const SizedBox(height: 8),
           Text(
-            privacyService.useUnusedChangeAddress(walletService.activeWalletId)
+            args.watchOnly
+                ? args.watchAccount
+                    ? 'Unused payment address. A new one is offered after payment. $watchAccountLimitations'
+                    : 'Payments to this address go to the watched wallet.'
+                : fresh
                 ? 'A new address is shown after this one is used.'
                 : 'This address stays the same. Turn on Fresh addresses in Settings to use a new one after each payment.',
             style: Theme.of(context).textTheme.bodyMedium,
@@ -460,6 +468,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
                 padding: const EdgeInsets.all(18),
                 child: QrImageView(
                   data: _qrData.isEmpty ? address : _qrData,
+                  semanticsLabel: _qrData.isEmpty ? address : _qrData,
                   version: QrVersions.auto,
                   size: 220,
                   backgroundColor: paper,
@@ -530,8 +539,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
                     ),
             child: const Text('Share'),
           ),
-          _stealthSection(context, address),
-          if (args.historyAddresses.where((a) => a != address).isNotEmpty) ...[
+          if (!args.watchOnly) _stealthSection(context, address),
+          if (!args.watchOnly && args.historyAddresses.where((a) => a != address).isNotEmpty) ...[
             const SizedBox(height: 28),
             const SectionLabel('Used addresses'),
             const SizedBox(height: 4),

@@ -21,11 +21,14 @@ class LastKnownBalance {
     required this.balanceNano,
     required this.age,
     this.tokens = const [],
+    this.tokensKnown = true,
     this.addresses = const [],
     this.stealthNano = 0,
     this.stealthScannedAt,
   });
   final int balanceNano;
+  /// Older snapshots without a token listing must not imply zero holdings.
+  final bool tokensKnown;
   final Duration age;
 
   /// Addresses this wallet was known to use when it was last unlocked.
@@ -189,6 +192,7 @@ class WalletDatabaseService {
           if (a is Map && a['address'] != null) a['address'].toString()
           else if (a is String && a.isNotEmpty) a,
       ],
+      tokensKnown: map['tokens'] is List,
       tokens: [
         for (final t in (map['tokens'] as List? ?? const []))
           if (t is Map && t['id'] is String)

@@ -1,4 +1,7 @@
 pub mod bip39;
+pub mod cold_request;
+pub mod cold_signing;
+pub mod cold_transport;
 pub mod derivation;
 pub mod encryption;
 pub mod error;
@@ -17,3 +20,5 @@ pub use storage::{
     AddressRecord, StoredBox, StoredToken, StoredTx, SyncCheckpoint, TrackedLineage, WalletDatabase,
 };
 pub use wallet::WalletHandle;
+
+pub mod watch_xpub;

@@ -149,6 +149,8 @@ class WalletArgsScope extends InheritedWidget {
 }
 
 class WalletRouteArgs {
+  final bool watchOnly;
+  final bool watchAccount;
   final String senderAddress;
   final String receiveAddress;
   final String changeAddress;
@@ -158,6 +160,8 @@ class WalletRouteArgs {
   final Map<String, dynamic>? transaction;
 
   const WalletRouteArgs({
+    this.watchOnly = false,
+    this.watchAccount = false,
     required this.senderAddress,
     required this.receiveAddress,
     required this.changeAddress,
@@ -171,6 +175,8 @@ class WalletRouteArgs {
   /// embedded in the home screen) or, failing that, the route arguments.
   static WalletRouteArgs of(BuildContext context) {
     final routeArgs = ModalRoute.of(context)?.settings.arguments;
+    // A watched receive route must not inherit the active signing wallet.
+    if (routeArgs is WalletRouteArgs && routeArgs.watchOnly) return routeArgs;
     final scoped = WalletArgsScope.maybeOf(context);
     if (scoped == null) return from(routeArgs);
     // Balances come from the live scope; a transaction is route-specific.
@@ -204,6 +210,8 @@ class WalletRouteArgs {
       tokens: tokens,
       spendableNano: spendableNano,
       transaction: transaction ?? this.transaction,
+      watchOnly: watchOnly,
+      watchAccount: watchAccount,
     );
   }
 }

@@ -6,19 +6,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../bridge/api.dart' as api;
 
 Future<({Map<String, int?> balances, String? error})> readWatchBalances(
-  List<String> addresses, Future<int> Function(String) read,
+  List<String> addresses,
+  Future<int> Function(String) read,
 ) async {
   final errors = <String>[];
-  final entries = await Future.wait(addresses.map((address) async {
-    try {
-      return MapEntry<String, int?>(address, await read(address));
-    } catch (e) {
-      errors.add('$address: $e');
-      return MapEntry<String, int?>(address, null);
-    }
-  }));
-  return (balances: Map.fromEntries(entries), error: errors.isEmpty ? null
-      : 'Some watched balances are unavailable.\n${errors.join('\n')}');
+  final entries = await Future.wait(
+    addresses.map((address) async {
+      try {
+        return MapEntry<String, int?>(address, await read(address));
+      } catch (e) {
+        errors.add('$address: $e');
+        return MapEntry<String, int?>(address, null);
+      }
+    }),
+  );
+  return (
+    balances: Map.fromEntries(entries),
+    error: errors.isEmpty
+        ? null
+        : 'Some watched balances are unavailable.\n${errors.join('\n')}',
+  );
 }
 
 /// Stores addresses to monitor without holding a wallet seed.
@@ -38,56 +45,53 @@ class WatchOnlyService extends ChangeNotifier {
       try {
         stored = jsonDecode(raw) as List;
       } catch (_) {
-        _addresses.clear();
         notifyListeners();
         return;
       }
-      final valid = <String>{};
-      var failed = false;
-      for (final item in stored.whereType<String>()) {
-        final trimmed = item.trim();
-        if (trimmed.isEmpty) continue;
-        try {
-          if (await api.validateErgoAddress(address: trimmed)) {
-            valid.add(trimmed);
-          }
-        } catch (_) {
-          // Validation could not complete (bridge/FFI failure). Preserve the
-          // existing in-memory collection rather than wiping it.
-          failed = true;
-          break;
-        }
-      }
-      if (!failed) {
-        _addresses
-          ..clear()
-          ..addAll(valid);
-      }
+      // Entries were validated on add. Loading must work before RustLib.init
+      // and must never reinterpret validation failure as user removal.
+      _addresses
+        ..clear()
+        ..addAll(stored.whereType<String>());
     }
     notifyListeners();
   }
 
-  /// Adds [address] after checksum-aware validation and deduplication.
+  /// Adds an address or P2PK public key, deduplicating the normalized address.
   /// Returns `true` if the address was saved, `false` if it was invalid or a
   /// duplicate.
   Future<bool> add(String address) async {
-    final trimmed = address.trim();
-    if (trimmed.isEmpty) return false;
-    if (!await api.validateErgoAddress(address: trimmed)) return false;
+    final trimmed = await api.normalizeWatchInput(input: address.trim());
+    if (trimmed == null) return false;
     if (_addresses.contains(trimmed)) return false;
     _addresses.add(trimmed);
-    await _save();
+    try {
+      await _save();
+    } catch (_) {
+      _addresses.remove(trimmed);
+      rethrow;
+    }
     return true;
   }
 
   Future<void> remove(String address) async {
-    _addresses.removeWhere((a) => a == address);
-    await _save();
+    final index = _addresses.indexOf(address);
+    if (index < 0) return;
+    _addresses.removeAt(index);
+    try {
+      await _save();
+    } catch (_) {
+      _addresses.insert(index.clamp(0, _addresses.length), address);
+      rethrow;
+    }
   }
 
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, jsonEncode(_addresses));
+    if (!await prefs.setString(_key, jsonEncode(_addresses))) {
+      await prefs.reload();
+      throw StateError('Could not save watched addresses. Please try again.');
+    }
     notifyListeners();
   }
 }
