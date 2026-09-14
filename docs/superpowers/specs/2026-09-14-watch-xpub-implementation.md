@@ -89,7 +89,7 @@ stealth or mixing transactions. No wallet handle or secret is introduced.
 
 Any balance/history/derivation error fails the refresh and disables Receive by
 clearing the snapshot, rather than returning a partial/zero balance. A node
-change during refresh also invalidates it. A 10,000-address cap reports an
+change invalidates completed snapshots and rejects scans still in flight. A 10,000-address cap reports an
 incomplete scan, never success. Refresh is single-flight per account and runs
 on import, overview refresh and Receive. No background monitoring guarantee is
 made. Snapshots are in memory; key and highest-used index are persisted.
@@ -98,51 +98,64 @@ made. Snapshots are in memory; key and highest-used index are persisted.
 
 The paste dialog explains that anyone holding the key can link all public
 payment addresses forever. The dialog, account card and account Receive state
-that the balance excludes stealth funds and the entry cannot spend. The
+that the balance excludes stealth funds and spending requires an offline signer. The
 hardened stealth branch `m/44'/429'/0'/3'/i` is intentionally unreachable; an
 external-chain export cannot even ascend to the account parent.
 
-This supplies the public discovery half of the cold-signing design. A future
-public preparation context should retain this key, its depth/path, and ordered
-address indices for input and change ownership, using the existing transaction
-builders without an unlocked handle. Account aggregation is not authority to
-spend. No cold transaction building, signing, QR transport or broadcasting was
-implemented. EIP-19's optional sender address does not identify the complete
-account or convey every input derivation path: verify real multi-address
-signing with the offline wallet before promising it. The cold-signing spec is
-amended to distinguish this implemented discovery from future preparation.
+Cold signing shipped on `feat/cold-signing-ui`: mainnet P2PK preparation
+(`cold_prepare_watch`), CSR/CSTX QR and pasted-page transport (`cold_start`),
+transaction review (`cold_review`), offline signing (`cold_sign`), verification
+(`cold_verify`) and broadcast (`cold_broadcast`). Preparation uses ordered
+public address indices for input ownership and change without an unlocked
+wallet on the online device. Account aggregation alone is not authority to spend.
+
+Real-device interoperability with Ergo Wallet App and live broadcast acceptance
+remain untested. Local wire-format and cryptographic tests do not establish
+either of those outcomes.
 
 ## Verification and delivery
 
-Commands from this worktree (the local Flutter copy avoids read-only SDK
-stamps; analytics is disabled to avoid writes to the home directory):
+Current verification on `feat/cold-signing-ui`:
+
+- Rust workspace: 831 passed, 15 ignored, no failures (unit, integration and doc suites).
+- Flutter: 842 passed, one skipped, no failures.
+- Flutter analysis: no issues.
+- `git diff --check`: passed.
+
+Exact final suite commands:
 
 ```sh
-# Repository root
-PATH="$PWD/app/build/tooling/flutter/bin:$PATH" FLUTTER_SUPPRESS_ANALYTICS=true CARGO_TARGET_DIR="$PWD/rust/target" flutter_rust_bridge_codegen generate
 # rust/
-CARGO_TARGET_DIR="$PWD/target" cargo test --workspace
+CARGO_TARGET_DIR="$PWD/target" cargo test --workspace > target/review-workspace-test.log 2>&1
 # app/
-FLUTTER_SUPPRESS_ANALYTICS=true build/tooling/flutter/bin/flutter analyze
-FLUTTER_SUPPRESS_ANALYTICS=true build/tooling/flutter/bin/flutter test
+TMPDIR="$PWD/build/tmp" FLUTTER_SUPPRESS_ANALYTICS=true build/tooling/flutter/bin/flutter analyze > build/review-analyze.log 2>&1
+TMPDIR="$PWD/build/tmp" FLUTTER_SUPPRESS_ANALYTICS=true build/tooling/flutter/bin/flutter test > build/review-flutter-test.log 2>&1
+# Repository root
+git diff --check
 ```
 
-Bridge generation completed successfully and generated Dart/Rust files are
-included. Workspace tests passed (808 passed, 12 ignored across unit/doc suites), analysis reported no issues, and Flutter
-reported 814 passing tests and one skipped. Additional regressions cover
-persisted frontier restoration without bridge validation and account Receive's
-stealth exclusion. `git diff --check` passed. Build products, logs and research
-checkouts remain in already-ignored build directories; no ignore rules changed.
+The system Flutter SDK could not write its engine stamp in the sandbox, so a
+local copy was placed in the existing ignored `app/build/tooling/flutter`
+directory. Build output and logs remain inside the worktree; no ignore rules
+were added. No Rust source or FRB signatures changed, so binding generation
+and rebuilding tracked Android native libraries were not required.
 
-The requested first commit (`Derive payment chains from extended public keys`)
-was attempted but `git add` failed creating
-`/home/rkadias/coding/arkadianet/Argus/.git/worktrees/xpub/index.lock` because
-that directory is read-only in the sandbox. All pieces are left uncommitted;
-no push or PR was attempted. Suggested subsequent coherent pieces are
-`Watch balances and receive across public address chains` and
-`Document extended-key exports and cold signing integration`.
+Review regressions cover out-of-order address reads and bounded account
+scheduling, overview updates during a blocked scan, observable failed preference
+writes, node invalidation (including switching away and back during a scan),
+and field-specific cold-send numeric validation.
 
-After the final overview wording adjustment (accounts are counted separately
-from individual addresses), analysis passed again and
-`FLUTTER_SUPPRESS_ANALYTICS=true build/tooling/flutter/bin/flutter test test/overview_summary_test.dart test/watch_receive_test.dart`
-passed all four tests from `app/`.
+The first requested commit, `Bound watched account refresh concurrency`, was
+attempted. Both `git add` and `git commit` failed creating
+`/home/rkadias/coding/arkadianet/Argus/.git/worktrees/coldui/index.lock`
+because the Git metadata is read-only in this sandbox. Per the requested fallback,
+all five findings remain uncommitted. No push or PR was attempted.
+
+## Review follow-up
+
+The current Rust count above was measured with `cargo test --workspace`, summing
+the unit, integration and doc-test result lines. The pre-review text in this
+checkout said 808 passed and 12 ignored, rather than the review's cited 828.
+
+See [the preference persistence follow-up](2026-09-14-watch-preference-persistence.md)
+for the correction to the earlier claim about watched-address disappearance.
