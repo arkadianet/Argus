@@ -185,9 +185,16 @@ A P2PK address already contains its compressed public key. The item-2 imports
 normalize keys to addresses, so no new redundant public-key storage is needed
 for single-address P2PK building. Arbitrary P2S/P2SH addresses remain watchable
 and receivable, but do not imply knowledge of signing keys or spending scripts.
-First cold signing should explicitly support P2PK spending inputs only. An
-extended public key and derivation metadata are a separate future account
-feature, not something to infer from a 33-byte point.
+First cold signing should explicitly support P2PK spending inputs only. Extended-key watch accounts now provide public discovery separately from
+single-address imports; see [the xpub implementation report](2026-09-14-watch-xpub-implementation.md).
+Ergo Wallet App exports a raw hex depth-4 external-chain key, not a depth-3
+account key. Preserve the supported key depth and address indices in a future
+public preparation context: append only `/i` to that export, and `/0/i` to an
+account key. The point alone is insufficient to derive sibling addresses.
+Discovery does not yet implement public transaction preparation or cold signing.
+The account key cannot derive the hardened stealth branch. Keep stealth funds
+out of public preparation. Test offline signing of inputs across several
+indices; EIP-19's sender field alone does not describe that ownership set.
 
 ## Compatible, and better
 
@@ -246,7 +253,7 @@ that release, establish fixture parity for reduced transactions, boxes and signe
 transactions with Appkit, plus mismatched/duplicate/missing/oversized-page and
 wrong-transaction rejection. The architecture can then extend to token sends,
 multiple watched P2PK inputs and richer draft recovery. An Argus cold-device
-role, extended-key accounts and dApp cold signing follow only after that narrow
+role, extended-key account transaction preparation and dApp cold signing follow only after that narrow
 path works with a real Ergo Wallet App device. This ordering keeps the initial
 security boundary understandable without replacing the existing builders.
 
