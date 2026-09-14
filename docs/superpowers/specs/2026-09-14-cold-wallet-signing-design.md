@@ -1,8 +1,8 @@
 # Watch-only transactions and EIP-19 cold signing
 
 Date: 2026-09-14
-Status: research and proposed design; cold signing is not implemented
-Base: `fix/send-and-token-ux`, not `main`
+Status: Rust transport and P2PK return verification implemented; application flow deferred
+Base: `perf/concurrent-gather`, not `main`
 
 ## Decision
 
@@ -18,7 +18,8 @@ binary-format levels. Confidence is high in the protocol identification, but
 cross-wallet interoperability is **not yet tested**. Shipping a compatibility
 claim requires sigma-rust/Appkit fixture round trips and an actual offline
 Ergo Wallet App signing round trip, including multiple pages in both directions.
-No cold-signing feature code or serialization helpers are part of this change.
+The implementation record below describes the completed Rust foundation; no
+application cold-signing flow is available yet.
 
 ## Evidence and precise transport
 
@@ -133,9 +134,9 @@ although each signed input now carries its proof.
 
 ## Existing Argus and sigma-rust seams
 
-The installed `ergo-lib` 0.28.0 package records sigma-rust revision
-`635bbaca55a27d6dd6b2c0ee2479b6ed60117780`. Its
-[reduced.rs](https://github.com/ergoplatform/sigma-rust/blob/635bbaca55a27d6dd6b2c0ee2479b6ed60117780/ergo-lib/src/chain/transaction/reduced.rs)
+The workspace pins `ergo-lib` 0.28.0 to sigma-rust revision
+`7f927613c5a72bf6ea93b95cf9987129a03dd4ba` (corrected during implementation). Its
+[reduced.rs](https://github.com/ergoplatform/sigma-rust/blob/7f927613c5a72bf6ea93b95cf9987129a03dd4ba/ergo-lib/src/chain/transaction/reduced.rs)
 implements `ergo_lib::chain::transaction::reduced::{ReducedTransaction,
 ReducedInput, reduce_tx}`. Reduction takes
 `wallet::tx_context::TransactionContext<UnsignedTransaction>` and
@@ -146,7 +147,7 @@ ReducedInput, reduce_tx}`. Reduction takes
 sigma_parse_bytes}` is implemented for `ReducedTransaction`, `ErgoBox` and
 `chain::transaction::Transaction`. `wallet::Wallet::sign_reduced_transaction`
 returns a `Transaction`. The
-[transaction implementation](https://github.com/ergoplatform/sigma-rust/blob/635bbaca55a27d6dd6b2c0ee2479b6ed60117780/ergo-lib/src/chain/transaction.rs)
+[transaction implementation](https://github.com/ergoplatform/sigma-rust/blob/7f927613c5a72bf6ea93b95cf9987129a03dd4ba/ergo-lib/src/chain/transaction.rs)
 also offers `Transaction::bytes_to_sign`, `verify_p2pk_input` and
 `from_unsigned_tx`. The last can attach proofs in other protocols but is not
 needed to reconstruct an EIP-19 response: that response already is a signed
@@ -303,3 +304,119 @@ also transient caches. Contacts, address labels and stealth identity preferences
 perform structural decoding/filtering, not fallible bridge validation. They
 have separate malformed-storage behavior, but no clearly identical
 validation/rebuild bug was found, so no unrelated changes were made.
+
+## Implementation record — transport layer
+
+`wallet-core::cold_transport` implements compact CSR/CSTX JSON, standard padded
+Base64, required request input boxes, optional sender, both density presets,
+and slicing before escaping with an actual envelope byte cap. The stateful
+collector retains partial scans in memory, reports missing pages, accepts
+out-of-order pages and identical duplicates, and latches conflicts until reset.
+It enforces the proposed local limits without adding wire fields. It has no
+UI, persistence, signing authority or network calls. Decoded request bytes are
+explicitly untrusted; this is not an offline binary parser or signer.
+
+Pinned upstream Appkit request fixtures cover one and three inputs; the latter
+occupies four low-density pages. Tests cover codec bytes, JSON escaping, Unicode
+slicing, invalid indices, conflicts, duplicate fields and resource limits.
+`cargo test -p wallet-core cold_transport`: 4 passed. Interoperability remains
+untested against a real device. No compression, fountain codes or proof-only
+response was needed or added.
+
+## Implementation record — return verification and stopping point
+
+`wallet-core::cold_signing::PreparedColdTransaction` binds a **locally built**
+reduced transaction to all spending boxes, in order, and its exact unsigned
+message bytes. It rejects missing/duplicate/mismatched boxes, non-P2PK input
+scripts and reductions inconsistent with those scripts or extensions. It
+exports the request through the transport codec without an unlocked handle.
+This type is a lower-level immutable transaction binding, not the proposed
+public watch-wallet preparation/session API. It must never be constructed by
+parsing untrusted QR bytes using the existing convenience parser.
+
+The returned full signed transaction passes a gate before node JSON becomes
+available: compare every non-proof byte to the preparation, allowing only the
+canonical 56-byte P2PK Schnorr proofs to differ. This preflight uses the trusted
+input IDs and serialized extensions, then compares the entire remaining
+transaction suffix. Consequently, an attacker cannot introduce new output
+scripts or binary length declarations into the general parser. Then parse,
+require byte-identical reserialization, compare `bytes_to_sign()` and verify
+every input proof against its matched P2PK box. This covers ordered inputs,
+context extensions, data inputs, token dictionaries, all output values,
+recipients, scripts, heights, tokens and registers. Trailing bytes and
+noncanonical encodings are rejected. `VerifiedColdTransaction` exposes the
+unchanged signed bytes, transaction ID and node JSON only after these checks.
+There is no broadcast integration; node acceptance and spendability still
+belong to the future application session.
+
+Tests include the full local prepare → request pages → decode → sign → response
+pages → decode → verify sequence, retaining byte identity at each serialization
+boundary and signing inputs at indices 0, 3 and 20. Separately signed changes
+to recipients, token quantities, registers, extensions, input order and data
+inputs are rejected. Corrupt proofs, every single-byte mutation of the local
+signed fixture, every truncation and trailing bytes are rejected. The locked
+wallet still refuses signing. Both pinned Appkit requests preserve their
+reduced-transaction and full-box bytes exactly in sigma-rust. These are tests
+of request fixtures and local signing, **not signed Appkit fixture parity or
+verified real-device interoperability**. Interoperability is untested against
+a real device.
+
+What the design got wrong or left incomplete:
+
+- The sigma-rust revision cited in the original research was stale; the actual
+  workspace Git pin is corrected above.
+- A bounded QR payload does not bound allocations inside a binary parser.
+  In particular, `ReducedTransaction::sigma_parse` allocates from its declared
+  message length before checking available bytes, and general ErgoTree parsing
+  also has supplied lengths. Production request decoding therefore stops at
+  bounded Base64 bytes. Only trusted fixtures use the convenience binary parser
+  in tests. A cold role needs an audited bounded parser before UI work; no
+  production offline signing entry point has been added.
+- Exact canonical signed bytes can be compared to local preparation before
+  general binary parsing, narrowing the returned-transaction attack surface
+  beyond the original parse-then-compare design. The gate is intentionally P2PK.
+
+Left for subsequent layers: public watch-wallet preparation with retained
+network/node, sender/change, expiry and ownership metadata; depth-3 account
+versus depth-4 external-chain xpub identity and each selected address index;
+FFI bindings; QR rendering/scanning UI; persistent resume/expiry; spendability
+rechecks and broadcast/retry handling; and the Argus cold-device role. The
+multi-index cryptographic test does not implement extended-key preparation.
+No derivation metadata is flattened into the optional sender field.
+
+**There is no cold review screen and no user-facing cold signing yet.** Before
+adding it, implement safe request parsing, recomputed box-ID checks and locally
+verified ownership, then show network, full recipients, ERG amounts, every token
+ID/quantity, fees, locally verified change, burns/mints and unusual scripts or
+registers before explicit approval. No opaque-blob signing shortcut is exposed.
+The ordinary hot-wallet send path and watch-only signing restrictions are
+unchanged. No FRB signature changed, so no binding regeneration is required;
+tracked JNI libraries were not rebuilt.
+
+Stopping here follows the requested lower-half-first scope: the transport and
+return gate are complete and independently testable, while safely parsing and
+reviewing arbitrary cold requests and implementing preparation/UI sessions
+would be a separate substantial layer. No EIP-19 extensions were needed.
+
+Validation uses a worktree-local Cargo target and a writable copy of the
+installed Flutter SDK under `rust/target/tools/flutter`, because the default
+Cargo target and installed Flutter cache are outside the writable sandbox.
+No build output or scratch logs were placed in `/tmp`, and no ignore rules
+were added. Exact successful commands from the worktree root:
+
+```sh
+(cd rust && CARGO_TARGET_DIR="$PWD/target" cargo test --workspace)
+(cd app && CI=true FLUTTER_SUPPRESS_ANALYTICS=true DART_SUPPRESS_ANALYTICS=true ../rust/target/tools/flutter/bin/flutter analyze)
+(cd app && CI=true FLUTTER_SUPPRESS_ANALYTICS=true DART_SUPPRESS_ANALYTICS=true ../rust/target/tools/flutter/bin/flutter test)
+```
+
+Rust workspace: 822 passed, 0 failed, 13 ignored, including 8 cold-signing tests.
+Flutter analysis: no issues. Flutter tests: 814 passed, 1 skipped.
+The initial unmodified commands failed due to read-only external Cargo/Flutter
+caches, before checks ran. The worktree-local commands address that limitation.
+
+The intended layer commits are `Add EIP-19 cold signing transport and page
+collection` and `Verify EIP-19 returns against prepared P2PK transactions`.
+The first staging attempt failed creating the shared Git worktree's
+`index.lock` on a read-only filesystem; all changes remain uncommitted, per the
+requested fallback. Nothing was pushed and no PR was opened.
