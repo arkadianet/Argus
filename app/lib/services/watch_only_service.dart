@@ -6,19 +6,26 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../bridge/api.dart' as api;
 
 Future<({Map<String, int?> balances, String? error})> readWatchBalances(
-  List<String> addresses, Future<int> Function(String) read,
+  List<String> addresses,
+  Future<int> Function(String) read,
 ) async {
   final errors = <String>[];
-  final entries = await Future.wait(addresses.map((address) async {
-    try {
-      return MapEntry<String, int?>(address, await read(address));
-    } catch (e) {
-      errors.add('$address: $e');
-      return MapEntry<String, int?>(address, null);
-    }
-  }));
-  return (balances: Map.fromEntries(entries), error: errors.isEmpty ? null
-      : 'Some watched balances are unavailable.\n${errors.join('\n')}');
+  final entries = await Future.wait(
+    addresses.map((address) async {
+      try {
+        return MapEntry<String, int?>(address, await read(address));
+      } catch (e) {
+        errors.add('$address: $e');
+        return MapEntry<String, int?>(address, null);
+      }
+    }),
+  );
+  return (
+    balances: Map.fromEntries(entries),
+    error: errors.isEmpty
+        ? null
+        : 'Some watched balances are unavailable.\n${errors.join('\n')}',
+  );
 }
 
 /// Stores addresses to monitor without holding a wallet seed.
@@ -58,18 +65,33 @@ class WatchOnlyService extends ChangeNotifier {
     if (trimmed == null) return false;
     if (_addresses.contains(trimmed)) return false;
     _addresses.add(trimmed);
-    await _save();
+    try {
+      await _save();
+    } catch (_) {
+      _addresses.remove(trimmed);
+      rethrow;
+    }
     return true;
   }
 
   Future<void> remove(String address) async {
-    _addresses.removeWhere((a) => a == address);
-    await _save();
+    final index = _addresses.indexOf(address);
+    if (index < 0) return;
+    _addresses.removeAt(index);
+    try {
+      await _save();
+    } catch (_) {
+      _addresses.insert(index.clamp(0, _addresses.length), address);
+      rethrow;
+    }
   }
 
   Future<void> _save() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key, jsonEncode(_addresses));
+    if (!await prefs.setString(_key, jsonEncode(_addresses))) {
+      await prefs.reload();
+      throw StateError('Could not save watched addresses. Please try again.');
+    }
     notifyListeners();
   }
 }
