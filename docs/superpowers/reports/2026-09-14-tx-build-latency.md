@@ -249,3 +249,282 @@ The ten-address median saving is **4.765 s on kadia** and **16.616 s on eutxo**,
 The original equal-latency `ceil(A/4) × g` estimate is a useful approximation, not a guarantee: live endpoint variation and waiting for the oldest outstanding address can affect the result. Single-address wallets have no latency overlap to exploit. The shared gather also serves callers other than button-press prepare, including the coin-control listing and mix funding path. The original report's successful request-count ledger remains valid. Its existing warning about mempool failures still applies: `get_effective_unspent` catches those failures and returns confirmed-only boxes. The new gather aborts every error actually returned by that method; this work neither fixes nor introduces the client's pre-existing fallback. Live enumeration remains non-atomic, so byte equality is guaranteed for identical address responses, not for two queries separated by a chain or mempool change.
 
 `git diff --check` and formatting validation of the new test module passed. Staging the implementation, tests and report failed with `Unable to create '/home/rkadias/coding/arkadianet/Argus/.git/worktrees/conc/index.lock': Read-only file system`. Per the requested failure policy, all work remains uncommitted on `perf/concurrent-gather`; no push or PR was attempted. Intended commit message: `Gather wallet addresses with bounded concurrency`.
+
+
+## Safe remainder — `perf/safe-wins`, 2026-09-14
+
+The baseline for this follow-up is **`feat/cold-wallet-signing`**, not `main`.
+That branch already contains rank 1. Ranks 4, 7, 8 and 9 are untouched.
+All measurements below use this Linux development host, not a phone; no real
+transaction was signed or submitted. Build output, scratch files and logs stay
+in the already ignored `rust/target`, with `CARGO_TARGET_DIR` and `TMPDIR` set
+there; no ignore rules were added.
+
+### Rank 3 — built: incremental reference index with a single-input fast path
+
+Before choosing the algorithm, `selected_lookup_benchmark` measured the independent
+old nested search against unconditional indexing at N=1,100,500,1000,10000 and
+K=1,4,10,N, both first-K and reverse-last-K selections. K=4 and K=10 model small
+multi-input sends; they are synthetic scenarios, not a measured wallet distribution.
+At N=10000, initial K=1 first-match medians were roughly 0.0002 ms old versus
+0.9 ms unconditional indexing. The unconditional allocation is rejected.
+
+Both ordinary single and multi send now call `selected_ergo_boxes`. The adaptive
+threshold is **K > 1**: K=0/1 retains the old search without an index; K>1 builds a
+local string-ID → reference map incrementally as it scans only the needed prefix.
+Each candidate is formatted at most once, and the map starts empty rather than
+allocating N slots. This handles early matches without constructing a full index
+and bounds the all-selected path to expected O(N+K). Selected order and repeated
+selected IDs remain intact. `entry().or_insert()` retains the first candidate;
+missing IDs are omitted exactly as before, and both callers retain their existing
+length checks and exact `TxBuildFailed("UTXO set mismatch")` errors.
+
+Final release comparison, median milliseconds of three trials. Each trial times
+20 repetitions except all-selected N>=1000 (one repetition). Inputs/fixtures and
+JSON comparisons are outside timing; ID formatting, index construction and selected
+box cloning are inside. Algorithm order alternates per trial; this compares the
+independent old implementation with production helper in one binary, not historical
+binaries. Synthetic boxes have distinct indices and the report's public sample tree.
+
+| N | K | Selected positions | Old nested | Full index (rejected) | Adaptive (built) |
+|---:|---:|---|---:|---:|---:|
+| 100 | 1 | first K | 0.000157 | 0.008570 | 0.000165 |
+| 100 | 1 | last K, reversed | 0.004513 | 0.009387 | 0.003807 |
+| 100 | 4 | first K | 0.000732 | 0.008839 | 0.000778 |
+| 100 | 4 | last K, reversed | 0.017412 | 0.009912 | 0.013300 |
+| 100 | 10 | first K | 0.003040 | 0.011179 | 0.002065 |
+| 100 | 10 | last K, reversed | 0.041636 | 0.010643 | 0.012508 |
+| 100 | 100 | first K | 0.208150 | 0.023134 | 0.029794 |
+| 100 | 100 | last K, reversed | 0.201319 | 0.021621 | 0.024626 |
+| 10000 | 1 | first K | 0.000171 | 0.904338 | 0.000237 |
+| 10000 | 1 | last K, reversed | 0.388532 | 0.897982 | 0.386302 |
+| 10000 | 4 | first K | 0.000751 | 0.911404 | 0.000902 |
+| 10000 | 4 | last K, reversed | 1.543820 | 0.951083 | 1.360290 |
+| 10000 | 10 | first K | 0.003448 | 0.921330 | 0.002095 |
+| 10000 | 10 | last K, reversed | 3.905680 | 0.998821 | 1.387343 |
+| 10000 | 10000 | first K | 1959.057132 | 3.729501 | 3.155148 |
+| 10000 | 10000 | last K, reversed | 2010.426768 | 2.891355 | 2.850708 |
+
+The microsecond/sub-microsecond early-match differences are below a meaningful
+preview latency claim. The selected-all N=10000 first-K case falls from **1959.057
+→ 3.155 ms**. Late K=10 falls **3.906 → 1.387 ms**; early K=10 falls **0.003448
+→ 0.002095 ms**. K=1 executes the same old algorithm. The incremental index costs
+more than a preallocated full index for some late matches, intentionally avoiding
+its unconditional cost for early matches.
+
+Equivalence: `api/tests/selected_lookup.rs` contains an independent copy of the old
+nested search. Deterministic tests compare serialized complete ErgoBox vectors and
+missing-count outcomes for empty candidates/selections, single input, reverse order,
+repeated candidate/selected IDs and multiple missing IDs. The release benchmark also
+checks old/full-index equality for every N/K/position fixture. The selected EIP-12
+inputs and already-built unsigned transaction are untouched; exactly the same full
+boxes reach cached signing. This is the same byte-comparison proof boundary as rank
+1; it is not a claim to have benchmarked signing or a funded live preview.
+
+Reproduce the final comparison (add `--release`; debug timings are not comparable):
+
+```bash
+CARGO_TARGET_DIR="$PWD/rust/target" TMPDIR="$PWD/rust/target/tmp" \
+  cargo test --manifest-path rust/Cargo.toml -p wallet-ffi --release \
+  selected_lookup -- --include-ignored --nocapture
+```
+
+Intended rank-3 commit: `Index selected boxes only as needed`.
+
+
+### Rank 5 — built: retain confirmed EIP-12 representations
+
+`get_effective_unspent` still calls `get_unspent`, resolves the tree, then queries
+mempool. Invalid-address, empty-mempool and failed-mempool branches are unchanged.
+The nonempty branch now passes the paired confirmed representations to
+`mempool::merge_confirmed`, filters both together, and converts only retained
+unconfirmed outputs. The pair-length/order invariant comes directly from
+`get_unspent` (one conversion per confirmed box); the helper is crate-private.
+Spent IDs still come from all returned transactions, confirmed survivors precede
+pending outputs, and duplicates are retained exactly as before. There is no new
+replacement/deduplication rule. Intermediate pending outputs spent by another
+pending transaction remain excluded.
+
+`mempool_merge_tests.rs` independently reimplements the entire old nonempty merge,
+including dropping the first EIP-12 vector and reconverting the retained boxes.
+It compares serialized **complete `(ErgoBox vector, EIP-12 vector)` bytes** for empty
+confirmed sets, duplicate confirmed/pending outputs, no spends, partial/all spends,
+confirmed → pending → pending chains, foreign/malformed outputs, missing transaction
+IDs, and boxes with tokens and R4 registers. The same unchanged selection/build
+functions therefore receive byte-identical ordered inputs for identical responses;
+this does not claim live reads at different times are atomic or equal.
+
+Release benchmark uses the same public-tree, distinct-index synthetic boxes as
+rank 3. Each fixture has a nonempty mempool spending the first confirmed box and
+creating one new owned output. Construction/cloning is excluded; initial confirmed
+conversion plus the complete merge are timed, including the old discarded
+conversion. Three trials alternate old/new order; assertions compare complete tuple
+bytes before timing. N=1 has no retained confirmed box to reconvert, so it shows no
+saving. Larger N measures conversion reuse, not network or phone preview time.
+
+| Confirmed N | Old ms, three trials | Reuse ms, three trials | Median ms |
+|---:|---|---|---|
+| 1 | 0.023164 / 0.022563 / 0.022543 | 0.022763 / 0.022813 / 0.022763 | 0.022563 → 0.022763 |
+| 100 | 1.118059 / 1.114863 / 1.113531 | 0.571799 / 0.575746 / 0.579614 | 1.114863 → 0.575746 |
+| 500 | 6.039289 / 6.651245 / 6.340152 | 3.027144 / 3.361170 / 3.418950 | 6.340152 → 3.361170 |
+| 1000 | 14.155263 / 14.086483 / 14.270684 | 6.643711 / 6.672505 / 6.560713 | 14.155263 → 6.643711 |
+| 10000 | 109.114501 / 109.081368 / 111.243935 | 57.074048 / 55.171946 / 55.013293 | 109.114501 → 55.171946 |
+
+Reproduce:
+
+```bash
+CARGO_TARGET_DIR="$PWD/rust/target" TMPDIR="$PWD/rust/target/tmp" \
+  cargo test --manifest-path rust/Cargo.toml -p wallet-net --release \
+  merge -- --include-ignored --nocapture
+```
+
+Intended rank-5 commit: `Reuse confirmed inputs during mempool merging`.
+
+### Rank 6 — rejected: pinned transport API couples reuse to stale capability state
+
+No production connection/cache code was changed. The 60-second health TTL,
+capability → info probes, fallback ordering, network invalidation and final height
+read all remain as before. Concurrent misses remain uncoalesced. There is **no
+measured safe before/after latency number** for this rank, and no claimed saving.
+
+Inspection of pinned `ergo-node-interface-rust` **0264f6f** found that its reqwest
+client is `pub(crate)`, every constructor creates a new transport, and there is no
+constructor accepting a reusable client or resetting health state independently.
+The exposed `refresh_capabilities()` is not equivalent to reconstruction: an
+inconclusive probe retains the old capability, whereas a fresh constructor records
+unknown. In addition, clones share the capability atomic through Arc, so refreshing
+a retained interface also mutates capability state observed by existing callers.
+The simple proposed reuse path thus exceeds transport-only behavior.
+
+A retained local-HTTP diagnostic,
+`transport_reuse_tests::reused_capability_after_inconclusive_probe_differs_from_fresh_client`,
+proves the first difference against the actual pinned dependency: initial 404 sets
+false; a reused interface probed with 503 retains **false**, while a new interface
+probed with the same 503 records **unknown**. Exactly three capability requests
+are checked. This matters because false can prevent extraIndex operations locally
+where unknown allows trying the endpoint. It is a behavior experiment, not an RTT
+benchmark or a production implementation.
+
+Separating transport without this difference needs an upstream transport-injection
+or reconstruction API (or vendoring/changing that dependency), plus independent
+per-health-generation capability state. Miss coalescing also needs cancellation,
+failed-attempt, fallback and network-generation tests. That is materially broader
+risk than the report's assumed small cache refactor. Under the explicit instruction
+to reject ranks whose risk is higher than assumed, the complete rank is deferred;
+a partial cache/coalescing change is not bundled with the box optimizations.
+
+Intended rank-6 diagnostic commit: `Document transport reuse capability mismatch`.
+
+
+### Rank 2 — diagnostic completed; no production behavior change
+
+The slow result is **not specific to the sample tree or solely to byErgoTree**.
+Eutxo shows an approximately two-second additional wait across several mempool
+routes, including ID-only listing. Its confirmed unspent and height routes remain
+fast. This is consistent with a mempool subsystem, scheduling or reverse-proxy
+issue on that service, but client measurements cannot identify which. Contacting
+the operator with these results is the next step; no operator was contacted here.
+No selected node, connected URL policy, settings, limits or mempool awareness changed.
+
+Retained `scripts/tx_latency_endpoints.py` reproduces the diagnostic, using Python
+requests, one persistent session per host, serial requests inside each host and
+concurrent hosts. Three trials reverse endpoint order on the middle trial. The
+first `/info` includes cold transport setup; subsequent requests use the session.
+Timings cover request through full body receipt; response-header time and JSON
+decode time are recorded separately. Timeout is 35 seconds. All final requests
+returned 200 except kadia's unsupported `outputs_tree` route (404, empty body).
+The public address/tree are the original report's sample. This is deliberately a
+read-only endpoint comparison, **not a before/after application optimization**.
+
+Final retained-script measurements, milliseconds in trial-number order:
+
+| Control | kadia, three trials | eutxo, three trials | Median kadia / eutxo |
+|---|---|---|---|
+| info | 985.761 / 319.770 / 325.741 | 783.382 / 183.029 / 179.652 | 325.741 / 183.029 |
+| unspent | 318.466 / 326.670 / 318.497 | 195.195 / 185.269 / 183.861 | 318.497 / 185.269 |
+| tree100 | 321.312 / 321.035 / 321.696 | 2196.404 / 2189.119 / 2187.253 | 321.312 / 2189.119 |
+| tree1 | 329.100 / 319.595 / 320.348 | 2190.698 / 2185.350 / 2190.947 | 320.348 / 2190.698 |
+| other_tree | 323.584 / 319.455 / 317.872 | 2189.306 / 2185.949 / 2185.041 | 319.455 / 2185.949 |
+| pool | 960.987 / 326.494 / 326.747 | 2930.989 / 2947.626 / 2921.824 | 326.747 / 2930.989 |
+| pool1 | 323.903 / 321.625 / 321.635 | 2908.864 / 2941.622 / 2915.051 | 321.635 / 2915.051 |
+| ids | 322.196 / 323.762 / 316.584 | 2183.892 / 2181.471 / 2184.328 | 322.196 / 2183.892 |
+| outputs_tree | 318.006 / 320.557 / 317.174 | 2182.454 / 2185.203 / 2180.363 | 318.006 / 2182.454 |
+
+Controls map directly to the script's `CASES`: `tree100` is Argus's exact POST
+`/transactions/unconfirmed/byErgoTree?offset=0&limit=100`, with a JSON-string tree;
+`tree1` changes only limit to 1; `other_tree` uses the valid generator-key P2PK tree.
+`pool`/`pool1` GET `/transactions/unconfirmed` at limits 100/1; `ids` lists mempool
+transaction IDs; `outputs_tree` queries unconfirmed outputs by tree. `unspent`
+matches Argus's address POST with offset=0 and limit=500.
+
+Eutxo's `tree100`, `tree1`, `other_tree` and `outputs_tree` bodies were each **3
+bytes**, with median times **2189.119, 2190.698, 2185.949 and 2182.454 ms**. JSON
+decoding took less than 0.2 ms and full-body time was within 1 ms of header time
+for these empty responses. The 352-byte ID listing still took **2183.892 ms**.
+Thus neither response download/JSON parsing nor the particular address nor the
+requested result limit explains the main delay. Its 237282-byte full-mempool
+response took **2930.989 ms**; limit=1 still returned a large 225104-byte transaction
+and took **2915.051 ms**. Large responses add transfer time, but that is separate
+from the two-second wait already present for empty/ID-only responses. By contrast,
+confirmed unspent's 1786-byte response took **185.269 ms** median. A generally slow
+connection to every endpoint is not supported by these controls.
+
+The initial six-route probe and separate three-route controls independently
+reproduced this pattern before the retained script was run. The initial empty-tree
+medians were about 2.19 s eutxo / 0.319 s kadia, consistent with the investigation's
+2.18 s / 0.34 s observation. Kadia returned two-byte empty arrays and a 404 for the
+output-only control; do not interpret that 404 as an equivalent fast result.
+
+Code findings: Argus requests no optional enrichment flag, makes only one mempool
+request per address, and uses transaction input IDs plus owned outputs for spent
+filtering and chaining. Dropping inputs or using only the output endpoint would
+lose confirmed-spend awareness. Lowering the limit could omit relevant transactions.
+No dispensable client request was established.
+
+Eutxo reported `appVersion=6.0.4RC2-109-c3646640-SNAPSHOT`; kadia reported `0.7.0`.
+They are not demonstrated identical server implementations or mempool snapshots.
+Inspection of the [upstream transaction route at the reported eutxo revision](https://github.com/ergoplatform/ergo/blob/c3646640/src/main/scala/org/ergoplatform/http/api/TransactionsApiRoute.scala)
+shows that by-tree examines pool outputs and state-resolved inputs before slicing
+the matches; lowering the returned limit need not reduce that search. ID listing
+only reads pool IDs, yet it has the same delay in these measurements. There is no
+basis to attribute all of the delay specifically to input resolution. The reported
+revision is source evidence, not verification of the operator's exact deployed
+binary/proxy configuration. Server profiling is required for a root cause.
+
+Reproduce (requires Python `requests`, as in the original method):
+
+```bash
+python3 scripts/tx_latency_endpoints.py > rust/target/endpoints.jsonl
+```
+
+Intended rank-2 diagnostic commit: `Record mempool endpoint latency controls`.
+
+### Final verification and delivery status
+
+`cargo test --workspace` passed: **825 passed, 0 failed, 15 ignored**, including
+doc tests (baseline: 822 passed, 13 ignored). New deterministic checks cover the
+two box-path equivalence proofs and the pinned-client capability mismatch. Both
+retained local release benchmarks passed separately, including their byte-equality
+assertions; the final lookup rerun also compares the production adaptive helper
+against the old path for every N/K/position fixture. The earlier rank-1 local HTTP,
+ordering, cancellation and ownership tests pass in the workspace suite.
+
+`cd app && flutter analyze` and `cd app && flutter test` were attempted; both exit
+before running because the installed SDK attempts to write
+`/home/rkadias/coding/development/flutter/bin/cache/engine.stamp` on the read-only
+filesystem. They are **blocked**, not passing. No `#[frb]` signature changed and
+bindings were not regenerated. Rust native-library sources changed; tracked
+`jniLibs/*.so` were deliberately not rebuilt, as allowed. `git diff --check` passes.
+
+Staging rank 3 failed with:
+
+```text
+fatal: Unable to create '/home/rkadias/coding/arkadianet/Argus/.git/worktrees/safewins/index.lock': Read-only file system
+```
+
+Per the requested failure policy, **all changes remain uncommitted on
+`perf/safe-wins`**. One commit per rank could not be created. The intended independent
+commit subjects are recorded in each section; rank 3 owns the FFI helper/test,
+rank 5 owns the net merge/helper test, rank 6 owns only its diagnostic test/module
+registration, and rank 2 owns the endpoint script, each with its corresponding
+report section. Nothing was pushed and no PR was opened.
