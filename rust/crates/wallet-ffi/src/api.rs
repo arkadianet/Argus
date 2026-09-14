@@ -7044,3 +7044,9 @@ mod paideia_tracking_tests {
 #[cfg(test)]
 #[path = "sync_tests.rs"]
 mod sync_tests;
+
+/// Derive public payment addresses from an Ergo Wallet App hex extended key.
+#[flutter_rust_bridge::frb]
+pub fn derive_watch_addresses(input: String, start: u32, count: u32) -> Result<Vec<String>, String> {
+    wallet_core::watch_xpub::addresses(&input, start, count)
+}

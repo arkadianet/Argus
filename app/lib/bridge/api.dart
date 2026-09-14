@@ -1597,3 +1597,14 @@ String stakeRecoveryProxyRecord({
   signedTxJson: signedTxJson,
   recipientAddress: recipientAddress,
 );
+
+/// Derive public payment addresses from an Ergo Wallet App hex extended key.
+Future<List<String>> deriveWatchAddresses({
+  required String input,
+  required int start,
+  required int count,
+}) => RustLib.instance.api.crateApiDeriveWatchAddresses(
+  input: input,
+  start: start,
+  count: count,
+);

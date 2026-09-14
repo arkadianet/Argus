@@ -17,3 +17,5 @@ pub use storage::{
     AddressRecord, StoredBox, StoredToken, StoredTx, SyncCheckpoint, TrackedLineage, WalletDatabase,
 };
 pub use wallet::WalletHandle;
+
+pub mod watch_xpub;
