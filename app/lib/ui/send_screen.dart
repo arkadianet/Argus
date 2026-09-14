@@ -944,7 +944,9 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                 initialValue: e.tokenId,
                 decoration: const InputDecoration(labelText: 'Another token'),
                 items: [
-                  for (final t in choices) DropdownMenuItem(value: t.id, child: Text(t.label, overflow: TextOverflow.ellipsis)),
+                  for (final t in choices.where((t) =>
+                      t.id == e.tokenId || !_extraTokens.any((other) => other != e && other.tokenId == t.id)))
+                    DropdownMenuItem(value: t.id, child: Text(t.label, overflow: TextOverflow.ellipsis)),
                 ],
                 onChanged: (v) => setState(() => e.tokenId = v),
                 validator: (v) => v == null ? 'Pick a token' : null,
@@ -982,7 +984,8 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
           ],
         ),
       ],
-      if (choices.length > _extraTokens.length)
+      if (!_extraTokens.any((e) => e.tokenId == null) &&
+          choices.any((t) => !_extraTokens.any((e) => e.tokenId == t.id)))
         Align(
           alignment: Alignment.centerLeft,
           child: TextButton.icon(
@@ -1081,7 +1084,13 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
         : (token != null ? 'From your wallet' : 'Ergo');
     return InkWell(
       onTap: () async {
-        final choice = await showAssetPicker(context, held: _args.tokens, buyable: _buyable, current: _assetId);
+        final extraIds = _extraTokens.map((e) => e.tokenId).toSet();
+        final choice = await showAssetPicker(
+          context,
+          held: _args.tokens.where((t) => !extraIds.contains(t.id)).toList(),
+          buyable: _buyable.where((t) => !extraIds.contains(t.id)).toList(),
+          current: _assetId,
+        );
         if (choice == null || !mounted) return;
         setState(() {
           _assetId = choice.assetId;
