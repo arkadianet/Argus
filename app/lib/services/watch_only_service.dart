@@ -38,42 +38,24 @@ class WatchOnlyService extends ChangeNotifier {
       try {
         stored = jsonDecode(raw) as List;
       } catch (_) {
-        _addresses.clear();
         notifyListeners();
         return;
       }
-      final valid = <String>{};
-      var failed = false;
-      for (final item in stored.whereType<String>()) {
-        final trimmed = item.trim();
-        if (trimmed.isEmpty) continue;
-        try {
-          if (await api.validateErgoAddress(address: trimmed)) {
-            valid.add(trimmed);
-          }
-        } catch (_) {
-          // Validation could not complete (bridge/FFI failure). Preserve the
-          // existing in-memory collection rather than wiping it.
-          failed = true;
-          break;
-        }
-      }
-      if (!failed) {
-        _addresses
-          ..clear()
-          ..addAll(valid);
-      }
+      // Entries were validated on add. Loading must work before RustLib.init
+      // and must never reinterpret validation failure as user removal.
+      _addresses
+        ..clear()
+        ..addAll(stored.whereType<String>());
     }
     notifyListeners();
   }
 
-  /// Adds [address] after checksum-aware validation and deduplication.
+  /// Adds an address or P2PK public key, deduplicating the normalized address.
   /// Returns `true` if the address was saved, `false` if it was invalid or a
   /// duplicate.
   Future<bool> add(String address) async {
-    final trimmed = address.trim();
-    if (trimmed.isEmpty) return false;
-    if (!await api.validateErgoAddress(address: trimmed)) return false;
+    final trimmed = await api.normalizeWatchInput(input: address.trim());
+    if (trimmed == null) return false;
     if (_addresses.contains(trimmed)) return false;
     _addresses.add(trimmed);
     await _save();
