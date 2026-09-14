@@ -3,6 +3,7 @@ import '../../services/watch_account_service.dart';
 import '../../services/wallet_service.dart';
 import '../../format.dart';
 import '../transactions_screen.dart';
+import '../cold_signing_screen.dart';
 
 Future<void> addWatchAccount(BuildContext context) => showDialog<void>(
   context: context,
@@ -157,6 +158,18 @@ class WatchAccountList extends StatelessWidget {
                                   ),
                                 ),
                           child: const Text('History'),
+                        ),
+                        OutlinedButton(
+                          onPressed: account.busy
+                              ? null
+                              : () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute<void>(
+                                    builder: (_) =>
+                                        ColdWatchSendScreen(account: account),
+                                  ),
+                                ),
+                          child: const Text('Send with offline signer'),
                         ),
                       ],
                     ),

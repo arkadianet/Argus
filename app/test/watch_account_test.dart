@@ -82,7 +82,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text(watchAccountDisclosure), findsOneWidget);
       expect(watchAccountDisclosure, contains('Cannot see stealth identities'));
-      expect(watchAccountDisclosure, contains('Cannot spend'));
+      expect(watchAccountDisclosure, contains('Cannot sign locally'));
       expect(watchAccountDisclosure, contains('forever'));
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();

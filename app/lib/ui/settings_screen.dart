@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'cold_signing_screen.dart';
 
 import '../services/contacts_service.dart';
 import '../services/network_controller.dart';
@@ -109,6 +110,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     title: 'App',
                     scope: 'App-wide',
                     children: [
+                      SettingsRow(
+                        icon: Icons.qr_code_scanner,
+                        title: 'Offline signing',
+                        subtitle: 'Scan, review and sign with this seed wallet',
+                        onTap: () => openColdSigner(context),
+                      ),
                       SettingsRow(
                         icon: Icons.hub_outlined,
                         title: 'Network',
