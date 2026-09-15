@@ -13,7 +13,8 @@ import 'notification_service.dart';
 import 'wallet_service.dart';
 
 /// Assets includes stealth holdings, but protocol orders use public inputs.
-/// Only block when the requested token amount actually needs that pocket.
+/// Explain a public shortfall when stealth exists; only suggest a transfer
+/// when the combined holdings cover the order.
 String? duckpoolsStealthFundingIssue(
   List<TokenBalance> holdings, String tokenId, int required, {
   required int decimals,
@@ -23,8 +24,15 @@ String? duckpoolsStealthFundingIssue(
   final stealth = matching.fold<int>(0, (n, t) => n + t.stealthAmount);
   final public = total - stealth;
   if (stealth <= 0 || required <= public) return null;
-  final shortfall = required - public;
   String amount(int units) => formatTokenAmountGrouped(units, decimals);
+  if (total < required) {
+    return 'Insufficient token $tokenId: you hold ${amount(total)} in total '
+        '(${amount(public)} public and ${amount(stealth)} in Stealth); '
+        'this order needs ${amount(required)}. '
+        'Even moving all Stealth holdings to public would leave you '
+        '${amount(required - total)} short. Nothing was sent.';
+  }
+  final shortfall = required - public;
   return 'Assets includes ${amount(stealth)} of token $tokenId in Stealth. '
       'Duckpools protocol funding uses public boxes, which hold ${amount(public)}; '
       'this order needs ${amount(required)}. '
