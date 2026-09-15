@@ -12,6 +12,7 @@ import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 import '../token_avatar.dart';
 import 'asset_tile.dart';
+import 'remote_preview.dart';
 
 class TokenDetailSheet extends StatefulWidget {
   const TokenDetailSheet({
@@ -392,15 +393,24 @@ class _TokenDetailBody extends StatelessWidget {
               MediaState.absent => 'No media link in issuance metadata.',
               MediaState.unknown => 'Media metadata unavailable',
               MediaState.unsupported => 'Preview not supported',
-              MediaState.notLoaded =>
-                'Remote preview not loaded · preview support unavailable in this build',
+              MediaState.notLoaded => 'Remote preview not loaded',
             }),
+            if (token.iconUrl != null)
+              RemotePreview(
+                key: ValueKey('${token.id}:${token.iconUrl}:${token.issuanceHash}'),
+                token: token,
+              ),
             Text(
               token.issuanceHash == null
                   ? 'Issuance media hash missing or invalid'
                   : 'Issuance media hash: ${token.issuanceHash}',
               textDirection: TextDirection.ltr,
             ),
+            if (token.iconUrl != null)
+              SelectableText(
+                issuerText(token.iconUrl, limit: 2048),
+                textDirection: TextDirection.ltr,
+              ),
             if (token.iconUrl != null)
               TextButton(
                 onPressed: () =>

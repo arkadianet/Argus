@@ -1,3 +1,4 @@
+import 'services/preview/preview_service.dart';
 import 'services/watch_account_service.dart';
 import 'package:flutter/material.dart';
 
@@ -53,6 +54,7 @@ Future<void> main() async {
     watchOnlyService.load().catchError((_) {}),
     watchAccountService.load().catchError((_) {}),
     privacyService.load().catchError((_) {}),
+    previewSettings.load().catchError((_) {}),
     stealthService.load().catchError((_) {}),
     tokenPricer.load().catchError((_) {}),
   ]);

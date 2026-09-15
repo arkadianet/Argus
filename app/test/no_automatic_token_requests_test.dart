@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:argus_wallet/services/preview/preview_service.dart';
 import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
@@ -21,10 +22,15 @@ class DenyTokenApi extends RustLibApi {
   }
 
   @override
-  Future<String> crateApiInspectTokenMetadata({required String tokenId, required String providerUrl, required bool providerIsNode}) async {
+  Future<String> crateApiInspectTokenMetadata({
+    required String tokenId,
+    required String providerUrl,
+    required bool providerIsNode,
+  }) async {
     metadataRequests++;
     throw StateError('Automatic descriptor request');
   }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -58,6 +64,10 @@ void main() {
   testWidgets(
     'Assets, dashboard row and detail rebuild without HTTP or metadata requests',
     (tester) async {
+      await previewSettings.setGateway(
+        'https://gateway.example',
+        lookup: (_) async => [InternetAddress('8.8.8.8')],
+      );
       final http = DenyHttp();
       final previous = HttpOverrides.current;
       HttpOverrides.global = http;
@@ -66,14 +76,21 @@ void main() {
         id: 'hostile-token',
         amount: 1,
         name: 'Art\u202e\u0001',
-        iconUrl: 'https://127.0.0.1/collect-viewer',
+        iconUrl: 'ipfs://QmYwAPJzv5CZsnAzt8auVZRnG6FMmQLGzsh6coP7u8MLhM',
         declaredAssetKind: DeclaredAssetKind.picture,
       );
       walletSyncController.tokens = [t];
       addTearDown(walletSyncController.reset);
       await tester.pumpWidget(
         MaterialApp(
-          home: AssetsScreen(args: WalletRouteArgs(senderAddress: 's', receiveAddress: 's', changeAddress: 's', tokens: [t])),
+          home: AssetsScreen(
+            args: WalletRouteArgs(
+              senderAddress: 's',
+              receiveAddress: 's',
+              changeAddress: 's',
+              tokens: [t],
+            ),
+          ),
         ),
       );
       await tester.pump();
