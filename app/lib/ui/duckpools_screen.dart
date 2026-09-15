@@ -360,7 +360,7 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> with TxReceiptOwner {
     final tokenId = kind == 'withdraw' ? pool.lendToken : pool.currencyId;
     setState(() => _working = true);
     try {
-      final issue = tokenId == null ? null : duckpoolsStealthFundingIssue(args.tokens, tokenId, amount);
+      final issue = tokenId == null ? null : duckpoolsStealthFundingIssue(args.tokens, tokenId, amount, decimals: s.decimals);
       if (issue != null) throw ArgusException(code: 'TX_BUILD_FAILED', message: issue);
       final prepared = await svc.prepareOrder(
         poolKey: s.pool,

@@ -123,15 +123,41 @@ void _stealthMetadataTests() {
     ]);
     expect(merged.single.amount, 482930456);
     expect(merged.single.amount - merged.single.stealthAmount, 0);
-    final issue = duckpoolsStealthFundingIssue(merged, id, 482930456)!;
-    expect(issue, contains('482930456 base units'));
+    final issue = duckpoolsStealthFundingIssue(merged, id, 482930456, decimals: 9)!;
+    expect(issue, contains('0.482930456 of token'));
     expect(issue, contains('Stealth pocket'));
     expect(issue, contains('makes the transferred funds public'));
     expect(issue, isNot(contains('have 0')));
     final both = mergeStealthTokens([TokenBalance(id: id, amount: 482930456)], merged);
-    expect(duckpoolsStealthFundingIssue(both, id, 482930456), isNull);
-    expect(duckpoolsStealthFundingIssue([], id, 482930456), isNull);
+    expect(duckpoolsStealthFundingIssue(both, id, 482930456, decimals: 9), isNull);
+    expect(duckpoolsStealthFundingIssue([], id, 482930456, decimals: 9), isNull);
 
+  });
+
+  test('Duckpools asks for only the minimum stealth shortfall in pool units', () {
+    final holdings = [TokenBalance(id: 'receipt', amount: 11000, stealthAmount: 8000)];
+    expect(
+      duckpoolsStealthFundingIssue(holdings, 'receipt', 10000, decimals: 2),
+      'Assets includes 80 of token receipt in Stealth. '
+      'Duckpools protocol funding uses public boxes, which hold 30; '
+      'this order needs 100. '
+      'In Send, choose the Stealth pocket and transfer at least 70 '
+      'of this token (the minimum shortfall) to your '
+      'public receive address, then retry after confirmation. '
+      'This makes the transferred funds public. Nothing was sent.',
+    );
+    expect(
+      duckpoolsStealthFundingIssue(holdings, 'receipt', 3001, decimals: 2),
+      contains('transfer at least 0.01 of this token'),
+    );
+  });
+
+  test('Duckpools needs no stealth transfer when public holdings exactly cover the order', () {
+    final holdings = [TokenBalance(id: 'receipt', amount: 18000, stealthAmount: 8000)];
+    expect(
+      duckpoolsStealthFundingIssue(holdings, 'receipt', 10000, decimals: 2),
+      isNull,
+    );
   });
 
   test('a stealth-only token keeps its name and decimals', () {
