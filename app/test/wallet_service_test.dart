@@ -5,6 +5,22 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  test('withHolding preserves raw issuer name and sanitised display name', () {
+    const raw = 'issuer\u202e\u0001name';
+    final token = TokenBalance(
+      id: 'token',
+      amount: 1,
+      name: raw,
+      stealthAmount: 1,
+    );
+    expect(token.name, isNot(raw));
+    final copy = token.withHolding(5, stealthAmount: 2).withHolding(7);
+    expect(copy.originalName, raw);
+    expect(copy.name, token.name);
+    expect(copy.amount, 7);
+    expect(copy.stealthAmount, 2);
+  });
+
   _displayAddressTests();
   group('SendPreview.fromJson', () {
     test('reads the charged app fee from the preview, including zero', () {

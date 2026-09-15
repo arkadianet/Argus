@@ -1,5 +1,8 @@
 import '../services/public_wallet_sync.dart';
 import 'widgets/error_sheet.dart';
+import 'widgets/erg_rate_line.dart';
+import 'widgets/watch_account_list.dart';
+import '../services/watch_account_service.dart';
 import 'widgets/wallet_view_boundary.dart';
 import 'dart:async';
 
@@ -58,7 +61,9 @@ import 'widgets/soft_card.dart';
 import 'widgets/token_detail_sheet.dart';
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key});
+  const DashboardScreen({super.key, this.initializeWalletService});
+
+  final Future<void> Function()? initializeWalletService;
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
@@ -91,6 +96,9 @@ class _DashboardScreenState extends State<DashboardScreen>
   final _pinCtrl = TextEditingController();
   List<WalletInfo> _wallets = [];
   String? _walletId;
+  WatchAccount? _selectedWatchAccount;
+  String? _selectedWatchAddress;
+  bool get _watchSelected => _selectedWatchAccount != null || _selectedWatchAddress != null;
 
   /// Home tabs: 0 wallet, 1 activity, 2 swap, 3 settings. Tabs are built on
   /// first visit so unlocking doesn't fan out into every protocol screen's
@@ -128,6 +136,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     WidgetsBinding.instance.addObserver(this);
     walletService.unlocked.addListener(_syncLock);
     watchOnlyService.addListener(_onWatchOnlyChanged);
+    watchAccountService.addListener(_onWatchAccountChanged);
     _sync.addListener(_onSyncChanged);
     mixService.addListener(_onSyncChanged);
     duckpoolsService.addListener(_onDuckpoolsChanged);
@@ -301,6 +310,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     WidgetsBinding.instance.removeObserver(this);
     walletService.unlocked.removeListener(_syncLock);
     watchOnlyService.removeListener(_onWatchOnlyChanged);
+    watchAccountService.removeListener(_onWatchAccountChanged);
     _sync.removeListener(_onSyncChanged);
     mixService.removeListener(_onSyncChanged);
     duckpoolsService.removeListener(_onDuckpoolsChanged);
@@ -310,7 +320,19 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.dispose();
   }
 
+  void _onWatchAccountChanged() {
+    if (!mounted) return;
+    setState(() {
+      if (!watchAccountService.accounts.contains(_selectedWatchAccount)) {
+        _selectedWatchAccount = null;
+      }
+    });
+  }
+
   void _onWatchOnlyChanged() {
+    if (!watchOnlyService.addresses.contains(_selectedWatchAddress)) {
+      _selectedWatchAddress = null;
+    }
     _refreshWatchOnly();
   }
 
@@ -428,7 +450,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _init() async {
     try {
-      await walletService.init();
+      await (widget.initializeWalletService ?? walletService.init)();
       await networkController.load();
       networkController.probe();
        await _loadWallets();
@@ -729,6 +751,10 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Future<void> _switchWallet(String walletId) async {
     if (!mounted) return;
+    setState(() {
+      _selectedWatchAccount = null;
+      _selectedWatchAddress = null;
+    });
     if (walletId == _walletId && walletService.isUnlocked) return;
     setState(() => _status = 'Switching wallet…');
     try {
@@ -825,7 +851,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         return;
       }
     }
-    if (picked != null && picked.isNotEmpty && picked != previousId) {
+    if (picked != null && picked.isNotEmpty && (picked != previousId || _watchSelected)) {
       await _switchWallet(picked);
       return;
     }
@@ -1017,7 +1043,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget build(BuildContext context) {
     if (_loading) return _splash();
 
-    final showTabs = _walletUnlocked && _sync.ownsWallet(_walletId);
+    final showTabs = !_watchSelected && _walletUnlocked && _sync.ownsWallet(_walletId);
     return PopScope(
       canPop: !showTabs || _tab == 0,
       onPopInvokedWithResult: (didPop, _) {
@@ -1030,7 +1056,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           style: Theme.of(context).textTheme.headlineSmall,
         ),
         actions: [
-          if (_walletUnlocked)
+          if (_walletUnlocked && !_watchSelected)
             IconButton(
               icon: const Icon(Icons.qr_code_scanner),
               tooltip: 'Scan',
@@ -1055,7 +1081,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           children: [
             const WarningStrip(),
             Expanded(
-              child: WalletViewBoundary(
+              child: _watchSelected ? _watchedLedger() : WalletViewBoundary(
                 controller: _sync,
                 walletId: _walletId,
                 unlocked: _walletUnlocked,
@@ -1190,6 +1216,11 @@ class _DashboardScreenState extends State<DashboardScreen>
           textAlign: TextAlign.center,
           style: Theme.of(context).textTheme.bodyMedium,
         ),
+        if (_wallets.isNotEmpty || watchAccountService.accounts.isNotEmpty ||
+            watchOnlyService.addresses.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _walletsCard(),
+        ],
         if (_wallets.isNotEmpty) ...[
           const SizedBox(height: 16),
           Center(
@@ -1329,17 +1360,17 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Widget _ledger() {
     return ListenableBuilder(
-      listenable: Listenable.merge([networkController, tokenPricer]),
+      listenable: Listenable.merge([networkController, tokenPricer, walletService.metadataChanges]),
       builder: (context, _) {
         // Stealth holdings are part of what the wallet owns, so they belong
         // in the asset list; each tile knows how much of it is stealth.
-        final holdings = _sync.displayTokens;
-        final fungible = holdings.where((t) => !t.isNft).toList();
-        final nfts = holdings.where((t) => t.isNft).toList();
+        final holdings = _sync.displayTokens.map(walletService.displayMetadata).toList();
+        final fungible = holdings.where((t) => !t.isCollectible).toList();
+        final nfts = holdings.where((t) => t.isCollectible).toList();
         final fragmented = _sync.utxoCount > utxoFragmentationThreshold;
         Widget tokenTile(TokenBalance t) => AssetTile.token(
               t,
-              fiatText: t.isNft ? null : tokenPricer.fiatTextFor(tokenId: t.id, amount: t.amount, decimals: t.decimals),
+              fiatText: t.isCollectible ? null : tokenPricer.fiatTextFor(tokenId: t.id, amount: t.amount, decimals: t.decimals),
               hidden: _balanceHidden,
               onTap: () => _openToken(t),
             );
@@ -1742,6 +1773,8 @@ class _DashboardScreenState extends State<DashboardScreen>
                       [if (fiat != null) fiat, subtitle].join('  ·  '),
                       style: TextStyle(fontSize: 14, color: muted),
                     ),
+                    const SizedBox(height: 2),
+                    const ErgRateLine(),
                     if (breakdown != null) ...[
                       const SizedBox(height: 2),
                       Text(breakdown, style: TextStyle(fontSize: 13, color: muted)),
@@ -1762,11 +1795,64 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  /// Every stored wallet plus watched addresses as compact rows. Tapping a
-  /// locked wallet switches to it (its unlock gate follows).
+  /// Public watch selection never changes the wallet holding signing keys.
+  Widget _watchedLedger() {
+    final account = _selectedWatchAccount;
+    final address = _selectedWatchAddress;
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        if (account != null)
+          WatchAccountList(selectedAccount: account, hideBalances: _balanceHidden),
+        if (address != null)
+          SoftCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Watch-only address', style: TextStyle(fontWeight: FontWeight.bold)),
+                const Text('Cannot sign locally. This single address has no account key for offline sending.'),
+                Text(address),
+                Text(_balanceHidden ? '•••••• ERG' :
+                    _watchBalances[address] == null ? 'Balance unavailable' : formatErg(_watchBalances[address])),
+                OutlinedButton(
+                  onPressed: () => Navigator.pushNamed(context, '/receive',
+                    arguments: WalletRouteArgs(
+                      watchOnly: true,
+                      senderAddress: address,
+                      receiveAddress: address,
+                      changeAddress: address,
+                    )),
+                  child: const Text('Receive'),
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 12),
+        const ErgRateLine(),
+        const SizedBox(height: 12),
+        _walletsCard(),
+      ],
+    );
+  }
+
   Widget _walletsCard() {
     final rows = <Widget>[
       for (final w in _wallets) _walletRow(w),
+      for (final account in watchAccountService.accounts)
+        ListTile(
+          key: ValueKey('watch-account-${account.key}'),
+          selected: identical(account, _selectedWatchAccount),
+          leading: const Icon(Icons.visibility_outlined),
+          title: const Text('Watch-only account'),
+          subtitle: Text('${shorten(account.key, head: 6, tail: 6)} · Cannot sign locally'),
+          trailing: Icon(identical(account, _selectedWatchAccount)
+              ? Icons.check_circle_outline : Icons.chevron_right),
+          onTap: () => setState(() {
+            _selectedWatchAccount = account;
+            _selectedWatchAddress = null;
+            _tab = 0;
+          }),
+        ),
       for (final a in watchOnlyService.addresses) _watchRow(a),
     ];
     return SoftCard(
@@ -1778,6 +1864,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _walletRow(WalletInfo w) {
     final colors = ArgusColors.of(context);
     final isActive = w.walletId == _walletId && walletService.isUnlocked;
+    final isSelected = isActive && !_watchSelected;
     final known = _lastKnown[w.walletId];
     // The active row must agree with the portfolio card above it: both are
     // display surfaces, so both include stealth funds.
@@ -1808,7 +1895,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         ? formatSyncAge(DateTime.now().subtract(known.age))
         : null;
     return InkWell(
-      onTap: isActive ? null : () => _switchWallet(w.walletId),
+      onTap: isSelected ? null : () => _switchWallet(w.walletId),
       onLongPress: () async {
         if (await renameWalletDialog(context, w) && mounted) await _loadWallets();
         if (mounted) setState(() {});
@@ -1821,7 +1908,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             SizedBox(
               width: 14,
               child: Center(
-                child: isActive
+                child: isSelected
                     ? Container(
                         width: 10,
                         height: 10,
@@ -1853,7 +1940,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                         ),
                       ),
                       const SizedBox(width: 8),
-                      if (isActive)
+                      if (isSelected)
                         const Text(
                           'ACTIVE',
                           style: TextStyle(fontSize: 11, letterSpacing: 1, fontWeight: FontWeight.w600, color: moss),
@@ -1862,10 +1949,10 @@ class _DashboardScreenState extends State<DashboardScreen>
                         Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.lock_outline, size: 12, color: colors.muted),
+                            Icon(isActive ? Icons.lock_open_outlined : Icons.lock_outline, size: 12, color: colors.muted),
                             const SizedBox(width: 3),
                             Text(
-                              'LOCKED',
+                              isActive ? 'UNLOCKED' : 'LOCKED',
                               style: TextStyle(fontSize: 11, letterSpacing: 1, color: colors.muted),
                             ),
                           ],
@@ -1917,7 +2004,12 @@ class _DashboardScreenState extends State<DashboardScreen>
     final colors = ArgusColors.of(context);
     final label = addressLabelService.labelFor(address);
     return InkWell(
-      onTap: _openWalletOverview,
+      key: ValueKey('watch-address-$address'),
+      onTap: () => setState(() {
+        _selectedWatchAddress = address;
+        _selectedWatchAccount = null;
+        _tab = 0;
+      }),
       borderRadius: BorderRadius.circular(cardRadius),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
@@ -1954,7 +2046,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             const SizedBox(width: 8),
             _rowBalance(_watchBalances[address], _watchOnlyLoading),
             const SizedBox(width: 4),
-            Icon(Icons.chevron_right, size: 18, color: colors.muted),
+            Icon(_selectedWatchAddress == address ? Icons.check_circle_outline : Icons.chevron_right, size: 18, color: colors.muted),
           ],
         ),
       ),

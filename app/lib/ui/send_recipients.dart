@@ -85,7 +85,7 @@ List<Map<String, dynamic>> buildRecipients(
         throw SendFormException('${who}token is not in this wallet');
       }
       final int amount;
-      if (token.isNft) {
+      if ((token.amount == 1 && token.decimals == 0)) {
         amount = 1;
       } else {
         final parsed = parseDecimalToBase(td.amountText ?? '', token.decimals);

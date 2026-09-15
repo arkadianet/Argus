@@ -335,7 +335,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
 
   void _applyMaxToken() {
     final token = _selectedToken;
-    if (token == null || token.isNft) {
+    if (token == null || (token.amount == 1 && token.decimals == 0)) {
       _snack('No token selected');
       return;
     }
@@ -1002,7 +1002,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
       child: Row(
         children: [
           Expanded(
-            child: token.isNft
+            child: (token.amount == 1 && token.decimals == 0)
                 ? Text('Sends 1 ${token.label} · Available 1')
                 : TextFormField(
                     key: ValueKey('amount-${token.id}'),
@@ -1425,14 +1425,14 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                                         return null;
                                       },
                                     ),
-                                    if (_args.tokens.any((t) => !t.isNft)) ...[
+                                    if (_args.tokens.isNotEmpty) ...[
                                       const SizedBox(height: 12),
                                       DropdownButtonFormField<String?>(
                                         initialValue: entry.tokenId,
                                         decoration: const InputDecoration(labelText: 'Token'),
                                         items: [
                                           const DropdownMenuItem(value: null, child: Text('None')),
-                                          ..._args.tokens.where((t) => !t.isNft).map(
+                                          ..._args.tokens.map(
                                             (t) => DropdownMenuItem(value: t.id, child: Text(t.label)),
                                           ),
                                         ],
@@ -1611,7 +1611,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                               child: const Text('Use all addresses'),
                             ),
                           ),
-                        if (_args.tokens.any((t) => !t.isNft)) ...[
+                        if (_args.tokens.isNotEmpty) ...[
                           const SizedBox(height: 12),
                           DropdownButtonFormField<String?>(
                             key: const Key('send-fee-token'),
@@ -1623,7 +1623,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                             ),
                             items: [
                               const DropdownMenuItem(value: null, child: Text('ERG')),
-                              for (final t in _args.tokens.where((t) => !t.isNft))
+                              for (final t in _args.tokens)
                                 DropdownMenuItem(value: t.id, child: Text(t.label, overflow: TextOverflow.ellipsis)),
                             ],
                             onChanged: (v) => setState(() => _feeTokenId = v),

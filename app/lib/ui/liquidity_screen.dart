@@ -792,7 +792,7 @@ class _CreateTabState extends State<_CreateTab>
     final theme = Theme.of(context);
     final muted = ArgusColors.of(context).muted;
     final pending = _pending;
-    final held = widget.args.tokens.where((t) => !t.isNft).toList();
+    final held = widget.args.tokens.toList();
     return ListView(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
       children: [

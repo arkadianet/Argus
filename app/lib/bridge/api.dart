@@ -273,6 +273,20 @@ Future<String> getTokenInfo({required String tokenId, String? explorerUrl}) =>
       explorerUrl: explorerUrl,
     );
 
+/// Explicit single-provider inspection, separate from balance and pricing APIs.
+Future<String> inspectTokenMetadata({
+  required String tokenId,
+  required String providerUrl,
+  required bool providerIsNode,
+}) => RustLib.instance.api.crateApiInspectTokenMetadata(
+  tokenId: tokenId,
+  providerUrl: providerUrl,
+  providerIsNode: providerIsNode,
+);
+
+void cancelTokenMetadata() =>
+    RustLib.instance.api.crateApiCancelTokenMetadata();
+
 Future<String> getTransactionHistory({
   required String address,
   String? nodeUrl,

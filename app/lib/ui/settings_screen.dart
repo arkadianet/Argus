@@ -11,6 +11,7 @@ import 'settings/about_page.dart';
 import 'settings/address_book_page.dart';
 import 'settings/display_settings_page.dart';
 import 'settings/network_settings_page.dart';
+import 'settings/preview_settings_page.dart';
 import 'settings/security_settings_page.dart';
 import 'settings/settings_shared.dart';
 import 'settings/wallet_settings_page.dart';
@@ -115,6 +116,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         title: 'Offline signing',
                         subtitle: 'Scan, review and sign with this seed wallet',
                         onTap: () => openColdSigner(context),
+                      ),
+                      SettingsRow(
+                        icon: Icons.image_outlined,
+                        title: 'Remote previews',
+                        subtitle: 'IPFS gateway and Never load remote previews',
+                        onTap: () => _open(const PreviewSettingsPage()),
                       ),
                       SettingsRow(
                         icon: Icons.hub_outlined,

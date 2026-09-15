@@ -10,6 +10,10 @@ import 'package:uuid/uuid.dart';
 import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
 import 'app_fee.dart';
+import 'network_controller.dart';
+import 'privacy_service.dart';
+import 'token_evidence.dart';
+export 'token_evidence.dart';
 import 'mix_service.dart';
 import 'stealth_service.dart';
 import 'wallet_sync_controller.dart';
@@ -102,9 +106,21 @@ class TokenBalance {
   final String id;
   final int amount;
   final String? name;
+  final String? originalName;
   final int decimals;
   final int? emissionAmount;
   final String? iconUrl;
+
+  final String? description;
+  final SupplyEvidence supplyEvidence;
+  final DecimalsEvidence decimalsEvidence;
+  final DeclaredAssetKind declaredAssetKind;
+  final MetadataState metadataState;
+  final MediaState mediaState;
+  final String? source;
+  final String? issuanceBoxId;
+  final String? issuanceHash;
+  final String? rawRegisters;
 
   /// How much of [amount] sits in stealth boxes rather than in the wallet's
   /// own P2PK boxes. Stealth funds are real but are not offered to ordinary
@@ -114,22 +130,90 @@ class TokenBalance {
   TokenBalance({
     required this.id,
     required this.amount,
-    this.name,
+    String? name,
     this.decimals = 0,
     this.emissionAmount,
     this.iconUrl,
     this.stealthAmount = 0,
-  });
+    this.description,
+    this.supplyEvidence = SupplyEvidence.unknown,
+    this.decimalsEvidence = DecimalsEvidence.unknown,
+    this.declaredAssetKind = DeclaredAssetKind.none,
+    this.metadataState = MetadataState.unavailable,
+    this.mediaState = MediaState.unknown,
+    this.source,
+    this.issuanceBoxId,
+    this.issuanceHash,
+    this.rawRegisters,
+  }) : originalName = name, name = name == null ? null : issuerText(name);
 
   /// True when any part of this holding is in stealth boxes.
   bool get hasStealth => stealthAmount > 0;
 
-  bool get isNft =>
-      amount == 1 && decimals == 0 && (emissionAmount == null || emissionAmount == 1);
+  bool get isCollectible =>
+      metadataState != MetadataState.invalid &&
+      metadataState != MetadataState.conflict &&
+      (declaredAssetKind != DeclaredAssetKind.none ||
+          (supplyEvidence == SupplyEvidence.originalEmission &&
+              emissionAmount == 1 &&
+              decimalsEvidence == DecimalsEvidence.valid &&
+              decimals == 0));
+
+  String get classification {
+    if (metadataState == MetadataState.invalid) return 'Metadata invalid';
+    if (metadataState == MetadataState.conflict) return 'Metadata conflict';
+    if (declaredAssetKind == DeclaredAssetKind.collection)
+      return 'Collection token';
+    if (declaredAssetKind == DeclaredAssetKind.unsupported)
+      return 'Declared NFT · unsupported type';
+    final single =
+        supplyEvidence == SupplyEvidence.originalEmission &&
+        emissionAmount == 1 &&
+        decimalsEvidence == DecimalsEvidence.valid &&
+        decimals == 0;
+    if (declaredAssetKind != DeclaredAssetKind.none) {
+      if (single) return 'Single-unit artwork · ${declaredAssetKind.name}';
+      if (supplyEvidence == SupplyEvidence.originalEmission &&
+          (emissionAmount ?? 0) > 1) {
+        return 'Declared artwork · multiple units';
+      }
+      return 'Declared artwork · supply unconfirmed';
+    }
+    if (single) return 'Single-unit token';
+    return metadataState == MetadataState.complete
+        ? 'Token'
+        : 'Token · metadata unavailable';
+  }
+
+  TokenBalance withHolding(int amount, {int? stealthAmount}) =>
+      TokenBalance._withHolding(
+        this,
+        amount,
+        stealthAmount ?? this.stealthAmount,
+      );
+
+  // Copy both representations verbatim; only issuer input is sanitised.
+  TokenBalance._withHolding(TokenBalance token, this.amount, this.stealthAmount)
+    : id = token.id,
+      name = token.name,
+      originalName = token.originalName,
+      decimals = token.decimals,
+      emissionAmount = token.emissionAmount,
+      iconUrl = token.iconUrl,
+      description = token.description,
+      supplyEvidence = token.supplyEvidence,
+      decimalsEvidence = token.decimalsEvidence,
+      declaredAssetKind = token.declaredAssetKind,
+      metadataState = token.metadataState,
+      mediaState = token.mediaState,
+      source = token.source,
+      issuanceBoxId = token.issuanceBoxId,
+      issuanceHash = token.issuanceHash,
+      rawRegisters = token.rawRegisters;
 
   String get label {
-    final n = name?.trim();
-    if (n != null && n.isNotEmpty) return n;
+    final n = issuerText(name).trim();
+    if (n.isNotEmpty) return n;
     return id.length > 8 ? '${id.substring(0, 8)}…' : id;
   }
 }
@@ -218,7 +302,12 @@ class WalletRouteArgs {
 
 /// A fee paid in a token through a babel box (EIP-31).
 class BabelFee {
-  const BabelFee({required this.tokenId, required this.tokensPaid, required this.price, required this.feeNano});
+  const BabelFee({
+    required this.tokenId,
+    required this.tokensPaid,
+    required this.price,
+    required this.feeNano,
+  });
   final String tokenId;
   final int tokensPaid;
 
@@ -313,7 +402,15 @@ class ConsolidatePreview {
   final int minerFee;
   final List<InputBoxInput> inputBoxes;
 
-  ConsolidatePreview({required this.preparationId, required this.inputCount, required this.totalErgIn, required this.changeNanoErg, required this.tokenCount, required this.minerFee, this.inputBoxes = const []});
+  ConsolidatePreview({
+    required this.preparationId,
+    required this.inputCount,
+    required this.totalErgIn,
+    required this.changeNanoErg,
+    required this.tokenCount,
+    required this.minerFee,
+    this.inputBoxes = const [],
+  });
 
   factory ConsolidatePreview.fromJson(Map<String, dynamic> json) => ConsolidatePreview(
     preparationId: _requireInt(json, 'preparation_id'), inputCount: _requireInt(json, 'input_count'),
@@ -333,7 +430,16 @@ class SplitPreview {
   final String? tokenId;
   final List<InputBoxInput> inputBoxes;
 
-  SplitPreview({required this.preparationId, required this.splitCount, required this.amountPerBox, required this.totalSplit, required this.changeNanoErg, required this.minerFee, this.tokenId, this.inputBoxes = const []});
+  SplitPreview({
+    required this.preparationId,
+    required this.splitCount,
+    required this.amountPerBox,
+    required this.totalSplit,
+    required this.changeNanoErg,
+    required this.minerFee,
+    this.tokenId,
+    this.inputBoxes = const [],
+  });
 
   factory SplitPreview.fromJson(Map<String, dynamic> json) {
     final tokenId = json['token_id'];
@@ -360,16 +466,34 @@ class RestructurePreview {
   final int minerFee;
   final List<InputBoxInput> inputBoxes;
 
-  RestructurePreview({required this.preparationId, required this.inputCount, required this.outputCount, required this.totalErgIn, required this.allocatedErg, required this.changeNanoErg, required this.hasChange, required this.minerFee, this.inputBoxes = const []});
+  RestructurePreview({
+    required this.preparationId,
+    required this.inputCount,
+    required this.outputCount,
+    required this.totalErgIn,
+    required this.allocatedErg,
+    required this.changeNanoErg,
+    required this.hasChange,
+    required this.minerFee,
+    this.inputBoxes = const [],
+  });
 
   factory RestructurePreview.fromJson(Map<String, dynamic> json) {
     final hasChange = json['has_change'];
-    if (hasChange is! bool) throw const FormatException('RestructurePreview missing or invalid has_change');
+    if (hasChange is! bool)
+      throw const FormatException(
+        'RestructurePreview missing or invalid has_change',
+      );
     return RestructurePreview(
-      preparationId: _requireInt(json, 'preparation_id'), inputCount: _requireInt(json, 'input_count'),
-      outputCount: _requireInt(json, 'output_count'), totalErgIn: _requireInt(json, 'total_erg_in'),
-      allocatedErg: _requireInt(json, 'allocated_erg'), changeNanoErg: _requireInt(json, 'change_nano_erg'),
-      hasChange: hasChange, minerFee: _requireInt(json, 'miner_fee'), inputBoxes: _parseInputBoxes(json['input_boxes']),
+      preparationId: _requireInt(json, 'preparation_id'),
+      inputCount: _requireInt(json, 'input_count'),
+      outputCount: _requireInt(json, 'output_count'),
+      totalErgIn: _requireInt(json, 'total_erg_in'),
+      allocatedErg: _requireInt(json, 'allocated_erg'),
+      changeNanoErg: _requireInt(json, 'change_nano_erg'),
+      hasChange: hasChange,
+      minerFee: _requireInt(json, 'miner_fee'),
+      inputBoxes: _parseInputBoxes(json['input_boxes']),
     );
   }
 }
@@ -428,7 +552,10 @@ class InputBoxInput {
   /// Parse from an ErgoBox JSON object returned by the node REST API
   /// (`/blockchain/box/unspent/byAddress`), whose keys use camelCase
   /// (e.g. `boxId`, `value`, `creationHeight`, `tokenId`, `amount`).
-  factory InputBoxInput.fromErgoBox(Map<String, dynamic> json, {String? address}) {
+  factory InputBoxInput.fromErgoBox(
+    Map<String, dynamic> json, {
+    String? address,
+  }) {
     return _parseBoxHelper(
       json,
       boxIdKey: 'boxId',
@@ -603,7 +730,12 @@ bool isIncorrectPin(Object error) {
 /// Completeness belongs to one history request, including its pending rows.
 typedef HistoryResult = ({List<Map<String, dynamic>> rows, bool partial});
 
-class WalletService {
+class WalletService with WidgetsBindingObserver {
+  bool _observingMetadata = false;
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) clearSessionMetadata();
+  }
   /// All wallet handle IDs currently in memory, keyed by wallet ID.
   final Map<String, BigInt> _handles = {};
 
@@ -623,6 +755,120 @@ class WalletService {
   static const _tokenMetaKey = 'argus_token_meta_v2';
   bool _tokenMetaDirty = false;
 
+  final metadataChanges = ValueNotifier<int>(0);
+  final Map<String, TokenBalance> _descriptors = {};
+  int _descriptorEpoch = 0;
+  bool _metadataBusy = false;
+  String _descriptorKey(String id) =>
+      '${currentWalletId.value}|${networkController.activeUrl}|${networkController.explorer}|$id|1';
+
+  TokenBalance displayMetadata(TokenBalance holding) =>
+      _descriptors[_descriptorKey(holding.id)]?.withHolding(
+        holding.amount,
+        stealthAmount: holding.stealthAmount,
+      ) ??
+      holding;
+
+  void clearSessionMetadata() {
+    if (_metadataBusy) {
+      try { RustLib.instance.api.crateApiCancelTokenMetadata(); } catch (_) {}
+    }
+    _descriptorEpoch++;
+    _descriptors.clear();
+    metadataChanges.value++;
+  }
+
+  Future<void> clearCollectibleData() async {
+    clearSessionMetadata();
+    _tokenMeta.clear();
+    _tokenMetaDirty = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_tokenMetaKey);
+  }
+
+  /// One explicit per-item request. New descriptors are memory-only, scoped
+  /// to this wallet and provider; neither sync nor legacy prefetch calls here.
+  Future<TokenBalance> loadMetadata(
+    TokenBalance holding, {
+    required String provider,
+    bool providerIsNode = false,
+  }) async {
+    if (!isUnlocked ||
+        privacyService.hideBalances ||
+        networkController.activeUrl == null) {
+      throw StateError('Metadata unavailable while locked, hidden or offline');
+    }
+    if (provider != (providerIsNode ? networkController.activeUrl : networkController.explorer))
+      throw StateError('Metadata provider changed');
+    if (_metadataBusy) throw StateError('Another metadata request is running');
+    if (!_observingMetadata) {
+      WidgetsBinding.instance.addObserver(this);
+      _observingMetadata = true;
+    }
+    _metadataBusy = true;
+    final epoch = _descriptorEpoch;
+    final key = _descriptorKey(holding.id);
+    try {
+      final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
+        tokenId: holding.id,
+        providerUrl: provider,
+        providerIsNode: providerIsNode,
+      );
+      if (epoch != _descriptorEpoch ||
+          key != _descriptorKey(holding.id) ||
+          !isUnlocked ||
+          privacyService.hideBalances) {
+        throw StateError('Metadata request cancelled');
+      }
+      if (utf8.encode(raw).length > 16384)
+        throw StateError('Metadata exceeds wallet limits');
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      if (m['id'] != holding.id) throw StateError('Metadata conflict');
+      final previous = _descriptors[key];
+      final conflict = previous != null && (
+        (previous.issuanceBoxId != null && m['boxId'] != null && previous.issuanceBoxId != m['boxId']) ||
+        (previous.emissionAmount != null && m['emissionAmount'] != null && previous.emissionAmount != m['emissionAmount']) ||
+        (previous.decimalsEvidence == DecimalsEvidence.valid && m['decimalsEvidence'] == 'valid' && previous.decimals != m['decimals']));
+      final result = TokenBalance(
+        id: holding.id,
+        amount: holding.amount,
+        stealthAmount: holding.stealthAmount,
+        name: m['name'] as String?,
+        description: m['description'] as String?,
+        decimals: (m['decimals'] as num?)?.toInt() ?? 0,
+        emissionAmount: (m['emissionAmount'] as num?)?.toInt(),
+        iconUrl: m['iconUrl'] as String?,
+        source: provider,
+        issuanceBoxId: m['boxId'] as String?,
+        issuanceHash: m['issuanceHash'] as String?,
+        rawRegisters: m['rawRegisters'] as String?,
+        supplyEvidence: SupplyEvidence.values.byName(
+          m['supplyEvidence'] as String,
+        ),
+        decimalsEvidence: DecimalsEvidence.values.byName(
+          m['decimalsEvidence'] as String,
+        ),
+        declaredAssetKind: DeclaredAssetKind.values.byName(
+          m['declaredAssetKind'] as String,
+        ),
+        metadataState: conflict ? MetadataState.conflict : MetadataState.values.byName(
+          m['metadataState'] as String,
+        ),
+        mediaState: MediaState.values.byName(m['mediaState'] as String),
+      );
+      // 1,000 × 16 KiB bounds this memory-only cache to 16 MiB serialized.
+      _descriptors.remove(key);
+      while (_descriptors.length >= 1000) {
+        _descriptors.remove(_descriptors.keys.first);
+      }
+      _descriptors[key] = result;
+      metadataChanges.value++;
+      return result;
+    } finally {
+      _metadataBusy = false;
+    }
+  }
+
   Future<void> init() async {
     if (_initialized) return;
     await Future.wait([RustLib.init(), loadTokenMeta()]);
@@ -638,19 +884,31 @@ class WalletService {
   /// Caches [meta] (name, decimals, emission, icon) for its token id. Call
   /// [persistTokenMeta] afterwards to keep it across launches.
   void rememberTokenMeta(TokenBalance meta) {
+    if (utf8
+            .encode(jsonEncode({'name': meta.name, 'iconUrl': meta.iconUrl}))
+            .length >
+        16384)
+      return;
+    _tokenMeta.remove(meta.id);
+    while (_tokenMeta.length >= 1000) {
+      _tokenMeta.remove(_tokenMeta.keys.first);
+    }
     _tokenMeta[meta.id] = meta;
     _tokenMetaDirty = true;
   }
 
-  /// Token metadata is public chain data and never changes for a given id,
-  /// so it is safe to keep in plain preferences and skip the node next time.
+  /// Legacy cache records have no provenance and migrate as partial only.
+  /// New descriptors never enter this app-wide, unencrypted store.
   Future<void> loadTokenMeta() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_tokenMetaKey);
-      if (raw == null || raw.isEmpty) return;
+      if (raw == null ||
+          raw.isEmpty ||
+          utf8.encode(raw).length > 16 * 1024 * 1024)
+        return;
       final map = jsonDecode(raw) as Map<String, dynamic>;
-      for (final entry in map.entries) {
+      for (final entry in map.entries.take(1000)) {
         final v = entry.value;
         if (v is! Map) continue;
         _tokenMeta[entry.key] = TokenBalance(
@@ -660,6 +918,7 @@ class WalletService {
           decimals: (v['decimals'] as num?)?.toInt() ?? 0,
           emissionAmount: (v['emissionAmount'] as num?)?.toInt(),
           iconUrl: v['iconUrl'] as String?,
+          metadataState: MetadataState.partial,
         );
       }
     } catch (_) {
@@ -753,8 +1012,10 @@ class WalletService {
     String passphrase = '',
     String? walletId,
   }) async {
-    final raw = await RustLib.instance.api
-        .crateApiWalletCreate(mnemonicPhrase: mnemonic, passphrase: passphrase);
+    final raw = await RustLib.instance.api.crateApiWalletCreate(
+      mnemonicPhrase: mnemonic,
+      passphrase: passphrase,
+    );
     final map = jsonDecode(raw) as Map<String, dynamic>;
     final id = walletId ?? const Uuid().v4();
     final session = WalletSession(
@@ -768,11 +1029,17 @@ class WalletService {
   }
 
   Future<String> wrapKeyWithPin(String wrapKey, String pin) {
-    return RustLib.instance.api.crateApiWrapKeyWithPin(wrapKeyHex: wrapKey, pin: pin);
+    return RustLib.instance.api.crateApiWrapKeyWithPin(
+      wrapKeyHex: wrapKey,
+      pin: pin,
+    );
   }
 
   Future<String> unwrapKeyWithPin(String pinWrapJson, String pin) {
-    return RustLib.instance.api.crateApiUnwrapKeyWithPin(pinWrapJson: pinWrapJson, pin: pin);
+    return RustLib.instance.api.crateApiUnwrapKeyWithPin(
+      pinWrapJson: pinWrapJson,
+      pin: pin,
+    );
   }
 
   /// Restore a wallet from an encrypted seed JSON blob.
@@ -797,6 +1064,7 @@ class WalletService {
   Future<void> lockForSwitch() => _lock(null, switching: true);
 
   Future<void> _lock(String? walletId, {required bool switching}) async {
+    clearSessionMetadata();
     final wid = walletId ?? _currentWalletId;
     final active = wid == _currentWalletId;
     final id = _handles[wid];
@@ -854,11 +1122,7 @@ class WalletService {
       final meta = all[id];
       final info = meta != null
           ? WalletInfo.fromJson(meta)
-          : WalletInfo(
-              walletId: id,
-              name: 'Wallet',
-              createdAt: DateTime.now(),
-            );
+          : WalletInfo(walletId: id, name: 'Wallet', createdAt: DateTime.now());
       infos.add(info.copyWith(isUnlocked: _handles.containsKey(id)));
     }
     return orderWallets(infos, await walletOrder());
@@ -931,7 +1195,11 @@ class WalletService {
 
   /// Pin a specific address index as the primary send/receive address for this wallet.
   /// Pass `null` to reset to the default (index 0).
-  Future<void> setPinnedAddressIndex(String walletId, int? index, {String? address}) async {
+  Future<void> setPinnedAddressIndex(
+    String walletId,
+    int? index, {
+    String? address,
+  }) async {
     final meta = await _loadWalletMeta(walletId);
     await _upsertWalletMeta(
       walletId,
@@ -948,10 +1216,8 @@ class WalletService {
 
   /// Fetches metadata for any of [ids] not yet known and persists it.
   Future<void> prefetchTokenMeta(Iterable<String> ids) async {
-    final missing = ids.where((id) => id.isNotEmpty && !_tokenMeta.containsKey(id)).toSet();
-    if (missing.isEmpty) return;
-    await Future.wait(missing.map((id) => tokenMeta(id, 0)));
-    await persistTokenMeta();
+    // Deliberately cache-only. Receiving or displaying an ID is not consent
+    // to disclose it to a metadata provider.
   }
 
   /// Delete a wallet and all its secure storage.
@@ -972,8 +1238,10 @@ class WalletService {
 
   Future<String> deriveAddress(int index) {
     _requireUnlocked();
-    return RustLib.instance.api
-        .crateApiDeriveAddress(handleId: _handleId!, index: index);
+    return RustLib.instance.api.crateApiDeriveAddress(
+      handleId: _handleId!,
+      index: index,
+    );
   }
 
   /// Derive like [deriveAddress] but return null on failure (e.g. an index
@@ -1060,9 +1328,12 @@ class WalletService {
   }
 
   /// A fresh one-time address for our own stealth change, with its script.
-  Future<Map<String, dynamic>> stealthSelfChangeTarget(String stealthAddress) async {
-    final raw = await RustLib.instance.api
-        .crateApiStealthSelfChangeTarget(stealthAddress: stealthAddress);
+  Future<Map<String, dynamic>> stealthSelfChangeTarget(
+    String stealthAddress,
+  ) async {
+    final raw = await RustLib.instance.api.crateApiStealthSelfChangeTarget(
+      stealthAddress: stealthAddress,
+    );
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
@@ -1167,7 +1438,9 @@ class WalletService {
 
   /// Like [sendErg], returning the whole result: `tx_id`, fees, and
   /// `output_box_ids`, the ids of the transaction's outputs.
-  Future<Map<String, dynamic>> sendErgDetailed({required int preparationId}) async {
+  Future<Map<String, dynamic>> sendErgDetailed({
+    required int preparationId,
+  }) async {
     _requireUnlocked();
     final raw = await RustLib.instance.api.crateApiSendErg(
       handleId: _handleId!,
@@ -1209,16 +1482,20 @@ class WalletService {
   /// The published `stealth…` string for stealth identity [index].
   Future<String> stealthAddressAt(int index) {
     _requireUnlocked();
-    return RustLib.instance.api
-        .crateApiStealthAddressAt(handleId: _handleId!, index: index);
+    return RustLib.instance.api.crateApiStealthAddressAt(
+      handleId: _handleId!,
+      index: index,
+    );
   }
 
   /// Tell the handle to scan and spend with identities `0..=index`.
   /// Returns how many identities are in use afterwards.
   Future<int> stealthUseIdentity(int index) {
     _requireUnlocked();
-    return RustLib.instance.api
-        .crateApiStealthUseIdentity(handleId: _handleId!, index: index);
+    return RustLib.instance.api.crateApiStealthUseIdentity(
+      handleId: _handleId!,
+      index: index,
+    );
   }
 
   /// Which stealth identities hold funds in [explorerBoxesJson], for a
@@ -1347,21 +1624,30 @@ class WalletService {
   /// selection spends them; an empty list frees everything.
   void mixSetReservedFunding(String reservationsJson) {
     if (!isUnlocked) return;
-    RustLib.instance.api.crateApiMixSetReservedFunding(handleId: _handleId!, reservationsJson: reservationsJson);
+    RustLib.instance.api.crateApiMixSetReservedFunding(
+      handleId: _handleId!,
+      reservationsJson: reservationsJson,
+    );
   }
 
   /// Boxes that came out of a mix: automatic coin selection leaves them
   /// alone, and a hand-picked set may hold them only on their own.
   void mixSetMixedBoxes(List<String> boxIds) {
     if (!isUnlocked) return;
-    RustLib.instance.api.crateApiMixSetMixedBoxes(handleId: _handleId!, boxIds: boxIds);
+    RustLib.instance.api.crateApiMixSetMixedBoxes(
+      handleId: _handleId!,
+      boxIds: boxIds,
+    );
   }
 
   /// The key for one mix, for the background job's keystore. It can spend
   /// that mix's boxes and nothing else.
   Future<Uint8List> mixExportKey(int mixId) {
     _requireUnlocked();
-    return RustLib.instance.api.crateApiMixExportKey(handleId: _handleId!, mixId: mixId);
+    return RustLib.instance.api.crateApiMixExportKey(
+      handleId: _handleId!,
+      mixId: mixId,
+    );
   }
 
   /// Everything a preparation will do, for the confirm sheet's details.
@@ -1724,7 +2010,10 @@ class WalletService {
   }
 
   /// Broadcasts signed transaction JSON and returns the tx id.
-  Future<String> submitSignedTransaction(String txJson, {String? nodeUrl}) async {
+  Future<String> submitSignedTransaction(
+    String txJson, {
+    String? nodeUrl,
+  }) async {
     final txId = await RustLib.instance.api.crateApiSubmitSignedTransaction(
       txJson: txJson,
       nodeUrl: nodeUrl,
@@ -1767,13 +2056,21 @@ class WalletService {
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> getBalance(String address, {String? nodeUrl}) async {
-    final raw = await RustLib.instance.api
-        .crateApiGetBalance(address: address, nodeUrl: nodeUrl);
+  Future<Map<String, dynamic>> getBalance(
+    String address, {
+    String? nodeUrl,
+  }) async {
+    final raw = await RustLib.instance.api.crateApiGetBalance(
+      address: address,
+      nodeUrl: nodeUrl,
+    );
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
-  Future<List<TokenBalance>> tokensFor(String address, {String? nodeUrl}) async {
+  Future<List<TokenBalance>> tokensFor(
+    String address, {
+    String? nodeUrl,
+  }) async {
     final map = await getBalance(address, nodeUrl: nodeUrl);
     return hydrateTokens(map['tokens']);
   }
@@ -1820,7 +2117,11 @@ class WalletService {
           final off = perAddressOffsets != null
               ? (perAddressOffsets[address] ?? 0)
               : offset;
-          final raw = await getTransactionHistory(address, limit: limit, offset: off);
+          final raw = await getTransactionHistory(
+            address,
+            limit: limit,
+            offset: off,
+          );
           ok++;
           final decoded = jsonDecode(raw) as List;
           if (perAddressOffsets != null) {
@@ -1859,36 +2160,16 @@ class WalletService {
   }
 
   Future<TokenBalance> tokenMeta(String id, int amount) async {
-    final cached = _tokenMeta[id];
-    if (cached != null) {
-      return TokenBalance(
-        id: id,
-        amount: amount,
-        name: cached.name,
-        decimals: cached.decimals,
-        emissionAmount: cached.emissionAmount,
-        iconUrl: cached.iconUrl,
-      );
-    }
-    try {
-      final raw = await RustLib.instance.api.crateApiGetTokenInfo(tokenId: id);
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final info = TokenBalance(
-        id: id,
-        amount: amount,
-        name: map['name'] as String?,
-        decimals: (map['decimals'] as num?)?.toInt() ?? 0,
-        emissionAmount: (map['emissionAmount'] as num?)?.toInt(),
-        iconUrl: map['iconUrl'] as String? ?? map['icon_url'] as String?,
-      );
-      rememberTokenMeta(info);
-      return info;
-    } catch (_) {
-      return TokenBalance(id: id, amount: amount);
-    }
+    return cachedTokenMeta(id)?.withHolding(amount) ??
+        TokenBalance(id: id, amount: amount);
   }
 
-  Future<String> getTransactionHistory(String address, {int limit = 20, int offset = 0, String? nodeUrl}) {
+  Future<String> getTransactionHistory(
+    String address, {
+    int limit = 20,
+    int offset = 0,
+    String? nodeUrl,
+  }) {
     return RustLib.instance.api.crateApiGetTransactionHistory(
       address: address,
       nodeUrl: nodeUrl,
@@ -1920,16 +2201,20 @@ class WalletService {
         if (all.length >= maxUnspentBoxesTotal) break;
         var offset = 0;
         while (all.length < maxUnspentBoxesTotal) {
-          final endpoint = '$normalizedUrl/blockchain/box/unspent/byAddress'
+          final endpoint =
+              '$normalizedUrl/blockchain/box/unspent/byAddress'
               '?offset=$offset&limit=$limit';
           final response = await client
-              .post(Uri.parse(endpoint),
-                  headers: {'Content-Type': 'application/json'},
-                  body: jsonEncode(addr))
+              .post(
+                Uri.parse(endpoint),
+                headers: {'Content-Type': 'application/json'},
+                body: jsonEncode(addr),
+              )
               .timeout(const Duration(seconds: 15));
           if (response.statusCode != 200) {
             throw Exception(
-                'Node returned ${response.statusCode} for unspent boxes');
+              'Node returned ${response.statusCode} for unspent boxes',
+            );
           }
           final body = response.body;
           if (body.isEmpty) break;
@@ -2027,7 +2312,9 @@ class WalletService {
         // Progress already broadcast is preserved; a total failure is a real
         // error the caller must see rather than an empty success.
         if (txIds.isEmpty) rethrow;
-        debugPrint('argus: consolidation stopped after ${txIds.length} batch(es): $e');
+        debugPrint(
+          'argus: consolidation stopped after ${txIds.length} batch(es): $e',
+        );
         break;
       }
     }
@@ -2053,11 +2340,14 @@ class WalletService {
 
   /// Compute total balances and summary from a local WalletDatabase JSON snapshot.
   Future<Map<String, dynamic>> computeDbSummary(String dbJson) async {
-    final raw = await RustLib.instance.api.crateApiDbComputeSummary(dbJson: dbJson);
+    final raw = await RustLib.instance.api.crateApiDbComputeSummary(
+      dbJson: dbJson,
+    );
     return jsonDecode(raw) as Map<String, dynamic>;
   }
 
   void _setHandle(String walletId, BigInt id) {
+    clearSessionMetadata();
     // Drop overlays tied to the outgoing key before publishing the new view.
     walletSyncController.deactivate();
     stealthService.reset();
@@ -2091,7 +2381,9 @@ class WalletService {
       return empty;
     }
     final decoded = jsonDecode(raw) as Map<String, dynamic>;
-    final all = decoded.map((k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)));
+    final all = decoded.map(
+      (k, v) => MapEntry(k, Map<String, dynamic>.from(v as Map)),
+    );
     _metaCache = all;
     return all;
   }

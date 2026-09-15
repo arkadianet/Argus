@@ -141,7 +141,6 @@ void main() {
       expect(api.calls, [
         'balance:b',
         'history:b',
-        'meta:shared-c',
         'balance:c',
         'history:c',
       ]);
@@ -153,7 +152,7 @@ void main() {
       ); // No native wallet handle exists.
       expect(c.balanceNano, 99);
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getString('argus_token_meta_v2'), contains('shared-c'));
+      expect(prefs.getString('argus_token_meta_v2'), isNull);
       final known = await WalletDatabaseService.lastKnownBalance('w2');
       expect(known!.tokens.single.amount, 2);
       expect(known.balanceNano, 7);
@@ -161,7 +160,7 @@ void main() {
       c.activateWallet('w2');
       expect(
         c.tokens.single.name,
-        'Shared',
+        isNull,
       ); // Before any hydrate/network await.
       expect(c.recentTxs.single['tx_id'], 'shared-tx');
       expect(c.statusLabel(online: true), contains('known addresses only'));

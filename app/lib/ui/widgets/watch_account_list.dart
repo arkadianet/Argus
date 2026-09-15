@@ -87,13 +87,24 @@ class _ImportAccountDialogState extends State<_ImportAccountDialog> {
 }
 
 class WatchAccountList extends StatelessWidget {
-  const WatchAccountList({super.key});
+  const WatchAccountList({
+    super.key,
+    this.selectedAccount,
+    this.hideBalances = false,
+  });
+
+  /// The dashboard selects one account; the overview continues to show all.
+  final WatchAccount? selectedAccount;
+  final bool hideBalances;
   @override
   Widget build(BuildContext context) => ListenableBuilder(
     listenable: watchAccountService,
     builder: (context, _) => Column(
       children: [
-        for (final account in watchAccountService.accounts)
+        for (final account
+            in selectedAccount == null
+                ? watchAccountService.accounts
+                : [selectedAccount!])
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -110,10 +121,9 @@ class WatchAccountList extends StatelessWidget {
                     'Discovery stops after 20 unused addresses. Payments beyond a larger gap can be missed.',
                   ),
                   if (account.snapshot case final snapshot?) ...[
-                    Text(formatErg(snapshot.balance)),
-                    Text('First address: ${snapshot.addresses.first}'),
-                    for (final token in snapshot.tokens.entries)
-                      Text('${token.value} base units · ${token.key}'),
+                    Text(
+                      hideBalances ? '•••••• ERG' : formatErg(snapshot.balance),
+                    ),
                     Wrap(
                       spacing: 8,
                       children: [
@@ -175,7 +185,14 @@ class WatchAccountList extends StatelessWidget {
                         ),
                       ],
                     ),
+                    Text('First address: ${snapshot.addresses.first}'),
+                    for (final token in snapshot.tokens.entries)
+                      Text(
+                        '${hideBalances ? '••••' : token.value} base units · ${token.key}',
+                      ),
                   ],
+                  if (account.snapshot == null)
+                    const Text('Balance unavailable'),
                   if (account.error != null) Text(account.error!),
                   Wrap(
                     spacing: 8,
@@ -210,11 +227,12 @@ class WatchAccountList extends StatelessWidget {
               ),
             ),
           ),
-        OutlinedButton.icon(
-          onPressed: () => addWatchAccount(context),
-          icon: const Icon(Icons.account_tree_outlined),
-          label: const Text('Watch an extended public key'),
-        ),
+        if (selectedAccount == null)
+          OutlinedButton.icon(
+            onPressed: () => addWatchAccount(context),
+            icon: const Icon(Icons.account_tree_outlined),
+            label: const Text('Watch an extended public key'),
+          ),
       ],
     ),
   );
