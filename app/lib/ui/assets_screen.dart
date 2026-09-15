@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../format.dart';
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
 import '../services/token_pricer.dart';
@@ -97,7 +98,9 @@ class _AssetsScreenState extends State<AssetsScreen> {
                   if (live.balanceNano == null)
                     const Text('Holdings not loaded'),
                   if (live.lastSyncedAt != null)
-                    Text('Holdings last synced ${live.lastSyncedAt}'),
+                    Text(
+                      'Holdings last synced ${formatSyncAge(live.lastSyncedAt)}',
+                    ),
                 ],
               ),
             ),

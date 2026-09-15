@@ -56,10 +56,14 @@ class _RemotePreviewState extends State<RemotePreview>
   }
 
   void _securityChanged() {
-    if (!_allowed) {
-      _clear();
+    // Security transitions latch until details are reopened.
+    if (privacyService.hideBalances ||
+        !walletService.isUnlocked ||
+        _wallet != walletService.currentWalletId.value) {
       _concealed = true;
     }
+    // Offline cancels current work but permits fresh consent after reconnecting.
+    if (!_allowed) _clear();
     if (mounted) setState(() {});
   }
 

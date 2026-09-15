@@ -195,7 +195,10 @@ pub fn describe(id: &str, source: &str, index: &Value, bx: Option<&Value>) -> Va
     out["metadataState"] = json!("complete");
     for (reg, field) in [("R4", "name"), ("R5", "description"), ("R6", "decimals")] {
         let Some(v) = regs.get(reg) else {
-            out["metadataState"] = json!("partial");
+            // Missing evidence must not erase malformed or contradictory evidence.
+            if out["metadataState"] == "complete" {
+                out["metadataState"] = json!("partial");
+            }
             continue;
         };
         let text = bytes(v).and_then(|b| String::from_utf8(b).map_err(|_| ()));
@@ -311,6 +314,29 @@ mod tests {
             describe("token", "p", &i, Some(&b))["decimalsEvidence"],
             "invalid"
         );
+    }
+    #[test]
+    fn missing_registers_do_not_weaken_invalid_or_conflicting_metadata() {
+        for (bad, missing) in [("R4", "R5"), ("R5", "R4")] {
+            for state in ["invalid", "conflict"] {
+                let (mut i, mut b) = fixture();
+                let field = if bad == "R4" { "name" } else { "description" };
+                if state == "invalid" {
+                    b["additionalRegisters"][bad] = json!("0400");
+                } else {
+                    i[field] = json!("contradicts register");
+                }
+                b["additionalRegisters"].as_object_mut().unwrap().remove(missing);
+                assert_eq!(
+                    describe("token", "p", &i, Some(&b))["metadataState"],
+                    state,
+                    "{state} {bad}, missing {missing}"
+                );
+            }
+        }
+        let (i, mut b) = fixture();
+        b["additionalRegisters"].as_object_mut().unwrap().remove("R5");
+        assert_eq!(describe("token", "p", &i, Some(&b))["metadataState"], "partial");
     }
     #[test]
     fn preserves_hostile_text_as_inert_inspectable_data() {

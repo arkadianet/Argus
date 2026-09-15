@@ -79,7 +79,7 @@ Paths below are relative to this document; findings describe the research baseli
 
 | Existing component | Reuse and actual gap |
 | --- | --- |
-| [TokenBalance and metadata cache](../../../app/lib/services/wallet_service.dart) | Already carries ID, holding, decimals, emission, icon URL and stealth quantity. `isNft` is exactly `amount == 1 && decimals == 0 && (emissionAmount == null || emissionAmount == 1)`. A failed metadata lookup returns default decimals zero and unknown emission, so one COMET can become an NFT. There is no R7 check. Add evidence/state fields rather than another holding model. |
+| [TokenBalance and metadata cache](../../../app/lib/services/wallet_service.dart) | Already carries ID, holding, decimals, emission, icon URL and stealth quantity. `isNft` is exactly `amount == 1 && decimals == 0 && (emissionAmount == null \|\| emissionAmount == 1)`. A failed metadata lookup returns default decimals zero and unknown emission, so one COMET can become an NFT. There is no R7 check. Add evidence/state fields rather than another holding model. |
 | [Rust token lookup](../../../rust/crates/wallet-net/src/client.rs), [FFI enrichment](../../../rust/crates/wallet-ffi/src/api.rs) | Node extraIndex token lookup with explorer fallback already exists. FFI reads issuance R7/R9 and emits `mediaKind` and `iconUrl`. Dart discards `mediaKind`; description, R8 hash and source/completeness are also absent from its model. `iconUrl` is extracted independently of a recognized R7, so even arbitrary token R9 can become an avatar URL. |
 | [Register helpers](../../../rust/crates/wallet-ffi/src/api_ergopay_impl.rs) | Hand-decoded byte collection and exact serialized R7 strings support three media kinds. No audio tuple, hash checking or collection marker. Decoder accepts a valid prefix with trailing bytes. Reuse the pinned Sigma library with strict type/length/full-consumption checks, not more bespoke hex cases. |
 | [Assets](../../../app/lib/ui/assets_screen.dart), [dashboard](../../../app/lib/ui/dashboard_screen.dart), [detail sheet](../../../app/lib/ui/widgets/token_detail_sheet.dart) | Assets already has Tokens/NFTs sections and live holdings; dashboard orders fungibles before NFTs and caps displayed assets at four. Details already have ID, explorer and Send. Add a filter/search and better details; no new ownership scan or signing path. Assets builds all section children eagerly and needs lazy rows for large holdings. |
@@ -318,8 +318,37 @@ The new hostile fixtures test claimed-PNG/non-PNG bytes, PNG dimension bombs bef
 
 ### Preview commit status
 
-Staging for `Load NFT previews through a user-configured IPFS gateway` failed:
+The initial sandbox attempt to stage `Load NFT previews through a user-configured IPFS gateway` failed:
 
 `fatal: Unable to create '/home/rkadias/coding/arkadianet/Argus/.git/worktrees/nftprev/index.lock': Read-only file system`
 
-Per the author instruction, all preview changes remain **uncommitted** on `feat/nft-previews`. No alternate staging path or second attempt was used. No push or PR was performed.
+That attempt left the preview changes uncommitted, as instructed, without an alternate staging path, push or PR. The preview implementation has since been committed and pushed on `feat/nft-previews` as **PR #122**. The consent, gateway and privacy decisions recorded above remain the implemented design.
+
+### PR #122 review follow-up
+
+Fixed missing-register downgrades of invalid/conflicting metadata, persisted the
+preview opt-out before publishing it, preserved raw and display issuer names
+when copying holdings, reused `formatSyncAge` in Assets, and separated transient
+offline cancellation from latched security concealment. Regression tests cover
+both register orderings, both failed opt-out directions, raw-name preservation,
+reconnection with fresh consent, and hidden/background concealment.
+
+Verification on Flutter 3.41.2 / Dart 3.11.0:
+
+| Command | Result |
+| --- | --- |
+| `cd rust && cargo test --workspace` | 837 passed, 0 failed, 15 ignored across 41 suites |
+| `cd app && flutter analyze` | No issues found |
+| `cd app && flutter test` | 890 passed, 0 failed, 1 skipped |
+| `scripts/build_android.sh` | Both tracked Android libraries rebuilt |
+| `scripts/release_check.sh libs` | Both libraries match a fresh build; version checks passed |
+| `git diff --check` | Passed |
+
+No FRB signatures changed. The SDK and pub cache were writable worktree-local
+copies; `TMPDIR` and `CARGO_TARGET_DIR` also pointed inside the worktree. The exact
+verification environment is saved in `logs/verification-env.sh`, with results
+in `logs/review-*.log`. The independently verified CI pin and dependency-lock
+change is documented in [Flutter toolchain notes](../../flutter-toolchain.md).
+Staging the CI fix failed on the same read-only Git `index.lock` location, so
+these follow-up changes remain uncommitted as instructed. Nothing was pushed
+and no additional PR was opened.

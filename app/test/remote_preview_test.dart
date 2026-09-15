@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/network_controller.dart';
+import 'package:argus_wallet/services/privacy_service.dart';
 import 'package:argus_wallet/services/preview/preview_service.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/ui/widgets/remote_preview.dart';
@@ -201,6 +202,53 @@ void main() {
           );
       },
     );
+  }
+  testWidgets('offline cancels consent and reconnect permits a fresh request', (
+    tester,
+  ) async {
+    await configure();
+    final deny = NoPreviewHttp(), previous = HttpOverrides.current;
+    HttpOverrides.global = deny;
+    addTearDown(() => HttpOverrides.global = previous);
+    await mount(tester, token());
+    await tester.tap(find.text('Load preview'));
+    await tester.pumpAndSettle();
+    networkController.activeUrl = null;
+    // Exercise the same notification emitted after a network probe.
+    // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+    networkController.notifyListeners();
+    await tester.pump();
+    networkController.activeUrl = 'https://node.example';
+    // ignore: invalid_use_of_protected_member, invalid_use_of_visible_for_testing_member
+    networkController.notifyListeners();
+    await tester.pump();
+    await tester.tap(find.widgetWithText(TextButton, 'Load preview').last);
+    await tester.pumpAndSettle();
+    expect(deny.calls, 0);
+    expect(find.text('Load preview'), findsOneWidget);
+    await tester.tap(find.text('Load preview'));
+    await tester.pumpAndSettle();
+    expect(find.text('Load preview through gateway.example?'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+  });
+  for (final transition in ['hidden', 'background']) {
+    testWidgets('$transition remains latched after returning', (tester) async {
+      await configure();
+      await mount(tester, token());
+      expect(find.text('Load preview'), findsOneWidget);
+      if (transition == 'hidden') {
+        await privacyService.setHideBalances(true);
+        await privacyService.setHideBalances(false);
+      } else {
+        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+        tester.binding.handleAppLifecycleStateChanged(
+          AppLifecycleState.resumed,
+        );
+      }
+      await tester.pump();
+      expect(find.text('Load preview'), findsNothing);
+    });
   }
   testWidgets('locked and offline details offer no load action', (
     tester,

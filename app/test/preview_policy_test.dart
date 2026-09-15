@@ -7,6 +7,8 @@ import 'package:argus_wallet/services/preview/preview_service.dart';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
+import 'support/failing_preferences.dart';
 
 const cid = 'QmYwAPJzv5CZsnAzt8auVZRnG6FMmQLGzsh6coP7u8MLhM';
 final png = base64Decode(
@@ -43,6 +45,30 @@ class FixtureTransport extends PreviewTransport {
 }
 
 void main() {
+  for (final initial in [false, true]) {
+    test('failed opt-out write preserves $initial without publishing', () async {
+      SharedPreferences.setMockInitialValues({});
+      SharedPreferencesStorePlatform.instance = FailingPreferences({
+        'flutter.preview_never': initial,
+      });
+      final settings = PreviewSettings();
+      addTearDown(settings.dispose);
+      addTearDown(() => SharedPreferences.setMockInitialValues({}));
+      await settings.load();
+      final revision = settings.revision;
+      var notifications = 0;
+      settings.addListener(() => notifications++);
+      await expectLater(settings.setNever(!initial), fails);
+      expect(settings.never, initial);
+      expect(settings.revision, revision);
+      expect(notifications, 0);
+      // Reload disk rather than the legacy SharedPreferences optimistic cache.
+      await (await SharedPreferences.getInstance()).reload();
+      await settings.load();
+      expect(settings.never, initial);
+    });
+  }
+
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() => SharedPreferences.setMockInitialValues({}));
   test('PNG MIME with non-PNG bytes refuses before decode', () async {

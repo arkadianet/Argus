@@ -185,25 +185,31 @@ class TokenBalance {
         : 'Token · metadata unavailable';
   }
 
-  TokenBalance withHolding(int amount, {int? stealthAmount}) => TokenBalance(
-    id: id,
-    amount: amount,
-    name: name,
-    decimals: decimals,
-    emissionAmount: emissionAmount,
-    iconUrl: iconUrl,
-    stealthAmount: stealthAmount ?? this.stealthAmount,
-    description: description,
-    supplyEvidence: supplyEvidence,
-    decimalsEvidence: decimalsEvidence,
-    declaredAssetKind: declaredAssetKind,
-    metadataState: metadataState,
-    mediaState: mediaState,
-    source: source,
-    issuanceBoxId: issuanceBoxId,
-    issuanceHash: issuanceHash,
-    rawRegisters: rawRegisters,
-  );
+  TokenBalance withHolding(int amount, {int? stealthAmount}) =>
+      TokenBalance._withHolding(
+        this,
+        amount,
+        stealthAmount ?? this.stealthAmount,
+      );
+
+  // Copy both representations verbatim; only issuer input is sanitised.
+  TokenBalance._withHolding(TokenBalance token, this.amount, this.stealthAmount)
+    : id = token.id,
+      name = token.name,
+      originalName = token.originalName,
+      decimals = token.decimals,
+      emissionAmount = token.emissionAmount,
+      iconUrl = token.iconUrl,
+      description = token.description,
+      supplyEvidence = token.supplyEvidence,
+      decimalsEvidence = token.decimalsEvidence,
+      declaredAssetKind = token.declaredAssetKind,
+      metadataState = token.metadataState,
+      mediaState = token.mediaState,
+      source = token.source,
+      issuanceBoxId = token.issuanceBoxId,
+      issuanceHash = token.issuanceHash,
+      rawRegisters = token.rawRegisters;
 
   String get label {
     final n = issuerText(name).trim();

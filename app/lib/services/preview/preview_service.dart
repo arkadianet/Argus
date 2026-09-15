@@ -30,12 +30,12 @@ class PreviewSettings extends ChangeNotifier {
   }
 
   Future<void> setNever(bool value) async {
-    _never = value;
-    revision++;
-    notifyListeners();
     final prefs = await SharedPreferences.getInstance();
     if (!await prefs.setBool('preview_never', value))
       refuse('Could not save preview setting.');
+    _never = value;
+    revision++;
+    notifyListeners();
   }
 
   Future<void> setGateway(String text, {GatewayLookup? lookup}) async {
