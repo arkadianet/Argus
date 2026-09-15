@@ -11,6 +11,23 @@ import 'network_controller.dart';
 import 'notification_service.dart';
 import 'wallet_service.dart';
 
+/// Assets includes stealth holdings, but protocol orders use public inputs.
+/// Only block when the requested token amount actually needs that pocket.
+String? duckpoolsStealthFundingIssue(
+  List<TokenBalance> holdings, String tokenId, int required,
+) {
+  final matching = holdings.where((t) => t.id == tokenId);
+  final total = matching.fold<int>(0, (n, t) => n + t.amount);
+  final stealth = matching.fold<int>(0, (n, t) => n + t.stealthAmount);
+  if (stealth <= 0 || required <= total - stealth) return null;
+  return 'Assets includes $stealth base units of token $tokenId in Stealth. '
+      'Duckpools protocol funding uses public boxes, which hold ${total - stealth}; '
+      'this order needs $required. '
+      'In Send, choose the Stealth pocket and transfer the required tokens to your '
+      'public receive address, then retry after confirmation. '
+      'This makes the transferred funds public. Nothing was sent.';
+}
+
 /// One Duckpools lending pool as deployed.
 class DuckPool {
   const DuckPool({

@@ -1,3 +1,4 @@
+import 'package:argus_wallet/services/duckpools_service.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -114,6 +115,25 @@ class _DisplayGateway implements WalletSyncGateway {
 
 // Metadata for tokens seen only in stealth boxes (CodeRabbit, PR #58)
 void _stealthMetadataTests() {
+  test('Duckpools receipt is visible in Assets with no public balance', () {
+    const id = 'fc888e0eed50a4042324793a7894134d83c7aaf5c99f4bf643e7e2b4e71e0095';
+    final merged = mergeStealthTokens([], [
+      TokenBalance(id: id, amount: 482930456, decimals: 9,
+          name: 'Lend Token ERG-0e', stealthAmount: 482930456),
+    ]);
+    expect(merged.single.amount, 482930456);
+    expect(merged.single.amount - merged.single.stealthAmount, 0);
+    final issue = duckpoolsStealthFundingIssue(merged, id, 482930456)!;
+    expect(issue, contains('482930456 base units'));
+    expect(issue, contains('Stealth pocket'));
+    expect(issue, contains('makes the transferred funds public'));
+    expect(issue, isNot(contains('have 0')));
+    final both = mergeStealthTokens([TokenBalance(id: id, amount: 482930456)], merged);
+    expect(duckpoolsStealthFundingIssue(both, id, 482930456), isNull);
+    expect(duckpoolsStealthFundingIssue([], id, 482930456), isNull);
+
+  });
+
   test('a stealth-only token keeps its name and decimals', () {
     final merged = mergeStealthTokens(
       const [],
