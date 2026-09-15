@@ -40,7 +40,9 @@ The obsolete co-location explanation is replaced with the actual remaining token
 
 This fix does not grant any protocol access to stealth or privacy-protected mixed boxes.
 
-## Verification
+## Verification before the watched-address-send rebase
+
+The table below records the original token-containment work before rebasing onto the watched-address-send work: 842 passing Cargo tests and 891 passing Flutter tests. PR #123 subsequently recorded 844 and 893 for the combined branch. Those are measurements of different scopes; the original results are retained here rather than replaced. The current review verification is recorded separately below.
 
 The pinned Flutter SDK is used from the existing worktree-local `logs/flutter` copy because the installed SDK cache is read-only. The Flutter pin and both lockfiles are unchanged. No `#[frb]` signature changed; bindings need no regeneration.
 
@@ -57,7 +59,7 @@ Commands run from the indicated directory (paths relative to that directory):
 
 Logs: `logs/containment-workspace.log`, `logs/containment-analyze.log`, `logs/containment-flutter-test.log`, `logs/containment-android.log`, and `logs/containment-release-libs.log`.
 
-## Commit status
+## Original commit status before the rebase
 
 On `fix/duckpools-withdraw`, staging the original diagnostics separately failed:
 
@@ -66,3 +68,33 @@ fatal: Unable to create '/home/rkadias/coding/arkadianet/Argus/.git/worktrees/du
 ```
 
 Per instruction, all work remains uncommitted. The original diagnostics binary patch and report were saved separately under `logs/diagnostics-before-containment.patch` and `logs/diagnostics-before-containment.md` (ignored local artifacts), preserving the starting state for splitting commits later. Intended plain commit messages: `Explain Duckpools funding exclusions and offer Send recovery` and `Allow token sends from boxes with co-located tokens`. Nothing was pushed and no PR was opened.
+
+
+## Review verification on the combined branch
+
+Measured on 2026-09-16 in `fix/duckpools-withdraw`, based on `f8c6746` with the review fixes in the working tree. This scope includes the watched-address-send rebase and two new Flutter regression tests for the minimum stealth transfer and exact public coverage. Current totals are **844 Cargo tests passed, 0 failed, 15 ignored**, including doc tests, and **895 Flutter tests passed, 0 failed, 1 skipped**. The Flutter total is two higher than the PR's earlier combined-branch total of 893 because of these regression tests.
+
+The diagnostic now computes `required - (total - stealth)` and formats every amount with the pool decimals, using the same formatter as the order screen. With two decimals, 3,000 public base units, 8,000 stealth base units, and a 10,000-base-unit order display as 30 public, 80 stealth, and an order of 100: the minimum transfer is 70 (7,000 base units). Exact public coverage returns no message; a one-base-unit shortfall displays as 0.01.
+
+Commands run from the indicated directory:
+
+| Directory | Exact command | Result |
+| --- | --- | --- |
+| rust | `cargo test --workspace` | Could not start tests: the configured shared target cache is read-only (`/home/rkadias/.cache/cargo-target/debug/.cargo-lock`). Retried below with a writable local target. |
+| rust | `CARGO_TARGET_DIR="$PWD/target" TMPDIR="$PWD/../logs/tmp" cargo test --workspace` | Passed: 844 tests, 0 failed, 15 ignored, summed across 42 result groups including doc tests. |
+| app | `FLUTTER_SUPPRESS_ANALYTICS=true TMPDIR="$PWD/../logs/tmp" ../logs/flutter/bin/flutter analyze` | Passed: no issues. |
+| app | `FLUTTER_SUPPRESS_ANALYTICS=true TMPDIR="$PWD/../logs/tmp" ../logs/flutter/bin/flutter test` | Passed: 895 tests, 0 failed, 1 skipped. |
+| root | `git diff --check` | Passed. |
+
+Logs: `logs/review-workspace.log` (successful retry), `logs/review-analyze.log`, and `logs/review-flutter-test.log`.
+
+The local SDK is Flutter 3.41.2 / Dart 3.11.0. The Flutter pin, lockfiles, bindings, native Rust, and tracked libraries are unchanged. No native rebuild or library release check is needed for these Dart and documentation changes.
+
+### Review commit status
+
+Staging the first finding failed because Git could not create `/home/rkadias/coding/arkadianet/Argus/.git/worktrees/duck/index.lock` on the read-only filesystem. As requested, both findings remain uncommitted. Intended separate plain commit messages:
+
+- `Show the minimum Duckpools stealth funding shortfall`
+- `Record Duckpools verification totals by branch scope`
+
+Nothing was pushed and no PR was opened.
