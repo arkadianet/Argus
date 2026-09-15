@@ -238,7 +238,7 @@ class LiveWalletSyncGateway
 List<TokenBalance> orderTokensForDisplay(List<TokenBalance> tokens) {
   final out = List<TokenBalance>.of(tokens);
   out.sort((a, b) {
-    if (a.isNft != b.isNft) return a.isNft ? 1 : -1;
+    if (a.isCollectible != b.isCollectible) return a.isCollectible ? 1 : -1;
     final byName = a.label.toLowerCase().compareTo(b.label.toLowerCase());
     if (byName != 0) return byName;
     return a.id.compareTo(b.id);
@@ -1000,14 +1000,7 @@ class WalletSyncController extends ChangeNotifier {
       erg += (map['balance_nano_erg'] as num?)?.toInt() ?? 0;
       for (final t in await _gw.hydrateTokens(map['tokens'])) {
         final prev = merged[t.id];
-        merged[t.id] = TokenBalance(
-          id: t.id,
-          amount: (prev?.amount ?? 0) + t.amount,
-          name: t.name,
-          decimals: t.decimals,
-          emissionAmount: t.emissionAmount,
-          iconUrl: t.iconUrl,
-        );
+        merged[t.id] = t.withHolding((prev?.amount ?? 0) + t.amount);
       }
     }
     return _BalanceResult(erg, merged.values.toList(), failed);

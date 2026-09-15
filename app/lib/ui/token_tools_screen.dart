@@ -368,7 +368,7 @@ class _BurnTabState extends State<_BurnTab>
       final t = held.where((t) => t.id == e.key).firstOrNull;
       if (t == null) continue;
       final int? n;
-      if (t.isNft) {
+      if ((t.amount == 1 && t.decimals == 0)) {
         n = 1;
       } else {
         n = parseDecimalToBase(e.value.text, t.decimals);
@@ -490,7 +490,7 @@ class _BurnTabState extends State<_BurnTab>
               value: _picked.containsKey(t.id),
               onChanged: (v) => setState(() {
                 if (v == true) {
-                  _picked[t.id] = TextEditingController(text: t.isNft ? '1' : '');
+                  _picked[t.id] = TextEditingController(text: (t.amount == 1 && t.decimals == 0) ? '1' : '');
                 } else {
                   _picked.remove(t.id)?.dispose();
                 }
@@ -503,11 +503,11 @@ class _BurnTabState extends State<_BurnTab>
                 child: TextField(
                   key: ValueKey('burn-amount-${t.id}'),
                   controller: ctl,
-                  enabled: !t.isNft,
+                  enabled: !(t.amount == 1 && t.decimals == 0),
                   decoration: InputDecoration(
-                    labelText: t.isNft ? '${t.label}: the one unit' : '${t.label} to burn',
-                    helperText: t.isNft ? null : 'Of ${formatTokenAmount(t.amount, t.decimals)}',
-                    suffixIcon: t.isNft
+                    labelText: (t.amount == 1 && t.decimals == 0) ? '${t.label}: the one unit' : '${t.label} to burn',
+                    helperText: (t.amount == 1 && t.decimals == 0) ? null : 'Of ${formatTokenAmount(t.amount, t.decimals)}',
+                    suffixIcon: (t.amount == 1 && t.decimals == 0)
                         ? null
                         : TextButton(
                             onPressed: () => setState(() => ctl.text = formatTokenAmount(t.amount, t.decimals)),

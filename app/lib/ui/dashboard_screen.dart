@@ -1360,17 +1360,17 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   Widget _ledger() {
     return ListenableBuilder(
-      listenable: Listenable.merge([networkController, tokenPricer]),
+      listenable: Listenable.merge([networkController, tokenPricer, walletService.metadataChanges]),
       builder: (context, _) {
         // Stealth holdings are part of what the wallet owns, so they belong
         // in the asset list; each tile knows how much of it is stealth.
-        final holdings = _sync.displayTokens;
-        final fungible = holdings.where((t) => !t.isNft).toList();
-        final nfts = holdings.where((t) => t.isNft).toList();
+        final holdings = _sync.displayTokens.map(walletService.displayMetadata).toList();
+        final fungible = holdings.where((t) => !t.isCollectible).toList();
+        final nfts = holdings.where((t) => t.isCollectible).toList();
         final fragmented = _sync.utxoCount > utxoFragmentationThreshold;
         Widget tokenTile(TokenBalance t) => AssetTile.token(
               t,
-              fiatText: t.isNft ? null : tokenPricer.fiatTextFor(tokenId: t.id, amount: t.amount, decimals: t.decimals),
+              fiatText: t.isCollectible ? null : tokenPricer.fiatTextFor(tokenId: t.id, amount: t.amount, decimals: t.decimals),
               hidden: _balanceHidden,
               onTap: () => _openToken(t),
             );

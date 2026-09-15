@@ -1,45 +1,34 @@
 import 'package:flutter/material.dart';
 
-import '../services/media_url.dart';
 import '../theme/argus_theme.dart';
+import '../services/token_evidence.dart';
 
-/// Round token mark: the token's icon when the node supplied one and it
-/// loads, otherwise the first letter of its label (Σ for ERG).
+/// Local-only token mark. Issuer URIs are inert, including for fungible tokens.
 class TokenAvatar extends StatelessWidget {
   const TokenAvatar({
     super.key,
     required this.label,
     this.iconUrl,
+    this.tokenId,
     this.isErg = false,
     this.radius = 20,
   });
 
   final String label;
   final String? iconUrl;
+  final String? tokenId;
   final bool isErg;
   final double radius;
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final url = resolveMediaUrl(iconUrl);
-    if (url != null) {
-      return ClipOval(
-        child: SizedBox.square(
-          dimension: radius * 2,
-          child: Image.network(
-            url,
-            fit: BoxFit.cover,
-            errorBuilder: (ctx, _, _) => _letter(ctx, dark),
-          ),
-        ),
-      );
-    }
     return _letter(context, dark);
   }
 
   Widget _letter(BuildContext context, bool dark) {
-    final letter = label.isNotEmpty ? label[0].toUpperCase() : '?';
+    final text = issuerText(tokenId ?? label);
+    final letter = text.isNotEmpty ? String.fromCharCode(text.runes.first).toUpperCase() : '?';
     return CircleAvatar(
       radius: radius,
       backgroundColor: isErg

@@ -741,15 +741,8 @@ List<TokenBalance> mergeStealthTokens(
     out.add(
       s == null
           ? t
-          : TokenBalance(
-              id: t.id,
-              amount: t.amount + s.amount,
-              name: t.name,
-              decimals: t.decimals,
-              emissionAmount: t.emissionAmount,
-              iconUrl: t.iconUrl,
-              stealthAmount: t.stealthAmount + s.amount,
-            ),
+          : t.withHolding(t.amount + s.amount,
+              stealthAmount: t.stealthAmount + s.amount),
     );
   }
   out.addAll(byId.values);

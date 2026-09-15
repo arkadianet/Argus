@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
 import '../services/token_pricer.dart';
@@ -8,125 +7,135 @@ import '../services/wallet_sync_controller.dart';
 import '../theme/argus_theme.dart';
 import 'send_screen.dart';
 import 'widgets/asset_tile.dart';
-import 'widgets/empty_state.dart';
-import 'widgets/soft_card.dart';
 import 'widgets/token_detail_sheet.dart';
 
-/// Full asset list for the dashboard's "View all" link: ERG plus every held
-/// token and NFT. Tapping a token opens its detail sheet.
-class AssetsScreen extends StatelessWidget {
+/// A text-first, lazy view of holdings. Opening it never hydrates metadata.
+class AssetsScreen extends StatefulWidget {
   const AssetsScreen({super.key, required this.args});
-
   final WalletRouteArgs args;
-
-  void _openToken(BuildContext context, TokenBalance t) {
-    showTokenDetailSheet(
-      context,
-      token: t,
-      explorerUrl: networkController.explorerToken(t.id),
-      onSend: (token) => Navigator.push(
-        context,
-        fadeRoute(
-          SendScreen(initialAssetId: token.id),
-          settings: RouteSettings(arguments: args),
-        ),
-      ),
-    );
-  }
-
-  /// Uses one live snapshot for sections and emptiness as wallet holdings change.
   @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Assets')),
-      body: ListenableBuilder(
-        listenable: Listenable.merge([
-          networkController,
-          privacyService,
-          tokenPricer,
-          walletSyncController,
-        ]),
-        builder: (context, _) {
-          final live = walletSyncController;
-          final holdings = live.displayTokens;
-          final balance = live.totalNanoWithStealth;
-          final fungible = holdings.where((t) => !t.isNft).toList();
-          final nfts = holdings.where((t) => t.isNft).toList();
-          final hidden = privacyService.hideBalances;
-          return ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-            children: [
-              _section('ERG'),
-              SoftCard(
-                padding: EdgeInsets.zero,
-                child: AssetTile.erg(
-                  balanceNano: balance,
-                  fiatText: networkController.fiatText(balance),
-                  hidden: hidden,
-                ),
-              ),
-              if (fungible.isNotEmpty) ...[
-                _section('Tokens (${fungible.length})'),
-                SoftCard(
-                  padding: EdgeInsets.zero,
-                  child: DividedColumn(
-                    children: [
-                      for (final t in fungible)
-                        AssetTile.token(
-                          t,
-                          fiatText: tokenPricer.fiatTextFor(tokenId: t.id, amount: t.amount, decimals: t.decimals),
-                          hidden: hidden,
-                          onTap: () => _openToken(context, t),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-              if (nfts.isNotEmpty) ...[
-                _section('NFTs (${nfts.length})'),
-                SoftCard(
-                  padding: EdgeInsets.zero,
-                  child: DividedColumn(
-                    children: [
-                      for (final t in nfts)
-                        AssetTile.token(
-                          t,
-                          hidden: hidden,
-                          onTap: () => _openToken(context, t),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-              if (holdings.isEmpty) ...[
-                const SizedBox(height: 16),
-                const SoftCard(
-                  child: EmptyState(
-                    compact: true,
-                    icon: Icons.token_outlined,
-                    title: 'No tokens yet',
-                    body: 'Tokens and NFTs sent to any of your addresses appear here automatically.',
-                  ),
-                ),
-              ],
-            ],
-          );
-        },
-      ),
-    );
-  }
+  State<AssetsScreen> createState() => _AssetsScreenState();
+}
 
-  Widget _section(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10, top: 12),
-      child: Text(
-        text,
-        style: const TextStyle(
-          fontFamily: 'Newsreader',
-          fontWeight: FontWeight.w600,
-          fontSize: 20,
-        ),
+class _AssetsScreenState extends State<AssetsScreen> {
+  bool _collectibles = false;
+  String _query = '';
+  void _open(TokenBalance token) => showTokenDetailSheet(
+    context,
+    token: token,
+    explorerUrl: networkController.explorerToken(token.id),
+    onSend: (t) => Navigator.push(
+      context,
+      fadeRoute(
+        SendScreen(initialAssetId: t.id),
+        settings: RouteSettings(arguments: widget.args),
       ),
-    );
-  }
+    ),
+  );
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    appBar: AppBar(
+      title: const Text('Assets'),
+      actions: [
+        IconButton(
+          tooltip: 'Clear collectible data',
+          icon: const Icon(Icons.delete_outline),
+          onPressed: walletService.clearCollectibleData,
+        ),
+      ],
+    ),
+    body: ListenableBuilder(
+      listenable: Listenable.merge([
+        networkController,
+        privacyService,
+        tokenPricer,
+        walletSyncController,
+        walletService.metadataChanges,
+      ]),
+      builder: (context, _) {
+        final live = walletSyncController;
+        final hidden = privacyService.hideBalances;
+        final holdings = live.displayTokens
+            .map(walletService.displayMetadata)
+            .toList();
+        final rows = holdings
+            .where(
+              (t) =>
+                  (!_collectibles || t.isCollectible) &&
+                  (t.label.toLowerCase().contains(_query) ||
+                      t.id.toLowerCase().contains(_query)),
+            )
+            .toList();
+        final unknown = holdings
+            .where((t) => t.metadataState != MetadataState.complete)
+            .length;
+        return Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(value: false, label: Text('All')),
+                      ButtonSegment(value: true, label: Text('Collectibles')),
+                    ],
+                    selected: {_collectibles},
+                    onSelectionChanged: (s) =>
+                        setState(() => _collectibles = s.single),
+                  ),
+                  TextField(
+                    decoration: const InputDecoration(
+                      labelText: 'Search name or token ID',
+                    ),
+                    enabled: !hidden,
+                    onChanged: (q) => setState(() => _query = q.toLowerCase()),
+                  ),
+                  if (!hidden) Text('$unknown unclassified or incomplete'),
+                  if (live.publicSnapshotOnly || live.stealthBalanceUnknown)
+                    const Text('Public holdings only'),
+                  if (live.balanceNano == null)
+                    const Text('Holdings not loaded'),
+                  if (live.lastSyncedAt != null)
+                    Text('Holdings last synced ${live.lastSyncedAt}'),
+                ],
+              ),
+            ),
+            Expanded(
+              child: hidden
+                  ? const Center(child: Text('Assets hidden'))
+                  : ListView.builder(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 40),
+                      itemCount: rows.length + 1,
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          if (!_collectibles)
+                            return AssetTile.erg(
+                              balanceNano: live.totalNanoWithStealth,
+                              fiatText: networkController.fiatText(
+                                live.totalNanoWithStealth,
+                              ),
+                            );
+                          return rows.isEmpty
+                              ? const Padding(
+                                  padding: EdgeInsets.all(16),
+                                  child: Text(
+                                    'No identified collectibles in loaded holdings',
+                                  ),
+                                )
+                              : const SizedBox.shrink();
+                        }
+                        final token = rows[index - 1];
+                        return AssetTile.token(
+                          token,
+                          onTap: () => _open(token),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
 }

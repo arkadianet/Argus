@@ -9,8 +9,8 @@ import '../token_avatar.dart';
 /// Short display symbol for a token: the first word of its name, or the
 /// start of its id when it has no name.
 String tokenTicker(TokenBalance t) {
-  final name = t.name?.trim();
-  if (name != null && name.isNotEmpty) {
+  final name = issuerText(t.name).trim();
+  if (name.isNotEmpty) {
     return name.contains(' ') ? name.split(' ').first : name;
   }
   return t.id.length > 6 ? t.id.substring(0, 6).toUpperCase() : t.id;
@@ -25,6 +25,7 @@ class AssetTile extends StatelessWidget {
     required this.amountText,
     this.fiatText,
     this.iconUrl,
+    this.tokenId,
     this.isErg = false,
     this.hidden = false,
     this.onTap,
@@ -46,6 +47,7 @@ class AssetTile extends StatelessWidget {
             ? '—'
             : _ergAmount(balanceNano),
         iconUrl = null,
+        tokenId = null,
         isErg = true,
         verified = true,
         caution = false;
@@ -58,11 +60,12 @@ class AssetTile extends StatelessWidget {
     this.onTap,
     this.showChevron = true,
   })  : ticker = tokenTicker(t),
-        name = (t.name?.trim().isNotEmpty ?? false)
-            ? t.name!.trim()
+        name = issuerText(t.name).trim().isNotEmpty
+            ? issuerText(t.name).trim()
             : shorten(t.id, head: 10, tail: 6),
-        amountText = t.isNft ? '1' : formatTokenAmountGrouped(t.amount, t.decimals),
+        amountText = formatTokenAmountGrouped(t.amount, t.decimals),
         iconUrl = t.iconUrl,
+        tokenId = t.id,
         isErg = false,
         verified = isVerifiedToken(t.id),
         caution = cautionedToken(t.id) != null;
@@ -72,6 +75,7 @@ class AssetTile extends StatelessWidget {
   final String amountText;
   final String? fiatText;
   final String? iconUrl;
+  final String? tokenId;
   final bool isErg;
   final bool hidden;
   final VoidCallback? onTap;
@@ -89,13 +93,13 @@ class AssetTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final muted = ArgusColors.of(context).muted;
     return InkWell(
-      onTap: onTap,
+      onTap: hidden ? null : onTap,
       borderRadius: BorderRadius.circular(cardRadius),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(
           children: [
-            TokenAvatar(label: ticker, iconUrl: iconUrl, isErg: isErg),
+            TokenAvatar(label: hidden ? '?' : ticker, iconUrl: iconUrl, tokenId: hidden ? null : tokenId, isErg: isErg),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -106,7 +110,7 @@ class AssetTile extends StatelessWidget {
                     children: [
                       Flexible(
                         child: Text(
-                          ticker,
+                          hidden ? '••••' : ticker,
                           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -124,7 +128,7 @@ class AssetTile extends StatelessWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    name,
+                    hidden ? '••••' : name,
                     style: TextStyle(fontSize: 12.5, color: muted),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,

@@ -113,7 +113,7 @@ class _AssetPickerSheetState extends State<AssetPickerSheet> {
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                       child: Row(
                         children: [
-                          TokenAvatar(label: b.name),
+                          TokenAvatar(label: b.name, tokenId: b.id),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Column(

@@ -865,41 +865,37 @@ pub async fn get_token_info(
     token_id: String,
     explorer_url: Option<String>,
 ) -> Result<String, String> {
-    let mut info = wallet_net::client::get_token_info(&token_id, explorer_url.as_deref())
-        .await
-        .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
-    // EIP-4 media: the issuance box (IndexedToken.boxId) carries the asset
-    // type in R7 and a link in R9. Best effort — a plain token has neither.
-    if let Some(box_id) = info
-        .get("boxId")
-        .and_then(|b| b.as_str())
-        .map(str::to_string)
-    {
-        if let Ok(client) = node_client(None).await {
-            if let Ok(bx) = client.get_blockchain_box_by_id(&box_id).await {
-                let regs = bx.get("additionalRegisters");
-                let kind = regs
-                    .and_then(|r| r.get("R7"))
-                    .and_then(|v| v.as_str())
-                    .and_then(crate::api_ergopay_impl::eip4_media_kind);
-                let link = regs
-                    .and_then(|r| r.get("R9"))
-                    .and_then(|v| v.as_str())
-                    .and_then(crate::api_ergopay_impl::decode_coll_byte_register)
-                    .filter(|l| crate::api_ergopay_impl::is_media_link(l));
-                if let Some(obj) = info.as_object_mut() {
-                    if let Some(k) = kind {
-                        obj.insert("mediaKind".into(), serde_json::Value::String(k.into()));
-                    }
-                    if let Some(l) = link {
-                        obj.insert("iconUrl".into(), serde_json::Value::String(l.trim().into()));
-                    }
-                }
-            }
+    let provider = explorer_url.ok_or_else(|| "Explicit metadata provider consent required".to_string())?;
+    let info = wallet_net::token_descriptor::load(&token_id, &provider).await?;
+    serde_json::to_string(&info).map_err(|e| e.to_string())
+}
+
+static METADATA_JOB: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static METADATA_CANCEL: once_cell::sync::Lazy<tokio::sync::watch::Sender<u64>> =
+    once_cell::sync::Lazy::new(|| tokio::sync::watch::channel(0).0);
+
+/// Explicit single-provider inspection, separate from balance and pricing APIs.
+#[flutter_rust_bridge::frb]
+pub async fn inspect_token_metadata(
+    token_id: String,
+    provider_url: String,
+    provider_is_node: bool,
+) -> Result<String, String> {
+    let _job = METADATA_JOB.try_lock().map_err(|_| "Metadata request already running")?;
+    let mut cancel = METADATA_CANCEL.subscribe();
+    tokio::select! {
+        _ = cancel.changed() => Err("Metadata request cancelled".into()),
+        answer = tokio::time::timeout(std::time::Duration::from_secs(15),
+            wallet_net::token_descriptor::load_from(&token_id, &provider_url, provider_is_node)) => {
+            let descriptor = answer.map_err(|_| "Metadata request timed out")??;
+            serde_json::to_string(&descriptor).map_err(|e| e.to_string())
         }
     }
-    serde_json::to_string(&info)
-        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+#[flutter_rust_bridge::frb(sync)]
+pub fn cancel_token_metadata() {
+    METADATA_CANCEL.send_modify(|generation| *generation = generation.wrapping_add(1));
 }
 
 #[flutter_rust_bridge::frb]

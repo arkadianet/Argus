@@ -96,17 +96,17 @@ void main() {
           tokens: staleArgs ? [TokenBalance(id: 'old', amount: 1)] : const [],
         );
         await tester.pumpWidget(MaterialApp(home: AssetsScreen(args: args)));
-        expect(find.text('No tokens yet'), findsOneWidget);
+        expect(find.text('Holdings not loaded'), findsOneWidget);
         walletSyncController.tokens = [
           TokenBalance(id: 'live', amount: 1, name: 'Live token'),
         ];
         walletSyncController.noteBroadcast('review-test');
         await tester.pump();
         expect(find.text('Live token'), findsOneWidget);
-        expect(find.text('No tokens yet'), findsNothing);
+        expect(find.text('Holdings not loaded'), findsOneWidget);
         walletSyncController.reset();
         await tester.pump();
-        expect(find.text('No tokens yet'), findsOneWidget);
+        expect(find.text('Holdings not loaded'), findsOneWidget);
         await tester.pumpWidget(const SizedBox());
         await tester.pump(const Duration(seconds: 4));
       },
@@ -233,7 +233,7 @@ void main() {
     final c = WalletSyncController(gw);
     await c.hydrateAfterUnlock();
     expect(c.tokens.single.emissionAmount, 1);
-    expect(c.tokens.single.isNft, isTrue);
+    expect(c.tokens.single.isCollectible, isFalse);
     expect(c.statusLabel(online: true), 'Not synced');
   });
 
@@ -287,7 +287,7 @@ void main() {
         c.lastSyncedAt?.millisecondsSinceEpoch,
         stamp?.millisecondsSinceEpoch,
       );
-      expect(c.tokens.single.isNft, isTrue);
+      expect(c.tokens.single.isCollectible, isFalse);
       expect(c.phase, SyncPhase.synced);
     },
   );

@@ -18,7 +18,7 @@ void main() {
   testWidgets('masks amounts when hidden', (tester) async {
     await tester.pumpWidget(_wrap(AssetTile.token(token, hidden: true)));
     expect(find.text('123.45 Sigma'), findsNothing);
-    expect(find.text('••••'), findsOneWidget);
+    expect(find.text('••••'), findsNWidgets(3));
   });
 
   testWidgets('token row shows its fiat value and masks it when hidden', (tester) async {

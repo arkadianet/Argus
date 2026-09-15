@@ -37,27 +37,11 @@ impl TokenMeta {
 static TOKEN_CACHE: Lazy<RwLock<HashMap<String, TokenMeta>>> =
     Lazy::new(|| RwLock::new(HashMap::new()));
 
-pub(crate) async fn token_meta(client: &ergo_node_client::NodeClient, token_id: &str) -> TokenMeta {
-    if let Some(hit) = recover(TOKEN_CACHE.read()).get(token_id) {
-        return hit.clone();
-    }
-    let meta = match client.get_token_info(token_id).await {
-        Ok(info) => TokenMeta {
-            // Node returns Options; an unnamed or nonsense-decimals token
-            // degrades to the safe fallback instead of a wrong amount.
-            name: info
-                .name
-                .filter(|n| !n.is_empty())
-                .unwrap_or_else(|| TokenMeta::fallback(token_id).name),
-            decimals: info
-                .decimals
-                .and_then(|d| u8::try_from(d).ok())
-                .unwrap_or(0),
-        },
-        Err(_) => TokenMeta::fallback(token_id),
-    };
-    recover(TOKEN_CACHE.write()).insert(token_id.to_string(), meta.clone());
-    meta
+pub(crate) async fn token_meta(_client: &ergo_node_client::NodeClient, token_id: &str) -> TokenMeta {
+    // Pool discovery/pricing also runs on the dashboard. It must not disclose
+    // token IDs through automatic enrichment. Only use explicitly seeded data.
+    recover(TOKEN_CACHE.read()).get(token_id).cloned()
+        .unwrap_or_else(|| TokenMeta::fallback(token_id))
 }
 
 /// Per-call cap inside `discover_*_pools`. Hitting it means pools were dropped.

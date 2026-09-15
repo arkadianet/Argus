@@ -1,6 +1,6 @@
 # NFT viewing in Argus
 
-Date: 2026-09-15. Status: proposed; no application changes.
+Date: 2026-09-15. Status: text-first implementation on `feat/nft-viewing`; implementation notes below supersede planning claims.
 Research baseline: `5ad8e4c`, branch `research/nft-viewing`.
 
 ## Decision
@@ -227,3 +227,65 @@ Residual risks must be stated honestly: a user-authorized request still reveals 
 The largest unresolved question is real-world compatibility: how much of the artwork users actually hold has valid R7/R8/R9, uses audio tuples, omits hashes, uses redirects, or consists of SVG/large originals. This research did not measure a representative collection corpus or fetch arbitrary artwork. Before broadening scope, obtain a public, reproducible sample of issuance IDs across known minting tools and EIP-24 versions, inspect registers without querying users' wallets, and measure formats/sizes with consent in an isolated research client. Compare with at least Ergo Wallet and Nautilus. Also resolve the attachment example discrepancy with maintainers before supporting it.
 
 The second uncertainty is whether available mobile decoders and HTTP plumbing can enforce the proposed bounds without disproportionate new native code. Resolve through a small implementation spike with malicious fixtures and real-device memory/network traces, in its own reviewed change. Until both questions are answered, strict unsupported states and a text-only release are deliberate product boundaries, not incomplete gallery work.
+
+
+## 8. Implementation record — text-first increment
+
+Implemented against `research/nft-viewing`, without changing token identity or the wallet-core transaction builders:
+
+- `TokenBalance` now separates supply, decimals, declaration, metadata and media evidence. Collectibles uses original emission evidence, never the current holding. A provider-reported emission of 21 billion remains multiple-unit evidence when a box holds one. Legacy cache records are partial and do not establish uniqueness. Missing metadata does not classify a singleton holding as an NFT.
+- Removed `isNft` from application code. Send/burn's existing one-base-unit convenience depends only on actual quantity and decimals; it does not consult classification. All token IDs remain eligible in send and liquidity pickers. Amount rows always display actual quantities. Wallet-core coin selection and preparation code are unchanged.
+- Shared avatars are local marks derived from token IDs. The old media resolver is inert, and there is no `Image.network` in the application. This covers fungible tokens too. The ordinary hydration/prefetch APIs are cache-only. Pool-pricing enrichment was another automatic token-ID lookup and is now cache-only as well.
+- Assets has lazy All/Collectibles rows, name/ID search, incomplete count and public/unknown holdings states. Hidden balances conceal token names, counts and details. Details show supply evidence, declaration, bounded description, source, full copyable ID, hash availability and inert media URI copy. The original typed registers remain inspectable as hex. Issuer controls/bidi overrides are stripped from displayed text; the limits are UTF-8 byte bounds, which are stricter than character counts for non-ASCII names.
+- The user can explicitly load metadata from the selected node or selected explorer API. Each action names the host and discloses the IP/token-ID association; stealth holdings have an additional linking warning. The same provider supplies index and issuance data. There is no automatic failover. Both paths use HTTPS, no redirects/proxy/credentials, a 64 KiB streamed response cap, one native job, a 5-second connect timeout and a 15-second whole-operation deadline. Closing an active sheet, cancellation, backgrounding, lock and wallet switching cancel/ignore the request. These are metadata requests to a user-selected provider, not an issuer-media client; preview destination restrictions must not be inferred from this transport.
+- Sigma Constant parsing admits only flat byte collections and the exact audio byte-pair type before entering the recursive parser. It rejects trailing/noncanonical data, wrong register types and more than 4 KiB of serialized registers. Node string and explorer `serializedValue` forms are supported. Issuance-box ID and token membership are checked. R4/R5/R6 disagreement produces conflict; failed issuance loading remains partial. Collection/attachment/unknown declarations do not select an image decoder. R8 is retained only as a 32-byte commitment, without any integrity claim.
+- Added native metadata inspection/cancellation APIs and regenerated FRB from the repository root. Both tracked Android libraries were rebuilt; `scripts/release_check.sh libs` compares them against fresh builds.
+
+### Deliberate differences and remaining first-increment limitations
+
+New descriptors are **memory-only for all holdings**, bounded to 1,000 entries and 16 KiB of serialized data per entry (at most about 16 MiB serialized). They are scoped by wallet, node configuration, explorer configuration and parser version, cleared on lock/switch/background, and never persisted through the legacy metadata store. This is stricter retention than proposed, but it also means newly inspected metadata is lost between sessions. Eviction is insertion order rather than the proposed LRU. The old preference cache is read with a 16 MiB ceiling, at most 1,000 entries, and partial evidence; a Clear collectible data action deletes it and session descriptors. No background retry/backoff scheduler exists because there are no automatic descriptor requests or retries.
+
+A node URL/configuration is not a validated genesis identity. A chain switch behind an unchanged endpoint cannot be detected by the current cache key. No persistent confirmed-descriptor index, reorg tracking, advanced issuance-transaction proof, next-20 batch inspection, or real-device 1,000/10,000-holding benchmark was built. Original emission is explicitly **provider reported**, not locally proved; the implementation never substitutes issuance-output quantity for total emission. These limitations must not be described as implementation of every proposed cache/provenance guarantee.
+
+The design understated two existing couplings: `isNft` changed transaction form behavior, and AMM pricing also hydrated token IDs. Both required changes beyond the Assets/detail widgets. It also proposed a shared permanent metadata cache while requiring sensitive associations to disappear on lock; the first implementation resolves that tension conservatively with session storage rather than claiming the existing preference store meets the new retention policy.
+
+### Verification of this increment
+
+Tests cover original-supply classification, unknown/malformed decimals, declarations with multiple units, collection and unknown kinds, stable send IDs/quantities across classification states, raw-register truncation/trailing bytes/nesting rejection, audio tuples, hostile control/bidi text, schema variants, issuance/issuer confusion, metadata redirects, chunked oversized metadata responses, explicit stealth consent, cancellation, provider/wallet isolation, and zero automatic metadata/media requests in shared asset widgets and hydration. Existing public-sync regression coverage now asserts zero token enrichment requests. These tests do not claim a preview transport or decoder exists.
+
+Build/log output stayed in ignored existing build directories under this worktree. The installed Flutter SDK attempted writes to its read-only cache; verification uses an unmodified worktree-local copy under `rust/target/flutter-sdk`, with analytics disabled and TMPDIR in the worktree. No tooling ignore rules were added.
+
+Final first-increment checks:
+
+| Command | Result |
+| --- | --- |
+| `cargo test --manifest-path rust/Cargo.toml --workspace` | 836 passed, 0 failed, 15 ignored across workspace/unit/doc suites |
+| `cd app && flutter --suppress-analytics analyze` | No issues found |
+| `cd app && flutter --suppress-analytics test` | 851 passed, 1 skipped |
+| `flutter_rust_bridge_codegen generate` (repository root) | Completed; generated Dart/Rust bindings updated with source |
+| `scripts/build_android.sh` | Both tracked ABIs rebuilt |
+| `scripts/release_check.sh libs` | Both ABIs byte-identical to fresh builds; version check also passed |
+| `git diff --check` | Passed |
+
+For reproducibility, Flutter commands used `rust/target/flutter-sdk/bin/flutter`; `CI=true`, `FLUTTER_SUPPRESS_ANALYTICS=true` and `DART_SUPPRESS_ANALYTICS=true` were set. Cargo used `CARGO_TARGET_DIR=$PWD/rust/target` from the repository root, and TMPDIR was `rust/target/tmp` for Rust/native generation and `app/build/tmp` for Flutter. The installed SDK's initial read-only stamp/telemetry errors were environmental failures, resolved by the local SDK copy and disabled analytics. Logs are in `rust/target/workspace-tests.log`, `rust/target/bindings.log`, `rust/target/android-build.log`, `rust/target/libs-check.log`, `app/build/nft-analyze.log` and `app/build/nft-tests.log`.
+
+
+## 9. Preview increment — withheld at the decoder acceptance gate
+
+Viewing remains an allowed user choice in this design. This build does **not** implement remote viewing, the per-item Load preview action, a Never load remote previews preference, or a configured IPFS gateway. There is no default gateway, hosted proxy, image fetcher, decoder, image cache or integrity badge. The user can inspect metadata and copy an inert media URI, or explicitly leave for the named explorer after a disclosure. This is a withheld second increment, not a completed preview feature.
+
+The blocker is the hostile-image decoder guarantee, **not an inability of reqwest to disable redirects or pin resolved addresses**. The installed Flutter engine's `ImageDescriptor`/`instantiateImageCodec` interface accepts target dimensions but exposes no enforceable total-allocation budget. Setting widget/target dimensions cannot establish the proposed 48 MiB ceiling for codec scratch space plus output, and moving the call to a Dart isolate does not establish native-code isolation. This implementation has neither selected an alternative decoder with an enforceable complete allocation budget nor measured low-memory Android/iOS peak allocation. The design's own acceptance gate says to withhold the second increment when those limits cannot be enforced. It would be incorrect to describe a consent dialog around Flutter's existing codec as meeting that gate.
+
+Because no media request/decode path ships, the following preview-specific requirements remain **unimplemented and unverified**, rather than partially enabled: CID/path parsing and custom-gateway validation; DNS address rejection/pinning/TLS binding including rebinding and mapped IPv4; 5 MiB identity-encoded streaming; byte/MIME PNG/JPEG validation; APNG rejection; dimensions/megapixel/allocation limits; resizing; original-byte SHA-256/R8 comparison and the further unhashed-content consent; preview cancellation and image retention; and real-device memory/network measurements. There is no implication that metadata transport's limits establish any of these media guarantees.
+
+Hostile fixtures actually exercised include a redirect and chunked oversized body **at the metadata transport boundary**, private/mapped-private issuer URLs **remaining inert in UI/resolver tests**, wrong/truncated/trailing/nested Sigma constants, invalid decimals, issuance-ID conflict, provider disagreement, and name/control/bidi text. No runnable image pipeline exists against which to test a declared-PNG-that-is-not, a dimension bomb or an R8 content mismatch. Those requested media fixture gates have **not passed** and must be implemented and exercised before enabling previews. No issuer artwork was downloaded during this work.
+
+The original proposal's uncertain decoder paragraph was a substantive dependency, not a routine Flutter image-widget task. The implementation confirms that the security acceptance criteria, rather than the choice to permit viewing, determine whether the preview increment can ship. A future isolated decoder/transport implementation must establish these guarantees before adding usable preview or gateway settings; it should remain separately revertible from the text-first changes.
+
+### Commit status
+
+An attempt to stage the first increment failed with:
+
+`fatal: Unable to create '/home/rkadias/coding/arkadianet/Argus/.git/worktrees/nftbuild/index.lock': Read-only file system`
+
+Per the task instruction, the implementation, bindings, tracked native libraries and this record are left **uncommitted** on `feat/nft-viewing`. No bypass or second staging attempt was made. No push or PR was performed. The intended first commit was the text-first implementation; the intended second commit was this preview acceptance/refusal record, not a claim that previews were implemented.
