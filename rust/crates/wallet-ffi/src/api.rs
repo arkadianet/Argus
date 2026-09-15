@@ -1552,6 +1552,83 @@ fn without_reserved(
         .unzip()
 }
 
+/// Explain selection against the inputs actually offered, preserving the
+/// distinction between a wallet holding and an automatically spendable balance.
+fn protocol_selection_error(
+    error: ergo_tx::BoxSelectorError,
+    all: &[ergo_tx::Eip12InputBox],
+    eligible: &[ergo_tx::Eip12InputBox],
+    mixed: &HashSet<String>,
+    reserved: &[FundingReservation],
+    send_token: Option<&str>,
+) -> String {
+    let (token, required, available) = match &error {
+        ergo_tx::BoxSelectorError::InsufficientTokens {
+            token_id,
+            required,
+            available,
+        } => (Some(token_id.as_str()), *required, *available),
+        ergo_tx::BoxSelectorError::InsufficientErg {
+            required,
+            available,
+        } => (None, *required, *available),
+        _ => return ArgusError::TxBuildFailed(error.to_string()).to_json_string(),
+    };
+    let amount = |b: &ergo_tx::Eip12InputBox| -> u128 {
+        match token {
+            Some(id) => b
+                .assets
+                .iter()
+                .filter(|a| a.token_id == id)
+                .map(|a| a.amount.parse::<u128>().unwrap_or(0))
+                .sum(),
+            None => b.value.parse::<u128>().unwrap_or(0),
+        }
+    };
+    let total: u128 = all.iter().map(amount).sum();
+    let reserved_amount: u128 = all
+        .iter()
+        .filter(|b| reserved.iter().any(|r| r.covers(b)))
+        .map(amount)
+        .sum();
+    let mixed_amount: u128 = all
+        .iter()
+        .filter(|b| mixed.contains(&b.box_id) && !reserved.iter().any(|r| r.covers(b)))
+        .map(amount)
+        .sum();
+    let protected_amount: u128 = eligible
+        .iter()
+        .filter(|b| send_token.is_some() && !wallet_core::spend::is_spendable(b, send_token))
+        .map(amount)
+        .sum();
+    let unit = token
+        .map(|id| format!("base units of token {id}"))
+        .unwrap_or_else(|| "nanoERG".into());
+    let mut message = format!("This order needs {required} {unit}; automatic selection can use {available}. \
+        The public-address boxes hold {total}. Stealth holdings shown in Assets are not included in protocol funding.");
+    if mixed_amount > 0 {
+        message.push_str(&format!(" {mixed_amount} {unit} are excluded by the mixed-box privacy rule. \
+            In Send, choose only the mixed boxes using coin control and transfer to your public receive address before retrying. \
+            This links those funds to your public wallet and reduces the privacy gained by mixing."));
+    }
+    if reserved_amount > 0 {
+        message.push_str(&format!(
+            " {reserved_amount} nanoERG are reserved for a pending mix. \
+            Wait for its entry to complete, or add unreserved public ERG for fees before retrying."
+        ));
+    }
+    if protected_amount > 0 && send_token.is_some() {
+        message.push_str(&format!(" {protected_amount} {unit} are excluded by the token-containment rule: \
+            their boxes hold tokens but do not contain the token requested by this order. Add unreserved public ERG for fees, \
+            or use Send with coin control to move ERG from those boxes to your public receive address. Review all tokens returned as change."));
+    }
+    if mixed_amount == 0 && reserved_amount == 0 && protected_amount == 0 {
+        message.push_str(" If the required funds are in Stealth, use Send with the Stealth pocket to transfer them to your public receive address, \
+            then retry after confirmation. This makes the transferred funds public. Otherwise refresh the wallet and check pending transactions.");
+    }
+    ArgusError::TxBuildFailed(message).to_json_string()
+}
+
 /// The wallet's unspent boxes, less what a pending mix has set aside.
 async fn gather_unspent(
     handle_id: u64,
@@ -4864,6 +4941,111 @@ mod tests {
     }
 
     #[test]
+    fn duckpools_receipt_excluded_by_mixed_rule_reproduces_device_error() {
+        let token = "fc888e0eed50a4042324793a7894134d83c7aaf5c99f4bf643e7e2b4e71e0095";
+        let receipt = ergo_tx::Eip12InputBox {
+            box_id: "receipt".into(),
+            transaction_id: "tx".into(),
+            index: 0,
+            value: "1000000000".into(),
+            ergo_tree: "0008cd".into(),
+            assets: vec![ergo_tx::Eip12Asset::new(token, 482_930_456)],
+            creation_height: 1,
+            additional_registers: Default::default(),
+            extension: Default::default(),
+        };
+        let mut public = receipt.clone();
+        public.box_id = "public".into();
+        public.assets.clear();
+        let inputs = vec![receipt, public];
+        let handle = 88_901;
+        recover(MIXED_BOXES.lock()).insert(handle, HashSet::from(["receipt".into()]));
+        let (boxes, eligible) = apply_mixed_rule(
+            handle,
+            inputs.iter().map(test_ergo_box).collect(),
+            inputs.clone(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(boxes.len(), 1);
+        let error =
+            wallet_core::spend::select_for_send(&eligible, 10_000_000, Some((token, 482_930_456)))
+                .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!("Insufficient token balance: need 482930456 of {token}, have 0")
+        );
+        let fixed = protocol_selection_error(
+            error,
+            &inputs,
+            &eligible,
+            &HashSet::from(["receipt".into()]),
+            &[],
+            Some(token),
+        );
+        assert!(fixed.contains("public-address boxes hold 482930456"));
+        assert!(fixed.contains("482930456 base units of token"));
+        assert!(fixed.contains("mixed-box privacy rule"));
+        assert!(fixed.contains("coin control"));
+        assert!(!fixed.contains("have 0"));
+        assert!(
+            wallet_core::spend::select_for_send(&inputs, 10_000_000, Some((token, 482_930_456)))
+                .is_ok()
+        );
+        // An unrelated mixed box does not hide the public receipt.
+        recover(MIXED_BOXES.lock()).insert(handle, HashSet::from(["elsewhere".into()]));
+        let (_, allowed) = apply_mixed_rule(
+            handle,
+            inputs.iter().map(test_ergo_box).collect(),
+            inputs.clone(),
+            None,
+        )
+        .unwrap();
+        assert!(
+            wallet_core::spend::select_for_send(&allowed, 10_000_000, Some((token, 482_930_456)))
+                .is_ok()
+        );
+        // Co-located tokens no longer exclude an ordinary public receipt.
+        let mut colocated = inputs.clone();
+        colocated[0].assets.push(ergo_tx::Eip12Asset::new("other", 1));
+        assert!(wallet_core::spend::select_for_send(
+            &colocated, 10_000_000, Some((token, 482_930_456))
+        ).is_ok());
+        let mut unrelated = inputs[1].clone();
+        unrelated.assets.push(ergo_tx::Eip12Asset::new("unrelated", 1));
+        let error = protocol_selection_error(
+            ergo_tx::BoxSelectorError::InsufficientErg { required: 2_000_000_000, available: 1_000_000_000 },
+            &[inputs[0].clone(), unrelated.clone()], &[inputs[0].clone(), unrelated],
+            &HashSet::new(), &[], Some(token),
+        );
+        assert!(error.contains("token-containment rule"));
+        assert!(error.contains("do not contain the token requested"));
+        assert!(!error.contains("other-token protection"));
+        // Reservation matching cannot exclude the receipt, even when its
+        // id and ERG value match; it can exclude the separate fee funding.
+        let reservation = FundingReservation {
+            box_ids: vec!["receipt".into(), "public".into()],
+            value_nano_erg: 1_000_000_000,
+        };
+        assert!(!reservation.covers(&inputs[0]));
+        assert!(reservation.covers(&inputs[1]));
+        let fixed = protocol_selection_error(
+            ergo_tx::BoxSelectorError::InsufficientErg {
+                required: 2_000_000_000,
+                available: 1_000_000_000,
+            },
+            &inputs,
+            &inputs[..1],
+            &HashSet::new(),
+            &[reservation],
+            Some(token),
+        );
+        assert!(fixed.contains("1000000000 nanoERG are reserved for a pending mix"));
+        assert!(!fixed.contains("mixed-box privacy rule"));
+        recover(MIXED_BOXES.lock()).remove(&handle);
+    }
+
+    #[test]
     fn a_reserved_funding_box_is_left_out_but_its_change_is_not() {
         fn eb(id: &str, value: i64, tokens: bool) -> ergo_tx::Eip12InputBox {
             ergo_tx::Eip12InputBox {
@@ -6044,8 +6226,14 @@ pub async fn duckpools_prepare_order(
     } else {
         spend_addresses
     };
-    let (boxes, utxos) = gather_unspent(handle_id, &client, &spend).await?;
-    let (_, utxos) = apply_mixed_rule(handle_id, boxes, utxos, None)?;
+    let (boxes, all_utxos) = gather_unspent_all(handle_id, &client, &spend).await?;
+    let reserved = recover(RESERVED_FUNDING.lock()).get(&handle_id).cloned().unwrap_or_default();
+    let mixed = recover(MIXED_BOXES.lock()).get(&handle_id).cloned().unwrap_or_default();
+    // Keep the source snapshot for diagnostics; never retry with excluded boxes.
+    drop(boxes);
+    let utxos: Vec<_> = all_utxos.iter().filter(|b| !reserved.iter().any(|r| r.covers(b))).cloned().collect();
+    let keep = mixed_rule(&mixed, utxos.iter().map(|b| b.box_id.as_str()), None)?;
+    let utxos: Vec<_> = utxos.into_iter().filter(|b| keep.contains(&b.box_id)).collect();
     let fee_cfg = ergo_tx::resolved_dev_fee_config();
     let app_fee = if fee_cfg.enabled {
         Some((fee_cfg.recipient_ergo_tree.as_str(), fee_cfg.budget()))
@@ -6061,6 +6249,7 @@ pub async fn duckpools_prepare_order(
         app_fee,
         miner_fee,
         height,
+        |e| protocol_selection_error(e, &all_utxos, &utxos, &mixed, &reserved, token.as_ref().map(|(id, _)| id.as_str())),
     )?;
     let ergo_boxes = used
         .iter()
