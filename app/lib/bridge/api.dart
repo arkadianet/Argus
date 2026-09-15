@@ -1681,3 +1681,20 @@ Future<String> coldPrepareWatch({
   tokenAmount: tokenAmount,
   nodeUrl: nodeUrl,
 );
+
+/// Prepare a public P2PK address payment; change always returns to that address.
+Future<String> coldPrepareAddress({
+  required String address,
+  required String recipient,
+  required PlatformInt64 amountNano,
+  String? tokenId,
+  BigInt? tokenAmount,
+  required String nodeUrl,
+}) => RustLib.instance.api.crateApiColdPrepareAddress(
+  address: address,
+  recipient: recipient,
+  amountNano: amountNano,
+  tokenId: tokenId,
+  tokenAmount: tokenAmount,
+  nodeUrl: nodeUrl,
+);

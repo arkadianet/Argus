@@ -7155,3 +7155,9 @@ pub async fn cold_broadcast(session: String) -> Result<String, String> { cold::b
 pub async fn cold_prepare_watch(key: String, address_count: u32, change_index: u32, recipient: String, amount_nano: i64, token_id: Option<String>, token_amount: Option<u64>, node_url: String) -> Result<String, String> {
     cold::prepare(key, address_count, change_index, recipient, amount_nano, token_id, token_amount, node_url).await
 }
+
+/// Prepare a public P2PK address payment; change always returns to that address.
+#[flutter_rust_bridge::frb]
+pub async fn cold_prepare_address(address: String, recipient: String, amount_nano: i64, token_id: Option<String>, token_amount: Option<u64>, node_url: String) -> Result<String, String> {
+    cold::prepare_address(address, recipient, amount_nano, token_id, token_amount, node_url).await
+}

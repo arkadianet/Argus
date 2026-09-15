@@ -1,3 +1,4 @@
+import 'cold_signing_screen.dart';
 import '../services/public_wallet_sync.dart';
 import 'widgets/error_sheet.dart';
 import 'widgets/erg_rate_line.dart';
@@ -1810,7 +1811,13 @@ class _DashboardScreenState extends State<DashboardScreen>
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('Watch-only address', style: TextStyle(fontWeight: FontWeight.bold)),
-                const Text('Cannot sign locally. This single address has no account key for offline sending.'),
+                const Text('Cannot sign locally. Send with an offline signer; change returns to this same address. A watched account tracks more addresses.'),
+                OutlinedButton(
+                  onPressed: () => Navigator.push(context, MaterialPageRoute<void>(
+                    builder: (_) => ColdWatchSendScreen.address(address: address),
+                  )),
+                  child: const Text('Send with offline signer'),
+                ),
                 Text(address),
                 Text(_balanceHidden ? '•••••• ERG' :
                     _watchBalances[address] == null ? 'Balance unavailable' : formatErg(_watchBalances[address])),
