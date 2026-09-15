@@ -33,6 +33,9 @@ pub enum SendError {
         need: u64,
     },
 
+    #[error("Token change requires at least {min} nanoERG leftover, have {have}. Add ERG to fund the change box and preserve unsent tokens.")]
+    TokenChangeInsufficientErg { have: i64, min: i64 },
+
     #[error("Change amount {change} nanoERG is below minimum box value of {min} nanoERG")]
     ChangeBelowMin { change: i64, min: i64 },
 
@@ -180,9 +183,9 @@ pub fn build_send_tx_with_fee(
     let need_change = change_remainder > 0 || has_change_tokens;
 
     if has_change_tokens && remainder < MIN_BOX_VALUE {
-        return Err(SendError::InsufficientErg {
-            have: total_erg,
-            need: send_erg + TX_FEE + citadel_fee + MIN_BOX_VALUE,
+        return Err(SendError::TokenChangeInsufficientErg {
+            have: remainder,
+            min: MIN_BOX_VALUE,
         });
     }
 

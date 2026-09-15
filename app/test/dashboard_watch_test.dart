@@ -193,7 +193,7 @@ void main() {
   );
 
   testWidgets(
-    'single watched address selects Receive without an offline Send',
+    'single watched address reaches offline Send and Receive while locked',
     (tester) async {
       SharedPreferences.setMockInitialValues({
         'argus_watch_only_addresses': jsonEncode([watched]),
@@ -206,7 +206,16 @@ void main() {
       await tester.tap(row);
       await tester.pumpAndSettle();
       expect(find.text('Watch-only address'), findsOneWidget);
-      expect(find.text('Send with offline signer'), findsNothing);
+      expect(find.text('Send with offline signer'), findsOneWidget);
+      expect(find.textContaining('change returns to this same address'), findsOneWidget);
+      await tester.ensureVisible(find.text('Send with offline signer'));
+      await tester.tap(find.text('Send with offline signer'));
+      await tester.pumpAndSettle();
+      expect(tester.widget<ColdWatchSendScreen>(find.byType(ColdWatchSendScreen)).address, watched);
+      expect(find.textContaining('Change, including remaining tokens'), findsOneWidget);
+      expect(find.text('Prepare cold request'), findsOneWidget);
+      await tester.pageBack();
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.text('Receive'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Receive'));

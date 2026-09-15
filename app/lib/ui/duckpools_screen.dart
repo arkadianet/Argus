@@ -1,3 +1,5 @@
+import '../bridge/argus_error.dart';
+import 'send_screen.dart';
 import 'widgets/tx_explorer_link.dart';
 import 'widgets/tx_result_view.dart';
 import 'package:flutter/material.dart';
@@ -308,6 +310,32 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> with TxReceiptOwner {
     }
   }
 
+  Future<void> _fundingFailure(Object error, WalletRouteArgs args, String? tokenId, String? walletBefore) async {
+    if (!_sameWallet(walletBefore)) return;
+    final failure = error is ArgusException ? error : ArgusException.fromJson('$error');
+    if (!failure.isTxBuildFailed || !failure.message.contains('protocol funding')) {
+      await showTxFailureSheet(context, error);
+      return;
+    }
+    final openSend = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Funds unavailable for this order'),
+        content: SingleChildScrollView(child: Text(failure.message)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Close')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Open Send')),
+        ],
+      ),
+    );
+    if (openSend != true || !mounted) return;
+    if (!_sameWallet(walletBefore)) return;
+    await Navigator.push(context, MaterialPageRoute<void>(
+      settings: RouteSettings(arguments: args),
+      builder: (_) => SendScreen(initialAssetId: tokenId, initialRecipient: args.receiveAddress),
+    ));
+  }
+
   /// Lend into, or withdraw from, one pool: amount sheet, quote, confirm,
   /// broadcast, record.
   Future<void> _order(DuckPoolState s, String kind) async {
@@ -328,8 +356,12 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> with TxReceiptOwner {
     // while it was open.
     if (!_sameWallet(walletBefore)) return;
     final args = WalletRouteArgs.of(context);
+    final pool = svc.pools.firstWhere((p) => p.key == s.pool);
+    final tokenId = kind == 'withdraw' ? pool.lendToken : pool.currencyId;
     setState(() => _working = true);
     try {
+      final issue = tokenId == null ? null : duckpoolsStealthFundingIssue(args.tokens, tokenId, amount, decimals: s.decimals);
+      if (issue != null) throw ArgusException(code: 'TX_BUILD_FAILED', message: issue);
       final prepared = await svc.prepareOrder(
         poolKey: s.pool,
         kind: kind,
@@ -388,7 +420,7 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> with TxReceiptOwner {
             'The order is pending execution. Follow its pending, refundable, or filled status under Your orders.',
       );
     } catch (e) {
-      if (mounted) showTxFailureSheet(context, e);
+      if (mounted) await _fundingFailure(e, args, tokenId, walletBefore);
     } finally {
       if (mounted) setState(() => _working = false);
     }

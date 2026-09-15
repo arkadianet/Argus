@@ -568,11 +568,12 @@ pub fn build_order(
     app_fee: Option<(&str, i64)>,
     miner_fee: i64,
     height: i32,
+    selection_error: impl Fn(ergo_tx::BoxSelectorError) -> String,
 ) -> Result<(ergo_tx::Eip12UnsignedTx, Vec<Eip12InputBox>), String> {
     let base = (proxy.value + app_fee.map(|(_, n)| n).unwrap_or(0) + miner_fee) as u64;
     for extra in [0u64, duckpools::MIN_BOX_VALUE as u64] {
         let selected =
-            wallet_core::spend::select_for_send(utxos, base + extra, token).map_err(err)?;
+            wallet_core::spend::select_for_send(utxos, base + extra, token).map_err(&selection_error)?;
         match build_order_tx(
             proxy,
             &selected.boxes,
@@ -604,6 +605,17 @@ mod tests {
         include_str!("../../vendor/protocols/duckpools/test/fixtures/pool_erg.json");
     const ERG_PARAM: &str =
         include_str!("../../vendor/protocols/duckpools/test/fixtures/interest_param_erg.json");
+
+    #[test]
+    fn withdrawal_preserves_receipt_base_units() {
+        let (pool, state) = state_for(&format!("[{ERG_POOL}]"), "erg").unwrap();
+        let q = Quote::new(pool, &state, "withdraw", 482_930_456, 100, 1000, None).unwrap();
+        assert_eq!(q.token_needed(pool), Some((
+            "fc888e0eed50a4042324793a7894134d83c7aaf5c99f4bf643e7e2b4e71e0095".into(),
+            482_930_456,
+        )));
+        assert_eq!(q.json()["lend_tokens"], 482_930_456);
+    }
 
     #[test]
     fn state_json_carries_rates_when_the_parameter_box_is_given() {
@@ -642,6 +654,7 @@ mod tests {
             Some(("bb", 1_100_000)),
             1_100_000,
             100,
+            err,
         )
         .unwrap();
         assert_eq!(used.len(), 1);
@@ -649,6 +662,38 @@ mod tests {
         assert_eq!(tx.outputs[0].value, proxy.value.to_string());
         assert_eq!(q.json()["kind"], "lend");
         assert!(q.json()["min_lend_tokens"].as_i64().unwrap() > 0);
+    }
+
+    #[test]
+    fn withdrawal_selects_colocated_receipts_and_funds_conserved_change() {
+        let (pool, state) = state_for(&format!("[{ERG_POOL}]"), "erg").unwrap();
+        let user = "0008cd0247997e4390471ab3fe271ad4ad1ad485570c50326ff671a57722ee88e1fa4582";
+        let q = Quote::new(pool, &state, "withdraw", 482_930_456, 100, 1_900_000, None).unwrap();
+        let proxy = q.proxy_box(pool, user).unwrap();
+        let (token, amount) = q.token_needed(pool).unwrap();
+        let receipt = Eip12InputBox {
+            box_id: "11".repeat(32), transaction_id: "22".repeat(32), index: 0,
+            value: (proxy.value + 1_100_000).to_string(), ergo_tree: user.into(),
+            assets: vec![ergo_tx::Eip12Asset::new(&token, amount as i64), ergo_tx::Eip12Asset::new("extra", 7)],
+            creation_height: 1, additional_registers: Default::default(), extension: Default::default(),
+        };
+        let mut funding = receipt.clone();
+        funding.box_id = "33".repeat(32);
+        funding.value = duckpools::MIN_BOX_VALUE.to_string();
+        funding.assets.clear();
+        // First selection consumes exactly proxy + fee. Leftover tokens force
+        // build_order to retry with the minimum change-box ERG budget.
+        let (tx, used) = build_order(&proxy, &[receipt, funding], Some((&token, amount)), user, None, 1_100_000, 100, err).unwrap();
+        assert_eq!(used.len(), 2);
+        let totals = |assets: Vec<&ergo_tx::Eip12Asset>| {
+            let mut totals = std::collections::BTreeMap::<String, u64>::new();
+            for a in assets { *totals.entry(a.token_id.clone()).or_default() += a.amount.parse::<u64>().unwrap(); }
+            totals
+        };
+        assert_eq!(totals(tx.inputs.iter().flat_map(|b| &b.assets).collect()), totals(tx.outputs.iter().flat_map(|b| &b.assets).collect()));
+        let change = tx.outputs.iter().find(|b| b.ergo_tree == user).unwrap();
+        assert_eq!(change.value, duckpools::MIN_BOX_VALUE.to_string());
+        assert_eq!(totals(change.assets.iter().collect()), std::collections::BTreeMap::from([("extra".into(), 7)]));
     }
 
     const FIX: &str = "../../vendor/protocols/duckpools/test/fixtures";

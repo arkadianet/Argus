@@ -346,13 +346,18 @@ Future<void> openColdSigner(BuildContext context) async {
 }
 
 class ColdWatchSendScreen extends StatefulWidget {
-  const ColdWatchSendScreen({super.key, required this.account});
-  final WatchAccount account;
+  const ColdWatchSendScreen({super.key, required WatchAccount this.account})
+    : address = null;
+  const ColdWatchSendScreen.address({super.key, required String this.address})
+    : account = null;
+  final WatchAccount? account;
+  final String? address;
   @override
   State<ColdWatchSendScreen> createState() => _ColdWatchSendScreenState();
 }
 
 class _ColdWatchSendScreenState extends State<ColdWatchSendScreen> {
+  String get sourceKey => widget.account?.key ?? 'address:${widget.address}';
   final recipient = TextEditingController();
   final amount = TextEditingController();
   final token = TextEditingController();
@@ -374,8 +379,8 @@ class _ColdWatchSendScreenState extends State<ColdWatchSendScreen> {
       error = null;
     });
     try {
-      final snapshot = widget.account.snapshot;
-      if (snapshot == null)
+      final snapshot = widget.account?.snapshot;
+      if (widget.account != null && snapshot == null)
         throw StateError('Refresh the watched account first.');
       final node = networkController.activeUrl;
       if (node == null) throw StateError('Choose an online node first.');
@@ -397,23 +402,32 @@ class _ColdWatchSendScreenState extends State<ColdWatchSendScreen> {
       }
       final raw =
           jsonDecode(
-                await api.coldPrepareWatch(
-                  key: widget.account.key,
-                  addressCount: snapshot.addresses.length,
-                  changeIndex: snapshot.highestUsed + 1,
-                  recipient: recipient.text.trim(),
-                  amountNano: amountNano,
-                  tokenId: tokenId.isEmpty ? null : tokenId,
-                  tokenAmount: tokenAmount,
-                  nodeUrl: node,
-                ),
+                widget.address != null
+                    ? await api.coldPrepareAddress(
+                        address: widget.address!,
+                        recipient: recipient.text.trim(),
+                        amountNano: amountNano,
+                        tokenId: tokenId.isEmpty ? null : tokenId,
+                        tokenAmount: tokenAmount,
+                        nodeUrl: node,
+                      )
+                    : await api.coldPrepareWatch(
+                        key: widget.account!.key,
+                        addressCount: snapshot!.addresses.length,
+                        changeIndex: snapshot.highestUsed + 1,
+                        recipient: recipient.text.trim(),
+                        amountNano: amountNano,
+                        tokenId: tokenId.isEmpty ? null : tokenId,
+                        tokenAmount: tokenAmount,
+                        nodeUrl: node,
+                      ),
               )
               as Map<String, dynamic>;
       if (networkController.activeUrl != node) {
         await api.coldDiscard(session: raw['session'] as String);
         throw StateError('Node changed during preparation. Try again.');
       }
-      pendingColdSends[widget.account.key] = ColdSigningController(
+      pendingColdSends[sourceKey] = ColdSigningController(
         session: raw['session'] as String,
         hot: true,
         reviewData: raw['review'] as Map<String, dynamic>,
@@ -431,8 +445,8 @@ class _ColdWatchSendScreenState extends State<ColdWatchSendScreen> {
       context,
       MaterialPageRoute<void>(
         builder: (_) => ColdSigningScreen(
-          controller: pendingColdSends[widget.account.key]!,
-          onDiscard: () => pendingColdSends.remove(widget.account.key),
+          controller: pendingColdSends[sourceKey]!,
+          onDiscard: () => pendingColdSends.remove(sourceKey),
         ),
       ),
     );
@@ -446,9 +460,18 @@ class _ColdWatchSendScreenState extends State<ColdWatchSendScreen> {
       padding: const EdgeInsets.all(20),
       children: [
         const Text(
-          'Mainnet P2PK payments. This watched account has no keys. An offline seed wallet must review and sign the request.',
+          'Mainnet P2PK payments. This watch-only source has no keys. An offline seed wallet must review and sign the request.',
         ),
-        if (pendingColdSends.containsKey(widget.account.key))
+        if (widget.address != null) ...[
+          const Text(
+            'Change, including remaining tokens, returns to this same watched address. Reusing it reduces privacy. A watched account tracks more addresses.',
+          ),
+          SelectableText(widget.address!),
+          const Text(
+            'The offline signer must own this mainnet P2PK address. Argus automatically searches EIP-3 account 0, external indices 0–512.',
+          ),
+        ],
+        if (pendingColdSends.containsKey(sourceKey))
           FilledButton(
             onPressed: busy ? null : resume,
             child: const Text('Resume cold send'),

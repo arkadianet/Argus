@@ -1,3 +1,5 @@
+import 'package:argus_wallet/format.dart';
+import 'package:argus_wallet/services/duckpools_service.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -114,6 +116,83 @@ class _DisplayGateway implements WalletSyncGateway {
 
 // Metadata for tokens seen only in stealth boxes (CodeRabbit, PR #58)
 void _stealthMetadataTests() {
+  test('Duckpools receipt is visible in Assets with no public balance', () {
+    const id = 'fc888e0eed50a4042324793a7894134d83c7aaf5c99f4bf643e7e2b4e71e0095';
+    final merged = mergeStealthTokens([], [
+      TokenBalance(id: id, amount: 482930456, decimals: 9,
+          name: 'Lend Token ERG-0e', stealthAmount: 482930456),
+    ]);
+    expect(merged.single.amount, 482930456);
+    expect(merged.single.amount - merged.single.stealthAmount, 0);
+    final issue = duckpoolsStealthFundingIssue(merged, id, 482930456, decimals: 9)!;
+    expect(issue, contains('0.482930456 of token'));
+    expect(issue, contains('Stealth pocket'));
+    expect(issue, contains('makes the transferred funds public'));
+    expect(issue, isNot(contains('have 0')));
+    final both = mergeStealthTokens([TokenBalance(id: id, amount: 482930456)], merged);
+    expect(duckpoolsStealthFundingIssue(both, id, 482930456, decimals: 9), isNull);
+    expect(duckpoolsStealthFundingIssue([], id, 482930456, decimals: 9), isNull);
+
+  });
+
+  test('Duckpools funding advice covers public, stealth and total boundaries', () {
+    // Quantities are token base units; expected text uses two decimal places.
+    const cases = <({int required, int public, int stealth, int total, String? transfer, String? shortage})>[
+      (required: 10000, public: 10001, stealth: 8000, total: 18001, transfer: null, shortage: null),
+      (required: 10000, public: 10000, stealth: 8000, total: 18000, transfer: null, shortage: null),
+      (required: 10000, public: 3000, stealth: 8000, total: 11000, transfer: '70', shortage: null),
+      (required: 3001, public: 3000, stealth: 8000, total: 11000, transfer: '0.01', shortage: null),
+      (required: 10000, public: 3000, stealth: 7000, total: 10000, transfer: '70', shortage: null),
+      (required: 10000, public: 0, stealth: 10000, total: 10000, transfer: '100', shortage: null),
+      (required: 10000, public: 1000, stealth: 2000, total: 3000, transfer: null, shortage: '70'),
+      (required: 10000, public: 3000, stealth: 6999, total: 9999, transfer: null, shortage: '0.01'),
+      (required: 10000, public: 0, stealth: 9999, total: 9999, transfer: null, shortage: '0.01'),
+      (required: 10000, public: 9999, stealth: 0, total: 9999, transfer: null, shortage: null),
+      (required: 10000, public: 10000, stealth: 0, total: 10000, transfer: null, shortage: null),
+      (required: 10000, public: 10001, stealth: 0, total: 10001, transfer: null, shortage: null),
+      (required: 10000, public: 0, stealth: 0, total: 0, transfer: null, shortage: null),
+      (required: 0, public: 0, stealth: 100, total: 100, transfer: null, shortage: null),
+      (required: 0, public: 0, stealth: 0, total: 0, transfer: null, shortage: null),
+    ];
+    for (final c in cases) {
+      expect(c.total, c.public + c.stealth, reason: '$c');
+      // Check both merged and separate entries, ignoring other tokens.
+      for (final holdings in [
+        [TokenBalance(id: 'receipt', amount: c.total, stealthAmount: c.stealth)],
+        [
+          TokenBalance(id: 'receipt', amount: c.public),
+          TokenBalance(id: 'receipt', amount: c.stealth, stealthAmount: c.stealth),
+          TokenBalance(id: 'other', amount: 100000, stealthAmount: 100000),
+        ],
+      ]) {
+        final issue = duckpoolsStealthFundingIssue(holdings, 'receipt', c.required, decimals: 2);
+        String amount(int units) => formatTokenAmountGrouped(units, 2);
+        if (c.transfer != null) {
+          expect(issue,
+            'Assets includes ${amount(c.stealth)} of token receipt in Stealth. '
+            'Duckpools protocol funding uses public boxes, which hold ${amount(c.public)}; '
+            'this order needs ${amount(c.required)}. '
+            'In Send, choose the Stealth pocket and transfer at least ${c.transfer} '
+            'of this token (the minimum shortfall) to your '
+            'public receive address, then retry after confirmation. '
+            'This makes the transferred funds public. Nothing was sent.', reason: '$c');
+        } else if (c.shortage != null) {
+          expect(issue,
+            'Insufficient token receipt: you hold ${amount(c.total)} in total '
+            '(${amount(c.public)} public and ${amount(c.stealth)} in Stealth); '
+            'this order needs ${amount(c.required)}. '
+            'Even moving all Stealth holdings to public would leave you '
+            '${c.shortage} short. Nothing was sent.', reason: '$c');
+          // _fundingFailure uses this marker to offer Open Send.
+          expect(issue, isNot(contains('protocol funding')), reason: '$c');
+        } else {
+          expect(issue, isNull, reason: '$c');
+        }
+      }
+    }
+    expect(duckpoolsStealthFundingIssue([], 'receipt', 10000, decimals: 2), isNull);
+  });
+
   test('a stealth-only token keeps its name and decimals', () {
     final merged = mergeStealthTokens(
       const [],

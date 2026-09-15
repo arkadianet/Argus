@@ -644,6 +644,22 @@ mod tests {
         assert!(review.outputs[0].owned);
         assert_eq!(review.fee_nano, "1100000");
         assert!(parsed.review(|_| Ok(false)).is_err());
+        // The line above proves review honours its callback. This proves
+        // sign_reviewed actually passes ownership as that callback: a wallet
+        // that does not own the inputs must refuse before signing, and
+        // swapping the callback for a constant true makes this fail.
+        let stranger = WalletHandle::create(
+            MnemonicPhrase::parse(PHRASE).unwrap(),
+            "not this wallet",
+        )
+        .unwrap();
+        assert!(!stranger.owns_address(&h.derive_address(1).unwrap()).unwrap());
+        // is_err() alone would also pass if signing merely failed for a
+        // missing key, so assert the refusal is the ownership one.
+        assert!(matches!(
+            parsed.sign_reviewed(&stranger),
+            Err(ColdError::Invalid(ref m)) if m.contains("does not belong to this cold wallet")
+        ));
         parsed
             .verify_bytes(&parsed.sign_reviewed(&h).unwrap())
             .unwrap();

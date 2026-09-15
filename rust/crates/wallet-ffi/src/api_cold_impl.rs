@@ -10,6 +10,34 @@ use wallet_core::{
     watch_xpub::WatchContext,
 };
 
+/// Public input ownership only; a single address has no invented derivation metadata.
+struct WatchSource {
+    addresses: Vec<String>,
+    metadata: serde_json::Value,
+}
+impl WatchSource {
+    fn account(key: &str, count: u32) -> Result<Self, String> {
+        let watch = WatchContext::new(key, count)?;
+        Ok(Self {
+            addresses: watch.addresses.iter().map(|a| a.address.clone()).collect(),
+            metadata: serde_json::to_value(watch).map_err(fail)?,
+        })
+    }
+    fn address(address: String) -> Result<Self, String> {
+        use ergo_lib::ergotree_ir::chain::address::{Address, AddressEncoder, NetworkPrefix};
+        let parsed = AddressEncoder::new(NetworkPrefix::Mainnet)
+            .parse_address_from_str(&address)
+            .map_err(fail)?;
+        if !matches!(parsed, Address::P2Pk(_)) {
+            return Err("Cold send requires a mainnet P2PK watched address".into());
+        }
+        Ok(Self {
+            metadata: serde_json::json!({"address": address, "change_address": address}),
+            addresses: vec![address],
+        })
+    }
+}
+
 struct Session {
     created: Instant,
     collector: Collector,
@@ -19,8 +47,8 @@ struct Session {
     handle: Option<u64>,
     node: Option<String>,
     request: Option<String>,
-    watch: Option<WatchContext>,
-    input_ownership: Vec<wallet_core::watch_xpub::WatchAddress>,
+    watch: Option<WatchSource>,
+    input_ownership: Vec<String>,
 }
 static SESSIONS: Lazy<Mutex<HashMap<String, Session>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 fn fail(e: impl std::fmt::Display) -> String {
@@ -226,7 +254,49 @@ pub(super) async fn prepare(
     token_amount: Option<u64>,
     node: String,
 ) -> Result<String, String> {
-    let watch = WatchContext::new(&key, count)?;
+    let watch = WatchSource::account(&key, count)?;
+    prepare_source(
+        watch,
+        change_index,
+        recipient,
+        amount,
+        token_id,
+        token_amount,
+        node,
+    )
+    .await
+}
+
+pub(super) async fn prepare_address(
+    address: String,
+    recipient: String,
+    amount: i64,
+    token_id: Option<String>,
+    token_amount: Option<u64>,
+    node: String,
+) -> Result<String, String> {
+    prepare_source(
+        WatchSource::address(address)?,
+        0,
+        recipient,
+        amount,
+        token_id,
+        token_amount,
+        node,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_source(
+    watch: WatchSource,
+    change_index: u32,
+    recipient: String,
+    amount: i64,
+    token_id: Option<String>,
+    token_amount: Option<u64>,
+    node: String,
+) -> Result<String, String> {
     watch
         .addresses
         .get(change_index as usize)
@@ -259,11 +329,11 @@ pub(super) async fn prepare(
     let mut boxes = Vec::new();
     let mut seen = HashSet::new();
     for a in &watch.addresses {
-        let (bs, ins) = client.get_effective_unspent(&a.address).await?;
+        let (bs, ins) = client.get_effective_unspent(a).await?;
         if bs.len() != ins.len() {
             return Err("Incomplete node input data".into());
         }
-        let expected = address_to_ergo_tree(&a.address)?;
+        let expected = address_to_ergo_tree(a)?;
         for (b, input) in bs.into_iter().zip(ins) {
             if hex::encode(b.ergo_tree.sigma_serialize_bytes().map_err(fail)?) != expected {
                 return Err("Node returned a foreign input".into());
@@ -290,7 +360,7 @@ pub(super) async fn prepare(
 
 #[allow(clippy::too_many_arguments)]
 fn build_watch_session(
-    watch: WatchContext,
+    watch: WatchSource,
     change_index: u32,
     recipient_tree: String,
     amount: i64,
@@ -317,7 +387,7 @@ fn build_watch_session(
             amount_nano_erg: amount,
             tokens: tokens.into_iter().collect(),
         }],
-        &address_to_ergo_tree(&change.address)?,
+        &address_to_ergo_tree(change)?,
         TX_FEE_NANO,
         i32::try_from(height).map_err(fail)?,
     )
@@ -354,14 +424,14 @@ fn build_watch_session(
         .collect::<Result<Vec<_>, _>>()?;
     let request = wallet_core::cold_transport::RequestBytes {
         reduced_tx: reduced,
-        sender: Some(watch.addresses[0].address.clone()),
+        sender: Some(watch.addresses[0].clone()),
         inputs: selected_boxes,
     }
     .encode()
     .map_err(fail)?;
     let prepared = wallet_core::cold_request::parse_request(&request).map_err(fail)?;
     let review = prepared
-        .review(|a| Ok(watch.addresses.iter().any(|entry| entry.address == a)))
+        .review(|a| Ok(watch.addresses.iter().any(|entry| entry == a)))
         .map_err(fail)?;
     let input_ownership = built
         .unsigned_tx
@@ -376,12 +446,12 @@ fn build_watch_session(
             watch
                 .addresses
                 .iter()
-                .find(|a| address_to_ergo_tree(&a.address).is_ok_and(|t| t == tree))
+                .find(|a| address_to_ergo_tree(a).is_ok_and(|t| t == tree))
                 .cloned()
-                .ok_or("Unknown input derivation".to_string())
+                .ok_or("Unknown input ownership".to_string())
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let metadata = serde_json::to_value(&watch).map_err(fail)?;
+    let metadata = watch.metadata.clone();
     let id = insert(Session {
         created: Instant::now(),
         collector: Collector::new(Direction::Response),
@@ -406,15 +476,16 @@ mod tests {
     #[test]
     fn public_watch_build_offline_review_sign_and_verified_return() {
         const KEY: &str = "0488b21e04220c2217000000009216e49a70865823eff5381d6fd33ac96743af1f3051dc4cc8edd66a29a740860326cfc301b0c8d4d815ac721e0551304417e6133c2c9137f9f22c33895a3e1650";
-        let watch = WatchContext::new(KEY, 21).unwrap();
+        let watch = WatchSource::account(KEY, 21).unwrap();
         let boxes = [0, 3, 20]
             .iter()
             .map(|i| {
                 serde_json::from_value(serde_json::json!({
-            "transactionId": "91".repeat(32), "index": i, "value": 10000000,
-            "ergoTree": address_to_ergo_tree(&watch.addresses[*i as usize].address).unwrap(),
-            "creationHeight": 1, "assets": [], "additionalRegisters": {}
-        })).unwrap()
+                    "transactionId": "91".repeat(32), "index": i, "value": 10000000,
+                    "ergoTree": address_to_ergo_tree(&watch.addresses[*i as usize]).unwrap(),
+                    "creationHeight": 1, "assets": [], "additionalRegisters": {}
+                }))
+                .unwrap()
             })
             .collect();
         let recipient = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
@@ -443,10 +514,12 @@ mod tests {
         {
             let sessions = recover(SESSIONS.lock());
             let s = sessions.get(&hot).unwrap();
-            assert_eq!(s.watch.as_ref().unwrap().key_depth, 4);
-            let mut indices: Vec<_> = s.input_ownership.iter().map(|a| a.index).collect();
-            indices.sort();
-            assert_eq!(indices, vec![0, 3, 20]);
+            assert_eq!(s.watch.as_ref().unwrap().metadata["key_depth"], 4);
+            assert_eq!(s.input_ownership.len(), 3);
+            let addresses = &s.watch.as_ref().unwrap().addresses;
+            for i in [0, 3, 20] {
+                assert!(s.input_ownership.contains(&addresses[i]));
+            }
         }
         let cold = start().unwrap();
         let ps = qr(hot.clone(), true).unwrap();
@@ -499,6 +572,124 @@ mod tests {
         assert!(sign(cold.clone(), handle).is_err());
         discard(hot);
         discard(cold);
+    }
+
+    #[tokio::test]
+    async fn single_address_erg_and_tokens_round_trip_with_same_address_change() {
+        const PHRASE: &str = "lens stadium egg cage hollow noble gate belt impulse vicious middle endless angry buzz crack";
+        let fixture = WalletHandle::create(MnemonicPhrase::parse(PHRASE).unwrap(), "").unwrap();
+        // Beyond preloaded indices: the actual signer below has never derived it.
+        let address = fixture.derive_address(73).unwrap();
+        let foreign =
+            WalletHandle::create(MnemonicPhrase::parse(PHRASE).unwrap(), "other").unwrap();
+        let recipient = foreign.derive_address(0).unwrap();
+        let token_id = "ab".repeat(32);
+        for with_token in [false, true] {
+            let watch = WatchSource::address(address.clone()).unwrap();
+            let assets = if with_token {
+                serde_json::json!([{"tokenId": token_id, "amount": 42}])
+            } else {
+                serde_json::json!([])
+            };
+            let boxes = vec![serde_json::from_value(serde_json::json!({
+                "transactionId": "91".repeat(32), "index": 0, "value": 10000000,
+                "ergoTree": address_to_ergo_tree(&address).unwrap(),
+                "creationHeight": 1, "assets": assets, "additionalRegisters": {}
+            }))
+            .unwrap()];
+            let tokens = if with_token {
+                HashMap::from([(token_id.clone(), 12)])
+            } else {
+                HashMap::new()
+            };
+            let result: serde_json::Value = serde_json::from_str(
+                &ergo_tx::dev_fee::with_test_dev_fee(
+                    DevFeeConfig::custom(
+                        address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap(),
+                        ARGUS_FEE_NANO,
+                    ),
+                    || {
+                        build_watch_session(
+                            watch,
+                            0,
+                            address_to_ergo_tree(&recipient).unwrap(),
+                            2000000,
+                            tokens,
+                            "http://unused.invalid".into(),
+                            boxes,
+                            2000,
+                            &wallet_net::client::make_state_context(2000),
+                        )
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let hot = result["session"].as_str().unwrap().to_string();
+            assert_eq!(result["ownership"]["change_address"], address);
+            assert!(result["ownership"].get("key_depth").is_none());
+            let outputs = result["review"]["outputs"].as_array().unwrap();
+            let change = outputs.iter().find(|o| o["owned"] == true).unwrap();
+            assert_eq!(change["address"], address);
+            assert_eq!(
+                change["nano_erg"],
+                (10000000 - 2000000 - TX_FEE_NANO - ARGUS_FEE_NANO).to_string()
+            );
+            if with_token {
+                assert_eq!(outputs[0]["tokens"][0]["amount"], "12");
+                assert_eq!(change["tokens"][0]["amount"], "30");
+            }
+            assert!(broadcast(hot.clone())
+                .await
+                .unwrap_err()
+                .contains("no verified response"));
+            let cold = start().unwrap();
+            for page in qr(hot.clone(), true).unwrap() {
+                add(cold.clone(), page).unwrap();
+            }
+            let wrong = register_handle(
+                WalletHandle::create(MnemonicPhrase::parse(PHRASE).unwrap(), "wrong").unwrap(),
+            );
+            assert!(review(cold.clone(), wrong).is_err());
+            assert!(sign(cold.clone(), wrong).is_err());
+            wallet_lock(wrong).unwrap();
+            let owner = register_handle(
+                WalletHandle::create(MnemonicPhrase::parse(PHRASE).unwrap(), "").unwrap(),
+            );
+            let shown: serde_json::Value =
+                serde_json::from_str(&review(cold.clone(), owner).unwrap()).unwrap();
+            assert_eq!(shown, result["review"]);
+            sign(cold.clone(), owner).unwrap();
+            for page in qr(cold.clone(), true).unwrap() {
+                add(hot.clone(), page).unwrap();
+            }
+            // Even a complete signed response must be verified before broadcast.
+            assert!(broadcast(hot.clone())
+                .await
+                .unwrap_err()
+                .contains("no verified response"));
+            verify(hot.clone()).unwrap();
+            assert!(add(hot.clone(), "invalid".into()).is_err());
+            assert!(broadcast(hot.clone())
+                .await
+                .unwrap_err()
+                .contains("no verified response"));
+            wallet_lock(owner).unwrap();
+            discard(hot);
+            discard(cold);
+        }
+    }
+
+    #[test]
+    fn single_address_source_rejects_non_p2pk_and_invalid_addresses() {
+        assert!(WatchSource::address("not an address".into()).is_err());
+        use ergo_lib::ergotree_ir::chain::address::{NetworkAddress, NetworkPrefix};
+        let script_address = NetworkAddress::new(
+            NetworkPrefix::Mainnet,
+            &ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS,
+        )
+        .to_base58();
+        assert!(WatchSource::address(script_address).is_err());
     }
 
     #[tokio::test]

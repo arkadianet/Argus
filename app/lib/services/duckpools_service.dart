@@ -4,12 +4,43 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../bridge/api.dart' as bridge;
+import '../format.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'mix_background.dart';
 import 'network_controller.dart';
 import 'notification_service.dart';
 import 'wallet_service.dart';
+
+/// Assets includes stealth holdings, but protocol orders use public inputs.
+/// Explain a public shortfall when stealth exists; only suggest a transfer
+/// when the combined holdings cover the order.
+String? duckpoolsStealthFundingIssue(
+  List<TokenBalance> holdings, String tokenId, int required, {
+  required int decimals,
+}) {
+  final matching = holdings.where((t) => t.id == tokenId);
+  final total = matching.fold<int>(0, (n, t) => n + t.amount);
+  final stealth = matching.fold<int>(0, (n, t) => n + t.stealthAmount);
+  final public = total - stealth;
+  if (stealth <= 0 || required <= public) return null;
+  String amount(int units) => formatTokenAmountGrouped(units, decimals);
+  if (total < required) {
+    return 'Insufficient token $tokenId: you hold ${amount(total)} in total '
+        '(${amount(public)} public and ${amount(stealth)} in Stealth); '
+        'this order needs ${amount(required)}. '
+        'Even moving all Stealth holdings to public would leave you '
+        '${amount(required - total)} short. Nothing was sent.';
+  }
+  final shortfall = required - public;
+  return 'Assets includes ${amount(stealth)} of token $tokenId in Stealth. '
+      'Duckpools protocol funding uses public boxes, which hold ${amount(public)}; '
+      'this order needs ${amount(required)}. '
+      'In Send, choose the Stealth pocket and transfer at least ${amount(shortfall)} '
+      'of this token (the minimum shortfall) to your '
+      'public receive address, then retry after confirmation. '
+      'This makes the transferred funds public. Nothing was sent.';
+}
 
 /// One Duckpools lending pool as deployed.
 class DuckPool {

@@ -2,7 +2,8 @@ use ergo_tx::{Eip12InputBox, SelectedInputs};
 
 /// Boxes that are safe to spend for this payment.
 /// ERG-only boxes are always eligible. Boxes that hold tokens are only
-/// eligible if every token is the one being sent (avoids sweeping NFTs).
+/// eligible if they contain the token being sent. Builders return all unsent
+/// tokens to the wallet as change. ERG-only filtering remains unchanged.
 pub fn filter_spendable(utxos: &[Eip12InputBox], send_token: Option<&str>) -> Vec<Eip12InputBox> {
     utxos
         .iter()
@@ -17,7 +18,7 @@ pub fn is_spendable(utxo: &Eip12InputBox, send_token: Option<&str>) -> bool {
     }
     match send_token {
         None => false,
-        Some(id) => utxo.assets.iter().all(|a| a.token_id == id),
+        Some(id) => utxo.assets.iter().any(|a| a.token_id == id),
     }
 }
 
@@ -415,7 +416,8 @@ mod tests {
             box_with("1000000", vec![("tok", "10"), ("nft", "1")]),
         ];
         let safe = filter_spendable(&boxes, Some("tok"));
-        assert_eq!(safe.len(), 1);
-        assert_eq!(safe[0].assets.len(), 1);
+        assert_eq!(safe.len(), 2);
+        assert_eq!(safe[1].assets.len(), 2);
+        assert!(!is_spendable(&box_with("1000000", vec![("other", "1")]), Some("tok")));
     }
 }
