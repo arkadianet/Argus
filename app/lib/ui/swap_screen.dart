@@ -826,10 +826,13 @@ class _AssetPickerSheetState extends State<_AssetPickerSheet> {
     }
 
     final showErg = matches(null);
-    final heldRows = [
-      for (final t in widget.heldTokens)
-        if (t.id != widget.exclude && matches(t.id)) t,
-    ];
+    final heldRows = heldByTradability(
+      [
+        for (final t in widget.heldTokens)
+          if (t.id != widget.exclude && matches(t.id)) t,
+      ],
+      poolIds,
+    );
     final verifiedRows = [
       for (final id in verified)
         if (id != widget.exclude &&
@@ -845,14 +848,19 @@ class _AssetPickerSheetState extends State<_AssetPickerSheet> {
           id,
     ];
 
-    Widget row(String? id, {BigInt? balance}) {
+    Widget row(String? id, {BigInt? balance, TokenBalance? held}) {
       final isVerified = id != null && isVerifiedToken(id);
-      final disabled = id == widget.exclude;
+      final noPool = id != null && !poolIds.contains(id);
+      final disabled = id == widget.exclude || noPool;
       return ListTile(
         enabled: !disabled,
         dense: true,
-        title: Text(symbol(id)),
-        subtitle: balance != null
+        // A token with no pool has no name in the pool set either, so fall
+        // back to whatever the holding itself knows.
+        title: Text(noPool && held != null ? held.label : symbol(id)),
+        subtitle: noPool
+            ? const Text('No Spectrum pool')
+            : balance != null
             ? Text(formatTokenAmount(
                 balance <= BigInt.from(0x7FFFFFFFFFFFFFFF)
                     ? balance.toInt()
@@ -917,7 +925,7 @@ class _AssetPickerSheetState extends State<_AssetPickerSheet> {
                                 ? null
                                 : BigInt.from(widget.spendableNano!)),
                       for (final t in heldRows)
-                        row(t.id, balance: BigInt.from(t.amount)),
+                        row(t.id, balance: BigInt.from(t.amount), held: t),
                       const Divider(height: 24),
                     ],
                     if (verifiedRows.isNotEmpty) ...[
@@ -947,6 +955,22 @@ class _AssetPickerSheetState extends State<_AssetPickerSheet> {
     );
   }
 }
+
+/// Held tokens ordered so the ones a pool can trade come first.
+///
+/// Held tokens are the only group in the picker not drawn from the pool set;
+/// every other group is built from it. Without this split a holding Spectrum
+/// cannot trade is offered like any other and then fails to quote. They stay
+/// listed rather than being filtered out — a wallet token missing from its
+/// own section reads as a bug — but the picker disables them and says why.
+List<TokenBalance> heldByTradability(
+  Iterable<TokenBalance> held,
+  Set<String> poolIds,
+) =>
+    [
+      ...held.where((t) => poolIds.contains(t.id)),
+      ...held.where((t) => !poolIds.contains(t.id)),
+    ];
 
 /// User-facing text for a failed quote.
 String swapQuoteError(String raw) {
