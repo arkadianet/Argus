@@ -34,6 +34,17 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
     super.dispose();
   }
 
+  Future<void> _setAutoResolve(bool value) async {
+    try {
+      await metadataSettings.setAutoResolve(value);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('$e')));
+    }
+  }
+
   Future<void> _addNode() async {
     final err = await networkController.addNode(_nodeCtrl.text);
     if (!mounted) return;
@@ -116,8 +127,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
                       : 'Takes effect once you tap a node above to pin it, and that node is the one connected. Automatic selection can change nodes, so it keeps asking.',
                 ),
                 value: metadataSettings.autoResolve,
-                onChanged: (value) =>
-                    metadataSettings.setAutoResolve(value).catchError((_) {}),
+                onChanged: _setAutoResolve,
               ),
             ),
             const SizedBox(height: 8),

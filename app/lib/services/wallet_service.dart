@@ -825,9 +825,21 @@ class WalletService with WidgetsBindingObserver {
   Future<void>? _sweep;
   bool _sweepCancelled = false;
 
-  /// Stops any running sweep and waits for it to let go of the metadata job,
-  /// so an explicit tap is never refused for one already in flight.
-  Future<void> stopAutoResolve() async {
+  /// Holdings handed to [autoResolveMetadata] that no sweep has processed
+  /// yet. A call made while a sweep runs leaves its list here instead of
+  /// being dropped; the running sweep picks it up when it finishes.
+  List<TokenBalance>? _pendingHoldings;
+
+  /// Non-zero while an explicit request owns the metadata job. Automatic
+  /// resolution does not start in that window, so the handover in
+  /// [beginManualMetadata] cannot be overtaken by a listener firing.
+  int _manualHold = 0;
+
+  /// Takes the metadata job for an explicit request: pauses automatic
+  /// resolution, then waits for any running sweep to let go. Every caller
+  /// must pair this with [endManualMetadata] in a `finally`.
+  Future<void> beginManualMetadata() async {
+    _manualHold++;
     _sweepCancelled = true;
     try {
       await _sweep;
@@ -836,20 +848,46 @@ class WalletService with WidgetsBindingObserver {
     }
   }
 
+  void endManualMetadata() {
+    if (_manualHold > 0) _manualHold--;
+  }
+
+  /// Ends automatic resolution without claiming the job, for a screen going
+  /// away. Anything already in flight finishes; nothing new starts.
+  void cancelAutoResolve() {
+    _sweepCancelled = true;
+    _pendingHoldings = null;
+  }
+
   /// Resolves [holdings] one at a time from the pinned node, skipping what is
   /// already resolved. Individual failures are skipped rather than ending the
-  /// sweep; a session change ends it at the next item.
+  /// sweep; a session change ends it at the next item and the loop picks up
+  /// whatever arrived meanwhile, so a holdings update during a sweep is not
+  /// left waiting for the next sync tick.
   Future<void> autoResolveMetadata(Iterable<TokenBalance> holdings) async {
+    _pendingHoldings = holdings.toList(growable: false);
     if (_sweep != null) return _sweep;
-    final provider = networkController.activeUrl;
-    if (provider == null || !networkController.pinnedNodeActive) return;
-    if (!metadataSettings.autoResolve) return;
-    _sweepCancelled = false;
-    _sweep = _runAutoResolve(holdings.toList(growable: false), provider);
-    try {
-      await _sweep;
-    } finally {
-      _sweep = null;
+    while (_pendingHoldings != null) {
+      final batch = _pendingHoldings!;
+      _pendingHoldings = null;
+      final provider = networkController.activeUrl;
+      if (provider == null ||
+          !networkController.pinnedNodeActive ||
+          !metadataSettings.autoResolve ||
+          _manualHold > 0) {
+        _pendingHoldings = null;
+        return;
+      }
+      _sweepCancelled = false;
+      _sweep = _runAutoResolve(batch, provider);
+      try {
+        await _sweep;
+      } finally {
+        _sweep = null;
+      }
+      // A cancelled sweep means an explicit request wants the job; it is not
+      // this loop's place to take it back.
+      if (_sweepCancelled) return;
     }
   }
 
@@ -860,7 +898,8 @@ class WalletService with WidgetsBindingObserver {
     final epoch = _descriptorEpoch;
     var done = 0;
     for (final holding in holdings) {
-      if (_sweepCancelled || done >= maxAutoResolvePerSweep) return;
+      if (_sweepCancelled || _manualHold > 0 ||
+          done >= maxAutoResolvePerSweep) return;
       // A provider change invalidates every key, so restart rather than
       // finish the list against a node the user is no longer using.
       if (epoch != _descriptorEpoch ||

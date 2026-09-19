@@ -79,51 +79,58 @@ class _TokenDetailSheetState extends State<TokenDetailSheet>
       );
       return;
     }
-    // An eligible node needs no prompt: it already holds what the request
-    // would reveal. Every other provider, and every stealth holding, asks.
-    final preapproved = node && walletService.autoResolveEligible(widget.token);
-    final yes = preapproved
-        ? true
-        : await showDialog<bool>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              title: Text('Load metadata from $host'),
-              content: Text(
-                'This provider can see your IP address and the token ID requested. '
-                '${widget.token.hasStealth ? 'Loading may link this private holding to this connection. ' : ''}'
-                'Issuer text may be misleading. No artwork will be downloaded.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, false),
-                  child: const Text('Cancel'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx, true),
-                  child: const Text('Load metadata'),
-                ),
-              ],
-            ),
-          );
-    if (yes != true || !mounted || _concealed) return;
-    // A background sweep holds the single metadata job; hand it over rather
-    // than fail this tap with "another request is running".
-    await walletService.stopAutoResolve();
-    if (!mounted || _concealed) return;
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    // Take the metadata job first. A background sweep otherwise holds it and
+    // this tap fails with "another request is running", and taking it before
+    // reading eligibility means the decision below cannot go stale across an
+    // await: nothing automatic can start between the check and the request.
+    await walletService.beginManualMetadata();
     try {
-      await walletService.loadMetadata(
-        widget.token,
-        provider: provider,
-        providerIsNode: node,
-      );
-    } catch (_) {
-      if (mounted) setState(() => _error = 'Metadata unavailable from $host');
+      if (!mounted || _concealed) return;
+      // An eligible node needs no prompt: it already holds what the request
+      // would reveal. Every other provider, and every stealth holding, asks.
+      final preapproved =
+          node && walletService.autoResolveEligible(widget.token);
+      final yes = preapproved
+          ? true
+          : await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: Text('Load metadata from $host'),
+                content: Text(
+                  'This provider can see your IP address and the token ID requested. '
+                  '${widget.token.hasStealth ? 'Loading may link this private holding to this connection. ' : ''}'
+                  'Issuer text may be misleading. No artwork will be downloaded.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: const Text('Cancel'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    child: const Text('Load metadata'),
+                  ),
+                ],
+              ),
+            );
+      if (yes != true || !mounted || _concealed) return;
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+      try {
+        await walletService.loadMetadata(
+          widget.token,
+          provider: provider,
+          providerIsNode: node,
+        );
+      } catch (_) {
+        if (mounted) setState(() => _error = 'Metadata unavailable from $host');
+      } finally {
+        if (mounted) setState(() => _loading = false);
+      }
     } finally {
-      if (mounted) setState(() => _loading = false);
+      walletService.endManualMetadata();
     }
   }
 

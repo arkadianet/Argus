@@ -19,12 +19,17 @@ class MetadataSettings extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Persists before changing memory, so a failed write cannot leave the
+  /// switch showing off while the next launch reads on and resolves without
+  /// asking. Throws when the write fails; the caller is expected to say so.
   Future<void> setAutoResolve(bool value) async {
     if (value == _autoResolve) return;
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.setBool(_autoResolveKey, value)) {
+      throw StateError('Could not save the token details setting.');
+    }
     _autoResolve = value;
     notifyListeners();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_autoResolveKey, value);
   }
 }
 

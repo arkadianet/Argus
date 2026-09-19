@@ -39,7 +39,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
     metadataSettings.removeListener(_sweep);
     networkController.removeListener(_sweep);
     walletSyncController.removeListener(_sweep);
-    walletService.stopAutoResolve();
+    walletService.cancelAutoResolve();
     super.dispose();
   }
 

@@ -103,6 +103,53 @@ void main() {
     });
   });
 
+  group('explicit handover', () {
+    setUp(() async {
+      await metadataSettings.setAutoResolve(true);
+      networkController.preferredUrl = 'https://mine.example';
+      networkController.activeUrl = 'https://mine.example';
+    });
+
+    tearDown(() async {
+      networkController.preferredUrl = null;
+      networkController.activeUrl = null;
+      await metadataSettings.setAutoResolve(false);
+    });
+
+    test('a held job keeps automatic resolution from starting', () async {
+      final svc = WalletService();
+      await svc.beginManualMetadata();
+      // Eligible in every other respect: only the hold stops it. Reaching
+      // the FFI would throw, so completing proves nothing started.
+      await expectLater(
+        svc.autoResolveMetadata([TokenBalance(id: 'tok', amount: 1)]),
+        completes,
+      );
+      svc.endManualMetadata();
+    });
+
+    test('holds nest, and only the last release frees the job', () async {
+      final svc = WalletService();
+      await svc.beginManualMetadata();
+      await svc.beginManualMetadata();
+      svc.endManualMetadata();
+      await expectLater(
+        svc.autoResolveMetadata([TokenBalance(id: 'tok', amount: 1)]),
+        completes,
+      );
+      svc.endManualMetadata();
+    });
+
+    test('cancelAutoResolve drops holdings queued behind a sweep', () async {
+      final svc = WalletService();
+      svc.cancelAutoResolve();
+      await expectLater(
+        svc.autoResolveMetadata([TokenBalance(id: 'tok', amount: 1)]),
+        completes,
+      );
+    });
+  });
+
   group('MetadataSettings', () {
     test('defaults to off so an existing install keeps asking', () async {
       final s = MetadataSettings();
@@ -117,6 +164,16 @@ void main() {
       final second = MetadataSettings();
       await second.load();
       expect(second.autoResolve, isTrue);
+    });
+
+    test('a redundant set does not notify', () async {
+      final s = MetadataSettings();
+      var notifications = 0;
+      s.addListener(() => notifications++);
+      await s.setAutoResolve(false);
+      expect(notifications, 0);
+      await s.setAutoResolve(true);
+      expect(notifications, 1);
     });
   });
 }
