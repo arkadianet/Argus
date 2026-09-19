@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:argus_wallet/bridge/frb_generated.dart';
@@ -20,6 +21,10 @@ class ResolverApi extends RustLibApi {
   /// Per-call hook: return an error string to throw, or null to succeed.
   String? Function(String tokenId)? onAsk;
 
+  /// When set, the next request suspends until this completes, so a test can
+  /// run another pass while one is genuinely in flight.
+  Completer<String?>? gate;
+
   @override
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
@@ -36,6 +41,12 @@ class ResolverApi extends RustLibApi {
     required bool providerIsNode,
   }) async {
     asked.add(tokenId);
+    final waiting = gate;
+    if (waiting != null) {
+      gate = null;
+      final err = await waiting.future;
+      if (err != null) throw StateError(err);
+    }
     final hook = onAsk?.call(tokenId);
     if (hook != null) throw StateError(hook);
     if (failWith == 'unsupported') {
@@ -308,6 +319,111 @@ void main() {
 
     final other = await TokenDescriptorStore.load('w8');
     expect(other, isEmpty);
+  });
+
+  test('an unfinished lookup is not suppressed on the next refresh',
+      () async {
+    // Ownership is lost while the request is in flight. The id must not be
+    // remembered as a miss: nothing was learned about it.
+    final svc = await unlocked('w10');
+    var current = true;
+    api.onAsk = (_) {
+      current = false;
+      return null;
+    };
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => current,
+    );
+    api.onAsk = null;
+    api.asked.clear();
+
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(api.asked, [_id('ab')],
+        reason: 'an interrupted pass must not permanently skip the token');
+    expect(svc.cachedTokenMeta(_id('ab'))?.name, 'Name ab');
+  });
+
+  test('cached descriptors are returned, not just freshly fetched ones',
+      () async {
+    final svc = await unlocked('w11');
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    api.asked.clear();
+
+    // Second pass: nothing to fetch, but the caller still needs the name to
+    // apply to holdings that published before the table was read.
+    final out = await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(api.asked, isEmpty);
+    expect(out[_id('ab')]?.name, 'Name ab',
+        reason: 'otherwise a restart shows raw ids until a later hydration');
+  });
+
+  test('results from a discarded session are dropped, not returned',
+      () async {
+    final svc = await unlocked('w12');
+    var asks = 0;
+    api.onAsk = (_) {
+      // Discard the session while the SECOND request is in flight, so the
+      // first has already accumulated a result.
+      if (++asks == 2) svc.clearSessionMetadata();
+      return null;
+    };
+    final out = await svc.prefetchTokenMeta(
+      [_id('ab'), _id('cd')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    api.onAsk = null;
+    expect(out, isEmpty,
+        reason: 'a result accumulated before the clear must not survive it');
+  });
+
+  test('a pass cannot record a verdict about a provider it does not own',
+      () async {
+    final svc = await unlocked('w13');
+    // A's request is genuinely in flight and holds the metadata job.
+    final gate = Completer<String?>();
+    api.gate = gate;
+    final passA = svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: 'https://a.example',
+      stillCurrent: () => true,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    // B takes over the provider slot, then exits because the job is held.
+    await svc.prefetchTokenMeta(
+      [_id('cd')],
+      walletId: _wallet,
+      servedBy: 'https://b.example',
+      stillCurrent: () => true,
+    );
+
+    // Now A's request fails with a capability error, after B owns the slot.
+    gate.complete('extraIndex is required for this endpoint');
+    await passA;
+
+    expect(svc.metadataLookupUnsupported, isFalse,
+        reason: "a verdict about A must not be applied to B");
   });
 
   test('an unparseable table is not a descriptor', () async {

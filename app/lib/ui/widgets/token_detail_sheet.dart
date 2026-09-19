@@ -114,8 +114,12 @@ class _TokenDetailSheetState extends State<TokenDetailSheet>
     } catch (e) {
       // Losing the single metadata job to a background pass is contention,
       // not the provider failing. Saying "unavailable" would tell the user
-      // their node is broken when another try would work.
-      final busy = e.toString().toLowerCase().contains('already running');
+      // their node is broken when another try would work. Typed, because
+      // Dart and Rust word this differently and a substring check missed
+      // the Dart one, which is the common case.
+      final busy =
+          e is MetadataBusyException ||
+          e.toString().toLowerCase().contains('already running');
       if (mounted) {
         setState(
           () => _error = busy

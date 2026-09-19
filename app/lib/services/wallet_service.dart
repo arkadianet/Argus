@@ -731,6 +731,17 @@ bool isIncorrectPin(Object error) {
 /// Completeness belongs to one history request, including its pending rows.
 typedef HistoryResult = ({List<Map<String, dynamic>> rows, bool partial});
 
+/// The single metadata job is already held. Typed rather than matched on
+/// message text: Dart and Rust word this differently ("Another metadata
+/// request is running" vs "Metadata request already running"), and a
+/// substring check silently missed one of them.
+/// Extends [StateError] so the pre-existing contract — callers and tests
+/// that expect a StateError for a concurrent job — keeps holding, while the
+/// type lets contention be told apart from a provider failure.
+class MetadataBusyException extends StateError {
+  MetadataBusyException() : super('Another metadata request is running');
+}
+
 class WalletService with WidgetsBindingObserver {
   bool _observingMetadata = false;
   @override
@@ -810,7 +821,7 @@ class WalletService with WidgetsBindingObserver {
     }
     if (provider != (providerIsNode ? networkController.activeUrl : networkController.explorer))
       throw StateError('Metadata provider changed');
-    if (_metadataBusy) throw StateError('Another metadata request is running');
+    if (_metadataBusy) throw MetadataBusyException();
     if (!_observingMetadata) {
       WidgetsBinding.instance.addObserver(this);
       _observingMetadata = true;
@@ -1324,49 +1335,55 @@ class WalletService with WidgetsBindingObserver {
     required String servedBy,
     required bool Function() stillCurrent,
   }) async {
-    final resolvedNow = <String, TokenBalance>{};
-    if (walletId.isEmpty || servedBy.isEmpty) return resolvedNow;
-    if (!isUnlocked || !stillCurrent()) return resolvedNow;
+    if (walletId.isEmpty || servedBy.isEmpty) return const {};
+    if (!isUnlocked || !stillCurrent()) return const {};
     await ensureWalletTable();
-    if (!_owns(walletId, stillCurrent)) return resolvedNow;
+    if (!_owns(walletId, stillCurrent)) return const {};
 
-    // Captured up front. `clearSessionMetadata` and `clearCollectibleData`
-    // bump the epoch; anything this pass learned afterwards belongs to a
-    // session the user has already discarded and must not be written back.
     final epoch = _descriptorEpoch;
     bool owns() => _owns(walletId, stillCurrent) && epoch == _descriptorEpoch;
 
-    if (_metadataCapabilityFor != servedBy) {
+    // Capability and miss state belong to a provider. Only the pass that
+    // introduced this provider may reset them, or an overlapping pass on
+    // another node would clear the verdict this one is about to record.
+    final ownsProvider = _metadataCapabilityFor == servedBy;
+    if (!ownsProvider) {
       _metadataCapabilityFor = servedBy;
       _metadataUnsupported = false;
       _consecutiveNotFound = 0;
-      // Misses are a property of a provider, not of a token. A node that
-      // could not answer for X says nothing about whether the next one can.
       _metadataMisses.clear();
     }
-    if (_metadataUnsupported) return resolvedNow;
 
-    final wanted = [
+    final requested = [
       for (final id in ids)
-        if (id.length == 64 &&
-            !_descriptorCache.containsKey(id) &&
-            !_legacyTokenMeta.containsKey(id) &&
-            !_metadataMisses.contains(id))
-          id,
+        if (id.length == 64) id,
     ];
-    if (wanted.isEmpty) return resolvedNow;
+    // Already-known descriptors go back to the caller too. After a restart
+    // the display cache is empty when holdings publish, so returning only
+    // freshly fetched entries would leave a wallet full of cached names
+    // showing raw ids until some later hydration.
+    final resolvedNow = <String, TokenBalance>{
+      for (final id in requested)
+        if (cachedTokenMeta(id) != null) id: cachedTokenMeta(id)!,
+    };
 
-    // One budget for the whole pass: there is one call per refresh, over
-    // every address's ids at once, so it cannot multiply by address count.
-    var attempted = 0;
     try {
+      if (_metadataUnsupported) return resolvedNow;
+      final wanted = [
+        for (final id in requested)
+          if (!_descriptorCache.containsKey(id) &&
+              !_legacyTokenMeta.containsKey(id) &&
+              !_metadataMisses.contains(id))
+            id,
+      ];
+
+      var attempted = 0;
       for (final id in wanted) {
         if (!owns() || _metadataUnsupported) return resolvedNow;
         if (attempted >= maxTokenMetaPerSync) return resolvedNow;
         // An explicit request owns the job. Yield rather than compete.
         if (_metadataBusy) return resolvedNow;
         _metadataBusy = true;
-        _metadataMisses.add(id);
         attempted++;
         try {
           final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
@@ -1374,32 +1391,29 @@ class WalletService with WidgetsBindingObserver {
             providerUrl: servedBy,
             providerIsNode: true,
           );
-          // Re-check before touching anything shared: this suspended, and
-          // the wallet, session or provider may have moved on.
-          if (!owns()) return resolvedNow;
+          // Discard rather than return: results from a session the user has
+          // discarded must not reach the screen.
+          if (!owns()) return const {};
           final m = jsonDecode(raw) as Map<String, dynamic>;
           if (m['id'] != id) continue;
           _rememberDescriptor(id, m, servedBy);
-          _metadataMisses.remove(id);
           _consecutiveNotFound = 0;
           final meta = cachedTokenMeta(id);
           if (meta != null) resolvedNow[id] = meta;
         } catch (e) {
-          // Ownership is checked before every shared-state mutation below.
-          // A failure that arrives after a wallet switch must not disable
-          // the incoming wallet's resolution.
-          if (!owns()) return resolvedNow;
+          if (!owns()) return const {};
+          if (e is MetadataBusyException) return resolvedNow;
           final text = e.toString().toLowerCase();
+          if (text.contains('already running')) return resolvedNow;
           if (text.contains('cancelled') || text.contains('canceled')) {
-            // The session was torn down under this pass. Stop; do not treat
-            // it as a property of the token.
-            _metadataMisses.remove(id);
-            return resolvedNow;
+            return const {};
           }
-          if (text.contains('already running')) {
-            _metadataMisses.remove(id);
-            return resolvedNow;
-          }
+          // Only now is this a property of the token: a miss recorded
+          // before the request would outlive a pass that never finished,
+          // suppressing a token that might have resolved.
+          _metadataMisses.add(id);
+          // And only the pass that owns this provider may judge it.
+          if (_metadataCapabilityFor != servedBy) return resolvedNow;
           if (_looksUnsupported(e)) {
             _metadataUnsupported = true;
             return resolvedNow;
@@ -1419,9 +1433,10 @@ class WalletService with WidgetsBindingObserver {
       }
       return resolvedNow;
     } finally {
-      // Every exit persists what this pass already learned. Returning early
-      // on the ninth token must not throw away the first eight.
-      if (_tokenMetaDirty && owns()) {
+      // Covers every exit, including the ones that resolve nothing: a pass
+      // invalidated after some successes would otherwise leave them dirty
+      // and lose them at the next wallet switch.
+      if (_tokenMetaDirty && _currentWalletId == walletId) {
         await persistTokenMeta();
       }
     }
