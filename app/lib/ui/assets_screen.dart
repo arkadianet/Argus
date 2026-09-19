@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../format.dart';
+import '../services/metadata_settings.dart';
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
 import '../services/token_pricer.dart';
@@ -10,7 +11,9 @@ import 'send_screen.dart';
 import 'widgets/asset_tile.dart';
 import 'widgets/token_detail_sheet.dart';
 
-/// A text-first, lazy view of holdings. Opening it never hydrates metadata.
+/// A text-first view of holdings. Opening it hydrates metadata only when the
+/// pinned node is serving the session and the user turned that on in Network
+/// settings; otherwise each token is still resolved by hand from its sheet.
 class AssetsScreen extends StatefulWidget {
   const AssetsScreen({super.key, required this.args});
   final WalletRouteArgs args;
@@ -21,6 +24,31 @@ class AssetsScreen extends StatefulWidget {
 class _AssetsScreenState extends State<AssetsScreen> {
   bool _collectibles = false;
   String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    metadataSettings.addListener(_sweep);
+    networkController.addListener(_sweep);
+    walletSyncController.addListener(_sweep);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _sweep());
+  }
+
+  @override
+  void dispose() {
+    metadataSettings.removeListener(_sweep);
+    networkController.removeListener(_sweep);
+    walletSyncController.removeListener(_sweep);
+    walletService.stopAutoResolve();
+    super.dispose();
+  }
+
+  /// Fire-and-forget; [WalletService.autoResolveMetadata] is a no-op when a
+  /// sweep is already running or the session is not eligible.
+  void _sweep() {
+    if (!mounted) return;
+    walletService.autoResolveMetadata(walletSyncController.displayTokens);
+  }
   void _open(TokenBalance token) => showTokenDetailSheet(
     context,
     token: token,

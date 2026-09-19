@@ -79,28 +79,37 @@ class _TokenDetailSheetState extends State<TokenDetailSheet>
       );
       return;
     }
-    final yes = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Load metadata from $host'),
-        content: Text(
-          'This provider can see your IP address and the token ID requested. '
-          '${widget.token.hasStealth ? 'Loading may link this private holding to this connection. ' : ''}'
-          'Issuer text may be misleading. No artwork will be downloaded.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Load metadata'),
-          ),
-        ],
-      ),
-    );
+    // An eligible node needs no prompt: it already holds what the request
+    // would reveal. Every other provider, and every stealth holding, asks.
+    final preapproved = node && walletService.autoResolveEligible(widget.token);
+    final yes = preapproved
+        ? true
+        : await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: Text('Load metadata from $host'),
+              content: Text(
+                'This provider can see your IP address and the token ID requested. '
+                '${widget.token.hasStealth ? 'Loading may link this private holding to this connection. ' : ''}'
+                'Issuer text may be misleading. No artwork will be downloaded.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('Cancel'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Load metadata'),
+                ),
+              ],
+            ),
+          );
     if (yes != true || !mounted || _concealed) return;
+    // A background sweep holds the single metadata job; hand it over rather
+    // than fail this tap with "another request is running".
+    await walletService.stopAutoResolve();
+    if (!mounted || _concealed) return;
     setState(() {
       _loading = true;
       _error = null;

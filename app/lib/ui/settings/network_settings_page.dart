@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/explorer_presets.dart';
+import '../../services/metadata_settings.dart';
 import '../../services/network_controller.dart';
 import '../../theme/argus_theme.dart';
 import '../widgets/soft_card.dart';
@@ -46,7 +47,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: networkController,
+      listenable: Listenable.merge([networkController, metadataSettings]),
       builder: (context, _) {
         final colors = ArgusColors.of(context);
         final nodes = networkController.nodes;
@@ -101,6 +102,27 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
             const SizedBox(height: 8),
             const SettingsNote(
               'Tap a node to use it. Automatic picks the reachable node with extraIndex and the smallest index lag. Built-in nodes are HTTPS; you can add http://ip:port for a node you run or trust, unencrypted.',
+            ),
+            const SizedBox(height: 24),
+            const SectionLabel('Token details', scope: 'App-wide'),
+            const SizedBox(height: 10),
+            SoftCard(
+              child: SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Resolve token names automatically'),
+                subtitle: Text(
+                  networkController.pinnedNodeActive
+                      ? 'Names, decimals and descriptions load from ${Uri.tryParse(networkController.activeUrl ?? '')?.host ?? 'the pinned node'} without asking each time. That node already receives your addresses and the boxes listing these tokens, so it learns nothing new.'
+                      : 'Takes effect once you tap a node above to pin it, and that node is the one connected. Automatic selection can change nodes, so it keeps asking.',
+                ),
+                value: metadataSettings.autoResolve,
+                onChanged: (value) =>
+                    metadataSettings.setAutoResolve(value).catchError((_) {}),
+              ),
+            ),
+            const SizedBox(height: 8),
+            const SettingsNote(
+              'Never applies to the explorer, which sync does not otherwise contact, or to stealth holdings, which the node cannot see from your addresses. Both keep asking per token. Resolved details stay in memory and are dropped when the app goes to the background.',
             ),
             const SectionLabel('Find more nodes', scope: 'App-wide'),
             const SizedBox(height: 10),

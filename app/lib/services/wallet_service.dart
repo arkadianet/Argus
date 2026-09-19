@@ -10,6 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
 import 'app_fee.dart';
+import 'metadata_settings.dart';
 import 'network_controller.dart';
 import 'privacy_service.dart';
 import 'token_evidence.dart';
@@ -784,6 +785,97 @@ class WalletService with WidgetsBindingObserver {
     _tokenMetaDirty = false;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenMetaKey);
+  }
+
+  /// Whether [holding] may be resolved without asking, from the active node.
+  ///
+  /// The pinned node already receives this wallet's addresses on every sync
+  /// and answers with the boxes that enumerate these very tokens, so reading
+  /// one token's issuance registers tells it nothing it was not already
+  /// told. Three cases keep the prompt because that argument fails for them:
+  ///
+  ///  * A node picked by failover rather than pinned. It has not necessarily
+  ///    served this wallet's balance, so its knowledge cannot be assumed.
+  ///  * The explorer. `PublicWalletSync` never contacts it, so it holds
+  ///    nothing about this wallet and a lookup would be a fresh disclosure.
+  ///  * Stealth holdings. Those boxes are not derivable from the wallet's
+  ///    public addresses, so the node has not seen them.
+  /// The disclosure rule on its own, free of session state so it can be
+  /// checked directly. [autoResolveEligible] adds the session conditions.
+  static bool autoResolveAllowedFor({
+    required bool enabled,
+    required bool pinnedNodeActive,
+    required bool hasStealth,
+  }) =>
+      enabled && pinnedNodeActive && !hasStealth;
+
+  bool autoResolveEligible(TokenBalance holding) =>
+      autoResolveAllowedFor(
+        enabled: metadataSettings.autoResolve,
+        pinnedNodeActive: networkController.pinnedNodeActive,
+        hasStealth: holding.hasStealth,
+      ) &&
+      isUnlocked &&
+      !privacyService.hideBalances;
+
+  /// Upper bound on one sweep, below the 1,000-entry `_descriptors` cap so a
+  /// large wallet cannot evict its own freshly resolved entries.
+  static const maxAutoResolvePerSweep = 250;
+
+  Future<void>? _sweep;
+  bool _sweepCancelled = false;
+
+  /// Stops any running sweep and waits for it to let go of the metadata job,
+  /// so an explicit tap is never refused for one already in flight.
+  Future<void> stopAutoResolve() async {
+    _sweepCancelled = true;
+    try {
+      await _sweep;
+    } catch (_) {
+      // The sweep never surfaces its own failures.
+    }
+  }
+
+  /// Resolves [holdings] one at a time from the pinned node, skipping what is
+  /// already resolved. Individual failures are skipped rather than ending the
+  /// sweep; a session change ends it at the next item.
+  Future<void> autoResolveMetadata(Iterable<TokenBalance> holdings) async {
+    if (_sweep != null) return _sweep;
+    final provider = networkController.activeUrl;
+    if (provider == null || !networkController.pinnedNodeActive) return;
+    if (!metadataSettings.autoResolve) return;
+    _sweepCancelled = false;
+    _sweep = _runAutoResolve(holdings.toList(growable: false), provider);
+    try {
+      await _sweep;
+    } finally {
+      _sweep = null;
+    }
+  }
+
+  Future<void> _runAutoResolve(
+    List<TokenBalance> holdings,
+    String provider,
+  ) async {
+    final epoch = _descriptorEpoch;
+    var done = 0;
+    for (final holding in holdings) {
+      if (_sweepCancelled || done >= maxAutoResolvePerSweep) return;
+      // A provider change invalidates every key, so restart rather than
+      // finish the list against a node the user is no longer using.
+      if (epoch != _descriptorEpoch ||
+          networkController.activeUrl != provider) return;
+      if (!autoResolveEligible(holding)) continue;
+      if (_descriptors.containsKey(_descriptorKey(holding.id))) continue;
+      if (holding.metadataState == MetadataState.complete) continue;
+      done++;
+      try {
+        await loadMetadata(holding, provider: provider, providerIsNode: true);
+      } catch (_) {
+        // A token with no issuance registers, or one the node cannot serve,
+        // must not stop the rest of the wallet from resolving.
+      }
+    }
   }
 
   /// One explicit per-item request. New descriptors are memory-only, scoped

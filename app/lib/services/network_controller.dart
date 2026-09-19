@@ -169,6 +169,14 @@ class NetworkController extends ChangeNotifier {
   bool probing = false;
   double? usdPerErg;
 
+  /// True when the node serving this session is the one the user pinned.
+  ///
+  /// [chooseActive] falls back to any reachable node when the preferred one
+  /// is down, so a non-null [preferredUrl] does not by itself mean the
+  /// pinned node is the one answering.
+  bool get pinnedNodeActive =>
+      preferredUrl != null && activeUrl == preferredUrl;
+
   /// Display currency for fiat conversions (CoinGecko vs_currency code).
   String fiatCode = 'usd';
   double? fiatPerErg;
