@@ -86,7 +86,8 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
       setState(() => _loading = false);
       final ids = {for (final b in boxes) for (final a in b.assets) a.tokenId};
       if (ids.isNotEmpty) {
-        walletService.prefetchTokenMeta(ids).then((_) {
+        // Cache only; see mix_screen.
+        walletService.ensureWalletTable().then((_) {
           if (mounted) setState(() {});
         }).catchError((_) {});
       }

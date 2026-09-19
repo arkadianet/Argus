@@ -6,7 +6,35 @@ import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-class FakeGateway implements WalletSyncGateway {
+/// Batch read over [FakeGateway], so tests can exercise the path that knows
+/// which endpoint served the balances. The live gateway is always batch.
+class _FakeRead implements WalletSyncRead {
+  _FakeRead(this.gw, this.addresses);
+  final FakeGateway gw;
+
+  /// Carried through: subclasses gate on which addresses were asked for, so
+  /// dropping them here silently changes the behaviour under test.
+  final List<String> addresses;
+  @override
+  Future<Map<String, dynamic>> balance(String address) =>
+      gw.getBalance(address);
+  @override
+  Future<HistoryResult> history() => gw.loadHistory(addresses);
+  @override
+  Future<int> count() => gw.countUnspentBoxes(addresses);
+  @override
+  Future<String?> servedBy() async => gw.servedByUrl;
+}
+
+class FakeGateway implements WalletSyncGateway, WalletSyncBatchGateway {
+  /// Null models a read that cannot say which node answered, in which case
+  /// nothing may be resolved.
+  String? servedByUrl = 'https://served.example';
+
+  @override
+  WalletSyncRead startRead(List<String> addresses) =>
+      _FakeRead(this, addresses);
+
   bool unlocked = true;
   int pinnedIndex = 0;
   int maxIndex = 5;
@@ -67,11 +95,17 @@ class FakeGateway implements WalletSyncGateway {
     return b;
   }
 
+  final List<String> resolved = [];
   @override
-  Future<List<TokenBalance>> hydrateTokens(
-    dynamic raw, {
-    bool allowNetwork = false,
-  }) async {
+  Future<void> resolveTokenNames(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
+  }) async => resolved.addAll(ids);
+
+  @override
+  Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
     final items = raw is List ? raw : const [];
     return [
       for (final t in items)
@@ -115,10 +149,6 @@ class FakeGateway implements WalletSyncGateway {
   void probeNetwork() {
     probeCalls++;
   }
-
-  final prefetched = <String>[];
-  @override
-  Future<void> prefetchTokenMeta(Iterable<String> ids) async => prefetched.addAll(ids);
 
   bool stealthEnabled = true;
 
@@ -479,6 +509,43 @@ void main() {
       expect(aa.amount, 7);
       expect(aa.stealthAmount, 7);
       expect(c.phase, SyncPhase.synced);
+    });
+
+    test('stealth-only ids are never handed to name resolution', () async {
+      const ordinary = 'a1';
+      const stealthOnly = 's1';
+      const both = 'b1';
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': ordinary, 'amount': 5},
+            {'id': both, 'amount': 5},
+          ],
+        },
+      };
+      gw.stealthResult = StealthScanResult(
+        scanned: 20,
+        ownedCount: 2,
+        totalNanoErg: 750,
+        tokens: [
+          StealthToken(id: stealthOnly, amount: BigInt.from(3)),
+          StealthToken(id: both, amount: BigInt.from(2)),
+        ],
+        boxIds: const ['b1', 'b2'],
+      );
+      gw.resolved.clear();
+
+      await c.refresh(discover: false);
+
+      expect(gw.resolved, contains(ordinary),
+          reason: 'positive control: ordinary holdings do resolve');
+      expect(gw.resolved, isNot(contains(stealthOnly)),
+          reason: 'a stealth-only id is not derivable from public addresses, '
+              'so the node that served these balances has never seen it');
+      expect(gw.resolved, contains(both),
+          reason: 'held in ordinary boxes too, so its id is already in the '
+              "node's own response");
     });
 
     test('an unreachable explorer leaves the balance unknown, not the sync',

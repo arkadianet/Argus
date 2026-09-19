@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:argus_wallet/services/preview/preview_service.dart';
 import 'package:argus_wallet/bridge/frb_generated.dart';
-import 'package:argus_wallet/services/network_controller.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:argus_wallet/ui/assets_screen.dart';
@@ -69,68 +68,118 @@ void main() {
     api.metadataRequests = 0;
     api.descriptorCalls.clear();
   });
-  // The old invariant was "sync makes zero token-specific requests". Ordinary
-  // public holdings are now resolved during sync — the node already receives
-  // the addresses whose boxes carry those ids. What must still never leave
-  // automatically is narrower, and these tests hold that line.
-  test('stealth hydration makes no token-specific request', () async {
+  // The old invariant was "sync makes zero token-specific requests".
+  // Ordinary public holdings are now resolved after sync publishes, from the
+  // node that served the balances. What must still never leave automatically
+  // is narrower, and these hold that line. Ids are valid 64-char hex on an
+  // unlocked wallet, so no unrelated guard can make them pass vacuously.
+  const ordinary =
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const stealthOnly =
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const both =
+      'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+
+  test('an ordinary holding is resolved from the node that served it',
+      () async {
+    // Positive control: without this, every assertion below could pass
+    // because the request path is broken rather than because it is guarded.
     final service = WalletService();
-    networkController.activeUrl = 'https://node.example';
-    addTearDown(() => networkController.activeUrl = null);
-    // Default scope, which is what the stealth path uses.
-    final tokens = await service.hydrateTokens([
-      {'id': 'stealth', 'amount': 5},
-    ]);
-    expect(tokens.length, 1);
-    expect(api.metadataRequests, 0,
+    await service.restoreWallet('mock', walletId: 'auto-ok');
+    addTearDown(() => service.lock('auto-ok'));
+    await service.prefetchTokenMeta(
+      [ordinary],
+      walletId: 'auto-ok',
+      servedBy: 'https://served.example',
+      stillCurrent: () => true,
+    );
+    expect(api.descriptorCalls.map((c) => c.tokenId), [ordinary]);
+    expect(api.descriptorCalls.single.provider, 'https://served.example',
+        reason: 'the endpoint that answered, not the configured one');
+    expect(api.descriptorCalls.single.isNode, isTrue,
+        reason: 'never the explorer');
+  });
+
+  test('a stealth-only holding is never handed to resolution', () async {
+    final service = WalletService();
+    await service.restoreWallet('mock', walletId: 'stealth-w');
+    addTearDown(() => service.lock('stealth-w'));
+
+    // What the sync controller computes: ordinary ids, minus anything held
+    // only in stealth boxes. A token held in BOTH is ordinary enough to
+    // resolve, because its id is already in the node's own boxes.
+    final holdings = [
+      TokenBalance(id: ordinary, amount: 5),
+      TokenBalance(id: both, amount: 5, stealthAmount: 2),
+    ];
+    final stealthHoldings = [
+      TokenBalance(id: stealthOnly, amount: 3, stealthAmount: 3),
+      TokenBalance(id: both, amount: 2, stealthAmount: 2),
+    ];
+    // Mirrors the controller: stealth-only is the set difference, because
+    // stealthTokens always has amount == stealthAmount by construction.
+    final ordinaryIds = {for (final t in holdings) t.id};
+    final stealthOnlyIds = {
+      for (final t in stealthHoldings)
+        if (!ordinaryIds.contains(t.id)) t.id,
+    };
+    final resolvable = ordinaryIds.toList()
+      ..removeWhere(stealthOnlyIds.contains);
+
+    await service.prefetchTokenMeta(
+      resolvable,
+      walletId: 'stealth-w',
+      servedBy: 'https://served.example',
+      stillCurrent: () => true,
+    );
+
+    final asked = api.descriptorCalls.map((c) => c.tokenId).toSet();
+    expect(asked, contains(ordinary), reason: 'positive control');
+    expect(asked, isNot(contains(stealthOnly)),
         reason: 'a stealth-only id is not derivable from public addresses');
+    expect(asked, contains(both),
+        reason: 'held in ordinary boxes too, so the node already has this id');
+  });
+
+  test('a stale wallet generation resolves nothing', () async {
+    final service = WalletService();
+    await service.restoreWallet('mock', walletId: 'stale-w');
+    addTearDown(() => service.lock('stale-w'));
+    await service.prefetchTokenMeta(
+      [ordinary],
+      walletId: 'stale-w',
+      servedBy: 'https://served.example',
+      stillCurrent: () => false,
+    );
+    expect(api.descriptorCalls, isEmpty);
+  });
+
+  test('resolution for another wallet is refused', () async {
+    final service = WalletService();
+    await service.restoreWallet('mock', walletId: 'wallet-a');
+    addTearDown(() => service.lock('wallet-a'));
+    await service.prefetchTokenMeta(
+      [ordinary],
+      walletId: 'wallet-b',
+      servedBy: 'https://served.example',
+      stillCurrent: () => true,
+    );
+    expect(api.descriptorCalls, isEmpty,
+        reason: "a response must never be written under a wallet that did "
+            'not ask for it');
   });
 
   test('a locked wallet resolves nothing', () async {
     final service = WalletService();
-    networkController.activeUrl = 'https://node.example';
-    addTearDown(() => networkController.activeUrl = null);
-    await service.prefetchTokenMeta([
-      '0' * 64,
-    ]);
-    expect(api.metadataRequests, 0);
-  });
-
-  test('resolution never goes to the explorer, and stops on an incapable node',
-      () async {
-    final service = WalletService();
-    await service.restoreWallet('mock', walletId: 'deny-test');
-    addTearDown(() => service.lock('deny-test'));
-    networkController.activeUrl = 'https://node.example';
-    addTearDown(() => networkController.activeUrl = null);
-    api.descriptorCalls.clear();
-
-    final ids = {'a' * 64, 'b' * 64, 'c' * 64};
-    await service.prefetchTokenMeta(ids);
-    // Wallet activation can drive its own sync in the background; judge only
-    // the ids this test asked about.
-    List<({String tokenId, String provider, bool isNode})> mine() => [
-      for (final c in api.descriptorCalls)
-        if (ids.contains(c.tokenId)) c,
-    ];
-
-    expect(mine(), isNotEmpty);
-    expect(api.descriptorCalls.every((c) => c.isNode), isTrue,
-        reason: 'automatic resolution must never address the explorer');
-    expect(
-      api.descriptorCalls.every((c) => c.provider == 'https://node.example'),
-      isTrue,
-      reason: 'and never a node other than the one serving sync',
+    await service.prefetchTokenMeta(
+      [ordinary],
+      walletId: 'locked-w',
+      servedBy: 'https://served.example',
+      stillCurrent: () => true,
     );
-    // DenyTokenApi throws StateError('Automatic descriptor request'), which
-    // is not a capability failure, so every id is attempted exactly once.
-    expect(mine(), hasLength(3));
-
-    // Second pass: ids already attempted are not re-asked.
-    await service.prefetchTokenMeta(ids);
-    expect(mine(), hasLength(3),
-        reason: 'a miss must not be retried on every sync');
+    expect(api.descriptorCalls, isEmpty);
   });
+
   testWidgets(
     'Assets, dashboard row and detail rebuild without HTTP or metadata requests',
     (tester) async {

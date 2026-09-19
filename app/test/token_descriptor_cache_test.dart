@@ -69,7 +69,9 @@ void main() {
 
   tearDown(() => networkController.activeUrl = null);
 
+  late String _wallet;
   Future<WalletService> unlocked(String walletId) async {
+    _wallet = walletId;
     final s = WalletService();
     await s.restoreWallet('mock', walletId: walletId);
     return s;
@@ -77,7 +79,7 @@ void main() {
 
   test('a resolved descriptor is cached and survives a restart', () async {
     final first = await unlocked('w1');
-    await first.prefetchTokenMeta([_id('ab')]);
+    await first.prefetchTokenMeta([_id('ab')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
 
     expect(api.asked, contains(_id('ab')));
     expect(first.cachedTokenMeta(_id('ab'))?.name, 'Name ab');
@@ -89,10 +91,11 @@ void main() {
     // directly.
     final second = WalletService();
     api.asked.clear();
+    _wallet = 'w1';
     await second.restoreWallet('mock', walletId: 'w1');
     // The table loads on the first path that needs it, which in production
     // is the sync that would otherwise resolve these ids.
-    await second.prefetchTokenMeta([_id('ab')]);
+    await second.prefetchTokenMeta([_id('ab')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
 
     expect(api.asked, isEmpty,
         reason: 'a cached name must not cost a request after a restart');
@@ -102,7 +105,7 @@ void main() {
 
   test('evidence survives the round trip rather than flattening', () async {
     final svc = await unlocked('w2');
-    await svc.prefetchTokenMeta([_id('cd')]);
+    await svc.prefetchTokenMeta([_id('cd')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
 
     final reloaded = await TokenDescriptorStore.load('w2');
     final d = reloaded[_id('cd')]!;
@@ -115,34 +118,34 @@ void main() {
 
   test('a cached descriptor is not re-requested', () async {
     final svc = await unlocked('w3');
-    await svc.prefetchTokenMeta([_id('ef')]);
+    await svc.prefetchTokenMeta([_id('ef')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     final before = api.asked.length;
-    await svc.prefetchTokenMeta([_id('ef')]);
+    await svc.prefetchTokenMeta([_id('ef')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(api.asked.length, before);
   });
 
   test('one incapable-node failure stops the rest of the batch', () async {
     final svc = await unlocked('w4');
     api.failWith = 'unsupported';
-    await svc.prefetchTokenMeta([_id('ab'), _id('cd'), _id('ef')]);
+    await svc.prefetchTokenMeta([_id('ab'), _id('cd'), _id('ef')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(api.asked, hasLength(1),
         reason: 'a node without extraIndex must be asked once, not per token');
     expect(svc.metadataLookupUnsupported, isTrue);
 
     // And nothing further, until the provider changes.
-    await svc.prefetchTokenMeta([_id('12')]);
+    await svc.prefetchTokenMeta([_id('12')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(api.asked, hasLength(1));
   });
 
   test('a new provider gets a fresh chance', () async {
     final svc = await unlocked('w5');
     api.failWith = 'unsupported';
-    await svc.prefetchTokenMeta([_id('ab')]);
+    await svc.prefetchTokenMeta([_id('ab')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(svc.metadataLookupUnsupported, isTrue);
 
     api.failWith = null;
     networkController.activeUrl = 'https://other.example';
-    await svc.prefetchTokenMeta([_id('cd')]);
+    await svc.prefetchTokenMeta([_id('cd')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(svc.metadataLookupUnsupported, isFalse);
     expect(api.asked, contains(_id('cd')));
   });
@@ -150,9 +153,9 @@ void main() {
   test('a token the node cannot find is not retried every sync', () async {
     final svc = await unlocked('w6');
     api.failWith = 'missing';
-    await svc.prefetchTokenMeta([_id('ab')]);
+    await svc.prefetchTokenMeta([_id('ab')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(api.asked, hasLength(1));
-    await svc.prefetchTokenMeta([_id('ab')]);
+    await svc.prefetchTokenMeta([_id('ab')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(api.asked, hasLength(1),
         reason: 'an unresolvable token must not be asked about forever');
   });
@@ -160,13 +163,13 @@ void main() {
   test('one missing token does not write off the node', () async {
     final svc = await unlocked('w6b');
     api.failWith = 'missing';
-    await svc.prefetchTokenMeta([_id('ab')]);
+    await svc.prefetchTokenMeta([_id('ab')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(svc.metadataLookupUnsupported, isFalse,
         reason: '404 also means "this node does not know that token"');
 
     // The next token still gets asked about, and resolves.
     api.failWith = null;
-    await svc.prefetchTokenMeta([_id('cd')]);
+    await svc.prefetchTokenMeta([_id('cd')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(svc.cachedTokenMeta(_id('cd'))?.name, 'Name cd');
   });
 
@@ -177,7 +180,7 @@ void main() {
       for (var i = 0; i < 12; i++)
         i.toRadixString(16).padLeft(2, '0') * 32,
     ];
-    await svc.prefetchTokenMeta(many);
+    await svc.prefetchTokenMeta(many, walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(svc.metadataLookupUnsupported, isTrue);
     expect(api.asked, hasLength(WalletService.notFoundRunBeforeUnsupported),
         reason: 'a node that answers nothing must not be asked 194 times');
@@ -185,10 +188,11 @@ void main() {
 
   test('descriptors do not leak between wallets', () async {
     final svc = await unlocked('w7');
-    await svc.prefetchTokenMeta([_id('ab')]);
+    await svc.prefetchTokenMeta([_id('ab')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
     expect(svc.cachedTokenMeta(_id('ab'))?.name, 'Name ab');
 
     // Switching wallets must drop the outgoing table synchronously.
+    _wallet = 'w8';
     await svc.restoreWallet('mock', walletId: 'w8');
     expect(svc.cachedTokenMeta(_id('ab')), isNull,
         reason: "one wallet's holdings must not be visible under another");

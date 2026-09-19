@@ -32,11 +32,17 @@ class GatedGateway extends FakeGateway {
   @override
   Future<Map<String, dynamic>?> loadCachedState(String walletKey) =>
       cacheGate?.future ?? super.loadCachedState(walletKey);
+  final List<String> resolved = [];
   @override
-  Future<List<TokenBalance>> hydrateTokens(
-    dynamic raw, {
-    bool allowNetwork = false,
-  }) async => [
+  Future<void> resolveTokenNames(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
+  }) async => resolved.addAll(ids);
+
+  @override
+  Future<List<TokenBalance>> hydrateTokens(dynamic raw) async => [
     for (final t in raw as List)
       TokenBalance(
         id: t['id'] as String,

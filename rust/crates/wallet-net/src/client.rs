@@ -346,6 +346,15 @@ impl ErgoNodeClient {
         })
     }
 
+    /// The endpoint this client is actually talking to.
+    ///
+    /// `connect` falls back past the preferred node, so callers that need to
+    /// know which node served a response — rather than which one was asked
+    /// for — must read this rather than the app's configured URL.
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
     /// Connect to the preferred node, then public fallbacks.
     pub async fn connect(preferred: Option<String>) -> Result<Self, String> {
         let mut last = "no node candidates".to_string();

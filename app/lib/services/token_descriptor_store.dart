@@ -115,14 +115,13 @@ class TokenDescriptorStore {
     Map<String, CachedDescriptor> entries,
   ) async {
     if (walletId.isEmpty) return;
+    // Serialize before suspending. Callers may hand over a map they mutate;
+    // enumerating it after an await could capture a different wallet's data.
+    final payload = jsonEncode({
+      for (final e in entries.entries.take(maxEntries)) e.key: encode(e.value),
+    });
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _key(walletId),
-      jsonEncode({
-        for (final e in entries.entries.take(maxEntries))
-          e.key: encode(e.value),
-      }),
-    );
+    await prefs.setString(_key(walletId), payload);
   }
 
   static Future<void> clear(String walletId) async {

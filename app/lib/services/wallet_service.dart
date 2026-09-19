@@ -945,7 +945,14 @@ class WalletService with WidgetsBindingObserver {
     final walletId = _currentWalletId;
     if (walletId == null || walletId.isEmpty) return;
     _tokenMetaDirty = false;
-    await TokenDescriptorStore.save(walletId, _descriptorCache);
+    // Snapshot synchronously. `save` suspends on SharedPreferences, and a
+    // wallet switch in that window clears or repopulates `_descriptorCache`
+    // in place — passing it by reference could write the new wallet's
+    // descriptors under the old wallet's key, or erase the old table.
+    await TokenDescriptorStore.save(
+      walletId,
+      Map<String, CachedDescriptor>.from(_descriptorCache),
+    );
   }
 
   /// Loads the active wallet's descriptors over whatever the legacy store
@@ -1293,26 +1300,37 @@ class WalletService with WidgetsBindingObserver {
   /// Cleared when the provider changes: a new node deserves one chance.
   String? _metadataCapabilityFor;
 
-  /// Resolves any of [ids] not already cached, from the node serving sync,
-  /// and persists what comes back.
+  /// Resolves any of [ids] not already cached, from [servedBy] — the node
+  /// that actually answered the balance request these ids came from.
   ///
-  /// Only ordinary public holdings reach here. Stealth-only ids are never
-  /// passed in: see [hydrateTokens]'s `allowNetwork`.
+  /// Every piece of context is an argument rather than an ambient read.
+  /// `_currentWalletId` and `networkController.activeUrl` can both change
+  /// while this runs, and reading them here would let a response for wallet
+  /// A be written under wallet B, or send A's ids to a node that never saw
+  /// them. [stillCurrent] is the caller's own generation check.
+  ///
+  /// Only ordinary public holdings are passed in. Stealth-only ids are never
+  /// given to this method: they are not derivable from the wallet's public
+  /// addresses, so [servedBy] has never seen them.
   ///
   /// This is the reversal of an earlier posture that held "receiving or
   /// displaying an ID is not consent to disclose it to a metadata provider".
-  /// That line was already crossed by the balance request itself: the same
-  /// node receives the wallet's addresses and answers with the boxes these
-  /// ids come from. Resolving them during sync — rather than when a token is
-  /// tapped — also keeps the provider from learning which token the user
-  /// looked at, which asking on demand would reveal.
-  Future<void> prefetchTokenMeta(Iterable<String> ids) async {
-    final provider = networkController.activeUrl;
-    if (provider == null || !isUnlocked) return;
-    // Never ask about an id this wallet may already have on disk.
+  /// The balance request already crossed that line: [servedBy] received the
+  /// addresses and answered with the boxes these ids come from. Running it
+  /// after sync publishes — rather than when a token is tapped — also keeps
+  /// the provider from learning which token the user looked at.
+  Future<void> prefetchTokenMeta(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
+  }) async {
+    if (walletId.isEmpty || servedBy.isEmpty) return;
+    if (!isUnlocked || !stillCurrent()) return;
     await ensureWalletTable();
-    if (_metadataCapabilityFor != provider) {
-      _metadataCapabilityFor = provider;
+    if (!stillCurrent() || _currentWalletId != walletId) return;
+    if (_metadataCapabilityFor != servedBy) {
+      _metadataCapabilityFor = servedBy;
       _metadataUnsupported = false;
       _consecutiveNotFound = 0;
     }
@@ -1325,46 +1343,44 @@ class WalletService with WidgetsBindingObserver {
           id,
     ];
     if (wanted.isEmpty) return;
-    final walletId = _currentWalletId;
+    // The budget covers this whole pass. There is exactly one call per
+    // refresh, over every address's ids at once, so it cannot be multiplied
+    // by the number of addresses the wallet has.
     var resolved = 0;
     for (final id in wanted) {
-      // Re-read per item: sync is long, and the node or wallet can change
-      // under it. Never carry a lookup over to a node that did not serve
-      // the balances these ids came from.
-      if (networkController.activeUrl != provider ||
+      // Re-read per item: this outlives one frame, and the wallet can change
+      // under it. Never write a response under a wallet that did not ask.
+      if (!stillCurrent() ||
           _currentWalletId != walletId ||
           !isUnlocked ||
           _metadataUnsupported) {
         break;
       }
       if (resolved >= maxTokenMetaPerSync) break;
-      // An explicit request owns the job. Yield rather than compete: both
-      // paths funnel through one Rust-side mutex, so racing it would make a
-      // user's own tap fail with "another request is running".
+      // An explicit request owns the job. Yield rather than compete.
       if (_metadataBusy) break;
+      _metadataBusy = true;
       _metadataMisses.add(id);
       resolved++;
       try {
         final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
           tokenId: id,
-          providerUrl: provider,
+          providerUrl: servedBy,
           providerIsNode: true,
         );
-        if (_currentWalletId != walletId) return;
+        if (!stillCurrent() || _currentWalletId != walletId) return;
         final m = jsonDecode(raw) as Map<String, dynamic>;
         if (m['id'] != id) continue;
-        _rememberDescriptor(id, m, provider);
+        _rememberDescriptor(id, m, servedBy);
         _metadataMisses.remove(id);
         _consecutiveNotFound = 0;
       } catch (e) {
         if (e.toString().toLowerCase().contains('already running')) {
-          // Lost the job to an explicit request; this is not a property of
-          // the token, so do not remember it as a miss.
+          // Lost the job to an explicit request; not a property of the token.
           _metadataMisses.remove(id);
           return;
         }
         if (_looksUnsupported(e)) {
-          // The node cannot do this at all; stop asking it about the rest.
           _metadataUnsupported = true;
           return;
         }
@@ -1377,15 +1393,17 @@ class WalletService with WidgetsBindingObserver {
         } else {
           _consecutiveNotFound = 0;
         }
+      } finally {
+        _metadataBusy = false;
       }
     }
-    if (_tokenMetaDirty) await persistTokenMeta();
+    if (_tokenMetaDirty && _currentWalletId == walletId) {
+      await persistTokenMeta();
+    }
   }
 
-  /// Per-sync ceiling, so a first sync on a large wallet does not turn into
-  /// hundreds of sequential requests before the balance can settle. What is
-  /// left resolves on later syncs, since misses are only remembered for ids
-  /// actually attempted.
+  /// Ceiling for one refresh. What is left resolves on later refreshes,
+  /// since misses are only remembered for ids actually attempted.
   static const maxTokenMetaPerSync = 40;
 
   /// An unambiguous "this endpoint cannot serve issuance lookups at all".
@@ -1477,6 +1495,17 @@ class WalletService with WidgetsBindingObserver {
     if (_handles.containsKey(walletId)) {
       await lock(walletId);
     }
+    // Invalidate before clearing, so a load or save still in flight for this
+    // wallet cannot recreate the table after it is gone.
+    if (_tableLoadedFor == walletId) {
+      _tableLoadedFor = null;
+      _tableLoad = null;
+    }
+    if (_currentWalletId == walletId) {
+      _descriptorCache.clear();
+      _tokenMetaDirty = false;
+    }
+    await TokenDescriptorStore.clear(walletId).catchError((_) {});
     await SecureStorageService.deleteWallet(walletId);
     await _removeWalletMeta(walletId);
   }
@@ -2325,14 +2354,12 @@ class WalletService with WidgetsBindingObserver {
     return hydrateTokens(map['tokens']);
   }
 
-  /// [allowNetwork] must stay false for stealth holdings. Those ids are not
-  /// derivable from the wallet's public addresses, so asking any provider
-  /// about one would disclose a holding the node has never seen. Ordinary
-  /// public holdings came from that node's own boxes.
-  Future<List<TokenBalance>> hydrateTokens(
-    dynamic raw, {
-    bool allowNetwork = false,
-  }) async {
+  /// Cache-only, always. Resolution is a separate pass the sync controller
+  /// runs after balances are published, so a slow node cannot hold up the
+  /// balance the user is waiting for, and so the ids that go to the network
+  /// are chosen at one explicit call site rather than by a flag threaded
+  /// through this interface.
+  Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
     final items = raw is List ? raw : const [];
     final jobs = <Future<TokenBalance>>[];
     for (final item in items) {
@@ -2342,22 +2369,7 @@ class WalletService with WidgetsBindingObserver {
       if (id.isEmpty || amount <= 0) continue;
       jobs.add(tokenMeta(id, amount));
     }
-    if (allowNetwork) await ensureWalletTable();
-    var out = await Future.wait(jobs);
-    if (allowNetwork) {
-      await prefetchTokenMeta([
-        for (final t in out)
-          if (t.metadataState != MetadataState.complete) t.id,
-      ]);
-      // Re-read so this sync shows what it just resolved.
-      out = [
-        for (final t in out)
-          cachedTokenMeta(t.id)?.withHolding(t.amount) ?? t,
-      ];
-    }
-    // Fire and forget: the write must not slow the balance refresh.
-    persistTokenMeta().catchError((_) {});
-    return out;
+    return Future.wait(jobs);
   }
 
   /// Carries completeness with the rows so overlapping wallet requests cannot

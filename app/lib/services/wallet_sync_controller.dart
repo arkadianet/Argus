@@ -46,11 +46,15 @@ abstract class WalletSyncGateway {
   Future<String> deriveAddress(int index);
   bool useUnusedChangeAddress(String? walletId);
   Future<Map<String, dynamic>> getBalance(String address);
-  /// [allowNetwork] is false for stealth holdings; see
-  /// [WalletService.hydrateTokens].
-  Future<List<TokenBalance>> hydrateTokens(
-    dynamic raw, {
-    bool allowNetwork = false,
+  Future<List<TokenBalance>> hydrateTokens(dynamic raw);
+
+  /// Resolves names for ordinary public holdings, after balances publish.
+  /// Never called with stealth-only ids.
+  Future<void> resolveTokenNames(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
   });
 
   /// Keeps missing-address status attached to the request that produced the rows.
@@ -61,7 +65,7 @@ abstract class WalletSyncGateway {
   void probeNetwork();
 
   /// Learns names and decimals for tokens seen in activity, best effort.
-  Future<void> prefetchTokenMeta(Iterable<String> ids);
+
 
   /// Whether the user has left the stealth scan on.
   bool get stealthScanEnabled;
@@ -77,6 +81,12 @@ abstract interface class WalletSyncRead {
   Future<Map<String, dynamic>> balance(String address);
   Future<HistoryResult> history();
   Future<int> count();
+
+  /// The node that actually answered this read. `connect` falls back past
+  /// the preferred URL, so this is not necessarily the configured one — and
+  /// it is the only endpoint that has already been shown these addresses and
+  /// the token ids in their boxes. Null when it cannot be established.
+  Future<String?> servedBy();
 }
 
 abstract interface class WalletSyncBatchGateway {
@@ -124,6 +134,16 @@ class _LiveSyncRead implements WalletSyncRead {
     if (count == null) throw StateError('UTXO listing incomplete');
     return count;
   }
+
+  @override
+  Future<String?> servedBy() async {
+    try {
+      final url = (await _inputs)['served_by'];
+      return url is String && url.isNotEmpty ? url : null;
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// Production gateway over the app's singleton services.
@@ -161,10 +181,23 @@ class LiveWalletSyncGateway
       walletService.getBalance(address);
 
   @override
-  Future<List<TokenBalance>> hydrateTokens(
-    dynamic raw, {
-    bool allowNetwork = false,
-  }) => walletService.hydrateTokens(raw, allowNetwork: allowNetwork);
+  Future<List<TokenBalance>> hydrateTokens(dynamic raw) =>
+      walletService.hydrateTokens(raw);
+
+  @override
+  Future<void> resolveTokenNames(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
+  }) => walletService
+      .prefetchTokenMeta(
+        ids,
+        walletId: walletId,
+        servedBy: servedBy,
+        stillCurrent: stillCurrent,
+      )
+      .catchError((_) {});
 
   /// Passes request-local completeness through without consulting shared state.
   @override
@@ -219,10 +252,6 @@ class LiveWalletSyncGateway
   void probeNetwork() {
     networkController.probe();
   }
-
-  @override
-  Future<void> prefetchTokenMeta(Iterable<String> ids) =>
-      walletService.prefetchTokenMeta(ids).catchError((_) {});
 
   @override
   bool get stealthScanEnabled => stealthService.scanEnabled;
@@ -868,8 +897,31 @@ class WalletSyncController extends ChangeNotifier {
           for (final t in (tx[key] as List? ?? const []))
             if (t is Map) t['token_id']?.toString() ?? '',
     }..remove('');
-    if (tokenIds.isNotEmpty) {
-      await _gw.prefetchTokenMeta(tokenIds);
+    // Names, after balances are on screen. Ordinary public holdings plus
+    // tokens seen moving in recent activity; stealth-only ids are excluded,
+    // since the node that served these addresses has never seen them.
+    // Ordinary ids come from the boxes the node itself returned, so it has
+    // already been shown every one of them. Stealth-only means "in the
+    // stealth scan and nowhere in the ordinary balance" — a token held in
+    // BOTH is ordinary enough, since its id is in the node's own boxes.
+    // `stealthTokens` always has amount == stealthAmount by construction, so
+    // that comparison cannot distinguish the two; set difference can.
+    final ordinaryIds = {for (final t in tokens) t.id};
+    final stealthOnly = {
+      for (final t in stealthTokens)
+        if (!ordinaryIds.contains(t.id)) t.id,
+    };
+    tokenIds.addAll(ordinaryIds);
+    tokenIds.removeWhere(stealthOnly.contains);
+    final servedBy = read == null ? null : await read.servedBy();
+    if (!_current(generation, walletId)) return;
+    if (tokenIds.isNotEmpty && servedBy != null && walletId != null) {
+      await _gw.resolveTokenNames(
+        tokenIds,
+        walletId: walletId,
+        servedBy: servedBy,
+        stillCurrent: () => _current(generation, walletId),
+      );
       if (!_current(generation, walletId)) return;
       notifyListeners();
     }
@@ -1005,10 +1057,7 @@ class WalletSyncController extends ChangeNotifier {
         continue;
       }
       erg += (map['balance_nano_erg'] as num?)?.toInt() ?? 0;
-      for (final t in await _gw.hydrateTokens(
-        map['tokens'],
-        allowNetwork: true,
-      )) {
+      for (final t in await _gw.hydrateTokens(map['tokens'])) {
         final prev = merged[t.id];
         merged[t.id] = t.withHolding((prev?.amount ?? 0) + t.amount);
       }
@@ -1049,9 +1098,6 @@ class WalletSyncController extends ChangeNotifier {
     ];
     List<TokenBalance> hydrated;
     try {
-      // Cache-only by default, and deliberately so: a stealth-only token id
-      // is not derivable from this wallet's public addresses, so asking any
-      // provider about one would disclose a holding it has never seen.
       hydrated = await _gw.hydrateTokens(raw);
     } catch (_) {
       hydrated = const [];
