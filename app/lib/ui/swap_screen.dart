@@ -49,6 +49,11 @@ class SwapScreen extends StatefulWidget {
 
 class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
   AmmPoolSet? _set;
+
+  /// True only once a full discovery pass has returned an untruncated set.
+  /// A cached or capped set may omit pools that exist, so absence from it is
+  /// not evidence that a token has none.
+  bool _setComplete = false;
   bool _loading = true;
   String? _error;
 
@@ -225,6 +230,8 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
       if (mounted && cached != null && _set == null) {
         setState(() {
           _set = cached;
+          // Cached: painted for speed, but discovery has not run yet.
+          _setComplete = false;
           _loading = false;
         });
       }
@@ -234,6 +241,7 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
       if (!mounted) return;
       setState(() {
         _set = set;
+        _setComplete = !set.truncated;
         _loading = false;
       });
       // An amount typed while pools were still loading has no quote yet;
@@ -733,9 +741,10 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
     final result = await showModalBottomSheet<(String?,)>(
       context: context,
       backgroundColor: Theme.of(context).colorScheme.surface,
-      builder: (ctx) => _AssetPickerSheet(
+      builder: (ctx) => SwapAssetPickerSheet(
         title: label,
         set: _set,
+        poolsComplete: _setComplete,
         heldTokens: _args.tokens,
         spendableNano: _args.spendableNano,
         exclude: otherSide,
@@ -782,10 +791,14 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
   }
 }
 
-class _AssetPickerSheet extends StatefulWidget {
-  const _AssetPickerSheet({
+/// Asset chooser for a swap side. Public so its enabled/disabled rules can
+/// be exercised directly; the swap screen is the only production caller.
+class SwapAssetPickerSheet extends StatefulWidget {
+  const SwapAssetPickerSheet({
+    super.key,
     required this.title,
     required this.set,
+    required this.poolsComplete,
     required this.heldTokens,
     required this.spendableNano,
     required this.exclude,
@@ -793,6 +806,10 @@ class _AssetPickerSheet extends StatefulWidget {
 
   final String title;
   final AmmPoolSet? set;
+
+  /// Whether [set] is a complete pool list. When false, a token missing from
+  /// it may still be tradable, so the sheet makes no claim about it.
+  final bool poolsComplete;
   final List<TokenBalance> heldTokens;
   final int? spendableNano;
 
@@ -800,10 +817,10 @@ class _AssetPickerSheet extends StatefulWidget {
   final String? exclude;
 
   @override
-  State<_AssetPickerSheet> createState() => _AssetPickerSheetState();
+  State<SwapAssetPickerSheet> createState() => SwapAssetPickerSheetState();
 }
 
-class _AssetPickerSheetState extends State<_AssetPickerSheet> {
+class SwapAssetPickerSheetState extends State<SwapAssetPickerSheet> {
   String _query = '';
 
   @override
@@ -818,21 +835,38 @@ class _AssetPickerSheetState extends State<_AssetPickerSheet> {
     String symbol(String? id) =>
         id == null ? 'ERG' : (tokens[id]?.name ?? id);
 
+    /// What the row actually shows. A holding with no pool entry has no name
+    /// in `tokens`, so it falls back to the label the holding carries — and
+    /// search has to look at the same text, or a token visible by name
+    /// disappears when that name is typed.
+    String displayName(String? id) {
+      if (id == null) return 'ERG';
+      final meta = tokens[id];
+      if (meta != null) return meta.name;
+      for (final t in widget.heldTokens) {
+        if (t.id == id) return t.label;
+      }
+      return id;
+    }
+
     bool matches(String? id) {
       if (_query.isEmpty) return true;
       final q = _query.toLowerCase();
-      return symbol(id).toLowerCase().contains(q) ||
+      return displayName(id).toLowerCase().contains(q) ||
+          symbol(id).toLowerCase().contains(q) ||
           (id?.toLowerCase().contains(q) ?? false);
     }
 
     final showErg = matches(null);
-    final heldRows = heldByTradability(
-      [
-        for (final t in widget.heldTokens)
-          if (t.id != widget.exclude && matches(t.id)) t,
-      ],
-      poolIds,
-    );
+    final heldFiltered = [
+      for (final t in widget.heldTokens)
+        if (t.id != widget.exclude && matches(t.id)) t,
+    ];
+    // With an incomplete list there is nothing to sort by, so leave the
+    // wallet's own order alone.
+    final heldRows = widget.poolsComplete
+        ? heldByTradability(heldFiltered, poolIds)
+        : heldFiltered;
     final verifiedRows = [
       for (final id in verified)
         if (id != widget.exclude &&
@@ -850,14 +884,16 @@ class _AssetPickerSheetState extends State<_AssetPickerSheet> {
 
     Widget row(String? id, {BigInt? balance, TokenBalance? held}) {
       final isVerified = id != null && isVerifiedToken(id);
-      final noPool = id != null && !poolIds.contains(id);
+      // Only a complete pool list proves absence. Against a cached or capped
+      // one, say nothing and leave the token selectable rather than claim it
+      // cannot be traded.
+      final noPool =
+          id != null && widget.poolsComplete && !poolIds.contains(id);
       final disabled = id == widget.exclude || noPool;
       return ListTile(
         enabled: !disabled,
         dense: true,
-        // A token with no pool has no name in the pool set either, so fall
-        // back to whatever the holding itself knows.
-        title: Text(noPool && held != null ? held.label : symbol(id)),
+        title: Text(displayName(id)),
         subtitle: noPool
             ? const Text('No Spectrum pool')
             : balance != null
