@@ -252,6 +252,11 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
     } catch (e) {
       if (!mounted) return;
       setState(() {
+        // A refresh that failed leaves the previous set in place, but it is
+        // no longer current evidence: a pool created since then would be
+        // missing from it. Stop claiming any holding has no pool until
+        // discovery succeeds again.
+        _setComplete = false;
         _error = e.toString();
         _loading = false;
       });

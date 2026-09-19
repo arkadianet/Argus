@@ -124,17 +124,20 @@ void main() {
       tester,
     ) async {
       // The row falls back to the holding's own label, so search has to look
-      // at that same text or the token vanishes when its name is typed.
+      // at that same text. The id shares no substring with the name, so the
+      // pre-existing id matcher cannot satisfy this on its own — deleting
+      // displayName() from matches() fails here.
       final result = await pick(
         tester,
         set: poolSet(const ['traded']),
         complete: true,
-        holdings: [held('orphan', name: 'Orphan')],
+        holdings: [held('f00dbeef', name: 'Orphan')],
         tap: 'Orphan',
         query: 'Orph',
       );
-      expect(result, isNull);
-      expect(find.text('Nothing matches "Orph".'), findsNothing);
+      expect(find.text('Orphan'), findsOneWidget,
+          reason: 'the row must survive a search for the name it shows');
+      expect(result, isNull, reason: 'and still not be selectable');
     });
   });
 }
