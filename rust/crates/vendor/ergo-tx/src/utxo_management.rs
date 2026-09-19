@@ -9,7 +9,7 @@ use citadel_core::constants::{MIN_BOX_VALUE_NANO as MIN_BOX_VALUE, TX_FEE_NANO a
 // block cost/size may still limit practical size before that hard ceiling.
 const MAX_SPLIT_OUTPUTS: usize = 100;
 const MAX_RESTRUCTURE_OUTPUTS: usize = 150;
-const MAX_TOKENS_PER_BOX: usize = 255;
+use crate::tx_helpers::MAX_TOKENS_PER_BOX;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UtxoManagementError {
@@ -122,10 +122,10 @@ pub fn build_consolidate_tx(
         }
     }
 
-    if token_totals.len() > 255 {
+    if token_totals.len() > MAX_TOKENS_PER_BOX {
         return Err(UtxoManagementError::TooManyTokenTypes {
             count: token_totals.len(),
-            max: 255,
+            max: MAX_TOKENS_PER_BOX,
         });
     }
 

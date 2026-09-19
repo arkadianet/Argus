@@ -1,9 +1,70 @@
 //! Shared transaction building helpers.
 
 use crate::box_selector::{self, BoxSelectorError, SelectedInputs};
-use crate::eip12::{Eip12InputBox, Eip12Output};
+use crate::eip12::{Eip12Asset, Eip12InputBox, Eip12Output};
 
 pub const MIN_CHANGE_VALUE: u64 = 1_000_000;
+
+/// Distinct tokens one box can carry: `ErgoBox::MAX_TOKENS_COUNT` in
+/// sigma-rust and `ErgoBox.MaxTokens` on the node. A candidate above it
+/// fails to build, so every change box is laid out under this cap.
+pub const MAX_TOKENS_PER_BOX: usize = 122;
+
+/// How many boxes `token_count` distinct tokens need under the cap; at
+/// least one, so a token-free change box still counts.
+pub fn boxes_for_tokens(token_count: usize) -> usize {
+    token_count.div_ceil(MAX_TOKENS_PER_BOX).max(1)
+}
+
+/// Lay `tokens` out over as many boxes as the cap requires, all paying to
+/// `ergo_tree` and worth `value` in total. Every extra box gets
+/// `min_box_value`; the first box carries the remainder, so callers that
+/// lead with a specific asset (a swap output) keep it in the first box.
+/// Fails when `value` cannot fund the extra boxes plus a first box worth
+/// `min_box_value`.
+pub fn token_outputs(
+    value: u64,
+    ergo_tree: &str,
+    tokens: Vec<Eip12Asset>,
+    current_height: i32,
+    min_box_value: u64,
+) -> Result<Vec<Eip12Output>, ChangeOutputError> {
+    let boxes = boxes_for_tokens(tokens.len());
+    let extras = (boxes - 1) as u64;
+    let reserved = extras * min_box_value;
+    let first_min = if tokens.is_empty() { 0 } else { min_box_value };
+    if value < reserved + first_min {
+        return Err(ChangeOutputError {
+            min_value: reserved + first_min,
+            available: value,
+        });
+    }
+    let mut chunks = if tokens.is_empty() {
+        vec![vec![]]
+    } else {
+        tokens
+            .chunks(MAX_TOKENS_PER_BOX)
+            .map(|c| c.to_vec())
+            .collect::<Vec<_>>()
+    };
+    let first = chunks.remove(0);
+    let mut outputs = Vec::with_capacity(boxes);
+    outputs.push(Eip12Output::change(
+        (value - reserved) as i64,
+        ergo_tree,
+        first,
+        current_height,
+    ));
+    for chunk in chunks {
+        outputs.push(Eip12Output::change(
+            min_box_value as i64,
+            ergo_tree,
+            chunk,
+            current_height,
+        ));
+    }
+    Ok(outputs)
+}
 
 #[derive(Debug, Clone)]
 pub struct ChangeOutputError {
@@ -45,20 +106,14 @@ pub fn append_change_output(
         box_selector::collect_multi_change_tokens(&selected.boxes, spent_tokens)
     };
 
-    if !change_tokens.is_empty() && change_erg < min_change_value {
-        return Err(ChangeOutputError {
-            min_value: min_change_value,
-            available: change_erg,
-        });
-    }
-
     if change_erg >= min_change_value || !change_tokens.is_empty() {
-        outputs.push(Eip12Output::change(
-            change_erg as i64,
+        outputs.extend(token_outputs(
+            change_erg,
             user_ergo_tree,
             change_tokens,
             current_height,
-        ));
+            min_change_value,
+        )?);
     }
 
     Ok(())
@@ -98,7 +153,6 @@ pub use crate::dev_fee::{append_dev_fee_output, dev_fee_budget, DevFeeConfig, De
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::eip12::Eip12Asset;
     use std::collections::HashMap;
 
     fn mock_utxo(box_id: &str, value: u64, assets: Vec<(&str, u64)>) -> Eip12InputBox {
@@ -242,5 +296,89 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.boxes.len(), 2);
+    }
+
+    fn many_tokens(n: usize) -> Vec<(String, u64)> {
+        (0..n).map(|i| (format!("tok{i:04}"), 1)).collect()
+    }
+
+    #[test]
+    fn change_with_more_tokens_than_a_box_holds_is_split_across_boxes() {
+        let toks = many_tokens(150);
+        let assets: Vec<(&str, u64)> = toks.iter().map(|(id, a)| (id.as_str(), *a)).collect();
+        let selected = SelectedInputs {
+            boxes: vec![mock_utxo("box1", 5_000_000_000, assets)],
+            total_erg: 5_000_000_000,
+            token_amount: 0,
+        };
+        let mut outputs = vec![];
+        append_change_output(
+            &mut outputs,
+            &selected,
+            1_000_000_000,
+            &[],
+            "0008cd...",
+            1000,
+            MIN_CHANGE_VALUE,
+        )
+        .unwrap();
+        assert_eq!(outputs.len(), 2);
+        assert_eq!(outputs[0].assets.len(), MAX_TOKENS_PER_BOX);
+        assert_eq!(outputs[1].assets.len(), 150 - MAX_TOKENS_PER_BOX);
+        assert_eq!(
+            outputs[0].value,
+            (4_000_000_000 - MIN_CHANGE_VALUE).to_string()
+        );
+        assert_eq!(outputs[1].value, MIN_CHANGE_VALUE.to_string());
+        let mut ids: Vec<&str> = outputs
+            .iter()
+            .flat_map(|o| o.assets.iter().map(|a| a.token_id.as_str()))
+            .collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 150, "every token lands in exactly one box");
+    }
+
+    #[test]
+    fn split_change_needs_a_min_box_value_per_extra_box() {
+        let toks = many_tokens(123);
+        let assets: Vec<(&str, u64)> = toks.iter().map(|(id, a)| (id.as_str(), *a)).collect();
+        let selected = SelectedInputs {
+            boxes: vec![mock_utxo("box1", 2_500_000, assets)],
+            total_erg: 2_500_000,
+            token_amount: 0,
+        };
+        let err = append_change_output(
+            &mut vec![],
+            &selected,
+            1_000_000,
+            &[],
+            "0008cd...",
+            1000,
+            MIN_CHANGE_VALUE,
+        )
+        .unwrap_err();
+        assert_eq!(err.min_value, 2 * MIN_CHANGE_VALUE);
+        assert_eq!(err.available, 1_500_000);
+    }
+
+    #[test]
+    fn token_outputs_puts_the_remainder_in_the_first_box() {
+        let assets: Vec<Eip12Asset> = many_tokens(245)
+            .into_iter()
+            .map(|(id, a)| Eip12Asset::new(id, a as i64))
+            .collect();
+        let outs = token_outputs(10_000_000, "0008cd...", assets, 1000, MIN_CHANGE_VALUE).unwrap();
+        assert_eq!(outs.len(), 3);
+        assert_eq!(outs[0].value, "8000000");
+        assert_eq!(outs[1].value, "1000000");
+        assert_eq!(outs[2].value, "1000000");
+        assert_eq!(outs[2].assets.len(), 1);
+        assert!(
+            token_outputs(2_999_999, "0008cd...", vec![], 1000, MIN_CHANGE_VALUE)
+                .unwrap()
+                .len()
+                == 1
+        );
     }
 }

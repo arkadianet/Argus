@@ -54,7 +54,11 @@ pub struct RecipientSpec {
 
 impl RecipientSpec {
     /// One token or none, the shape most sends have.
-    pub fn with_token(ergo_tree: String, amount_nano_erg: i64, token: Option<(String, u64)>) -> Self {
+    pub fn with_token(
+        ergo_tree: String,
+        amount_nano_erg: i64,
+        token: Option<(String, u64)>,
+    ) -> Self {
         Self {
             ergo_tree,
             amount_nano_erg,
@@ -224,12 +228,19 @@ pub fn build_multi_send_tx_with_fee(
             .iter()
             .map(|(id, amt)| Eip12Asset::new(id.clone(), *amt as i64))
             .collect();
-        outputs.push(Eip12Output::change(
-            change_value,
-            change_ergo_tree,
-            change_assets,
-            current_height,
-        ));
+        outputs.extend(
+            crate::token_outputs(
+                change_value as u64,
+                change_ergo_tree,
+                change_assets,
+                current_height,
+                MIN_BOX_VALUE as u64,
+            )
+            .map_err(|e| MultiSendError::TokenChangeInsufficientErg {
+                have: e.available as i64,
+                min: e.min_value as i64,
+            })?,
+        );
     }
 
     // Cannot fail once enabled with a tree; budget was reserved above.
@@ -382,9 +393,15 @@ mod tests {
         let recipients = vec![RecipientSpec {
             ergo_tree: "0008cd02".to_string(),
             amount_nano_erg: 2_000_000,
-            tokens: vec![("tok_a".to_string(), 30), ("tok_b".to_string(), 7), ("tok_a".to_string(), 10)],
+            tokens: vec![
+                ("tok_a".to_string(), 30),
+                ("tok_b".to_string(), 7),
+                ("tok_a".to_string(), 10),
+            ],
         }];
-        let result = build_multi_send_tx_with_fee(&inputs, &recipients, CHANGE_TREE, 1_000_000, 100).unwrap();
+        let result =
+            build_multi_send_tx_with_fee(&inputs, &recipients, CHANGE_TREE, 1_000_000, 100)
+                .unwrap();
         let tx = result.unsigned_tx;
         let out = &tx.outputs[0];
         assert_eq!(out.value, "2000000");
@@ -396,5 +413,37 @@ mod tests {
         assert_eq!(change.assets.len(), 1);
         assert_eq!(change.assets[0].token_id, "tok_a");
         assert_eq!(change.assets[0].amount, "60");
+    }
+
+    #[test]
+    fn a_wallet_with_more_tokens_than_a_box_holds_gets_split_change() {
+        let ids: Vec<String> = (0..123).map(|i| format!("tok{i:04}")).collect();
+        let assets: Vec<(&str, &str)> = ids.iter().map(|id| (id.as_str(), "7")).collect();
+        let inputs = vec![make_box("5000000000", assets)];
+        let recipients = vec![RecipientSpec {
+            ergo_tree: RECIPIENT_TREE.into(),
+            amount_nano_erg: 1_000_000_000,
+            tokens: vec![],
+        }];
+        let built =
+            build_multi_send_tx_with_fee(&inputs, &recipients, CHANGE_TREE, 1_100_000, 1).unwrap();
+        let change: Vec<_> = built
+            .unsigned_tx
+            .outputs
+            .iter()
+            .filter(|o| o.ergo_tree == CHANGE_TREE)
+            .collect();
+        assert_eq!(change.len(), 2);
+        assert!(change
+            .iter()
+            .all(|o| o.assets.len() <= crate::MAX_TOKENS_PER_BOX));
+        assert_eq!(change.iter().map(|o| o.assets.len()).sum::<usize>(), 123);
+        let out_total: i64 = built
+            .unsigned_tx
+            .outputs
+            .iter()
+            .map(|o| o.value.parse::<i64>().unwrap())
+            .sum();
+        assert_eq!(out_total, 5_000_000_000);
     }
 }

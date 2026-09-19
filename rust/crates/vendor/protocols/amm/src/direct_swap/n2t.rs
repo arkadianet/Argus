@@ -3,7 +3,6 @@
 use crate::calculator;
 use crate::constants::fees;
 use crate::state::{AmmError, AmmPool, SwapInput};
-use crate::tx_builder::MIN_CHANGE_VALUE;
 use ergo_tx::{
     append_dev_fee_output, collect_change_tokens, resolved_dev_fee_config, select_inputs_for_spend,
     Eip12Asset, Eip12InputBox, Eip12Output, Eip12UnsignedTx,
@@ -146,7 +145,11 @@ pub(crate) fn build_n2t_direct_swap(
 
     // Held tokens ride only on the ERG-funded leg: the user already owns
     // them and they leave with the swapped ones in a single box.
-    let held = if is_erg_to_token { recipient_held_tokens } else { 0 };
+    let held = if is_erg_to_token {
+        recipient_held_tokens
+    } else {
+        0
+    };
     if !is_erg_to_token && recipient_held_tokens > 0 {
         return Err(AmmError::TxBuildError(
             "held tokens can only be forwarded when paying with ERG".to_string(),
@@ -188,10 +191,6 @@ pub(crate) fn build_n2t_direct_swap(
         SwapInput::Erg { .. } => None,
         SwapInput::Token { token_id, amount } => Some((token_id.as_str(), *amount)),
     };
-    let selected = select_inputs_for_spend(user_utxos, user_erg_needed, token_requirement)
-        .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
-
-    let change_erg = selected.total_erg - user_erg_needed;
     // The held amount is spent into the recipient box, so it must be
     // subtracted from change or it would be duplicated.
     let spent_token = match input {
@@ -199,68 +198,38 @@ pub(crate) fn build_n2t_direct_swap(
         SwapInput::Erg { .. } => None,
         SwapInput::Token { token_id, amount } => Some((token_id.as_str(), *amount)),
     };
-    let change_tokens = collect_change_tokens(&selected.boxes, spent_token);
 
-    // When no separate recipient, merge swap output + change into one box
-    let mut outputs = vec![new_pool_output];
-
-    if recipient_ergo_tree.is_none() {
-        let user_erg = if is_erg_to_token {
-            MIN_BOX_VALUE + change_erg
-        } else {
-            output_amount + change_erg
-        };
-
-        let mut user_tokens = if is_erg_to_token {
-            vec![Eip12Asset {
-                token_id: pool.token_y.token_id.clone(),
-                amount: (output_amount + held).to_string(),
-            }]
-        } else {
-            vec![]
-        };
-        user_tokens.extend(change_tokens);
-
-        outputs.push(Eip12Output::change(
-            user_erg as i64,
+    // Change tokens are laid out under the per-box cap, and every extra box
+    // costs ERG the selection has not budgeted for; reselect with it.
+    let mut extra_erg: u64 = 0;
+    let mut passes = 0;
+    let (selected, user_side) = loop {
+        let selected =
+            select_inputs_for_spend(user_utxos, user_erg_needed + extra_erg, token_requirement)
+                .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
+        let change_erg = selected.total_erg - user_erg_needed;
+        let change_tokens = collect_change_tokens(&selected.boxes, spent_token);
+        match super::user_outputs(
+            user_swap_output.clone(),
+            recipient_ergo_tree.is_none(),
             user_ergo_tree,
-            user_tokens,
+            change_erg,
+            change_tokens,
             current_height,
-        ));
-    } else {
-        if !change_tokens.is_empty() && change_erg < MIN_CHANGE_VALUE {
-            return Err(AmmError::TxBuildError(format!(
-                "Change tokens exist but not enough ERG for change box (need {MIN_CHANGE_VALUE}, have {change_erg})"
-            )));
-        }
-
-        // If change ERG is too small for a separate box and there are no change
-        // tokens, fold it into the swap output to avoid losing ERG.
-        let user_swap_output =
-            if change_erg > 0 && change_erg < MIN_CHANGE_VALUE && change_tokens.is_empty() {
-                let base_value: u64 = user_swap_output
-                    .value
-                    .parse()
-                    .map_err(|_| AmmError::TxBuildError("Invalid swap output value".to_string()))?;
-                Eip12Output {
-                    value: (base_value + change_erg).to_string(),
-                    ..user_swap_output
+        ) {
+            Ok(outputs) => break (selected, outputs),
+            Err(short) => {
+                passes += 1;
+                if passes >= super::MAX_SELECTION_PASSES {
+                    return Err(AmmError::TxBuildError(short.to_string()));
                 }
-            } else {
-                user_swap_output
-            };
-
-        outputs.push(user_swap_output);
-
-        if change_erg >= MIN_CHANGE_VALUE || !change_tokens.is_empty() {
-            outputs.push(Eip12Output::change(
-                change_erg as i64,
-                user_ergo_tree,
-                change_tokens,
-                current_height,
-            ));
+                extra_erg += short.min_value - short.available;
+            }
         }
-    }
+    };
+
+    let mut outputs = vec![new_pool_output];
+    outputs.extend(user_side);
 
     append_dev_fee_output(&mut outputs, &fee_cfg, current_height)
         .map_err(|e| AmmError::TxBuildError(e.to_string()))?;

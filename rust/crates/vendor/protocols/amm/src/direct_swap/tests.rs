@@ -744,3 +744,221 @@ fn test_direct_swap_token_to_erg_rejects_pool_dust_breach() {
         "unexpected error: {err}"
     );
 }
+
+fn user_utxo_with_tokens(box_id: &str, value: u64, assets: Vec<(String, u64)>) -> Eip12InputBox {
+    Eip12InputBox {
+        box_id: box_id.to_string(),
+        transaction_id: "user_tx_many".to_string(),
+        index: 0,
+        value: value.to_string(),
+        ergo_tree: USER_TREE.to_string(),
+        assets: assets
+            .into_iter()
+            .map(|(id, a)| Eip12Asset {
+                token_id: id,
+                amount: a.to_string(),
+            })
+            .collect(),
+        creation_height: 999_000,
+        additional_registers: HashMap::new(),
+        extension: HashMap::new(),
+    }
+}
+
+const USER_TREE: &str = "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+
+fn dust_tokens(n: usize) -> Vec<(String, u64)> {
+    (0..n).map(|i| (format!("dust{i:04}"), 1)).collect()
+}
+
+fn input_sum(tx: &Eip12UnsignedTx) -> u64 {
+    tx.inputs
+        .iter()
+        .map(|i| i.value.parse::<u64>().unwrap())
+        .sum()
+}
+
+fn output_sum(tx: &Eip12UnsignedTx) -> u64 {
+    tx.outputs
+        .iter()
+        .map(|o| o.value.parse::<u64>().unwrap())
+        .sum()
+}
+
+#[test]
+fn n2t_swap_output_plus_change_over_the_token_cap_is_split() {
+    no_citadel_fee(|| {
+        let pool = test_n2t_pool();
+        let pool_box = test_pool_box();
+        // 122 dust tokens ride along; the swapped token makes 123.
+        let user_utxo = user_utxo_with_tokens("many", 10_000_000_000, dust_tokens(122));
+        let input = SwapInput::Erg {
+            amount: 1_000_000_000,
+        };
+        let output =
+            calculator::calculate_output(100_000_000_000, 1_000_000, 1_000_000_000, 997, 1000);
+        let build = build_direct_swap_eip12(
+            &pool_box,
+            &pool,
+            &input,
+            calculator::apply_slippage(output, 0.5),
+            &[user_utxo],
+            USER_TREE,
+            1_000_000,
+            None,
+            None,
+        )
+        .unwrap();
+        let user: Vec<_> = build
+            .unsigned_tx
+            .outputs
+            .iter()
+            .filter(|o| o.ergo_tree == USER_TREE)
+            .collect();
+        assert_eq!(user.len(), 2);
+        assert!(user
+            .iter()
+            .all(|o| o.assets.len() <= ergo_tx::MAX_TOKENS_PER_BOX));
+        assert_eq!(user.iter().map(|o| o.assets.len()).sum::<usize>(), 123);
+        assert_eq!(
+            user[0].assets[0].token_id, pool.token_y.token_id,
+            "the swap output leads the first box"
+        );
+        assert_eq!(
+            input_sum(&build.unsigned_tx),
+            output_sum(&build.unsigned_tx)
+        );
+    });
+}
+
+#[test]
+fn n2t_swap_selects_more_erg_when_the_split_needs_it() {
+    no_citadel_fee(|| {
+        let pool = test_n2t_pool();
+        let pool_box = test_pool_box();
+        let output =
+            calculator::calculate_output(100_000_000_000, 1_000_000, 1_000_000_000, 997, 1000);
+        // Box "exact" covers the swap with nothing to spare and carries 122
+        // dust tokens; the split needs one more box's worth of ERG, which
+        // only "spare" can provide.
+        let exact = user_utxo_with_tokens(
+            "exact",
+            1_000_000_000 + MIN_BOX_VALUE + TX_FEE,
+            dust_tokens(122),
+        );
+        let spare = user_utxo_with_tokens("spare", 3_000_000, vec![]);
+        let build = build_direct_swap_eip12(
+            &pool_box,
+            &pool,
+            &SwapInput::Erg {
+                amount: 1_000_000_000,
+            },
+            calculator::apply_slippage(output, 0.5),
+            &[exact, spare],
+            USER_TREE,
+            1_000_000,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(build.unsigned_tx.inputs.len(), 3, "pool + both user boxes");
+        let user: Vec<_> = build
+            .unsigned_tx
+            .outputs
+            .iter()
+            .filter(|o| o.ergo_tree == USER_TREE)
+            .collect();
+        assert_eq!(user.len(), 2);
+        assert!(user
+            .iter()
+            .all(|o| o.value.parse::<u64>().unwrap() >= MIN_BOX_VALUE));
+        assert_eq!(
+            input_sum(&build.unsigned_tx),
+            output_sum(&build.unsigned_tx)
+        );
+    });
+}
+
+#[test]
+fn n2t_swap_to_a_separate_recipient_splits_the_change() {
+    no_citadel_fee(|| {
+        let pool = test_n2t_pool();
+        let pool_box = test_pool_box();
+        let user_utxo = user_utxo_with_tokens("many", 10_000_000_000, dust_tokens(123));
+        let output =
+            calculator::calculate_output(100_000_000_000, 1_000_000, 1_000_000_000, 997, 1000);
+        let recipient = "0008cdrecipient";
+        let build = build_direct_swap_eip12(
+            &pool_box,
+            &pool,
+            &SwapInput::Erg {
+                amount: 1_000_000_000,
+            },
+            calculator::apply_slippage(output, 0.5),
+            &[user_utxo],
+            USER_TREE,
+            1_000_000,
+            Some(recipient),
+            None,
+        )
+        .unwrap();
+        let change: Vec<_> = build
+            .unsigned_tx
+            .outputs
+            .iter()
+            .filter(|o| o.ergo_tree == USER_TREE)
+            .collect();
+        assert_eq!(change.len(), 2);
+        assert_eq!(change.iter().map(|o| o.assets.len()).sum::<usize>(), 123);
+        assert_eq!(build.unsigned_tx.outputs[1].ergo_tree, recipient);
+        assert_eq!(
+            input_sum(&build.unsigned_tx),
+            output_sum(&build.unsigned_tx)
+        );
+    });
+}
+
+#[test]
+fn t2t_swap_output_plus_change_over_the_token_cap_is_split() {
+    no_citadel_fee(|| {
+        let pool = test_t2t_pool();
+        let pool_box = test_t2t_pool_box();
+        let x = "token_x_id_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+        let mut assets = dust_tokens(121);
+        assets.push((x.clone(), 500_000));
+        let user_utxo = user_utxo_with_tokens("many", 5_000_000_000, assets);
+        let input_amount = 100_000u64;
+        let output = calculator::calculate_output(10_000_000, 5_000_000, input_amount, 997, 1000);
+        let build = build_direct_swap_eip12(
+            &pool_box,
+            &pool,
+            &SwapInput::Token {
+                token_id: x,
+                amount: input_amount,
+            },
+            calculator::apply_slippage(output, 0.5),
+            &[user_utxo],
+            USER_TREE,
+            1_000_000,
+            None,
+            None,
+        )
+        .unwrap();
+        let user: Vec<_> = build
+            .unsigned_tx
+            .outputs
+            .iter()
+            .filter(|o| o.ergo_tree == USER_TREE)
+            .collect();
+        assert_eq!(user.len(), 2);
+        assert!(user
+            .iter()
+            .all(|o| o.assets.len() <= ergo_tx::MAX_TOKENS_PER_BOX));
+        // 121 dust + x change + y output = 123
+        assert_eq!(user.iter().map(|o| o.assets.len()).sum::<usize>(), 123);
+        assert_eq!(
+            input_sum(&build.unsigned_tx),
+            output_sum(&build.unsigned_tx)
+        );
+    });
+}
