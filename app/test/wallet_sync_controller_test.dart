@@ -68,7 +68,10 @@ class FakeGateway implements WalletSyncGateway {
   }
 
   @override
-  Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
+  Future<List<TokenBalance>> hydrateTokens(
+    dynamic raw, {
+    bool allowNetwork = false,
+  }) async {
     final items = raw is List ? raw : const [];
     return [
       for (final t in items)

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:argus_wallet/services/preview/preview_service.dart';
 import 'package:argus_wallet/bridge/frb_generated.dart';
+import 'package:argus_wallet/services/network_controller.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:argus_wallet/ui/assets_screen.dart';
@@ -11,7 +12,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class DenyTokenApi extends RustLibApi {
+  @override
+  Future<BigInt> crateApiWalletRestore({
+    required String encryptedSeedJson,
+    String? wrapKey,
+  }) async => BigInt.one;
+
+  @override
+  Future<void> crateApiWalletLock({required BigInt handleId}) async {}
+
   int metadataRequests = 0;
+  final List<({String tokenId, String provider, bool isNode})> descriptorCalls =
+      [];
   @override
   Future<String> crateApiGetTokenInfo({
     required String tokenId,
@@ -28,6 +40,11 @@ class DenyTokenApi extends RustLibApi {
     required bool providerIsNode,
   }) async {
     metadataRequests++;
+    descriptorCalls.add((
+      tokenId: tokenId,
+      provider: providerUrl,
+      isNode: providerIsNode,
+    ));
     throw StateError('Automatic descriptor request');
   }
 
@@ -47,20 +64,73 @@ class DenyHttp extends HttpOverrides {
 void main() {
   final api = DenyTokenApi();
   setUpAll(() => RustLib.initMock(api: api));
-  setUp(() => SharedPreferences.setMockInitialValues({}));
-  test(
-    'sync hydration and prefetch make zero token-specific requests',
-    () async {
-      final service = WalletService();
-      final tokens = await service.hydrateTokens([
-        {'id': 'public', 'amount': 1},
-        {'id': 'stealth', 'amount': 5},
-      ]);
-      await service.prefetchTokenMeta(['public', 'stealth', 'notification']);
-      expect(tokens.length, 2);
-      expect(api.metadataRequests, 0);
-    },
-  );
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+    api.metadataRequests = 0;
+    api.descriptorCalls.clear();
+  });
+  // The old invariant was "sync makes zero token-specific requests". Ordinary
+  // public holdings are now resolved during sync — the node already receives
+  // the addresses whose boxes carry those ids. What must still never leave
+  // automatically is narrower, and these tests hold that line.
+  test('stealth hydration makes no token-specific request', () async {
+    final service = WalletService();
+    networkController.activeUrl = 'https://node.example';
+    addTearDown(() => networkController.activeUrl = null);
+    // Default scope, which is what the stealth path uses.
+    final tokens = await service.hydrateTokens([
+      {'id': 'stealth', 'amount': 5},
+    ]);
+    expect(tokens.length, 1);
+    expect(api.metadataRequests, 0,
+        reason: 'a stealth-only id is not derivable from public addresses');
+  });
+
+  test('a locked wallet resolves nothing', () async {
+    final service = WalletService();
+    networkController.activeUrl = 'https://node.example';
+    addTearDown(() => networkController.activeUrl = null);
+    await service.prefetchTokenMeta([
+      '0' * 64,
+    ]);
+    expect(api.metadataRequests, 0);
+  });
+
+  test('resolution never goes to the explorer, and stops on an incapable node',
+      () async {
+    final service = WalletService();
+    await service.restoreWallet('mock', walletId: 'deny-test');
+    addTearDown(() => service.lock('deny-test'));
+    networkController.activeUrl = 'https://node.example';
+    addTearDown(() => networkController.activeUrl = null);
+    api.descriptorCalls.clear();
+
+    final ids = {'a' * 64, 'b' * 64, 'c' * 64};
+    await service.prefetchTokenMeta(ids);
+    // Wallet activation can drive its own sync in the background; judge only
+    // the ids this test asked about.
+    List<({String tokenId, String provider, bool isNode})> mine() => [
+      for (final c in api.descriptorCalls)
+        if (ids.contains(c.tokenId)) c,
+    ];
+
+    expect(mine(), isNotEmpty);
+    expect(api.descriptorCalls.every((c) => c.isNode), isTrue,
+        reason: 'automatic resolution must never address the explorer');
+    expect(
+      api.descriptorCalls.every((c) => c.provider == 'https://node.example'),
+      isTrue,
+      reason: 'and never a node other than the one serving sync',
+    );
+    // DenyTokenApi throws StateError('Automatic descriptor request'), which
+    // is not a capability failure, so every id is attempted exactly once.
+    expect(mine(), hasLength(3));
+
+    // Second pass: ids already attempted are not re-asked.
+    await service.prefetchTokenMeta(ids);
+    expect(mine(), hasLength(3),
+        reason: 'a miss must not be retried on every sync');
+  });
   testWidgets(
     'Assets, dashboard row and detail rebuild without HTTP or metadata requests',
     (tester) async {

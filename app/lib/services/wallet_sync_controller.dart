@@ -46,7 +46,12 @@ abstract class WalletSyncGateway {
   Future<String> deriveAddress(int index);
   bool useUnusedChangeAddress(String? walletId);
   Future<Map<String, dynamic>> getBalance(String address);
-  Future<List<TokenBalance>> hydrateTokens(dynamic raw);
+  /// [allowNetwork] is false for stealth holdings; see
+  /// [WalletService.hydrateTokens].
+  Future<List<TokenBalance>> hydrateTokens(
+    dynamic raw, {
+    bool allowNetwork = false,
+  });
 
   /// Keeps missing-address status attached to the request that produced the rows.
   Future<HistoryResult> loadHistory(List<String> addresses, {int limit = 20});
@@ -156,8 +161,10 @@ class LiveWalletSyncGateway
       walletService.getBalance(address);
 
   @override
-  Future<List<TokenBalance>> hydrateTokens(dynamic raw) =>
-      walletService.hydrateTokens(raw);
+  Future<List<TokenBalance>> hydrateTokens(
+    dynamic raw, {
+    bool allowNetwork = false,
+  }) => walletService.hydrateTokens(raw, allowNetwork: allowNetwork);
 
   /// Passes request-local completeness through without consulting shared state.
   @override
@@ -998,7 +1005,10 @@ class WalletSyncController extends ChangeNotifier {
         continue;
       }
       erg += (map['balance_nano_erg'] as num?)?.toInt() ?? 0;
-      for (final t in await _gw.hydrateTokens(map['tokens'])) {
+      for (final t in await _gw.hydrateTokens(
+        map['tokens'],
+        allowNetwork: true,
+      )) {
         final prev = merged[t.id];
         merged[t.id] = t.withHolding((prev?.amount ?? 0) + t.amount);
       }
@@ -1039,6 +1049,9 @@ class WalletSyncController extends ChangeNotifier {
     ];
     List<TokenBalance> hydrated;
     try {
+      // Cache-only by default, and deliberately so: a stealth-only token id
+      // is not derivable from this wallet's public addresses, so asking any
+      // provider about one would disclose a holding it has never seen.
       hydrated = await _gw.hydrateTokens(raw);
     } catch (_) {
       hydrated = const [];
