@@ -988,12 +988,31 @@ class WalletService with WidgetsBindingObserver {
 
   /// Loads the active wallet's descriptor table once, on the first path that
   /// needs it. Memoized per wallet so concurrent syncs share one read.
+  /// Tables captured from a wallet that was switched away from before its
+  /// descriptors were written. Drained on the next awaited path rather than
+  /// fired and forgotten, which would leave a platform-channel future owned
+  /// by nobody.
+  final List<(String, Map<String, CachedDescriptor>)> _pendingFlush = [];
+
+  Future<void> flushPendingDescriptors() async {
+    while (_pendingFlush.isNotEmpty) {
+      final (walletId, table) = _pendingFlush.removeAt(0);
+      try {
+        await TokenDescriptorStore.save(walletId, table);
+      } catch (_) {
+        // A table that cannot be written is not worth retrying forever.
+      }
+    }
+  }
+
   Future<void> ensureWalletTable() {
     final walletId = _currentWalletId;
     if (walletId == null || walletId.isEmpty) return Future<void>.value();
     if (_tableLoadedFor == walletId && _tableLoad != null) return _tableLoad!;
     _tableLoadedFor = walletId;
-    return _tableLoad = loadWalletTokenMeta(walletId).catchError((_) {});
+    return _tableLoad = flushPendingDescriptors()
+        .then((_) => loadWalletTokenMeta(walletId))
+        .catchError((_) {});
   }
 
   /// The legacy app-wide table as a base layer, with this wallet's own
@@ -1104,6 +1123,9 @@ class WalletService with WidgetsBindingObserver {
       wrapKey: map['wrap_key'] as String,
     );
     _setHandle(id, session.handleId);
+    // Write the outgoing wallet's table now rather than waiting for the
+    // incoming wallet's first sync, which may never come.
+    await flushPendingDescriptors();
     return session;
   }
 
@@ -1134,6 +1156,7 @@ class WalletService with WidgetsBindingObserver {
     );
     final id = walletId ?? const Uuid().v4();
     _setHandle(id, raw);
+    await flushPendingDescriptors();
   }
 
   /// Lock the currently active wallet. If [walletId] is provided, lock only
@@ -1408,12 +1431,19 @@ class WalletService with WidgetsBindingObserver {
           if (text.contains('cancelled') || text.contains('canceled')) {
             return const {};
           }
-          // Only now is this a property of the token: a miss recorded
-          // before the request would outlive a pass that never finished,
-          // suppressing a token that might have resolved.
-          _metadataMisses.add(id);
-          // And only the pass that owns this provider may judge it.
+          // Only the pass that owns this provider may record anything about
+          // it — misses included. A late failure from a node that no longer
+          // holds the slot would otherwise suppress this token for whichever
+          // node does.
           if (_metadataCapabilityFor != servedBy) return resolvedNow;
+          // Durable negatives only. A timeout, a dropped connection or a 5xx
+          // says nothing about the token: recording those would stop it ever
+          // being asked for again this session, even after the node recovers.
+          if (_looksDurableNegative(e)) {
+            // A miss recorded before the request would outlive a pass that
+            // never finished, suppressing a token that might have resolved.
+            _metadataMisses.add(id);
+          }
           if (_looksUnsupported(e)) {
             _metadataUnsupported = true;
             return resolvedNow;
@@ -1469,6 +1499,22 @@ class WalletService with WidgetsBindingObserver {
 
   /// How long a run of not-founds must be before the node is written off.
   static const notFoundRunBeforeUnsupported = 8;
+
+  /// Whether the provider gave a definite "no such token", as opposed to
+  /// failing to answer. Only the former is worth remembering.
+  static bool _looksDurableNegative(Object error) {
+    final text = error.toString().toLowerCase();
+    if (text.contains('timed out') ||
+        text.contains('timeout') ||
+        text.contains('connection') ||
+        text.contains('unreachable') ||
+        text.contains('socket') ||
+        text.contains('handshake') ||
+        RegExp(r'\b5\d\d\b').hasMatch(text)) {
+      return false;
+    }
+    return true;
+  }
 
   static bool _looksNotFound(Object error) {
     final text = error.toString().toLowerCase();
@@ -2686,11 +2732,21 @@ class WalletService with WidgetsBindingObserver {
     walletSyncController.deactivate();
     stealthService.reset();
     mixService.reset();
+    // Descriptors are per wallet. Capture the outgoing wallet's unwritten
+    // table BEFORE `_currentWalletId` moves — reading it afterwards would
+    // file the old wallet's descriptors under the new wallet's key.
+    // Snapshotted synchronously so the incoming wallet cannot alter what
+    // gets saved, and cleared here so nothing can read it under the new
+    // wallet; the replacement loads behind that.
+    final outgoing = _currentWalletId;
+    if (_tokenMetaDirty && outgoing != null && outgoing.isNotEmpty) {
+      _pendingFlush.add((outgoing, Map<String, CachedDescriptor>.from(
+        _descriptorCache,
+      )));
+      _tokenMetaDirty = false;
+    }
     _handles[walletId] = id;
     _currentWalletId = walletId;
-    // Descriptors are per wallet. Drop the outgoing wallet's table here,
-    // synchronously, so nothing can read it under the incoming wallet; the
-    // replacement loads behind that. A missing table only costs a refetch.
     _descriptorCache.clear();
     _metadataMisses.clear();
     _tokenMeta

@@ -21,9 +21,12 @@ class ResolverApi extends RustLibApi {
   /// Per-call hook: return an error string to throw, or null to succeed.
   String? Function(String tokenId)? onAsk;
 
-  /// When set, the next request suspends until this completes, so a test can
-  /// run another pass while one is genuinely in flight.
+  /// When set, the request numbered [gateOnCall] suspends until this
+  /// completes, so a test can act while one is genuinely in flight.
   Completer<String?>? gate;
+
+  /// 1-based index of the request the gate applies to.
+  int gateOnCall = 1;
 
   @override
   Future<BigInt> crateApiWalletRestore({
@@ -41,7 +44,7 @@ class ResolverApi extends RustLibApi {
     required bool providerIsNode,
   }) async {
     asked.add(tokenId);
-    final waiting = gate;
+    final waiting = asked.length == gateOnCall ? gate : null;
     if (waiting != null) {
       gate = null;
       final err = await waiting.future;
@@ -53,6 +56,7 @@ class ResolverApi extends RustLibApi {
       throw StateError('extraIndex is required for this endpoint');
     }
     if (failWith == 'missing') throw StateError('404 not found');
+    if (failWith == 'timeout') throw StateError('Metadata request timed out');
     return jsonEncode({
       'id': tokenId,
       'name': 'Name ${tokenId.substring(0, 2)}',
@@ -80,6 +84,8 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     api.asked.clear();
     api.failWith = null;
+    api.gate = null;
+    api.gateOnCall = 1;
     networkController.activeUrl = _node;
   });
 
@@ -424,6 +430,93 @@ void main() {
 
     expect(svc.metadataLookupUnsupported, isFalse,
         reason: "a verdict about A must not be applied to B");
+  });
+
+  test('a transient failure is retried, a definite one is not', () async {
+    final svc = await unlocked('w14');
+    api.failWith = 'timeout';
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(api.asked, [_id('ab')]);
+
+    api.failWith = null;
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(api.asked, [_id('ab'), _id('ab')],
+        reason: 'a node that failed to answer said nothing about the token');
+    expect(svc.cachedTokenMeta(_id('ab'))?.name, 'Name ab');
+  });
+
+  test("a late failure cannot poison another provider's misses", () async {
+    final svc = await unlocked('w15');
+    final gate = Completer<String?>();
+    api.gate = gate;
+    final passA = svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: 'https://a.example',
+      stillCurrent: () => true,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    // B takes the provider slot and exits because the job is held.
+    await svc.prefetchTokenMeta(
+      [_id('cd')],
+      walletId: _wallet,
+      servedBy: 'https://b.example',
+      stillCurrent: () => true,
+    );
+    // A's request now fails definitively.
+    gate.complete('404 not found');
+    await passA;
+    api.asked.clear();
+
+    // B must still be willing to ask about that token.
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: 'https://b.example',
+      stillCurrent: () => true,
+    );
+    expect(api.asked, [_id('ab')],
+        reason: "A's verdict must not enter B's miss cache");
+  });
+
+  test('switching wallets writes what the old one had resolved', () async {
+    final svc = await unlocked('w16');
+    // First token resolves; the second suspends, so the pass is still open
+    // when the wallet changes.
+    final gate = Completer<String?>();
+    api.gate = gate;
+    api.gateOnCall = 2;
+    final pass = svc.prefetchTokenMeta(
+      [_id('ab'), _id('cd')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    // Wait until the first has resolved and the second is suspended, rather
+    // than guessing a number of microtasks.
+    while (api.asked.length < 2) {
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    _wallet = 'w17';
+    await svc.restoreWallet('mock', walletId: 'w17');
+    gate.complete(null);
+    await pass;
+
+    final onDisk = await TokenDescriptorStore.load('w16');
+    expect(onDisk[_id('ab')]?.name, 'Name ab',
+        reason: 'a switch must not discard what the old wallet resolved');
   });
 
   test('an unparseable table is not a descriptor', () async {
