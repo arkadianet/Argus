@@ -87,9 +87,11 @@ class FakeGateway implements WalletSyncGateway, WalletSyncBatchGateway {
   @override
   bool useUnusedChangeAddress(String? walletId) => unusedChange;
 
+  bool balanceThrows = false;
   @override
   Future<Map<String, dynamic>> getBalance(String address) async {
     balanceCalls.add(address);
+    if (balanceThrows) throw Exception('node down');
     final b = balances[address];
     if (b == null) throw Exception('node down');
     return b;
@@ -97,12 +99,24 @@ class FakeGateway implements WalletSyncGateway, WalletSyncBatchGateway {
 
   final List<String> resolved = [];
   @override
-  Future<void> resolveTokenNames(
+  Future<Map<String, TokenBalance>> resolveTokenNames(
     Iterable<String> ids, {
     required String walletId,
     required String servedBy,
     required bool Function() stillCurrent,
-  }) async => resolved.addAll(ids);
+  }) async {
+    resolved.addAll(ids);
+    resolveProviders.add(servedBy);
+    return {
+      for (final id in ids)
+        if (resolvedNames.containsKey(id))
+          id: TokenBalance(id: id, amount: 0, name: resolvedNames[id]),
+    };
+  }
+
+  /// Names the fake will hand back, so a test can check they reach the UI.
+  final Map<String, String> resolvedNames = {};
+  final List<String> resolveProviders = [];
 
   @override
   Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
@@ -515,6 +529,11 @@ void main() {
       const ordinary = 'a1';
       const stealthOnly = 's1';
       const both = 'b1';
+      // A stealth-only holding is one the ordinary balance does not carry,
+      // so it is absent here. Deleting `removeWhere(stealthOnly.contains)`
+      // will NOT fail this test, and that is the point being asserted: the
+      // containment is structural — candidates are the ids the node itself
+      // returned — rather than a filter that could be removed by accident.
       gw.balances = {
         'addr0': {
           'balance_nano_erg': 100,
@@ -532,20 +551,112 @@ void main() {
           StealthToken(id: stealthOnly, amount: BigInt.from(3)),
           StealthToken(id: both, amount: BigInt.from(2)),
         ],
-        boxIds: const ['b1', 'b2'],
+        boxIds: const ['bx1', 'bx2'],
       );
       gw.resolved.clear();
 
       await c.refresh(discover: false);
+      await c.pendingNameResolution;
 
       expect(gw.resolved, contains(ordinary),
           reason: 'positive control: ordinary holdings do resolve');
-      expect(gw.resolved, isNot(contains(stealthOnly)),
-          reason: 'a stealth-only id is not derivable from public addresses, '
-              'so the node that served these balances has never seen it');
       expect(gw.resolved, contains(both),
-          reason: 'held in ordinary boxes too, so its id is already in the '
-              "node's own response");
+          reason: 'held in ordinary boxes too, so the node already has it');
+      expect(gw.resolved, isNot(contains(stealthOnly)),
+          reason: 'entirely stealth-held, so the node that served these '
+              'addresses has never seen this id');
+      expect(c.stealthTokens.map((t) => t.id), contains(stealthOnly),
+          reason: 'positive control: the holding exists and is displayed, '
+              'so its absence above is containment and not a missing token');
+    });
+
+    test('a failed balance read resolves nothing from retained state',
+        () async {
+      // `tokens` survives a failed refresh. Those ids came from a previous
+      // response, possibly from another node, so they must not be sent.
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'old', 'amount': 1},
+          ],
+        },
+      };
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+      expect(gw.resolved, contains('old'));
+
+      gw.resolved.clear();
+      gw.balanceThrows = true;
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+      expect(c.tokens.map((t) => t.id), contains('old'),
+          reason: 'the holding is still displayed');
+      expect(gw.resolved, isEmpty,
+          reason: 'but nothing may be re-sent from retained state');
+      gw.balanceThrows = false;
+    });
+
+    test('resolved names reach the published holdings', () async {
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'a1', 'amount': 5},
+          ],
+        },
+      };
+      gw.resolvedNames['a1'] = 'Resolved';
+
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+
+      expect(c.tokens.single.name, 'Resolved',
+          reason: 'a first refresh must not leave the id on screen until '
+              'some later hydration happens to pick it up');
+      expect(c.tokens.single.amount, 5, reason: 'amount preserved');
+      gw.resolvedNames.clear();
+    });
+
+    test('nothing resolves when the serving node is unknown', () async {
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'a1', 'amount': 5},
+          ],
+        },
+      };
+      gw.servedByUrl = null;
+      gw.resolved.clear();
+
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+
+      expect(gw.resolved, isEmpty,
+          reason: 'without knowing who answered, the disclosure argument '
+              'does not hold');
+      gw.servedByUrl = 'https://served.example';
+    });
+
+    test('resolution addresses the node that answered', () async {
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'a1', 'amount': 5},
+          ],
+        },
+      };
+      gw.servedByUrl = 'https://fellback.example';
+      gw.resolveProviders.clear();
+
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+
+      expect(gw.resolveProviders, ['https://fellback.example'],
+          reason: 'not the configured node, the one that served');
+      gw.servedByUrl = 'https://served.example';
     });
 
     test('an unreachable explorer leaves the balance unknown, not the sync',

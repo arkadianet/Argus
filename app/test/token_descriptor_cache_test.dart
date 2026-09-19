@@ -17,6 +17,9 @@ class ResolverApi extends RustLibApi {
   /// with no extraIndex; `missing` mimics a token it simply cannot find.
   String? failWith;
 
+  /// Per-call hook: return an error string to throw, or null to succeed.
+  String? Function(String tokenId)? onAsk;
+
   @override
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
@@ -33,6 +36,8 @@ class ResolverApi extends RustLibApi {
     required bool providerIsNode,
   }) async {
     asked.add(tokenId);
+    final hook = onAsk?.call(tokenId);
+    if (hook != null) throw StateError(hook);
     if (failWith == 'unsupported') {
       throw StateError('extraIndex is required for this endpoint');
     }
@@ -137,17 +142,121 @@ void main() {
     expect(api.asked, hasLength(1));
   });
 
-  test('a new provider gets a fresh chance', () async {
+  test('a new provider retries the token the old one failed', () async {
+    // The same token, deliberately: asking about a different one would pass
+    // even if misses were never scoped to the provider that produced them.
     final svc = await unlocked('w5');
-    api.failWith = 'unsupported';
-    await svc.prefetchTokenMeta([_id('ab')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
-    expect(svc.metadataLookupUnsupported, isTrue);
+    api.failWith = 'missing';
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: 'https://a.example',
+      stillCurrent: () => true,
+    );
+    expect(api.asked, [_id('ab')]);
 
     api.failWith = null;
-    networkController.activeUrl = 'https://other.example';
-    await svc.prefetchTokenMeta([_id('cd')], walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
-    expect(svc.metadataLookupUnsupported, isFalse);
-    expect(api.asked, contains(_id('cd')));
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: 'https://b.example',
+      stillCurrent: () => true,
+    );
+    expect(api.asked, [_id('ab'), _id('ab')],
+        reason: 'a miss belongs to the provider that produced it');
+    expect(svc.cachedTokenMeta(_id('ab'))?.name, 'Name ab');
+  });
+
+  test('an early capability exit still persists earlier successes', () async {
+    final svc = await unlocked('w5b');
+    // One success, then a run of not-founds long enough to write the node
+    // off. The success must survive a restart.
+    final ids = [
+      _id('ab'),
+      for (var i = 0; i < WalletService.notFoundRunBeforeUnsupported; i++)
+        i.toRadixString(16).padLeft(2, '0') * 32,
+    ];
+    var first = true;
+    api.onAsk = (_) {
+      if (first) {
+        first = false;
+        return null;
+      }
+      return '404 not found';
+    };
+    await svc.prefetchTokenMeta(
+      ids,
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    api.onAsk = null;
+    expect(svc.metadataLookupUnsupported, isTrue);
+
+    final onDisk = await TokenDescriptorStore.load('w5b');
+    expect(onDisk[_id('ab')]?.name, 'Name ab',
+        reason: 'returning early must not discard what was already resolved');
+  });
+
+  test('a failure arriving after a wallet switch does not disable the new '
+      'wallet', () async {
+    final svc = await unlocked('w5c');
+    api.failWith = 'unsupported';
+    // The pass no longer owns the wallet by the time the error lands.
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'a-wallet-that-is-no-longer-active',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(svc.metadataLookupUnsupported, isFalse,
+        reason: "wallet A's failure must not disable wallet B");
+    expect(api.asked, isEmpty);
+  });
+
+  test('a failure that lands after ownership is lost changes nothing',
+      () async {
+    // The pass starts owned and loses ownership while the request is in
+    // flight, then that request fails with a capability error. Without the
+    // ownership check on the error path, this would disable resolution for
+    // whatever wallet is current by the time it lands.
+    final svc = await unlocked('w5e');
+    var current = true;
+    api.onAsk = (_) {
+      current = false;
+      return 'extraIndex is required for this endpoint';
+    };
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => current,
+    );
+    api.onAsk = null;
+    expect(api.asked, hasLength(1), reason: 'the request did go out');
+    expect(svc.metadataLookupUnsupported, isFalse,
+        reason: 'a verdict from a pass that no longer owns the session must '
+            'not be applied to the one that does');
+  });
+
+  test('a discarded session is not written back', () async {
+    final svc = await unlocked('w5d');
+    // clearSessionMetadata bumps the descriptor epoch mid-pass.
+    api.onAsk = (_) {
+      svc.clearSessionMetadata();
+      return null;
+    };
+    await svc.prefetchTokenMeta(
+      [_id('ab'), _id('cd')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    api.onAsk = null;
+    expect(api.asked, hasLength(1),
+        reason: 'the pass stops once its session is discarded');
+    expect(await TokenDescriptorStore.load('w5d'), isEmpty,
+        reason: 'and writes nothing back');
   });
 
   test('a token the node cannot find is not retried every sync', () async {

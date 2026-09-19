@@ -111,8 +111,18 @@ class _TokenDetailSheetState extends State<TokenDetailSheet>
         provider: provider,
         providerIsNode: node,
       );
-    } catch (_) {
-      if (mounted) setState(() => _error = 'Metadata unavailable from $host');
+    } catch (e) {
+      // Losing the single metadata job to a background pass is contention,
+      // not the provider failing. Saying "unavailable" would tell the user
+      // their node is broken when another try would work.
+      final busy = e.toString().toLowerCase().contains('already running');
+      if (mounted) {
+        setState(
+          () => _error = busy
+              ? 'Another metadata request is finishing — try again'
+              : 'Metadata unavailable from $host',
+        );
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }

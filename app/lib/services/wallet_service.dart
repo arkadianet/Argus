@@ -899,10 +899,9 @@ class WalletService with WidgetsBindingObserver {
             .length >
         16384)
       return;
-    _tokenMeta.remove(meta.id);
-    while (_tokenMeta.length >= 1000) {
-      _tokenMeta.remove(_tokenMeta.keys.first);
-    }
+    // No independent eviction: `_descriptorCache` bounds growth, and the
+    // two must agree. Dropping an entry here while the cache still holds it
+    // would show an unresolved id that is never requested again.
     _tokenMeta[meta.id] = meta;
     _tokenMetaDirty = true;
   }
@@ -1319,88 +1318,118 @@ class WalletService with WidgetsBindingObserver {
   /// addresses and answered with the boxes these ids come from. Running it
   /// after sync publishes — rather than when a token is tapped — also keeps
   /// the provider from learning which token the user looked at.
-  Future<void> prefetchTokenMeta(
+  Future<Map<String, TokenBalance>> prefetchTokenMeta(
     Iterable<String> ids, {
     required String walletId,
     required String servedBy,
     required bool Function() stillCurrent,
   }) async {
-    if (walletId.isEmpty || servedBy.isEmpty) return;
-    if (!isUnlocked || !stillCurrent()) return;
+    final resolvedNow = <String, TokenBalance>{};
+    if (walletId.isEmpty || servedBy.isEmpty) return resolvedNow;
+    if (!isUnlocked || !stillCurrent()) return resolvedNow;
     await ensureWalletTable();
-    if (!stillCurrent() || _currentWalletId != walletId) return;
+    if (!_owns(walletId, stillCurrent)) return resolvedNow;
+
+    // Captured up front. `clearSessionMetadata` and `clearCollectibleData`
+    // bump the epoch; anything this pass learned afterwards belongs to a
+    // session the user has already discarded and must not be written back.
+    final epoch = _descriptorEpoch;
+    bool owns() => _owns(walletId, stillCurrent) && epoch == _descriptorEpoch;
+
     if (_metadataCapabilityFor != servedBy) {
       _metadataCapabilityFor = servedBy;
       _metadataUnsupported = false;
       _consecutiveNotFound = 0;
+      // Misses are a property of a provider, not of a token. A node that
+      // could not answer for X says nothing about whether the next one can.
+      _metadataMisses.clear();
     }
-    if (_metadataUnsupported) return;
+    if (_metadataUnsupported) return resolvedNow;
+
     final wanted = [
       for (final id in ids)
         if (id.length == 64 &&
-            !_tokenMeta.containsKey(id) &&
+            !_descriptorCache.containsKey(id) &&
+            !_legacyTokenMeta.containsKey(id) &&
             !_metadataMisses.contains(id))
           id,
     ];
-    if (wanted.isEmpty) return;
-    // The budget covers this whole pass. There is exactly one call per
-    // refresh, over every address's ids at once, so it cannot be multiplied
-    // by the number of addresses the wallet has.
-    var resolved = 0;
-    for (final id in wanted) {
-      // Re-read per item: this outlives one frame, and the wallet can change
-      // under it. Never write a response under a wallet that did not ask.
-      if (!stillCurrent() ||
-          _currentWalletId != walletId ||
-          !isUnlocked ||
-          _metadataUnsupported) {
-        break;
-      }
-      if (resolved >= maxTokenMetaPerSync) break;
-      // An explicit request owns the job. Yield rather than compete.
-      if (_metadataBusy) break;
-      _metadataBusy = true;
-      _metadataMisses.add(id);
-      resolved++;
-      try {
-        final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
-          tokenId: id,
-          providerUrl: servedBy,
-          providerIsNode: true,
-        );
-        if (!stillCurrent() || _currentWalletId != walletId) return;
-        final m = jsonDecode(raw) as Map<String, dynamic>;
-        if (m['id'] != id) continue;
-        _rememberDescriptor(id, m, servedBy);
-        _metadataMisses.remove(id);
-        _consecutiveNotFound = 0;
-      } catch (e) {
-        if (e.toString().toLowerCase().contains('already running')) {
-          // Lost the job to an explicit request; not a property of the token.
+    if (wanted.isEmpty) return resolvedNow;
+
+    // One budget for the whole pass: there is one call per refresh, over
+    // every address's ids at once, so it cannot multiply by address count.
+    var attempted = 0;
+    try {
+      for (final id in wanted) {
+        if (!owns() || _metadataUnsupported) return resolvedNow;
+        if (attempted >= maxTokenMetaPerSync) return resolvedNow;
+        // An explicit request owns the job. Yield rather than compete.
+        if (_metadataBusy) return resolvedNow;
+        _metadataBusy = true;
+        _metadataMisses.add(id);
+        attempted++;
+        try {
+          final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
+            tokenId: id,
+            providerUrl: servedBy,
+            providerIsNode: true,
+          );
+          // Re-check before touching anything shared: this suspended, and
+          // the wallet, session or provider may have moved on.
+          if (!owns()) return resolvedNow;
+          final m = jsonDecode(raw) as Map<String, dynamic>;
+          if (m['id'] != id) continue;
+          _rememberDescriptor(id, m, servedBy);
           _metadataMisses.remove(id);
-          return;
-        }
-        if (_looksUnsupported(e)) {
-          _metadataUnsupported = true;
-          return;
-        }
-        if (_looksNotFound(e)) {
-          _consecutiveNotFound++;
-          if (_consecutiveNotFound >= notFoundRunBeforeUnsupported) {
-            _metadataUnsupported = true;
-            return;
-          }
-        } else {
           _consecutiveNotFound = 0;
+          final meta = cachedTokenMeta(id);
+          if (meta != null) resolvedNow[id] = meta;
+        } catch (e) {
+          // Ownership is checked before every shared-state mutation below.
+          // A failure that arrives after a wallet switch must not disable
+          // the incoming wallet's resolution.
+          if (!owns()) return resolvedNow;
+          final text = e.toString().toLowerCase();
+          if (text.contains('cancelled') || text.contains('canceled')) {
+            // The session was torn down under this pass. Stop; do not treat
+            // it as a property of the token.
+            _metadataMisses.remove(id);
+            return resolvedNow;
+          }
+          if (text.contains('already running')) {
+            _metadataMisses.remove(id);
+            return resolvedNow;
+          }
+          if (_looksUnsupported(e)) {
+            _metadataUnsupported = true;
+            return resolvedNow;
+          }
+          if (_looksNotFound(e)) {
+            _consecutiveNotFound++;
+            if (_consecutiveNotFound >= notFoundRunBeforeUnsupported) {
+              _metadataUnsupported = true;
+              return resolvedNow;
+            }
+          } else {
+            _consecutiveNotFound = 0;
+          }
+        } finally {
+          _metadataBusy = false;
         }
-      } finally {
-        _metadataBusy = false;
       }
-    }
-    if (_tokenMetaDirty && _currentWalletId == walletId) {
-      await persistTokenMeta();
+      return resolvedNow;
+    } finally {
+      // Every exit persists what this pass already learned. Returning early
+      // on the ninth token must not throw away the first eight.
+      if (_tokenMetaDirty && owns()) {
+        await persistTokenMeta();
+      }
     }
   }
+
+  /// Whether this pass still belongs to the wallet that started it.
+  bool _owns(String walletId, bool Function() stillCurrent) =>
+      isUnlocked && _currentWalletId == walletId && stillCurrent();
 
   /// Ceiling for one refresh. What is left resolves on later refreshes,
   /// since misses are only remembered for ids actually attempted.
@@ -1465,6 +1494,15 @@ class WalletService with WidgetsBindingObserver {
       ),
       source: source,
     );
+    // One bound, shared with the display view and the persisted table, so
+    // an eviction here cannot leave a resolved token looking unresolved and
+    // be requested again on every refresh forever.
+    _descriptorCache.remove(id);
+    while (_descriptorCache.length >= TokenDescriptorStore.maxEntries) {
+      final oldest = _descriptorCache.keys.first;
+      _descriptorCache.remove(oldest);
+      _tokenMeta.remove(oldest);
+    }
     _descriptorCache[id] = descriptor;
     // `TokenBalance`'s constructor runs issuerText() over the name, so a
     // hostile label is sanitised on the way in as well as on the way out.
