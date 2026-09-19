@@ -10,7 +10,7 @@ import 'package:uuid/uuid.dart';
 import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
 import 'app_fee.dart';
-import 'metadata_settings.dart';
+import 'metadata_consent.dart';
 import 'network_controller.dart';
 import 'privacy_service.dart';
 import 'token_evidence.dart';
@@ -733,9 +733,20 @@ typedef HistoryResult = ({List<Map<String, dynamic>> rows, bool partial});
 
 class WalletService with WidgetsBindingObserver {
   bool _observingMetadata = false;
+
+  /// Whether the app is in the foreground. Automatic resolution is not
+  /// allowed outside it: backgrounding wipes the resolved metadata, and
+  /// polling continues for a window afterwards, so without this a sync tick
+  /// would quietly fetch it all again.
+  bool _foreground = true;
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) clearSessionMetadata();
+    _foreground = state == AppLifecycleState.resumed;
+    if (!_foreground) {
+      cancelAutoResolve();
+      clearSessionMetadata();
+    }
   }
   /// All wallet handle IDs currently in memory, keyed by wallet ID.
   final Map<String, BigInt> _handles = {};
@@ -776,6 +787,7 @@ class WalletService with WidgetsBindingObserver {
     }
     _descriptorEpoch++;
     _descriptors.clear();
+    _attempted.clear();
     metadataChanges.value++;
   }
 
@@ -800,20 +812,39 @@ class WalletService with WidgetsBindingObserver {
   ///    nothing about this wallet and a lookup would be a fresh disclosure.
   ///  * Stealth holdings. Those boxes are not derivable from the wallet's
   ///    public addresses, so the node has not seen them.
-  /// The disclosure rule on its own, free of session state so it can be
+  /// The authorisation rule on its own, free of session state so it can be
   /// checked directly. [autoResolveEligible] adds the session conditions.
+  ///
+  /// Four things must hold, and none of them is an argument about what the
+  /// provider already knows:
+  ///
+  ///  * [consented] — this exact endpoint was granted permission. Grants do
+  ///    not transfer when the pinned node changes.
+  ///  * [pinnedNodeActive] — the endpoint answering is the pinned one.
+  ///    Metadata requests never fail over: another node serving balances
+  ///    neither grants it permission nor withdraws the pinned node's.
+  ///  * not [hasStealth] — private holdings are outside the grant's scope
+  ///    and are always asked about separately.
+  ///  * [foreground] — a backgrounded app has just had its metadata wiped;
+  ///    it must not quietly fetch it again.
   static bool autoResolveAllowedFor({
-    required bool enabled,
+    required bool consented,
     required bool pinnedNodeActive,
     required bool hasStealth,
+    required bool foreground,
   }) =>
-      enabled && pinnedNodeActive && !hasStealth;
+      consented && pinnedNodeActive && !hasStealth && foreground;
 
-  bool autoResolveEligible(TokenBalance holding) =>
+  /// Whether [holding] may be resolved from [providerUrl] without asking.
+  /// The provider is passed in rather than read here so callers check the
+  /// endpoint they are actually about to send to.
+  bool autoResolveEligible(TokenBalance holding, String? providerUrl) =>
       autoResolveAllowedFor(
-        enabled: metadataSettings.autoResolve,
-        pinnedNodeActive: networkController.pinnedNodeActive,
+        consented: metadataConsent.allows(providerUrl),
+        pinnedNodeActive: networkController.pinnedNodeActive &&
+            networkController.activeUrl == providerUrl,
         hasStealth: holding.hasStealth,
+        foreground: _foreground,
       ) &&
       isUnlocked &&
       !privacyService.hideBalances;
@@ -821,6 +852,10 @@ class WalletService with WidgetsBindingObserver {
   /// Upper bound on one sweep, below the 1,000-entry `_descriptors` cap so a
   /// large wallet cannot evict its own freshly resolved entries.
   static const maxAutoResolvePerSweep = 250;
+
+  /// Tokens automatic resolution has already tried this session, successful
+  /// or not. Cleared with the descriptors it parallels.
+  final Set<String> _attempted = {};
 
   Future<void>? _sweep;
   bool _sweepCancelled = false;
@@ -848,15 +883,28 @@ class WalletService with WidgetsBindingObserver {
     }
   }
 
+  /// Releases the job and resumes whatever the hold displaced. An explicit
+  /// request no longer strands the rest of the wallet unresolved until the
+  /// next sync tick.
   void endManualMetadata() {
     if (_manualHold > 0) _manualHold--;
+    if (_manualHold > 0) return;
+    final resume = _heldDuringManual;
+    _heldDuringManual = null;
+    if (resume != null) unawaited(autoResolveMetadata(resume));
   }
+
+  /// Holdings offered while an explicit request held the job. Kept rather
+  /// than dropped, and re-checked against current authorisation when the
+  /// hold is released.
+  List<TokenBalance>? _heldDuringManual;
 
   /// Ends automatic resolution without claiming the job, for a screen going
   /// away. Anything already in flight finishes; nothing new starts.
   void cancelAutoResolve() {
     _sweepCancelled = true;
     _pendingHoldings = null;
+    _heldDuringManual = null;
   }
 
   /// Resolves [holdings] one at a time from the pinned node, skipping what is
@@ -865,7 +913,14 @@ class WalletService with WidgetsBindingObserver {
   /// whatever arrived meanwhile, so a holdings update during a sweep is not
   /// left waiting for the next sync tick.
   Future<void> autoResolveMetadata(Iterable<TokenBalance> holdings) async {
-    _pendingHoldings = holdings.toList(growable: false);
+    final batchIn = holdings.toList(growable: false);
+    // An explicit request owns the job; keep this for when it lets go rather
+    // than dropping it on the floor.
+    if (_manualHold > 0) {
+      _heldDuringManual = batchIn;
+      return;
+    }
+    _pendingHoldings = batchIn;
     if (_sweep != null) return _sweep;
     while (_pendingHoldings != null) {
       final batch = _pendingHoldings!;
@@ -873,7 +928,8 @@ class WalletService with WidgetsBindingObserver {
       final provider = networkController.activeUrl;
       if (provider == null ||
           !networkController.pinnedNodeActive ||
-          !metadataSettings.autoResolve ||
+          !metadataConsent.allows(provider) ||
+          !_foreground ||
           _manualHold > 0) {
         _pendingHoldings = null;
         return;
@@ -904,9 +960,16 @@ class WalletService with WidgetsBindingObserver {
       // finish the list against a node the user is no longer using.
       if (epoch != _descriptorEpoch ||
           networkController.activeUrl != provider) return;
-      if (!autoResolveEligible(holding)) continue;
+      // Re-read authorisation for the endpoint about to be contacted, on
+      // every item: holding the job pauses the sweep, it does not freeze
+      // network settings or the grant list underneath it.
+      if (!autoResolveEligible(holding, provider)) continue;
       if (_descriptors.containsKey(_descriptorKey(holding.id))) continue;
       if (holding.metadataState == MetadataState.complete) continue;
+      // One attempt per token per session. Without this, a batch of
+      // timeouts is retried in full on every sync tick, which is unbounded
+      // network work no per-sweep cap can limit.
+      if (!_attempted.add(holding.id)) continue;
       done++;
       try {
         await loadMetadata(holding, provider: provider, providerIsNode: true);

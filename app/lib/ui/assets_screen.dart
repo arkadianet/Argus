@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../format.dart';
-import '../services/metadata_settings.dart';
+import '../services/metadata_consent.dart';
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
 import '../services/token_pricer.dart';
@@ -28,7 +28,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
   @override
   void initState() {
     super.initState();
-    metadataSettings.addListener(_sweep);
+    metadataConsent.addListener(_sweep);
     networkController.addListener(_sweep);
     walletSyncController.addListener(_sweep);
     WidgetsBinding.instance.addPostFrameCallback((_) => _sweep());
@@ -36,7 +36,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
 
   @override
   void dispose() {
-    metadataSettings.removeListener(_sweep);
+    metadataConsent.removeListener(_sweep);
     networkController.removeListener(_sweep);
     walletSyncController.removeListener(_sweep);
     walletService.cancelAutoResolve();

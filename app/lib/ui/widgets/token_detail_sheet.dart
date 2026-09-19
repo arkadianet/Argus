@@ -89,7 +89,7 @@ class _TokenDetailSheetState extends State<TokenDetailSheet>
       // An eligible node needs no prompt: it already holds what the request
       // would reveal. Every other provider, and every stealth holding, asks.
       final preapproved =
-          node && walletService.autoResolveEligible(widget.token);
+          node && walletService.autoResolveEligible(widget.token, provider);
       final yes = preapproved
           ? true
           : await showDialog<bool>(

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../services/explorer_presets.dart';
-import '../../services/metadata_settings.dart';
+import '../../services/metadata_consent.dart';
 import '../../services/network_controller.dart';
 import '../../theme/argus_theme.dart';
 import '../widgets/soft_card.dart';
@@ -34,9 +34,46 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
     super.dispose();
   }
 
+  /// Granting names the endpoint and states what it will see. Revoking is
+  /// immediate and needs no confirmation.
   Future<void> _setAutoResolve(bool value) async {
+    final provider = networkController.activeUrl;
+    if (provider == null) return;
+    if (value) {
+      final host = Uri.tryParse(provider)?.host ?? provider;
+      final yes = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('Allow $host to resolve token names automatically?'),
+          content: Text(
+            'While Assets is open, Argus may request names, decimals and '
+            'descriptions for ordinary holdings in whichever wallet you '
+            'unlock.\n\n'
+            '$host sees your connection\'s IP address, the token ids '
+            'requested and when they were requested. From those it can infer '
+            'your holdings and link your activity across visits and wallets.\n\n'
+            'Turning this off stops later requests. It cannot take back what '
+            'has already been sent. Stealth holdings are never included and '
+            'are always asked about separately.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Allow'),
+            ),
+          ],
+        ),
+      );
+      if (yes != true || !mounted) return;
+    }
     try {
-      await metadataSettings.setAutoResolve(value);
+      await (value
+          ? metadataConsent.grant(provider)
+          : metadataConsent.revoke(provider));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(
@@ -58,7 +95,7 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([networkController, metadataSettings]),
+      listenable: Listenable.merge([networkController, metadataConsent]),
       builder: (context, _) {
         final colors = ArgusColors.of(context);
         final nodes = networkController.nodes;
@@ -123,16 +160,20 @@ class _NetworkSettingsPageState extends State<NetworkSettingsPage> {
                 title: const Text('Resolve token names automatically'),
                 subtitle: Text(
                   networkController.pinnedNodeActive
-                      ? 'Names, decimals and descriptions load from ${Uri.tryParse(networkController.activeUrl ?? '')?.host ?? 'the pinned node'} without asking each time. That node already receives your addresses and the boxes listing these tokens, so it learns nothing new.'
-                      : 'Takes effect once you tap a node above to pin it, and that node is the one connected. Automatic selection can change nodes, so it keeps asking.',
+                      ? 'Lets ${Uri.tryParse(networkController.activeUrl ?? '')?.host ?? 'the pinned node'} see which token ids you hold and when you look at them, in exchange for names instead of ids.'
+                      : 'Permission is granted to one node. Tap a node above to pin it, and once it is the connected one you can allow it here.',
                 ),
-                value: metadataSettings.autoResolve,
-                onChanged: _setAutoResolve,
+                value: metadataConsent.allows(networkController.activeUrl),
+                onChanged: networkController.pinnedNodeActive
+                    ? _setAutoResolve
+                    : null,
               ),
             ),
             const SizedBox(height: 8),
-            const SettingsNote(
-              'Never applies to the explorer, which sync does not otherwise contact, or to stealth holdings, which the node cannot see from your addresses. Both keep asking per token. Resolved details stay in memory and are dropped when the app goes to the background.',
+            SettingsNote(
+              'Permission belongs to one node address and never moves to another: pinning a different node means granting it separately. '
+              '${metadataConsent.granted.length > 1 ? 'You have allowed ${metadataConsent.granted.length} providers. ' : ''}'
+              'The explorer and stealth holdings are never included and are always asked about per token. Resolved details stay in memory and are dropped when the app goes to the background.',
             ),
             const SectionLabel('Find more nodes', scope: 'App-wide'),
             const SizedBox(height: 10),

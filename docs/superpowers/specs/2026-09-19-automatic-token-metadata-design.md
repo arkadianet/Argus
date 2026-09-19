@@ -13,70 +13,104 @@ in the token detail sheet. A wallet holding 194 unnamed tokens therefore
 showed 194 rows of truncated ids, each needing two taps to resolve, and the
 result was dropped again the next time the app went to the background.
 
-That default is defensible for an unknown provider. It is not defensible for
-the node the wallet is already talking to.
+Requiring 194 confirmations does not produce 194 informed decisions. It
+produces reflexive approval, which is the failure mode the prompt exists to
+prevent.
 
-## The disclosure argument
+## The justification that did not survive review
 
-`PublicWalletSync` sends the wallet's addresses to `networkController.activeUrl`
-on every sync, for `getBalance` and `getTransactionHistory`. The boxes that
-come back enumerate the wallet's tokens. Asking that same node to read one of
-those tokens' issuance registers tells it nothing it was not already told.
-The consent dialog was asking the user to approve a disclosure that had
-already happened.
+The first version of this work argued that automatic resolution against the
+pinned node disclosed nothing new, because sync already sends that node the
+wallet's addresses and the boxes it returns enumerate the same tokens.
 
-Three cases break that argument, and all three keep asking:
+That argument was wrong, in two separate ways.
 
-- **A node chosen by failover.** `chooseActive` falls back to any reachable
-  node when the pinned one is down, and the default pool holds five. A
-  non-null `preferredUrl` does not mean the pinned node is the one answering,
-  so the gate is `preferredUrl != null && activeUrl == preferredUrl`
-  (`NetworkController.pinnedNodeActive`), not merely "a node is pinned".
-  Without that distinction, auto-resolution would spread the wallet's token
-  set across up to five operators, none of which had necessarily served its
-  balance.
-- **The explorer.** Sync never contacts `networkController.explorer`. It holds
-  nothing about this wallet, so a metadata lookup there is a fresh disclosure
-  to a party that currently has none. It stays behind per-token consent
-  regardless of the setting.
-- **Stealth holdings.** Those boxes are not derivable from the wallet's public
-  addresses, so the node has not seen them. `hasStealth` excludes a holding
-  from automatic resolution even on the pinned node.
+It was wrong on the facts. It cited `PublicWalletSync`, which
+(`public_wallet_sync.dart:103`) explicitly *skips* the active wallet. The
+active wallet syncs through `_LiveSyncRead`, which does pass
+`networkController.activeUrl` — so the conclusion happened to hold on the
+normal path — but the cited evidence did not support it, and the fallback
+`getBalance` path passes no node at all.
 
-## What was built
+It was wrong in principle, which matters more. Knowing that a provider
+returned certain tokens does not authorise telling that provider *when* the
+user opens Assets, how often they come back, or which wallet they unlocked.
+Possession and interest are different facts, and a request burst is its own
+signal. No amount of provenance tracking answers "may we disclose this
+additional activity?" — only permission does.
 
-`MetadataSettings.autoResolve`, persisted at `argus_auto_metadata_v1`,
-**defaults to off** so an existing install keeps its current behaviour until
-the user opts in. The switch lives in Network settings next to the node list,
-because it is meaningless until a node is pinned and the copy says so.
+The gate was also not enforcing even the weaker claim: `setPreferredNode`
+assigns `preferredUrl` and then probes, so pinning a new node opened the gate
+immediately, against holdings that a *different* node had served.
 
-`WalletService.autoResolveAllowedFor` holds the disclosure rule alone —
-enabled, pinned-node-active, not stealth — with no session state, so it can
-be checked directly in tests. `autoResolveEligible` adds unlocked and
-not-hiding-balances on top.
+## What this does instead
 
-`autoResolveMetadata` sweeps the holdings sequentially, because both
-`_metadataBusy` in Dart and `METADATA_JOB` in Rust allow one metadata request
-at a time. It skips what is already resolved, swallows per-token failures so
-one unreadable token cannot stall the wallet, and stops at the next item when
-the descriptor epoch changes or the active node moves. `stopAutoResolve`
-lets an explicit tap take the job from a running sweep rather than be refused
-with "another request is running".
+Permission, not justification. `MetadataConsent` records the exact provider
+endpoints allowed to resolve automatically, and the settings copy states what
+the provider learns rather than denying that it learns anything:
 
-The sweep is capped at 250 tokens, below the 1,000-entry `_descriptors` cap,
-so a large wallet cannot evict its own freshly resolved entries mid-sweep.
+> `<host>` sees your connection's IP address, the token ids requested and
+> when they were requested. From those it can infer your holdings and link
+> your activity across visits and wallets. Turning this off stops later
+> requests. It cannot take back what has already been sent.
+
+Consequences of keying on the endpoint:
+
+- Grants are stored as `scheme://host:port`, so the same host over http, or
+  on another port, is a different provider needing its own grant.
+- A grant never transfers. Pinning a different node does not carry permission
+  to it; the switch turns itself off because that endpoint is not granted.
+- The pre-consent boolean (`argus_auto_metadata_v1`) is deliberately **not**
+  migrated and is deleted on load. It was agreed to under terms that said the
+  node learned nothing new, which is not what is being asked now.
+
+## The boundaries
+
+- **Failover** is a recipient restriction. Automatic resolution runs only
+  when the active node *is* the pinned, granted endpoint. Metadata requests
+  never fail over: another node serving balances neither earns permission nor
+  removes the pinned node's.
+- **The explorer** keeps its per-token prompt. Node permission does not
+  authorise explorer requests.
+- **Stealth holdings** are outside the grant's scope and are always asked
+  about individually.
+- **Foreground only.** Backgrounding wipes resolved metadata, and
+  `dashboard_screen.dart` deliberately keeps polling for a window afterwards.
+  Without a foreground condition a poll tick in that window would quietly
+  fetch everything again, contradicting the promise the UI just made.
+
+## Mechanics
+
+Authorisation is re-read before every individual request, not once per
+sweep: holding the metadata job pauses automatic resolution, it does not
+freeze network settings or the grant list underneath it.
+
+The sweep runs sequentially because both `_metadataBusy` and Rust's
+`METADATA_JOB` allow one request at a time. It is capped at 250 per batch,
+below the 1,000-entry `_descriptors` cap. Each token is attempted at most
+once per session (`_attempted`): without that, a batch of timeouts is retried
+in full on every sync tick, which no per-batch cap can bound.
+
+`beginManualMetadata`/`endManualMetadata` hand the job to an explicit tap and
+resume whatever the hold displaced, so one manual request does not strand the
+rest of the wallet until the next sync tick.
 
 ## What deliberately did not change
 
-Resolved descriptors stay memory-only and are still dropped on background,
-lock and wallet switch. Automatic resolution changes *who has to be asked*,
-not *what is kept on disk*. Persisting them would mean writing a map of the
-wallet's holdings to unencrypted `SharedPreferences`, which is a separate
-decision with a different threat model, and the existing persisted store
-(`argus_token_meta_v2`) is already dead — its only writer, `rememberTokenMeta`,
-has no production caller, so `persistTokenMeta` always early-returns.
+Resolved descriptors stay memory-only, dropped on background, lock and wallet
+switch. Persisting them would reduce repeated disclosure bursts — a real
+argument in favour — but it needs a wallet-scoped encrypted store with
+explicit retention and clearing semantics, not the unencrypted
+`SharedPreferences` the legacy cache uses. That is a separate decision.
 
-That dead path is left alone here. It is worth settling separately: as
-written, the legacy cache can only shrink, so `cachedTokenMeta` consumers
+Deferred: plumbing the serving node back out of the Rust client (which does
+silent failover and reports nothing), automatic resolution for the explorer,
+any automation for stealth holdings, and persistent metadata caching.
+
+## Still open
+
+`rememberTokenMeta` has no production caller, so `_tokenMetaDirty` is never
+set and `persistTokenMeta` always early-returns. The legacy
+`argus_token_meta_v2` store can only shrink, so `cachedTokenMeta` consumers
 (UTXO management, activity tiles, transaction details) degrade permanently to
-shortened ids once a user clears collectible data.
+shortened ids once a user clears collectible data. Untouched here.
