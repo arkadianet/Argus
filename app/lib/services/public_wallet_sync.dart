@@ -18,7 +18,6 @@ abstract class PublicWalletGateway {
   Future<Map<String, dynamic>?> load(String id);
   Future<Map<String, dynamic>> balance(String address);
   Future<List<dynamic>> history(String address);
-  Future<TokenBalance> metadata(String id, int amount);
   Future<void> save(
     String id,
     Map<String, dynamic> data,
@@ -43,9 +42,6 @@ class LivePublicWalletGateway implements PublicWalletGateway {
             ),
           )
           as List;
-  @override
-  Future<TokenBalance> metadata(String id, int amount) =>
-      walletService.tokenMeta(id, amount);
   @override
   Future<void> save(
     String id,
@@ -143,19 +139,23 @@ class PublicWalletSync extends ChangeNotifier {
               transactions[row['tx_id'] as String] = row;
             }
           }
-          final tokens = <Map<String, dynamic>>[];
-          for (final entry in amounts.entries) {
-            if (!valid()) return;
-            final t = await gateway.metadata(entry.key, entry.value);
-            tokens.add({
-              'id': t.id,
-              'amount': t.amount,
-              'name': t.name,
-              'decimals': t.decimals,
-              'iconUrl': t.iconUrl,
-              'emissionAmount': t.emissionAmount,
-            });
-          }
+          // A public refresh updates amounts, not metadata. Keep the target
+          // wallet's last known token scale and label from this same snapshot.
+          // Looking in the active wallet's cache would substitute another
+          // wallet's data; a cache wipe would also turn known scales into zero.
+          final knownTokens = {
+            for (final row in (old['tokens'] as List? ?? const []))
+              (row as Map)['id'] as String: row,
+          };
+          final tokens = [
+            for (final holding in amounts.entries)
+              <String, dynamic>{
+                ...?knownTokens[holding.key]?.cast<String, dynamic>(),
+                'id': holding.key,
+                'amount': holding.value,
+                'decimals': knownTokens[holding.key]?['decimals'] ?? 0,
+              },
+          ];
           final rows = transactions.values.toList()
             ..sort(
               (a, b) => ((b['timestamp'] as num?) ?? 0).compareTo(

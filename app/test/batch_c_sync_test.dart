@@ -98,9 +98,6 @@ class MemoryPublic extends PublicWalletGateway {
   }
 
   @override
-  Future<TokenBalance> metadata(String id, int amount) async =>
-      TokenBalance(id: id, amount: amount, name: 'Shared', decimals: 2);
-  @override
   Future<void> save(
     String id,
     Map<String, dynamic> snapshot,
@@ -131,8 +128,20 @@ void main() {
   );
 
   test(
-    'C: live locked-wallet reads use public APIs and global metadata only',
+    'C: public refresh preserves its own snapshot metadata after a cache clear',
     () async {
+      for (final (id, name, decimals) in [
+        ('w2', 'Wallet two', 2),
+        ('w3', 'Wallet three', 3),
+      ]) {
+        await WalletDatabaseService.savePublicSnapshot(id, {
+          'wallet_id': id,
+          'tokens': [
+            {'id': 'shared-c', 'amount': 999, 'name': name, 'decimals': decimals},
+          ],
+        }, () => true);
+      }
+      await walletService.clearCollectibleData();
       final active = GatedGateway();
       final c = WalletSyncController(active)..activateWallet('w1');
       c.balanceNano = 99;
@@ -156,11 +165,14 @@ void main() {
       final known = await WalletDatabaseService.lastKnownBalance('w2');
       expect(known!.tokens.single.amount, 2);
       expect(known.balanceNano, 7);
+      expect(known.tokens.single.decimals, 2);
+      final third = await WalletDatabaseService.lastKnownBalance('w3');
+      expect(third!.tokens.single.decimals, 3);
       active.walletId = 'w2';
       c.activateWallet('w2');
       expect(
         c.tokens.single.name,
-        isNull,
+        'Wallet two',
       ); // Before any hydrate/network await.
       expect(c.recentTxs.single['tx_id'], 'shared-tx');
       expect(c.statusLabel(online: true), contains('known addresses only'));

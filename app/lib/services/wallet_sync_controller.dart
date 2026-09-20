@@ -65,9 +65,6 @@ abstract class WalletSyncGateway {
   Future<void> saveCachedState(Map<String, dynamic> snapshot);
   void probeNetwork();
 
-  /// Learns names and decimals for tokens seen in activity, best effort.
-
-
   /// Whether the user has left the stealth scan on.
   bool get stealthScanEnabled;
 
@@ -946,38 +943,6 @@ class WalletSyncController extends ChangeNotifier {
         })
         .catchError((_) {})
         .whenComplete(() => _nameResolution = null);
-  }
-
-  /// Strips resolved metadata back out of the published holdings, keeping
-  /// the holdings themselves. `_applyResolved` copies names, evidence and
-  /// classification into `tokens`/`stealthTokens`, so clearing the service
-  /// caches alone would leave a wiped collectible still named and still
-  /// classified on screen.
-  void stripResolvedMetadata() {
-    List<TokenBalance> bare(List<TokenBalance> current) => [
-      for (final t in current)
-        TokenBalance(
-          id: t.id,
-          amount: t.amount,
-          stealthAmount: t.stealthAmount,
-          // Scale, not issuer identity. Dropping it here would display and
-          // price 5 base units of a two-decimal token as 5 rather than 0.05.
-          decimals: t.decimals,
-        ),
-    ];
-    tokens = bare(tokens);
-    stealthTokens = bare(stealthTokens);
-    // Retained views and warm public snapshots carry their own copies, so
-    // switching back to a wallet would restore the names the wipe removed —
-    // without any lookup, which makes it look like nothing was cleared.
-    // Dropping them costs a resync, not data.
-    _remembered.clear();
-    _publicWarm.clear();
-    // A public refresh already holding named tokens would otherwise resume
-    // after the wipe, pass its own validity check, and write them straight
-    // back to disk and memory. The descriptor epoch does not reach it.
-    _publicGeneration++;
-    notifyListeners();
   }
 
   /// Folds resolved descriptors into the holdings already on screen. Without

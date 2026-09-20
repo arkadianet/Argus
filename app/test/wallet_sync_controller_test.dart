@@ -628,7 +628,7 @@ void main() {
       gw.resolvedNames.clear();
     });
 
-    test('a wipe strips names from holdings already on screen', () async {
+    test('retaining a wallet preserves names already on screen', () async {
       gw.balances = {
         'addr0': {
           'balance_nano_erg': 100,
@@ -642,11 +642,11 @@ void main() {
       await c.pendingNameResolution;
       expect(c.tokens.single.name, 'Resolved', reason: 'control');
 
-      c.stripResolvedMetadata();
+      c.deactivate();
+      c.activateWallet('w1');
 
-      expect(c.tokens.single.name, isNull,
-          reason: 'clearing collectible data must not leave the name on '
-              'screen, since displayMetadata falls back to the holding');
+      expect(c.tokens.single.name, 'Resolved',
+          reason: 'the retained balance view keeps its metadata');
       expect(c.tokens.single.amount, 5, reason: 'the holding itself stays');
       gw.resolvedNames.clear();
     });

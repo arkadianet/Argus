@@ -815,13 +815,8 @@ class WalletService with WidgetsBindingObserver {
     _wipe = done.future;
     try {
       clearSessionMetadata();
-      // Descriptors already copied into the published holdings have to go
-      // too, or a wiped collectible keeps its name and classification.
-      walletSyncController.stripResolvedMetadata();
-      // The persisted balance snapshots carry their own copy of the names;
-      // strip those rather than deleting the snapshots, which would also
-      // take balances, history and discovered addresses.
-      await WalletDatabaseService.stripSnapshotMetadata().catchError((_) {});
+      // Balance snapshots and published holdings remain intact. This clears
+      // lookup caches, not the wallet's last known view of its holdings.
       _tokenMeta.clear();
       _legacyTokenMeta.clear();
       _descriptorCache.clear();
@@ -1507,7 +1502,7 @@ class WalletService with WidgetsBindingObserver {
           // registers are missing. Keep what came back — a name beats an id
           // — but leave the token eligible so a later pass can complete it
           // rather than caching a register-less descriptor forever.
-              final meta = cachedTokenMeta(id);
+          final meta = cachedTokenMeta(id);
           if (meta != null) resolvedNow[id] = meta;
         } catch (e) {
           if (!owns()) return const {};

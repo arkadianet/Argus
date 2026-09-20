@@ -211,8 +211,10 @@ void main() {
       servedBy: 'https://b.example',
       stillCurrent: () => true,
     );
-    expect(api.asked, [_id('ab'), _id('ab')],
-        reason: 'a miss belongs to the provider that produced it');
+    expect(api.asked, [
+      _id('ab'),
+      _id('ab'),
+    ], reason: 'a miss belongs to the provider that produced it');
     expect(svc.cachedTokenMeta(_id('ab'))?.name, 'Name ab');
   });
 
@@ -434,8 +436,7 @@ void main() {
     expect(other, isEmpty);
   });
 
-  test('an unfinished lookup is not suppressed on the next refresh',
-      () async {
+  test('an unfinished lookup is not suppressed on the next refresh', () async {
     // Ownership is lost while the request is in flight. The id must not be
     // remembered as a miss: nothing was learned about it.
     final svc = await unlocked('w10');
@@ -459,8 +460,9 @@ void main() {
       servedBy: networkController.activeUrl!,
       stillCurrent: () => true,
     );
-    expect(api.asked, [_id('ab')],
-        reason: 'an interrupted pass must not permanently skip the token');
+    expect(api.asked, [
+      _id('ab'),
+    ], reason: 'an interrupted pass must not permanently skip the token');
     expect(svc.cachedTokenMeta(_id('ab'))?.name, 'Name ab');
   });
 
@@ -593,8 +595,9 @@ void main() {
       servedBy: 'https://b.example',
       stillCurrent: () => true,
     );
-    expect(api.asked, [_id('ab')],
-        reason: "A's verdict must not enter B's miss cache");
+    expect(api.asked, [
+      _id('ab'),
+    ], reason: "A's verdict must not enter B's miss cache");
   });
 
   test('switching wallets writes what the old one had resolved', () async {
@@ -937,23 +940,37 @@ void main() {
         reason: "a deleted wallet's descriptors must not outlive it");
   });
 
-  test('clearing collectible data strips names already published', () async {
-    // Goes through clearCollectibleData rather than calling the strip
-    // directly, so removing that call from the wipe fails here.
+  test('clearing collectible caches preserves published holdings', () async {
     final svc = await unlocked('wS');
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wS',
+      servedBy: _node,
+      stillCurrent: () => true,
+    );
+    expect(svc.cachedTokenMeta(_id('ab')), isNotNull);
+    expect(await TokenDescriptorStore.load('wS'), isNotEmpty);
     walletSyncController.tokens = [
       TokenBalance(id: _id('ab'), amount: 5, name: 'Published', decimals: 2),
     ];
     addTearDown(walletSyncController.reset);
 
     await svc.clearCollectibleData();
+    expect(svc.cachedTokenMeta(_id('ab')), isNull);
+    expect(await TokenDescriptorStore.load('wS'), isEmpty);
 
-    expect(walletSyncController.tokens.single.decimals, 2,
-        reason: 'the scale must survive the wipe, or 5 base units of a '
-            'two-decimal token display and price as 5 rather than 0.05');
-    expect(walletSyncController.tokens.single.name, isNull,
-        reason: 'displayMetadata falls back to the holding, so a wiped name '
-            'would stay on screen');
+    expect(
+      walletSyncController.tokens.single.decimals,
+      2,
+      reason:
+          'the scale must survive the wipe, or 5 base units of a '
+          'two-decimal token display and price as 5 rather than 0.05',
+    );
+    expect(
+      walletSyncController.tokens.single.name,
+      'Published',
+      reason: 'clearing lookup caches leaves the last known holdings intact',
+    );
     expect(walletSyncController.tokens.single.amount, 5);
   });
 
@@ -1000,53 +1017,47 @@ void main() {
         reason: 'its own deletion must still invalidate the write');
   });
 
-  test('a snapshot refresh cannot blank a scale it already knew', () async {
-    // A public refresh of an inactive wallet resolves metadata against the
-    // ACTIVE wallet's cache, so its rows arrive bare. Writing those over a
-    // snapshot that knew the scale would price the holding 100x.
-    await WalletDatabaseService.savePublicSnapshot('wM', {
-      'wallet_id': 'wM',
-      'balance_nano_erg': 10,
+  test('snapshot writes replace metadata without merging or mutating input', () async {
+    final t = TokenBalance(id: _id('ab'), amount: 5, name: 'Target', decimals: 3);
+    final snapshot = {
+      'wallet_id': 'target',
       'tokens': [
-        {'id': _id('ab'), 'amount': 5, 'name': 'Known', 'decimals': 2},
+        {
+          'id': t.id,
+          'amount': t.amount,
+          'name': t.name,
+          'decimals': t.decimals,
+        },
       ],
-    }, () => true);
-
-    await WalletDatabaseService.savePublicSnapshot('wM', {
-      'wallet_id': 'wM',
-      'balance_nano_erg': 11,
-      'tokens': [
-        {'id': _id('ab'), 'amount': 5, 'decimals': 0},
-      ],
-    }, () => true);
-
-    final after = await WalletDatabaseService.loadCachedState(
-      expectedWalletId: 'wM',
+    };
+    await WalletDatabaseService.savePublicSnapshot(
+      'target',
+      snapshot,
+      () => true,
     );
-    expect(after!['balance_nano_erg'], 11, reason: 'the refresh still lands');
-    expect((after['tokens'] as List).single['decimals'], 2,
-        reason: 'but it must not blank a scale the snapshot already knew');
-    expect((after['tokens'] as List).single['name'], 'Known');
-
-    // The other direction: a row that DOES carry metadata is authoritative,
-    // including a resolved scale of zero, which most NFTs have.
-    await WalletDatabaseService.savePublicSnapshot('wM', {
-      'wallet_id': 'wM',
-      'balance_nano_erg': 12,
+    // The new snapshot is authoritative, including unnamed zero-decimal rows.
+    final replacement = {
+      'wallet_id': 'target',
       'tokens': [
-        {'id': _id('ab'), 'amount': 5, 'name': 'Corrected', 'decimals': 0},
+        {'id': t.id, 'amount': 6, 'decimals': 0},
       ],
-    }, () => true);
-    final corrected = await WalletDatabaseService.loadCachedState(
-      expectedWalletId: 'wM',
+    };
+    await WalletDatabaseService.savePublicSnapshot(
+      'target',
+      replacement,
+      () => true,
     );
-    expect((corrected!['tokens'] as List).single['decimals'], 0,
-        reason: 'a resolved zero must be able to replace a stale scale, or '
-            'the 100x error can never be corrected');
-    expect((corrected['tokens'] as List).single['name'], 'Corrected');
+    expect(
+      await WalletDatabaseService.loadCachedState(expectedWalletId: 'target'),
+      replacement,
+    );
+    expect(snapshot['tokens'], [
+      {'id': t.id, 'amount': 5, 'name': 'Target', 'decimals': 3},
+    ]);
   });
 
-  test('a refresh invalidated during the merge does not land', () async {
+
+  test('an invalidated public snapshot does not land', () async {
     await WalletDatabaseService.savePublicSnapshot('wN', {
       'wallet_id': 'wN',
       'balance_nano_erg': 1,
@@ -1055,110 +1066,122 @@ void main() {
       ],
     }, () => true);
 
-    // Invalid by the time the merge's await completes.
-    var checks = 0;
     await WalletDatabaseService.savePublicSnapshot('wN', {
       'wallet_id': 'wN',
       'balance_nano_erg': 999,
       'tokens': [
         {'id': _id('ab'), 'amount': 5},
       ],
-    }, () => checks++ == 0);
+    }, () => false);
 
     final after = await WalletDatabaseService.loadCachedState(
       expectedWalletId: 'wN',
     );
-    expect(after!['balance_nano_erg'], 1,
-        reason: 'a write whose validity lapsed during the merge must not '
-            'overwrite newer state');
+    expect(
+      after!['balance_nano_erg'],
+      1,
+      reason:
+          'a write whose validity lapsed must not '
+          'overwrite newer state',
+    );
   });
 
-  test('a wipe does not leave names in retained or persisted snapshots',
-      () async {
-    final svc = await unlocked('wV');
-    walletSyncController.tokens = [
-      TokenBalance(id: _id('ab'), amount: 5, name: 'Published'),
-    ];
-    addTearDown(walletSyncController.reset);
-    // A retained view of this wallet, as a switch away would leave behind.
-    walletSyncController.deactivate();
-    // A real snapshot: balances and history alongside the token names.
-    await WalletDatabaseService.savePublicSnapshot('wV', {
-      'wallet_id': 'wV',
-      'balance_nano_erg': 4200,
-      'used_addresses': ['addr0', 'addr1'],
-      'tokens': [
-        {'id': _id('ab'), 'amount': 5, 'name': 'Published', 'decimals': 2},
-      ],
-    }, () => true);
+  test(
+    'a cache wipe preserves retained and persisted balance snapshots',
+    () async {
+      final svc = await unlocked('wV');
+      walletSyncController.tokens = [
+        TokenBalance(id: _id('ab'), amount: 5, name: 'Published'),
+      ];
+      addTearDown(walletSyncController.reset);
+      // A retained view of this wallet, as a switch away would leave behind.
+      walletSyncController.deactivate();
+      // A real snapshot: balances and history alongside the token names.
+      await WalletDatabaseService.savePublicSnapshot('wV', {
+        'wallet_id': 'wV',
+        'balance_nano_erg': 4200,
+        'used_addresses': ['addr0', 'addr1'],
+        'tokens': [
+          {'id': _id('ab'), 'amount': 5, 'name': 'Published', 'decimals': 2},
+        ],
+      }, () => true);
 
-    await svc.clearCollectibleData();
+      await svc.clearCollectibleData();
 
-    // Switching back must not restore the names without a lookup.
-    walletSyncController.activateWallet('wV');
-    expect(
-      walletSyncController.tokens.where((t) => t.name != null),
-      isEmpty,
-      reason: 'a retained view would otherwise put the wiped names back',
-    );
+      // Switching back retains the last known view without a lookup.
+      walletSyncController.activateWallet('wV');
+      expect(
+        walletSyncController.tokens.where((t) => t.name != null),
+        hasLength(1),
+        reason: 'retained holdings are independent of the lookup cache',
+      );
 
-    final after = await WalletDatabaseService.loadCachedState(
-      expectedWalletId: 'wV',
-    );
-    expect(after, isNotNull,
-        reason: 'the snapshot itself must survive: it holds balances, '
-            'history and discovered addresses, none of which are '
-            'collectible data');
-    expect(after!['balance_nano_erg'], 4200);
-    expect(after['used_addresses'], ['addr0', 'addr1']);
-    expect((after['tokens'] as List).single['name'], isNull,
-        reason: 'but its copy of the names must be gone');
-    expect((after['tokens'] as List).single['amount'], 5,
-        reason: 'while the holding itself stays');
-    expect((after['tokens'] as List).single['decimals'], 2,
-        reason: 'decimals are the scale of the amount, not issuer identity: '
-            'dropping them crashes wallet activation and values a '
-            'two-decimal holding at a hundred times its worth');
-
-    // The consumer that would crash: a stripped snapshot installed as a
-    // warm public snapshot, then activated. Activation is a no-op for a
-    // wallet that is already current, so switch away first.
-    // The controller's live gateway reads the GLOBAL service, so the local
-    // instance being unlocked is not enough — rememberPublic would refuse
-    // for that reason and activation would never reach _applyPublic.
-    await walletService.restoreWallet('mock', walletId: 'other');
-    addTearDown(() => walletService.lock('other'));
-    walletSyncController.deactivate();
-    expect(
-      walletSyncController.rememberPublic(
-        'wV',
+      final after = await WalletDatabaseService.loadCachedState(
+        expectedWalletId: 'wV',
+      );
+      expect(
         after,
-        walletSyncController.publicGeneration,
-      ),
-      isTrue,
-      reason: 'the snapshot has to actually be installed for this to test '
-          'anything',
-    );
-    expect(() => walletSyncController.activateWallet('wV'), returnsNormally);
-    expect(walletSyncController.tokens.single.decimals, 2,
-        reason: 'the activated holding must keep its scale');
-    expect(walletSyncController.tokens.single.amount, 5);
+        isNotNull,
+        reason:
+            'the snapshot itself must survive: it holds balances, '
+            'history and discovered addresses, none of which are '
+            'collectible data',
+      );
+      expect(after!['balance_nano_erg'], 4200);
+      expect(after['used_addresses'], ['addr0', 'addr1']);
+      expect((after['tokens'] as List).single['name'], 'Published');
+      expect(
+        (after['tokens'] as List).single['amount'],
+        5,
+        reason: 'while the holding itself stays',
+      );
+      expect(
+        (after['tokens'] as List).single['decimals'],
+        2,
+        reason: 'preserving the scale keeps the holding correctly valued',
+      );
 
-    final known = await WalletDatabaseService.lastKnownBalance('wV');
-    expect(known!.tokens.single.decimals, 2,
-        reason: 'a lost scale prices this holding at a hundred times its '
-            'worth, which a non-null check cannot see');
-    expect(known.tokens.single.amount, 5);
-  });
+      // Restore the preserved snapshot as a
+      // warm public snapshot, then activated. Activation is a no-op for a
+      // wallet that is already current, so switch away first.
+      // The controller's live gateway reads the GLOBAL service, so the local
+      // instance being unlocked is not enough — rememberPublic would refuse
+      // for that reason and activation would never reach _applyPublic.
+      await walletService.restoreWallet('mock', walletId: 'other');
+      addTearDown(() => walletService.lock('other'));
+      walletSyncController.deactivate();
+      expect(
+        walletSyncController.rememberPublic(
+          'wV',
+          after,
+          walletSyncController.publicGeneration,
+        ),
+        isTrue,
+        reason:
+            'the snapshot has to actually be installed for this to test '
+            'anything',
+      );
+      expect(() => walletSyncController.activateWallet('wV'), returnsNormally);
+      expect(
+        walletSyncController.tokens.single.decimals,
+        2,
+        reason: 'the activated holding must keep its scale',
+      );
+      expect(walletSyncController.tokens.single.amount, 5);
 
-  test('a public refresh in flight cannot write names back after a wipe',
-      () async {
-    // The refresh captured its generation before the wipe; on resuming, its
-    // own validity check would otherwise still pass and repopulate the warm
-    // snapshot with the names that were just cleared.
-    // The GLOBAL service: `walletSyncController`'s live gateway reads it,
-    // so a fresh instance would leave it locked and rememberPublic would
-    // refuse for that reason instead of the one under test.
+      final known = await WalletDatabaseService.lastKnownBalance('wV');
+      expect(
+        known!.tokens.single.decimals,
+        2,
+        reason:
+            'a lost scale prices this holding at a hundred times its '
+            'worth, which a non-null check cannot see',
+      );
+      expect(known.tokens.single.amount, 5);
+    },
+  );
+
+  test('a cache wipe does not invalidate a public balance refresh', () async {
     await walletService.restoreWallet('mock', walletId: 'wG');
     addTearDown(() => walletService.lock('wG'));
     final generation = walletSyncController.publicGeneration;
@@ -1181,8 +1204,8 @@ void main() {
 
     expect(
       walletSyncController.rememberPublic('other-wallet', snapshot, generation),
-      isFalse,
-      reason: 'work begun before the wipe must not land after it',
+      isTrue,
+      reason: 'clearing lookup caches does not cancel balance refreshes',
     );
   });
 

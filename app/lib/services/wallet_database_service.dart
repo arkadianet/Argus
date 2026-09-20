@@ -169,16 +169,6 @@ class WalletDatabaseService {
   ) async {
     final prefs = await SharedPreferences.getInstance();
     if (!valid() || snapshot['wallet_id'] != walletId) return;
-    // A public refresh resolves token metadata against the ACTIVE wallet's
-    // cache, so refreshing an inactive wallet yields bare, zero-decimal
-    // holdings. Writing those over a snapshot that already knew the scale
-    // would value five base units of a two-decimal token as five. Keep what
-    // the stored snapshot already knows where the incoming row is bare.
-    await _mergeKnownTokenMetadata(walletId, snapshot);
-    // The merge suspends, so re-check: a lock, wallet switch or wipe landing
-    // in it would otherwise let this write overwrite newer state or restore
-    // names that were just cleared.
-    if (!valid()) return;
     await prefs.setString(
       _snapshotKey(walletId),
       _obfuscate(jsonEncode(snapshot), walletId),
@@ -218,83 +208,6 @@ class WalletDatabaseService {
   static Future<void> clearWallet(String walletId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_snapshotKey(walletId));
-  }
-
-  static Future<void> _mergeKnownTokenMetadata(
-    String walletId,
-    Map<String, dynamic> incoming,
-  ) async {
-    final tokens = incoming['tokens'];
-    if (tokens is! List || tokens.isEmpty) return;
-    final existing = await loadCachedState(expectedWalletId: walletId);
-    final known = <String, Map>{
-      for (final t in (existing?['tokens'] as List? ?? const []))
-        if (t is Map && t['id'] != null) t['id'].toString(): t,
-    };
-    if (known.isEmpty) return;
-    for (final t in tokens) {
-      if (t is! Map) continue;
-      final prior = known[t['id']?.toString()];
-      if (prior == null) continue;
-      // Whole-row, not field-by-field. A row carrying any metadata is
-      // authoritative and replaces what was stored — including a resolved
-      // scale of zero, which most NFTs legitimately have and which a
-      // "zero means missing" rule could never write down. Only a row with
-      // no metadata at all is the refresh-resolved-against-the-wrong-cache
-      // case this exists for.
-      final carriesMetadata = t['name'] != null ||
-          t['iconUrl'] != null ||
-          t['emissionAmount'] != null ||
-          (t['decimals'] is num && (t['decimals'] as num) != 0);
-      if (carriesMetadata) continue;
-      for (final field in const [
-        'name',
-        'decimals',
-        'iconUrl',
-        'emissionAmount',
-      ]) {
-        if (prior[field] != null) t[field] = prior[field];
-      }
-    }
-  }
-
-  /// Removes token metadata from every wallet's cached snapshot, keeping
-  /// the snapshot itself.
-  ///
-  /// The snapshots carry their own copy of names, decimals and icons, so
-  /// leaving them would restore wiped metadata at the next offline start.
-  /// Deleting them outright would take balances, history, discovered
-  /// addresses and last-known stealth totals with it — state that has
-  /// nothing to do with collectibles, and which a locked wallet cannot
-  /// rebuild until it is unlocked and rediscovered.
-  static Future<void> stripSnapshotMetadata() async {
-    const prefix = 'argus_local_wallet_db_v3_';
-    final prefs = await SharedPreferences.getInstance();
-    for (final key in prefs.getKeys().toList()) {
-      if (!key.startsWith(prefix)) continue;
-      final walletId = key.substring(prefix.length);
-      final map = await loadCachedState(expectedWalletId: walletId);
-      if (map == null) continue;
-      final tokens = map['tokens'];
-      if (tokens is! List) continue;
-      map['tokens'] = [
-        for (final t in tokens)
-          if (t is Map)
-            {
-              'id': t['id'],
-              'amount': t['amount'],
-              // Kept deliberately. Decimals are the scale of the amount, not
-              // issuer identity: dropping them makes `_applyPublic` pass null
-              // into a non-nullable parameter, and makes `lastKnownBalance`
-              // read raw units as whole tokens — valuing a two-decimal
-              // holding at a hundred times its worth.
-              'decimals': t['decimals'] ?? 0,
-            }
-          else
-            t,
-      ];
-      await prefs.setString(key, _obfuscate(jsonEncode(map), walletId));
-    }
   }
 
   /// Record or update a tracked DeFi singleton contract lineage.

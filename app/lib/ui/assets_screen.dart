@@ -39,7 +39,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
       title: const Text('Assets'),
       actions: [
         IconButton(
-          tooltip: 'Clear collectible data',
+          tooltip: 'Clear collectible cache (saved holdings keep their metadata)',
           icon: const Icon(Icons.delete_outline),
           onPressed: walletService.clearCollectibleData,
         ),

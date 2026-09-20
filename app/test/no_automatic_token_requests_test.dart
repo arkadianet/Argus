@@ -2,6 +2,8 @@ import 'dart:io';
 import 'package:argus_wallet/services/preview/preview_service.dart';
 import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
+import 'package:argus_wallet/services/stealth_service.dart';
+import 'wallet_sync_controller_test.dart' show FakeGateway;
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:argus_wallet/ui/assets_screen.dart';
 import 'package:argus_wallet/ui/widgets/asset_tile.dart';
@@ -49,6 +51,27 @@ class DenyTokenApi extends RustLibApi {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+// Exercise the real controller-to-service boundary, including candidate
+// selection, instead of duplicating its privacy logic in the test.
+class ResolvingGateway extends FakeGateway {
+  ResolvingGateway(this.service);
+  final WalletService service;
+  @override
+  String? get activeWalletId => service.activeWalletId;
+  @override
+  Future<Map<String, TokenBalance>> resolveTokenNames(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
+  }) => service.prefetchTokenMeta(
+    ids,
+    walletId: walletId,
+    servedBy: servedBy,
+    stillCurrent: stillCurrent,
+  );
 }
 
 class DenyHttp extends HttpOverrides {
@@ -105,40 +128,51 @@ void main() {
     await service.restoreWallet('mock', walletId: 'stealth-w');
     addTearDown(() => service.lock('stealth-w'));
 
-    // What the sync controller computes: ordinary ids, minus anything held
-    // only in stealth boxes. A token held in BOTH is ordinary enough to
-    // resolve, because its id is already in the node's own boxes.
-    final holdings = [
-      TokenBalance(id: ordinary, amount: 5),
-      TokenBalance(id: both, amount: 5, stealthAmount: 2),
-    ];
-    final stealthHoldings = [
-      TokenBalance(id: stealthOnly, amount: 3, stealthAmount: 3),
-      TokenBalance(id: both, amount: 2, stealthAmount: 2),
-    ];
-    // Mirrors the controller: stealth-only is the set difference, because
-    // stealthTokens always has amount == stealthAmount by construction.
-    final ordinaryIds = {for (final t in holdings) t.id};
-    final stealthOnlyIds = {
-      for (final t in stealthHoldings)
-        if (!ordinaryIds.contains(t.id)) t.id,
-    };
-    final resolvable = ordinaryIds.toList()
-      ..removeWhere(stealthOnlyIds.contains);
-
-    await service.prefetchTokenMeta(
-      resolvable,
-      walletId: 'stealth-w',
-      servedBy: 'https://served.example',
-      stillCurrent: () => true,
+    final gateway = ResolvingGateway(service)
+      ..balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': ordinary, 'amount': 5},
+            {'id': both, 'amount': 5},
+          ],
+        },
+      }
+      ..stealthResult = StealthScanResult(
+        scanned: 2,
+        ownedCount: 2,
+        totalNanoErg: 10,
+        tokens: [
+          StealthToken(id: stealthOnly, amount: BigInt.from(3)),
+          StealthToken(id: both, amount: BigInt.from(2)),
+        ],
+        boxIds: const ['private-box'],
+      );
+    final controller = WalletSyncController(gateway);
+    addTearDown(controller.dispose);
+    await controller.hydrateAfterUnlock();
+    await controller.refresh(discover: false);
+    await controller.pendingNameResolution;
+    expect(controller.stealthTokens.map((t) => t.id), contains(stealthOnly));
+    expect(
+      api.descriptorCalls.every(
+        (c) => c.isNode && c.provider == 'https://served.example',
+      ),
+      isTrue,
     );
 
     final asked = api.descriptorCalls.map((c) => c.tokenId).toSet();
     expect(asked, contains(ordinary), reason: 'positive control');
-    expect(asked, isNot(contains(stealthOnly)),
-        reason: 'a stealth-only id is not derivable from public addresses');
-    expect(asked, contains(both),
-        reason: 'held in ordinary boxes too, so the node already has this id');
+    expect(
+      asked,
+      isNot(contains(stealthOnly)),
+      reason: 'a stealth-only id is not derivable from public addresses',
+    );
+    expect(
+      asked,
+      contains(both),
+      reason: 'held in ordinary boxes too, so the node already has this id',
+    );
   });
 
   test('a stale wallet generation resolves nothing', () async {

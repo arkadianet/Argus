@@ -59,10 +59,10 @@ node just returned, in the same exchange.
 | Stealth-only holdings | **never** | not derivable from public addresses; the node has never seen them |
 | The explorer | **never** | a token-specific lookup exceeds the generic stealth-template listing sync already makes |
 
-`hydrateTokens` takes `allowNetwork`, defaulting to **false**. The ordinary
-path (`wallet_sync_controller.dart`) passes true; the stealth path takes the
-default. Both previously shared one method with no scope — making it
-network-active without splitting would have disclosed stealth-only ids.
+`hydrateTokens` is cache-only. The sync controller submits only ids from
+successful ordinary balance responses to `prefetchTokenMeta`, with the serving
+node returned by that same batch read. Retained holdings, transaction history,
+and stealth-only holdings never supply candidates.
 
 ## Storage
 
@@ -90,22 +90,32 @@ again. The active wallet's descriptors overlay it.
 - One capability failure (no `extraIndex`; `load_from` is HTTPS-only, so a
   user-configured `http://ip:port` node can never answer) stops the whole
   wallet from retrying that node. A new provider gets a fresh chance.
-- Authorisation and provider are re-read per item: sync is long, and the node
-  or wallet can change under it.
+- Wallet ownership and the originating sync generation are checked across
+  asynchronous work. The serving endpoint stays tied to the balance response.
 
-## Known gap: which node actually served
+## Serving node
 
-`ErgoNodeClient::connect(preferred)` walks `node_urls(preferred)` — preferred
-first, **then public fallbacks** — so sync can silently land on a node other
-than `networkController.activeUrl`. Resolution addresses `activeUrl` and
-`token_descriptor::load_from` does not fail over, so a lookup never goes
-somewhere unexpected; but in a failover it may go to a node that did not serve
-these balances.
+The batch response includes `served_by`, obtained from the connected node
+client. Resolution uses that endpoint without explorer fallback. If the read
+cannot identify its serving node, it makes no automatic metadata requests.
 
-The client knows which url it used (`ErgoNodeClient.url`) and does not report
-it to Dart. The correct fix is to return the serving endpoint with the sync
-result and resolve against that. It needs a Rust change plus regenerated FFI
-bindings and is **not done here**.
+## Clearing the cache
+
+“Clear collectible cache” deletes the legacy metadata table, every wallet's
+descriptor table, pending descriptor writes, and in-memory descriptor caches.
+Descriptor epochs still discard lookup results that cross the clear.
+
+It leaves published holdings, retained views and persisted balance snapshots
+alone. Names and classifications already copied into those holdings can remain
+visible or reappear on activation until a later sync replaces them. This is a
+cache reset, not an erasure of token metadata from wallet history. The control's
+tooltip states that saved holdings keep their metadata.
+
+Snapshot writes are authoritative replacements, with no metadata merge and no
+clear-triggered public-refresh invalidation. Background public refreshes update
+amounts while retaining metadata from that same wallet's existing snapshot.
+This preserves known decimal scales after a cache clear and avoids cross-wallet
+metadata substitution without consulting a second storage layer.
 
 ## Still open
 
