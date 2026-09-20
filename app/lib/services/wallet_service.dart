@@ -791,6 +791,14 @@ class WalletService with WidgetsBindingObserver {
       try { RustLib.instance.api.crateApiCancelTokenMetadata(); } catch (_) {}
     }
     _descriptorEpoch++;
+    // An in-flight table load belongs to the epoch just discarded and will
+    // refuse to apply itself. Drop the memoization with it, or the next
+    // reader awaits that same aborted future and silently gets no table —
+    // leaving persisted names unavailable until the wallet is reactivated,
+    // and letting a later pass overwrite the stored table with only the
+    // subset it happened to fetch.
+    _tableLoadedFor = null;
+    _tableLoad = null;
     _descriptors.clear();
     metadataChanges.value++;
   }

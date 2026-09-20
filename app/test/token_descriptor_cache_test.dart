@@ -857,6 +857,30 @@ void main() {
         reason: "another wallet's passes must not move this one's cursor");
   });
 
+  test('a session clear during a table load does not strand the table',
+      () async {
+    // Non-wipe: backgrounding, locking and wallet switches all bump the
+    // epoch. The aborted load must not stay memoized, or the persisted
+    // names are unavailable for the rest of the session.
+    final first = await unlocked('wR');
+    await first.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wR',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+
+    final second = WalletService();
+    await second.restoreWallet('mock', walletId: 'wR');
+    final aborted = second.ensureWalletTable();
+    second.clearSessionMetadata();
+    await aborted;
+
+    await second.ensureWalletTable();
+    expect(second.cachedTokenMeta(_id('ab'))?.name, 'Name ab',
+        reason: 'a later reader must get a fresh load, not the aborted one');
+  });
+
   test('a wipe during a table load does not restore it in memory', () async {
     // Populate a table, then start a fresh service that loads it and wipe
     // while the load is in flight.
@@ -891,19 +915,24 @@ void main() {
       stillCurrent: () => true,
     );
 
+    // B already holds a COMPLETE copy, persisted before the switch, so the
+    // assertion cannot be satisfied by B simply fetching it afresh.
+    final other = WalletService();
     api.incomplete = false;
-    _wallet = 'wJ';
-    await svc.restoreWallet('mock', walletId: 'wJ');
-    await svc.prefetchTokenMeta(
+    await other.restoreWallet('mock', walletId: 'wJ');
+    await other.prefetchTokenMeta(
       [_id('ab')],
       walletId: 'wJ',
       servedBy: networkController.activeUrl!,
       stillCurrent: () => true,
     );
-    expect(svc.cachedTokenMeta(_id('ab'))?.name, 'Name ab');
+    expect((await TokenDescriptorStore.load('wJ'))[_id('ab')]?.incomplete,
+        isFalse);
+
+    _wallet = 'wJ';
+    await svc.restoreWallet('mock', walletId: 'wJ');
     api.asked.clear();
 
-    // Back to a wallet whose copy is complete: nothing to ask about.
     await svc.prefetchTokenMeta(
       [_id('ab')],
       walletId: 'wJ',
