@@ -6,10 +6,11 @@ use std::collections::HashMap;
 
 pub const MIN_CHANGE_VALUE: u64 = 1_000_000;
 
-/// Distinct tokens one change box is packed with. The node's
-/// `ErgoBox.MaxTokens` is 255, but the binding limit is the 4 KB box size;
-/// sigma-rust derives `ErgoBox::MAX_TOKENS_COUNT = 122` from it and refuses
-/// to build a candidate above that, so change is laid out under 122.
+/// Distinct tokens one change box is packed with, at most. The node's
+/// `ErgoBox.MaxTokens` is 255, but sigma-rust refuses to build a candidate
+/// above `ErgoBox::MAX_TOKENS_COUNT = 122`, and the binding limit is bytes:
+/// `MAX_BOX_BYTES` is reached well before 122 tokens with real amounts, so
+/// `token_outputs` packs by size and this count is only the ceiling.
 pub const MAX_TOKENS_PER_BOX: usize = 122;
 
 /// Selection passes a builder makes before giving up: each extra change box
@@ -17,18 +18,87 @@ pub const MAX_TOKENS_PER_BOX: usize = 122;
 /// comes from can carry tokens of their own.
 pub const MAX_SELECTION_PASSES: usize = 4;
 
-/// How many boxes `token_count` distinct tokens need under the cap; at
-/// least one, so a token-free change box still counts.
-pub fn boxes_for_tokens(token_count: usize) -> usize {
-    token_count.div_ceil(MAX_TOKENS_PER_BOX).max(1)
+/// The node's box-size limit (`MaxBoxSize`), counting the whole serialized
+/// box: candidate plus transaction id and index.
+pub const MAX_BOX_BYTES: usize = 4096;
+
+/// The node's dust rule (`minValuePerByte`): a box must carry at least this
+/// many nanoERG per serialized byte.
+pub const NANO_PER_BYTE: u64 = 360;
+
+/// Headroom kept under `MAX_BOX_BYTES`, since `box_bytes` is an estimate.
+const BOX_BYTES_MARGIN: usize = 64;
+
+fn vlq_len(mut n: u64) -> usize {
+    let mut bytes = 1;
+    while n >= 0x80 {
+        n >>= 7;
+        bytes += 1;
+    }
+    bytes
 }
 
-/// Lay `tokens` out over as many boxes as the cap requires, all paying to
-/// `ergo_tree` and worth `value` in total. Every extra box gets
-/// `min_box_value`; the first box carries the remainder, so callers that
-/// lead with a specific asset (a swap output) keep it in the first box.
-/// Fails when `value` cannot fund the extra boxes plus a first box worth
-/// `min_box_value`.
+/// Upper bound on the serialized size of a box paying to `ergo_tree_hex`
+/// with these tokens and registers: the value at its widest, the tree, the
+/// creation height, each token's 32-byte id and VLQ amount, the registers,
+/// and the 34 bytes of transaction id and index the node counts too.
+pub fn box_bytes(
+    ergo_tree_hex: &str,
+    tokens: &[Eip12Asset],
+    registers: &HashMap<String, String>,
+) -> usize {
+    let value = 9;
+    let tree = ergo_tree_hex.len() / 2;
+    let height = 5;
+    let token_bytes: usize = tokens
+        .iter()
+        .map(|t| 32 + vlq_len(t.amount.parse::<u64>().unwrap_or(u64::MAX)))
+        .sum();
+    let register_bytes: usize = registers.values().map(|v| v.len() / 2).sum();
+    let id_and_index = 34;
+    value
+        + tree
+        + height
+        + vlq_len(tokens.len() as u64)
+        + token_bytes
+        + 1
+        + register_bytes
+        + id_and_index
+}
+
+/// The least ERG a box of `bytes` may carry: the per-byte floor, or
+/// `min_box_value` when that is higher.
+pub fn min_value_for(bytes: usize, min_box_value: u64) -> u64 {
+    (bytes as u64 * NANO_PER_BYTE).max(min_box_value)
+}
+
+/// Split `tokens` into boxes that each stay under the token cap and, with
+/// headroom, under the byte limit. Always returns at least one (possibly
+/// empty) chunk.
+fn pack_tokens(ergo_tree: &str, tokens: Vec<Eip12Asset>) -> Vec<Vec<Eip12Asset>> {
+    let empty = HashMap::new();
+    let limit = MAX_BOX_BYTES - BOX_BYTES_MARGIN;
+    let mut chunks: Vec<Vec<Eip12Asset>> = vec![vec![]];
+    for token in tokens {
+        let current = chunks.last_mut().expect("one chunk always exists");
+        current.push(token);
+        let too_many = current.len() > MAX_TOKENS_PER_BOX;
+        let too_big = box_bytes(ergo_tree, current, &empty) > limit;
+        if (too_many || too_big) && current.len() > 1 {
+            let token = current.pop().expect("just pushed");
+            chunks.push(vec![token]);
+        }
+    }
+    chunks
+}
+
+/// Lay `tokens` out over as many boxes as the node's limits require, all
+/// paying to `ergo_tree` and worth `value` in total. A box stops taking
+/// tokens at the count cap or the byte limit, whichever comes first. Every
+/// extra box gets the least it may carry for its size (`min_value_for`);
+/// the first box carries the remainder, so callers that lead with a
+/// specific asset (a swap output) keep it in the first box. Fails when
+/// `value` cannot fund the extra boxes plus the first box's own floor.
 pub fn token_outputs(
     value: u64,
     ergo_tree: &str,
@@ -36,35 +106,38 @@ pub fn token_outputs(
     current_height: i32,
     min_box_value: u64,
 ) -> Result<Vec<Eip12Output>, ChangeOutputError> {
-    let boxes = boxes_for_tokens(tokens.len());
-    let extras = (boxes - 1) as u64;
-    let reserved = extras * min_box_value;
-    let first_min = if tokens.is_empty() { 0 } else { min_box_value };
+    let empty = HashMap::new();
+    let mut chunks = pack_tokens(ergo_tree, tokens);
+    let first = chunks.remove(0);
+    let extras: Vec<(Vec<Eip12Asset>, u64)> = chunks
+        .into_iter()
+        .map(|chunk| {
+            let floor = min_value_for(box_bytes(ergo_tree, &chunk, &empty), min_box_value);
+            (chunk, floor)
+        })
+        .collect();
+    let reserved: u64 = extras.iter().map(|(_, floor)| floor).sum();
+    let first_min = if first.is_empty() {
+        0
+    } else {
+        min_value_for(box_bytes(ergo_tree, &first, &empty), min_box_value)
+    };
     if value < reserved + first_min {
         return Err(ChangeOutputError {
             min_value: reserved + first_min,
             available: value,
         });
     }
-    let mut chunks = if tokens.is_empty() {
-        vec![vec![]]
-    } else {
-        tokens
-            .chunks(MAX_TOKENS_PER_BOX)
-            .map(|c| c.to_vec())
-            .collect::<Vec<_>>()
-    };
-    let first = chunks.remove(0);
-    let mut outputs = Vec::with_capacity(boxes);
+    let mut outputs = Vec::with_capacity(extras.len() + 1);
     outputs.push(Eip12Output::change(
         (value - reserved) as i64,
         ergo_tree,
         first,
         current_height,
     ));
-    for chunk in chunks {
+    for (chunk, floor) in extras {
         outputs.push(Eip12Output::change(
-            min_box_value as i64,
+            floor as i64,
             ergo_tree,
             chunk,
             current_height,
@@ -430,6 +503,22 @@ mod tests {
         (0..n).map(|i| (format!("tok{i:04}"), 1)).collect()
     }
 
+    fn big_tokens(n: usize, amount: u64) -> Vec<Eip12Asset> {
+        (0..n)
+            .map(|i| Eip12Asset::new(format!("tok{i:04}"), amount as i64))
+            .collect()
+    }
+
+    fn all_ids(outputs: &[Eip12Output]) -> Vec<&str> {
+        let mut ids: Vec<&str> = outputs
+            .iter()
+            .flat_map(|o| o.assets.iter().map(|a| a.token_id.as_str()))
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     #[test]
     fn change_with_more_tokens_than_a_box_holds_is_split_across_boxes() {
         let toks = many_tokens(150);
@@ -451,24 +540,66 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outputs.len(), 2);
-        assert_eq!(outputs[0].assets.len(), MAX_TOKENS_PER_BOX);
-        assert_eq!(outputs[1].assets.len(), 150 - MAX_TOKENS_PER_BOX);
-        assert_eq!(
-            outputs[0].value,
-            (4_000_000_000 - MIN_CHANGE_VALUE).to_string()
+        assert!(outputs.iter().all(|o| o.assets.len() <= MAX_TOKENS_PER_BOX));
+        let extra_min = min_value_for(
+            box_bytes("0008cd...", &outputs[1].assets, &HashMap::new()),
+            MIN_CHANGE_VALUE,
         );
-        assert_eq!(outputs[1].value, MIN_CHANGE_VALUE.to_string());
-        let mut ids: Vec<&str> = outputs
-            .iter()
-            .flat_map(|o| o.assets.iter().map(|a| a.token_id.as_str()))
-            .collect();
-        ids.sort();
-        ids.dedup();
-        assert_eq!(ids.len(), 150, "every token lands in exactly one box");
+        assert_eq!(outputs[1].value, extra_min.to_string());
+        assert_eq!(outputs[0].value, (4_000_000_000 - extra_min).to_string());
+        assert_eq!(
+            all_ids(&outputs).len(),
+            150,
+            "every token lands in exactly one box"
+        );
     }
 
     #[test]
-    fn split_change_needs_a_min_box_value_per_extra_box() {
+    fn a_change_box_never_exceeds_the_protocol_byte_limit() {
+        // 122 tokens fit the count cap; with real amounts they do not fit
+        // 4096 bytes. The node rejects the box, not the count.
+        let outs = token_outputs(
+            10_000_000_000,
+            "0008cd...",
+            big_tokens(122, 1_000_000_000),
+            1000,
+            MIN_CHANGE_VALUE,
+        )
+        .unwrap();
+        assert!(outs.len() >= 2, "{} box(es)", outs.len());
+        for o in &outs {
+            let bytes = box_bytes("0008cd...", &o.assets, &o.additional_registers);
+            assert!(bytes <= MAX_BOX_BYTES, "{bytes} bytes");
+            let value: u64 = o.value.parse().unwrap();
+            assert!(
+                value >= bytes as u64 * NANO_PER_BYTE,
+                "{value} nano for {bytes} bytes"
+            );
+        }
+        assert_eq!(all_ids(&outs).len(), 122);
+    }
+
+    #[test]
+    fn extra_boxes_carry_the_per_byte_floor_not_the_flat_minimum() {
+        let outs = token_outputs(
+            10_000_000_000,
+            "0008cd...",
+            big_tokens(200, 1_000_000_000),
+            1000,
+            MIN_CHANGE_VALUE,
+        )
+        .unwrap();
+        let extra = &outs[1];
+        let bytes = box_bytes("0008cd...", &extra.assets, &extra.additional_registers);
+        assert!(
+            bytes as u64 * NANO_PER_BYTE > MIN_CHANGE_VALUE,
+            "the test box must be over the flat floor"
+        );
+        assert_eq!(extra.value, (bytes as u64 * NANO_PER_BYTE).to_string());
+    }
+
+    #[test]
+    fn split_change_needs_the_floor_of_every_box() {
         let toks = many_tokens(123);
         let assets: Vec<(&str, u64)> = toks.iter().map(|(id, a)| (id.as_str(), *a)).collect();
         let selected = SelectedInputs {
@@ -486,27 +617,64 @@ mod tests {
             MIN_CHANGE_VALUE,
         )
         .unwrap_err();
-        assert_eq!(err.min_value, 2 * MIN_CHANGE_VALUE);
+        let ok = token_outputs(
+            10_000_000,
+            "0008cd...",
+            many_tokens(123)
+                .into_iter()
+                .map(|(id, a)| Eip12Asset::new(id, a as i64))
+                .collect(),
+            1000,
+            MIN_CHANGE_VALUE,
+        )
+        .unwrap();
+        let floors: u64 = ok
+            .iter()
+            .map(|o| {
+                min_value_for(
+                    box_bytes("0008cd...", &o.assets, &o.additional_registers),
+                    MIN_CHANGE_VALUE,
+                )
+            })
+            .sum();
+        assert_eq!(err.min_value, floors);
         assert_eq!(err.available, 1_500_000);
     }
 
     #[test]
     fn token_outputs_puts_the_remainder_in_the_first_box() {
-        let assets: Vec<Eip12Asset> = many_tokens(245)
-            .into_iter()
-            .map(|(id, a)| Eip12Asset::new(id, a as i64))
-            .collect();
-        let outs = token_outputs(10_000_000, "0008cd...", assets, 1000, MIN_CHANGE_VALUE).unwrap();
-        assert_eq!(outs.len(), 3);
-        assert_eq!(outs[0].value, "8000000");
-        assert_eq!(outs[1].value, "1000000");
-        assert_eq!(outs[2].value, "1000000");
-        assert_eq!(outs[2].assets.len(), 1);
-        assert!(
+        let outs = token_outputs(
+            10_000_000,
+            "0008cd...",
+            big_tokens(245, 1),
+            1000,
+            MIN_CHANGE_VALUE,
+        )
+        .unwrap();
+        assert!(outs.len() >= 3);
+        let extras: u64 = outs[1..]
+            .iter()
+            .map(|o| o.value.parse::<u64>().unwrap())
+            .sum();
+        assert_eq!(outs[0].value, (10_000_000 - extras).to_string());
+        assert!(outs.last().unwrap().assets.len() < outs[0].assets.len());
+        assert_eq!(all_ids(&outs).len(), 245);
+        assert_eq!(
             token_outputs(2_999_999, "0008cd...", vec![], 1000, MIN_CHANGE_VALUE)
                 .unwrap()
-                .len()
-                == 1
+                .len(),
+            1
         );
+    }
+
+    #[test]
+    fn box_bytes_counts_the_id_and_index_and_the_vlq_amounts() {
+        let one = vec![Eip12Asset::new("t", 1)];
+        let big = vec![Eip12Asset::new("t", i64::MAX)];
+        let tree = "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+        let base = box_bytes(tree, &[], &HashMap::new());
+        assert_eq!(box_bytes(tree, &one, &HashMap::new()), base + 33);
+        assert_eq!(box_bytes(tree, &big, &HashMap::new()), base + 32 + 9);
+        assert!(base > 36 + 34, "tree, tx id and index are all counted");
     }
 }

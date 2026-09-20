@@ -527,15 +527,15 @@ mod tests {
             &fee,
         )
         .unwrap_err();
-        assert!(
-            matches!(
-                err,
-                SendError::TokenChangeInsufficientErg {
-                    have: 1_500_000,
-                    min: 2_000_000
-                }
-            ),
-            "{err}"
-        );
+        match err {
+            SendError::TokenChangeInsufficientErg { have, min } => {
+                assert_eq!(have, 1_500_000);
+                assert!(
+                    min > 2 * MIN_BOX_VALUE,
+                    "two boxes, each at its per-byte floor: {min}"
+                );
+            }
+            other => panic!("{other}"),
+        }
     }
 }
