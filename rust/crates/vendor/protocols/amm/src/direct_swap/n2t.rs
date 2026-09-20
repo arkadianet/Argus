@@ -199,34 +199,23 @@ pub(crate) fn build_n2t_direct_swap(
         SwapInput::Token { token_id, amount } => Some((token_id.as_str(), *amount)),
     };
 
-    // Change tokens are laid out under the per-box cap, and every extra box
-    // costs ERG the selection has not budgeted for; reselect with it.
-    let mut extra_erg: u64 = 0;
-    let mut passes = 0;
-    let (selected, user_side) = loop {
-        let selected =
-            select_inputs_for_spend(user_utxos, user_erg_needed + extra_erg, token_requirement)
-                .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
-        let change_erg = selected.total_erg - user_erg_needed;
-        let change_tokens = collect_change_tokens(&selected.boxes, spent_token);
-        match super::user_outputs(
-            user_swap_output.clone(),
-            recipient_ergo_tree.is_none(),
-            user_ergo_tree,
-            change_erg,
-            change_tokens,
-            current_height,
-        ) {
-            Ok(outputs) => break (selected, outputs),
-            Err(short) => {
-                passes += 1;
-                if passes >= super::MAX_SELECTION_PASSES {
-                    return Err(AmmError::TxBuildError(short.to_string()));
-                }
-                extra_erg += short.min_value - short.available;
-            }
-        }
-    };
+    let (selected, user_side) = ergo_tx::select_and_lay_out(
+        user_erg_needed,
+        |budget| select_inputs_for_spend(user_utxos, budget, token_requirement),
+        |boxes| collect_change_tokens(boxes, spent_token),
+        |change_erg, change_tokens| {
+            ergo_tx::user_outputs(
+                user_swap_output.clone(),
+                recipient_ergo_tree.is_none(),
+                user_ergo_tree,
+                change_erg,
+                change_tokens,
+                current_height,
+                MIN_BOX_VALUE,
+            )
+        },
+    )
+    .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
 
     let mut outputs = vec![new_pool_output];
     outputs.extend(user_side);

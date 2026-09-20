@@ -15,7 +15,7 @@ mod tests;
 use serde::{Deserialize, Serialize};
 
 use crate::state::{AmmError, AmmPool, PoolType, SwapInput};
-use ergo_tx::{ChangeOutputError, Eip12Asset, Eip12InputBox, Eip12Output, Eip12UnsignedTx};
+use ergo_tx::{Eip12InputBox, Eip12UnsignedTx};
 
 use self::n2t::build_n2t_direct_swap;
 use self::t2t::build_t2t_direct_swap;
@@ -132,58 +132,4 @@ fn resolve_miner_fee(custom: Option<u64>) -> Result<u64, AmmError> {
         ))),
         Some(v) => Ok(v),
     }
-}
-
-/// Selection passes a builder makes before giving up: each extra change box
-/// costs ERG the previous pass did not budget for, and the boxes that ERG
-/// comes from can carry tokens of their own.
-const MAX_SELECTION_PASSES: usize = 4;
-
-/// The user's side of the swap: the swap output, merged with the change when
-/// it pays to the user's own tree, followed by the change laid out under the
-/// per-box token cap. The error carries how much ERG the layout is short.
-fn user_outputs(
-    swap_output: Eip12Output,
-    merge_change: bool,
-    user_ergo_tree: &str,
-    change_erg: u64,
-    change_tokens: Vec<Eip12Asset>,
-    current_height: i32,
-) -> Result<Vec<Eip12Output>, ChangeOutputError> {
-    if merge_change {
-        let base: u64 = swap_output.value.parse().unwrap_or(0);
-        let mut tokens = swap_output.assets;
-        tokens.extend(change_tokens);
-        return ergo_tx::token_outputs(
-            base + change_erg,
-            user_ergo_tree,
-            tokens,
-            current_height,
-            MIN_BOX_VALUE,
-        );
-    }
-
-    let min_change = crate::tx_builder::MIN_CHANGE_VALUE;
-    // Change ERG too small for its own box and no tokens to carry: fold it
-    // into the swap output rather than lose it to the miner.
-    let swap_output = if change_erg > 0 && change_erg < min_change && change_tokens.is_empty() {
-        let base: u64 = swap_output.value.parse().unwrap_or(0);
-        Eip12Output {
-            value: (base + change_erg).to_string(),
-            ..swap_output
-        }
-    } else {
-        swap_output
-    };
-    let mut outputs = vec![swap_output];
-    if change_erg >= min_change || !change_tokens.is_empty() {
-        outputs.extend(ergo_tx::token_outputs(
-            change_erg,
-            user_ergo_tree,
-            change_tokens,
-            current_height,
-            min_change,
-        )?);
-    }
-    Ok(outputs)
 }

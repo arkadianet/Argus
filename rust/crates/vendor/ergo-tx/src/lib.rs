@@ -51,8 +51,9 @@ pub use multi_send::{
 pub use send::{build_send_tx, build_send_tx_with_fee, SendBuildResult, SendError, SendSummary};
 pub use sigma::*;
 pub use tx_helpers::{
-    append_change_output, boxes_for_tokens, select_inputs_for_multi_spend, select_inputs_for_spend,
-    token_outputs, ChangeOutputError, MAX_TOKENS_PER_BOX,
+    append_change_output, boxes_for_tokens, merge_assets, select_and_lay_out,
+    select_inputs_for_multi_spend, select_inputs_for_spend, token_outputs, user_outputs,
+    ChangeOutputError, LayoutError, MAX_SELECTION_PASSES, MAX_TOKENS_PER_BOX,
 };
 // Re-export nanoERG constant used by fee helpers
 pub use citadel_core::constants::DEV_FEE_NANO;

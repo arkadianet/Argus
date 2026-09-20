@@ -2,13 +2,20 @@
 
 use crate::box_selector::{self, BoxSelectorError, SelectedInputs};
 use crate::eip12::{Eip12Asset, Eip12InputBox, Eip12Output};
+use std::collections::HashMap;
 
 pub const MIN_CHANGE_VALUE: u64 = 1_000_000;
 
-/// Distinct tokens one box can carry: `ErgoBox::MAX_TOKENS_COUNT` in
-/// sigma-rust and `ErgoBox.MaxTokens` on the node. A candidate above it
-/// fails to build, so every change box is laid out under this cap.
+/// Distinct tokens one change box is packed with. The node's
+/// `ErgoBox.MaxTokens` is 255, but the binding limit is the 4 KB box size;
+/// sigma-rust derives `ErgoBox::MAX_TOKENS_COUNT = 122` from it and refuses
+/// to build a candidate above that, so change is laid out under 122.
 pub const MAX_TOKENS_PER_BOX: usize = 122;
+
+/// Selection passes a builder makes before giving up: each extra change box
+/// costs ERG the previous pass did not budget for, and the boxes that ERG
+/// comes from can carry tokens of their own.
+pub const MAX_SELECTION_PASSES: usize = 4;
 
 /// How many boxes `token_count` distinct tokens need under the cap; at
 /// least one, so a token-free change box still counts.
@@ -110,13 +117,132 @@ pub fn append_change_output(
         outputs.extend(token_outputs(
             change_erg,
             user_ergo_tree,
-            change_tokens,
+            merge_assets(change_tokens),
             current_height,
             min_change_value,
         )?);
     }
 
     Ok(())
+}
+
+/// Sum amounts that share a token id, keeping first-appearance order, so a
+/// box never lists the same token twice.
+pub fn merge_assets(assets: Vec<Eip12Asset>) -> Vec<Eip12Asset> {
+    let mut order: Vec<String> = Vec::new();
+    let mut totals: HashMap<String, u64> = HashMap::new();
+    for a in assets {
+        let amount = a.amount.parse::<u64>().unwrap_or(0);
+        match totals.get_mut(&a.token_id) {
+            Some(t) => *t = t.saturating_add(amount),
+            None => {
+                order.push(a.token_id.clone());
+                totals.insert(a.token_id, amount);
+            }
+        }
+    }
+    order
+        .into_iter()
+        .map(|id| {
+            let amount = totals[&id];
+            Eip12Asset::new(id, amount as i64)
+        })
+        .collect()
+}
+
+/// The user's side of a protocol action: `base` is the action's output to
+/// the user (a swap output, LP tokens, a redeemed amount). With
+/// `merge_change` the change rides in the same box, laid out under the
+/// token cap with `base`'s assets first; otherwise `base` is followed by
+/// the change boxes, and change ERG too small for a box of its own is
+/// folded into `base` rather than lost to the miner.
+pub fn user_outputs(
+    base: Eip12Output,
+    merge_change: bool,
+    user_ergo_tree: &str,
+    change_erg: u64,
+    change_tokens: Vec<Eip12Asset>,
+    current_height: i32,
+    min_box_value: u64,
+) -> Result<Vec<Eip12Output>, ChangeOutputError> {
+    let base_value: u64 = base.value.parse().unwrap_or(0);
+    if merge_change {
+        let mut tokens = base.assets;
+        tokens.extend(change_tokens);
+        return token_outputs(
+            base_value + change_erg,
+            user_ergo_tree,
+            merge_assets(tokens),
+            current_height,
+            min_box_value,
+        );
+    }
+
+    let base = if change_erg > 0 && change_erg < min_box_value && change_tokens.is_empty() {
+        Eip12Output {
+            value: (base_value + change_erg).to_string(),
+            ..base
+        }
+    } else {
+        base
+    };
+    let mut outputs = vec![base];
+    if change_erg >= min_box_value || !change_tokens.is_empty() {
+        outputs.extend(token_outputs(
+            change_erg,
+            user_ergo_tree,
+            merge_assets(change_tokens),
+            current_height,
+            min_box_value,
+        )?);
+    }
+    Ok(outputs)
+}
+
+/// Why `select_and_lay_out` gave up.
+#[derive(Debug, Clone)]
+pub enum LayoutError {
+    Selection(BoxSelectorError),
+    Change(ChangeOutputError),
+}
+
+impl std::fmt::Display for LayoutError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LayoutError::Selection(e) => write!(f, "{e}"),
+            LayoutError::Change(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for LayoutError {}
+
+/// Select inputs for `erg_needed`, collect their change tokens, and lay the
+/// user's outputs out under the token cap. Every extra change box costs ERG
+/// the selection did not budget for, so when the layout is short the
+/// selection is rerun with the shortfall added, up to `MAX_SELECTION_PASSES`.
+/// `lay_out` receives the change ERG left over after `erg_needed` and the
+/// change tokens.
+pub fn select_and_lay_out(
+    erg_needed: u64,
+    select: impl Fn(u64) -> Result<SelectedInputs, BoxSelectorError>,
+    change_tokens: impl Fn(&[Eip12InputBox]) -> Vec<Eip12Asset>,
+    lay_out: impl Fn(u64, Vec<Eip12Asset>) -> Result<Vec<Eip12Output>, ChangeOutputError>,
+) -> Result<(SelectedInputs, Vec<Eip12Output>), LayoutError> {
+    let mut extra_erg: u64 = 0;
+    for pass in 1..=MAX_SELECTION_PASSES {
+        let selected = select(erg_needed + extra_erg).map_err(LayoutError::Selection)?;
+        let change_erg = selected.total_erg.saturating_sub(erg_needed);
+        let tokens = change_tokens(&selected.boxes);
+        match lay_out(change_erg, tokens) {
+            Ok(outputs) => return Ok((selected, outputs)),
+            Err(short) if pass < MAX_SELECTION_PASSES => {
+                extra_erg += short.min_value.saturating_sub(short.available);
+            }
+            Err(short) => return Err(LayoutError::Change(short)),
+        }
+    }
+    unreachable!("the loop returns on its last pass")
 }
 
 pub fn select_inputs_for_spend(
@@ -153,7 +279,6 @@ pub use crate::dev_fee::{append_dev_fee_output, dev_fee_budget, DevFeeConfig, De
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
 
     fn mock_utxo(box_id: &str, value: u64, assets: Vec<(&str, u64)>) -> Eip12InputBox {
         Eip12InputBox {

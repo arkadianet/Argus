@@ -962,3 +962,40 @@ fn t2t_swap_output_plus_change_over_the_token_cap_is_split() {
         );
     });
 }
+
+#[test]
+fn n2t_swap_output_merges_with_the_same_token_already_held() {
+    no_citadel_fee(|| {
+        let pool = test_n2t_pool();
+        let pool_box = test_pool_box();
+        // The wallet already holds 500 of the output token, and nothing is
+        // forwarded as "held": the change and the swap output are the same
+        // token and must land as one asset entry.
+        let user_utxo = user_utxo_with_tokens(
+            "holds_y",
+            10_000_000_000,
+            vec![(pool.token_y.token_id.clone(), 500)],
+        );
+        let output =
+            calculator::calculate_output(100_000_000_000, 1_000_000, 1_000_000_000, 997, 1000);
+        let build = build_direct_swap_eip12(
+            &pool_box,
+            &pool,
+            &SwapInput::Erg {
+                amount: 1_000_000_000,
+            },
+            calculator::apply_slippage(output, 0.5),
+            &[user_utxo],
+            USER_TREE,
+            1_000_000,
+            None,
+            None,
+        )
+        .unwrap();
+        let user = &build.unsigned_tx.outputs[1];
+        assert_eq!(user.ergo_tree, USER_TREE);
+        assert_eq!(user.assets.len(), 1, "{:?}", user.assets);
+        assert_eq!(user.assets[0].token_id, pool.token_y.token_id);
+        assert_eq!(user.assets[0].amount, (output + 500).to_string());
+    });
+}

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use citadel_core::{constants, TxError};
 use ergo_tx::{
-    append_change_output, append_dev_fee_output, collect_change_tokens, resolved_dev_fee_config,
+    append_dev_fee_output, collect_change_tokens, resolved_dev_fee_config,
     select_inputs_for_spend, Eip12Asset, Eip12InputBox, Eip12Output, Eip12UnsignedTx,
 };
 
@@ -145,31 +145,62 @@ pub fn build_swap_dexy_tx(
     let fee_cfg = resolved_dev_fee_config();
     let citadel_fee = fee_cfg.budget();
 
-    let selected = match request.direction {
-        SwapDirection::ErgToDexy => {
-            let needed = request.input_amount
+    // The user's swap output; change is laid out after it under the token
+    // cap, and the selection is rerun when extra change boxes need ERG.
+    let (erg_needed, token_requirement, user_swap_output) = match request.direction {
+        SwapDirection::ErgToDexy => (
+            request.input_amount
                 + constants::TX_FEE_NANO
                 + citadel_fee
-                + constants::MIN_BOX_VALUE_NANO;
-            select_inputs_for_spend(
-                &request.user_inputs,
-                needed as u64,
-                if held > 0 {
-                    Some((state.dexy_token_id.as_str(), held as u64))
-                } else {
-                    None
-                },
+                + constants::MIN_BOX_VALUE_NANO,
+            // An empty requirement returns every input token as change, so
+            // the held amount must be declared spent or it would be duplicated.
+            if held > 0 {
+                Some((state.dexy_token_id.as_str(), held as u64))
+            } else {
+                None
+            },
+            Eip12Output::change(
+                constants::MIN_BOX_VALUE_NANO,
+                output_ergo_tree,
+                vec![Eip12Asset::new(&state.dexy_token_id, output_amount + held)],
+                request.current_height,
+            ),
+        ),
+        SwapDirection::DexyToErg => (
+            constants::TX_FEE_NANO + citadel_fee + constants::MIN_BOX_VALUE_NANO,
+            Some((state.dexy_token_id.as_str(), request.input_amount as u64)),
+            Eip12Output::change(
+                constants::MIN_BOX_VALUE_NANO + output_amount,
+                output_ergo_tree,
+                vec![],
+                request.current_height,
+            ),
+        ),
+    };
+    // As before: an ERG-funded swap keeps its change in the user's own box
+    // after the swap output; a Dexy-funded one merges the ERG it receives
+    // with the change in the output box.
+    let (merge_change, change_tree) = match request.direction {
+        SwapDirection::ErgToDexy => (false, request.user_ergo_tree.as_str()),
+        SwapDirection::DexyToErg => (true, output_ergo_tree),
+    };
+    let (selected, user_side) = ergo_tx::select_and_lay_out(
+        erg_needed as u64,
+        |budget| select_inputs_for_spend(&request.user_inputs, budget, token_requirement),
+        |boxes| collect_change_tokens(boxes, token_requirement),
+        |change_erg, change_tokens| {
+            ergo_tx::user_outputs(
+                user_swap_output.clone(),
+                merge_change,
+                change_tree,
+                change_erg,
+                change_tokens,
+                request.current_height,
+                constants::MIN_BOX_VALUE_NANO as u64,
             )
-        }
-        SwapDirection::DexyToErg => {
-            let min_erg = constants::TX_FEE_NANO + citadel_fee + constants::MIN_BOX_VALUE_NANO;
-            select_inputs_for_spend(
-                &request.user_inputs,
-                min_erg as u64,
-                Some((&state.dexy_token_id, request.input_amount as u64)),
-            )
-        }
-    }
+        },
+    )
     .map_err(|e| TxError::BuildFailed {
         message: e.to_string(),
     })?;
@@ -186,60 +217,7 @@ pub fn build_swap_dexy_tx(
     );
 
     let mut outputs = vec![lp_output, build_swap_nft_output(ctx, request.current_height)];
-
-    match request.direction {
-        SwapDirection::ErgToDexy => {
-            let user_output_erg = constants::MIN_BOX_VALUE_NANO;
-            outputs.push(Eip12Output::change(
-                user_output_erg,
-                output_ergo_tree,
-                vec![Eip12Asset::new(
-                    &state.dexy_token_id,
-                    output_amount + held,
-                )],
-                request.current_height,
-            ));
-
-            let erg_used =
-                (request.input_amount + constants::TX_FEE_NANO + citadel_fee + user_output_erg)
-                    as u64;
-            // An empty `spent_tokens` returns every input token as change, so
-            // the held amount must be declared spent or it would be duplicated.
-            let spent: Vec<(&str, u64)> = if held > 0 {
-                vec![(state.dexy_token_id.as_str(), held as u64)]
-            } else {
-                vec![]
-            };
-            append_change_output(
-                &mut outputs,
-                &selected,
-                erg_used,
-                &spent,
-                &request.user_ergo_tree,
-                request.current_height,
-                constants::MIN_BOX_VALUE_NANO as u64,
-            )
-            .map_err(|e| TxError::BuildFailed {
-                message: e.to_string(),
-            })?;
-        }
-        SwapDirection::DexyToErg => {
-            let user_output_erg = selected.total_erg as i64 + output_amount
-                - constants::TX_FEE_NANO
-                - citadel_fee;
-            let remaining_assets = collect_change_tokens(
-                &selected.boxes,
-                Some((&state.dexy_token_id, request.input_amount as u64)),
-            );
-
-            outputs.push(Eip12Output::change(
-                user_output_erg,
-                output_ergo_tree,
-                remaining_assets,
-                request.current_height,
-            ));
-        }
-    }
+    outputs.extend(user_side);
 
     append_dev_fee_output(&mut outputs, &fee_cfg, request.current_height).map_err(|e| {
         TxError::BuildFailed {
