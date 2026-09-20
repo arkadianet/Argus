@@ -169,6 +169,12 @@ class WalletDatabaseService {
   ) async {
     final prefs = await SharedPreferences.getInstance();
     if (!valid() || snapshot['wallet_id'] != walletId) return;
+    // A public refresh resolves token metadata against the ACTIVE wallet's
+    // cache, so refreshing an inactive wallet yields bare, zero-decimal
+    // holdings. Writing those over a snapshot that already knew the scale
+    // would value five base units of a two-decimal token as five. Keep what
+    // the stored snapshot already knows where the incoming row is bare.
+    await _mergeKnownTokenMetadata(walletId, snapshot);
     await prefs.setString(
       _snapshotKey(walletId),
       _obfuscate(jsonEncode(snapshot), walletId),
@@ -208,6 +214,36 @@ class WalletDatabaseService {
   static Future<void> clearWallet(String walletId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_snapshotKey(walletId));
+  }
+
+  static Future<void> _mergeKnownTokenMetadata(
+    String walletId,
+    Map<String, dynamic> incoming,
+  ) async {
+    final tokens = incoming['tokens'];
+    if (tokens is! List || tokens.isEmpty) return;
+    final existing = await loadCachedState(expectedWalletId: walletId);
+    final known = <String, Map>{
+      for (final t in (existing?['tokens'] as List? ?? const []))
+        if (t is Map && t['id'] != null) t['id'].toString(): t,
+    };
+    if (known.isEmpty) return;
+    for (final t in tokens) {
+      if (t is! Map) continue;
+      final prior = known[t['id']?.toString()];
+      if (prior == null) continue;
+      for (final field in const [
+        'name',
+        'decimals',
+        'iconUrl',
+        'emissionAmount',
+      ]) {
+        final incomingValue = t[field];
+        final bare = incomingValue == null ||
+            (field == 'decimals' && incomingValue == 0);
+        if (bare && prior[field] != null) t[field] = prior[field];
+      }
+    }
   }
 
   /// Removes token metadata from every wallet's cached snapshot, keeping

@@ -118,8 +118,18 @@ class FakeGateway implements WalletSyncGateway, WalletSyncBatchGateway {
   final Map<String, String> resolvedNames = {};
   final List<String> resolveProviders = [];
 
+  /// Overrides what hydration returns, so a test can supply a fully
+  /// resolved descriptor.
+  Map<String, TokenBalance>? hydrated;
+
   @override
   Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
+    if (hydrated != null) {
+      return [
+        for (final t in (raw as List))
+          if (hydrated!.containsKey(t['id'])) hydrated![t['id']]!,
+      ];
+    }
     final items = raw is List ? raw : const [];
     return [
       for (final t in items)
@@ -680,6 +690,41 @@ void main() {
       expect(gw.resolveProviders, ['https://fellback.example'],
           reason: 'not the configured node, the one that served');
       gw.servedByUrl = 'https://served.example';
+    });
+
+    test('a stealth-only collectible keeps its classification', () async {
+      // Rebuilding stealth holdings field-by-field dropped the evidence that
+      // makes isCollectible true, and stealth-only ids are never resolved,
+      // so nothing downstream could put it back.
+      gw.hydrated = {
+        'nft1': TokenBalance(
+          id: 'nft1',
+          amount: 0,
+          name: 'Art',
+          decimals: 0,
+          emissionAmount: 1,
+          supplyEvidence: SupplyEvidence.originalEmission,
+          decimalsEvidence: DecimalsEvidence.valid,
+          declaredAssetKind: DeclaredAssetKind.picture,
+          metadataState: MetadataState.complete,
+        ),
+      };
+      gw.stealthResult = StealthScanResult(
+        scanned: 1,
+        ownedCount: 1,
+        totalNanoErg: 0,
+        tokens: [StealthToken(id: 'nft1', amount: BigInt.one)],
+        boxIds: const ['bx'],
+      );
+
+      await c.refresh(discover: false);
+
+      final held = c.stealthTokens.singleWhere((t) => t.id == 'nft1');
+      expect(held.isCollectible, isTrue,
+          reason: 'a resolved collectible held only in stealth must not drop '
+              'out of the Collectibles filter');
+      expect(held.stealthAmount, 1);
+      gw.hydrated = null;
     });
 
     test('an unreachable explorer leaves the balance unknown, not the sync',

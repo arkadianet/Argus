@@ -1170,15 +1170,21 @@ class WalletSyncController extends ChangeNotifier {
     final meta = {for (final t in hydrated) t.id: t};
     stealthTokens = [
       for (final t in result.tokens)
-        TokenBalance(
-          id: t.id,
-          amount: t.amount.toInt(),
-          name: meta[t.id]?.name,
-          decimals: meta[t.id]?.decimals ?? 0,
-          emissionAmount: meta[t.id]?.emissionAmount,
-          iconUrl: meta[t.id]?.iconUrl,
-          stealthAmount: t.amount.toInt(),
-        ),
+        // withHolding rather than a hand-copied subset: rebuilding by field
+        // dropped supplyEvidence, decimalsEvidence, declaredAssetKind,
+        // metadataState and provenance, so a resolved collectible held only
+        // in stealth boxes vanished from the Collectibles filter — and
+        // stealth-only ids are excluded from resolution, so nothing could
+        // repair it afterwards.
+        meta[t.id]?.withHolding(
+              t.amount.toInt(),
+              stealthAmount: t.amount.toInt(),
+            ) ??
+            TokenBalance(
+              id: t.id,
+              amount: t.amount.toInt(),
+              stealthAmount: t.amount.toInt(),
+            ),
     ];
     _stealthBoxIds = List.of(result.boxIds);
     stealthRows = stealthActivityRows(result.boxes);

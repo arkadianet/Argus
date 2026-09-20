@@ -1000,6 +1000,35 @@ void main() {
         reason: 'its own deletion must still invalidate the write');
   });
 
+  test('a snapshot refresh cannot blank a scale it already knew', () async {
+    // A public refresh of an inactive wallet resolves metadata against the
+    // ACTIVE wallet's cache, so its rows arrive bare. Writing those over a
+    // snapshot that knew the scale would price the holding 100x.
+    await WalletDatabaseService.savePublicSnapshot('wM', {
+      'wallet_id': 'wM',
+      'balance_nano_erg': 10,
+      'tokens': [
+        {'id': _id('ab'), 'amount': 5, 'name': 'Known', 'decimals': 2},
+      ],
+    }, () => true);
+
+    await WalletDatabaseService.savePublicSnapshot('wM', {
+      'wallet_id': 'wM',
+      'balance_nano_erg': 11,
+      'tokens': [
+        {'id': _id('ab'), 'amount': 5, 'decimals': 0},
+      ],
+    }, () => true);
+
+    final after = await WalletDatabaseService.loadCachedState(
+      expectedWalletId: 'wM',
+    );
+    expect(after!['balance_nano_erg'], 11, reason: 'the refresh still lands');
+    expect((after['tokens'] as List).single['decimals'], 2,
+        reason: 'but it must not blank a scale the snapshot already knew');
+    expect((after['tokens'] as List).single['name'], 'Known');
+  });
+
   test('a wipe does not leave names in retained or persisted snapshots',
       () async {
     final svc = await unlocked('wV');
@@ -1050,13 +1079,26 @@ void main() {
     // The consumer that would crash: a stripped snapshot installed as a
     // warm public snapshot, then activated. Activation is a no-op for a
     // wallet that is already current, so switch away first.
+    // The controller's live gateway reads the GLOBAL service, so the local
+    // instance being unlocked is not enough — rememberPublic would refuse
+    // for that reason and activation would never reach _applyPublic.
+    await walletService.restoreWallet('mock', walletId: 'other');
+    addTearDown(() => walletService.lock('other'));
     walletSyncController.deactivate();
-    walletSyncController.rememberPublic(
-      'wV',
-      after,
-      walletSyncController.publicGeneration,
+    expect(
+      walletSyncController.rememberPublic(
+        'wV',
+        after,
+        walletSyncController.publicGeneration,
+      ),
+      isTrue,
+      reason: 'the snapshot has to actually be installed for this to test '
+          'anything',
     );
     expect(() => walletSyncController.activateWallet('wV'), returnsNormally);
+    expect(walletSyncController.tokens.single.decimals, 2,
+        reason: 'the activated holding must keep its scale');
+    expect(walletSyncController.tokens.single.amount, 5);
 
     final known = await WalletDatabaseService.lastKnownBalance('wV');
     expect(known!.tokens.single.decimals, 2,
