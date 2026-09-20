@@ -881,6 +881,34 @@ void main() {
         reason: 'a later reader must get a fresh load, not the aborted one');
   });
 
+  test('a load started during a wipe restores nothing', () async {
+    // The other ordering: the load begins AFTER the wipe has cleared memory
+    // and bumped the epoch, but BEFORE it has deleted the stored tables. It
+    // would capture the new epoch, read the surviving table and put it all
+    // back, passing every epoch check on the way.
+    final first = await unlocked('wX');
+    await first.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wX',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+
+    final second = WalletService();
+    await second.restoreWallet('mock', walletId: 'wX');
+    await second.ensureWalletTable();
+    expect(second.cachedTokenMeta(_id('ab')), isNotNull, reason: 'control');
+
+    final wiping = second.clearCollectibleData();
+    // Started mid-wipe, not before it.
+    final reload = second.ensureWalletTable();
+    await Future.wait([wiping, reload]);
+
+    expect(second.cachedTokenMeta(_id('ab')), isNull,
+        reason: 'a load queued behind a wipe must find nothing to load');
+    expect(await TokenDescriptorStore.load('wX'), isEmpty);
+  });
+
   test('a wipe during a table load does not restore it in memory', () async {
     // Populate a table, then start a fresh service that loads it and wipe
     // while the load is in flight.

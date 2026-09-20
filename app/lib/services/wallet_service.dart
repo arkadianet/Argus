@@ -803,18 +803,36 @@ class WalletService with WidgetsBindingObserver {
     metadataChanges.value++;
   }
 
+  /// Non-null while a wipe is in progress. Table loads wait behind it:
+  /// clearing memory and bumping the epoch happens first, but the stored
+  /// tables are deleted several awaits later, and a load starting in that
+  /// window would capture the NEW epoch, read the not-yet-deleted table and
+  /// put it all back — passing every epoch check on the way.
+  Future<void>? _wipe;
+
   Future<void> clearCollectibleData() async {
-    clearSessionMetadata();
-    _tokenMeta.clear();
-    _legacyTokenMeta.clear();
-    _descriptorCache.clear();
-    _metadataMisses.clear();
-    // A queued write would otherwise recreate what this just cleared.
-    _pendingFlush.clear();
-    _tokenMetaDirty = false;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_tokenMetaKey);
-    await TokenDescriptorStore.clearAll();
+    final done = Completer<void>();
+    _wipe = done.future;
+    try {
+      clearSessionMetadata();
+      _tokenMeta.clear();
+      _legacyTokenMeta.clear();
+      _descriptorCache.clear();
+      _metadataMisses.clear();
+      // A queued write would otherwise recreate what this just cleared.
+      _pendingFlush.clear();
+      _tokenMetaDirty = false;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_tokenMetaKey);
+      await TokenDescriptorStore.clearAll();
+    } finally {
+      _wipe = null;
+      done.complete();
+      // Anything that queued behind the wipe reloads from storage that is
+      // now empty, so there is nothing left to restore.
+      _tableLoadedFor = null;
+      _tableLoad = null;
+    }
   }
 
   /// One explicit per-item request. New descriptors are memory-only, scoped
@@ -1038,7 +1056,9 @@ class WalletService with WidgetsBindingObserver {
     if (_tableLoadedFor == walletId && _tableLoad != null) return _tableLoad!;
     _tableLoadedFor = walletId;
     final epoch = _descriptorEpoch;
-    return _tableLoad = flushPendingDescriptors()
+    final barrier = _wipe ?? Future<void>.value();
+    return _tableLoad = barrier
+        .then((_) => flushPendingDescriptors())
         .then((_) => loadWalletTokenMeta(walletId, expectedEpoch: epoch))
         .catchError((_) {});
   }
