@@ -818,6 +818,8 @@ class WalletService with WidgetsBindingObserver {
       // Descriptors already copied into the published holdings have to go
       // too, or a wiped collectible keeps its name and classification.
       walletSyncController.stripResolvedMetadata();
+      // The persisted balance snapshot carries its own copy of the names.
+      await WalletDatabaseService.clearAllSnapshots().catchError((_) {});
       _tokenMeta.clear();
       _legacyTokenMeta.clear();
       _descriptorCache.clear();
@@ -2875,12 +2877,8 @@ class WalletService with WidgetsBindingObserver {
     _tokenMeta
       ..clear()
       ..addAll(_legacyTokenMeta);
-    // The table itself loads lazily, on the first path that needs it. An
-    // eager fire-and-forget load here left a platform-channel future pending
-    // outside any caller's control, which a widget test's pumpAndSettle
-    // waits on forever.
-    _tableLoadedFor = null;
-    _tableLoad = null;
+    // The table loads lazily, on the first path that needs it; the
+    // memoization was already dropped by clearSessionMetadata above.
     walletSyncController.activateWallet(walletId);
     currentWalletId.value = walletId;
     unlocked.value = true;

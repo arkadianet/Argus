@@ -898,19 +898,13 @@ class WalletSyncController extends ChangeNotifier {
     //
     // Stealth containment is structural, not a filter: candidates are the
     // ids the node itself just returned in `balances.tokens`, so a holding
-    // that exists only in stealth boxes cannot appear among them. The
-    // removeWhere below is therefore redundant and kept only as a cheap
-    // assertion of that invariant — if candidates are ever widened, it is
-    // the thing that keeps stealth ids out. A token held in BOTH stays
-    // resolvable: its id is already in the node's own boxes.
+    // that exists only in stealth boxes cannot be among them. A token held
+    // in BOTH stays resolvable — its id is already in the node's own boxes.
+    // Widening this set is what would need a filter; narrowing it here
+    // would only be decoration.
     final ordinaryIds = <String>{
       if (failed < addresses.length) for (final t in balances.tokens) t.id,
     };
-    final stealthOnly = {
-      for (final t in stealthTokens)
-        if (!ordinaryIds.contains(t.id)) t.id,
-    };
-    ordinaryIds.removeWhere(stealthOnly.contains);
     final servedBy = read == null ? null : await read.servedBy();
     if (!_current(generation, walletId)) return;
     if (ordinaryIds.isNotEmpty && servedBy != null && walletId != null) {
@@ -970,6 +964,12 @@ class WalletSyncController extends ChangeNotifier {
     ];
     tokens = bare(tokens);
     stealthTokens = bare(stealthTokens);
+    // Retained views and warm public snapshots carry their own copies, so
+    // switching back to a wallet would restore the names the wipe removed —
+    // without any lookup, which makes it look like nothing was cleared.
+    // Dropping them costs a resync, not data.
+    _remembered.clear();
+    _publicWarm.clear();
     notifyListeners();
   }
 

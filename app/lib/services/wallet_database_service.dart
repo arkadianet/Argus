@@ -210,6 +210,16 @@ class WalletDatabaseService {
     await prefs.remove(_snapshotKey(walletId));
   }
 
+  /// Every wallet's cached snapshot. Used when clearing collectible data:
+  /// the snapshots carry their own copy of token names, so leaving them
+  /// would restore the wiped metadata at the next offline start.
+  static Future<void> clearAllSnapshots() async {
+    final prefs = await SharedPreferences.getInstance();
+    for (final key in prefs.getKeys().toList()) {
+      if (key.startsWith('argus_local_wallet_db_v3_')) await prefs.remove(key);
+    }
+  }
+
   /// Record or update a tracked DeFi singleton contract lineage.
   static Future<void> recordLineage({
     required String singletonTokenId,

@@ -996,6 +996,32 @@ void main() {
         reason: 'its own deletion must still invalidate the write');
   });
 
+  test('a wipe does not leave names in retained or persisted snapshots',
+      () async {
+    final svc = await unlocked('wV');
+    walletSyncController.tokens = [
+      TokenBalance(id: _id('ab'), amount: 5, name: 'Published'),
+    ];
+    addTearDown(walletSyncController.reset);
+    // A retained view of this wallet, as a switch away would leave behind.
+    walletSyncController.deactivate();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('argus_local_wallet_db_v3_wV', 'snapshot-with-names');
+
+    await svc.clearCollectibleData();
+
+    // Switching back must not restore the names without a lookup.
+    walletSyncController.activateWallet('wV');
+    expect(
+      walletSyncController.tokens.where((t) => t.name != null),
+      isEmpty,
+      reason: 'a retained view would otherwise put the wiped names back',
+    );
+    expect(prefs.getString('argus_local_wallet_db_v3_wV'), isNull,
+        reason: 'and the persisted snapshot would restore them at the next '
+            'offline start');
+  });
+
   test('a load started during a wipe restores nothing', () async {
     // The other ordering: the load begins AFTER the wipe has cleared memory
     // and bumped the epoch, but BEFORE it has deleted the stored tables. It
