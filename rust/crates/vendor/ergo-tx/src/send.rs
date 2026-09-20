@@ -47,6 +47,9 @@ pub enum SendError {
 
     #[error("Citadel fee config error: {0}")]
     DevFee(String),
+
+    #[error("{0}")]
+    ChangeBox(String),
 }
 
 #[derive(Debug)]
@@ -223,9 +226,15 @@ pub fn build_send_tx_with_fee(
                 current_height,
                 MIN_BOX_VALUE as u64,
             )
-            .map_err(|e| SendError::TokenChangeInsufficientErg {
-                have: e.available as i64,
-                min: e.min_value as i64,
+            .map_err(|e| match e {
+                crate::ChangeOutputError::NotEnoughErg {
+                    min_value,
+                    available,
+                } => SendError::TokenChangeInsufficientErg {
+                    have: available as i64,
+                    min: min_value as i64,
+                },
+                other => SendError::ChangeBox(other.to_string()),
             })?,
         );
         change_value

@@ -108,6 +108,17 @@ pub fn token_outputs(
 ) -> Result<Vec<Eip12Output>, ChangeOutputError> {
     let empty = HashMap::new();
     let mut chunks = pack_tokens(ergo_tree, tokens);
+    // The packer never splits a single token, so a tree that leaves no room
+    // for even one comes out as an oversized singleton. Refuse it here.
+    for chunk in &chunks {
+        let bytes = box_bytes(ergo_tree, chunk, &empty);
+        if bytes > MAX_BOX_BYTES {
+            return Err(ChangeOutputError::BoxTooLarge {
+                bytes,
+                limit: MAX_BOX_BYTES,
+            });
+        }
+    }
     let first = chunks.remove(0);
     let extras: Vec<(Vec<Eip12Asset>, u64)> = chunks
         .into_iter()
@@ -123,7 +134,7 @@ pub fn token_outputs(
         min_value_for(box_bytes(ergo_tree, &first, &empty), min_box_value)
     };
     if value < reserved + first_min {
-        return Err(ChangeOutputError {
+        return Err(ChangeOutputError::NotEnoughErg {
             min_value: reserved + first_min,
             available: value,
         });
@@ -146,19 +157,30 @@ pub fn token_outputs(
     Ok(outputs)
 }
 
+/// Why change could not be laid out: the ERG on hand cannot fund the boxes
+/// the tokens need, or one token cannot be boxed at all because the tree
+/// alone leaves no room under the node's size limit.
 #[derive(Debug, Clone)]
-pub struct ChangeOutputError {
-    pub min_value: u64,
-    pub available: u64,
+pub enum ChangeOutputError {
+    NotEnoughErg { min_value: u64, available: u64 },
+    BoxTooLarge { bytes: usize, limit: usize },
 }
 
 impl std::fmt::Display for ChangeOutputError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Change tokens exist but not enough ERG for change box (need {}, have {})",
-            self.min_value, self.available
-        )
+        match self {
+            ChangeOutputError::NotEnoughErg {
+                min_value,
+                available,
+            } => write!(
+                f,
+                "Change tokens exist but not enough ERG for change box (need {min_value}, have {available})"
+            ),
+            ChangeOutputError::BoxTooLarge { bytes, limit } => write!(
+                f,
+                "A change box with a single token would be {bytes} bytes, over the {limit}-byte limit; the change script is too large"
+            ),
+        }
     }
 }
 
@@ -312,10 +334,13 @@ pub fn select_and_lay_out(
         let tokens = change_tokens(&selected.boxes);
         match lay_out(change_erg, tokens) {
             Ok(outputs) => return Ok((selected, outputs)),
-            Err(short) if pass < MAX_SELECTION_PASSES => {
-                extra_erg += short.min_value.saturating_sub(short.available);
+            Err(ChangeOutputError::NotEnoughErg {
+                min_value,
+                available,
+            }) if pass < MAX_SELECTION_PASSES => {
+                extra_erg += min_value.saturating_sub(available);
             }
-            Err(short) => return Err(LayoutError::Change(short)),
+            Err(e) => return Err(LayoutError::Change(e)),
         }
     }
     unreachable!("the loop returns on its last pass")
@@ -637,8 +662,16 @@ mod tests {
                 )
             })
             .sum();
-        assert_eq!(err.min_value, floors);
-        assert_eq!(err.available, 1_500_000);
+        match err {
+            ChangeOutputError::NotEnoughErg {
+                min_value,
+                available,
+            } => {
+                assert_eq!(min_value, floors);
+                assert_eq!(available, 1_500_000);
+            }
+            other => panic!("{other}"),
+        }
     }
 
     #[test]
@@ -676,5 +709,36 @@ mod tests {
         assert_eq!(box_bytes(tree, &one, &HashMap::new()), base + 33);
         assert_eq!(box_bytes(tree, &big, &HashMap::new()), base + 32 + 9);
         assert!(base > 36 + 34, "tree, tx id and index are all counted");
+    }
+
+    #[test]
+    fn a_tree_that_leaves_no_room_for_one_token_is_refused_not_emitted() {
+        let huge_tree = "ab".repeat(MAX_BOX_BYTES);
+        let err = token_outputs(
+            10_000_000_000,
+            &huge_tree,
+            big_tokens(1, 1),
+            1000,
+            MIN_CHANGE_VALUE,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ChangeOutputError::BoxTooLarge { .. }),
+            "{err}"
+        );
+        // A tree that just fits keeps working.
+        let fits = "ab".repeat(MAX_BOX_BYTES - 200);
+        assert_eq!(
+            token_outputs(
+                10_000_000_000,
+                &fits,
+                big_tokens(1, 1),
+                1000,
+                MIN_CHANGE_VALUE
+            )
+            .unwrap()
+            .len(),
+            1
+        );
     }
 }
