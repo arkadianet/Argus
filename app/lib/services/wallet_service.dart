@@ -801,7 +801,6 @@ class WalletService with WidgetsBindingObserver {
     _legacyTokenMeta.clear();
     _descriptorCache.clear();
     _metadataMisses.clear();
-    _incompleteDescriptors.clear();
     // A queued write would otherwise recreate what this just cleared.
     _pendingFlush.clear();
     _tokenMetaDirty = false;
@@ -970,10 +969,15 @@ class WalletService with WidgetsBindingObserver {
 
   /// Loads the active wallet's descriptors over whatever the legacy store
   /// supplied. Called when a wallet becomes active, not once at startup.
-  Future<void> loadWalletTokenMeta(String walletId) async {
+  /// [expectedEpoch] is the descriptor epoch at the moment the load was
+  /// *requested*. Capturing it here instead would be too late: the load is
+  /// chained behind a flush, so a wipe can land before this body starts and
+  /// the load would then adopt the new epoch and undo it.
+  Future<void> loadWalletTokenMeta(String walletId, {int? expectedEpoch}) async {
+    final epoch = expectedEpoch ?? _descriptorEpoch;
+    if (epoch != _descriptorEpoch) return;
     final loaded = await TokenDescriptorStore.load(walletId);
-    // The wallet may have changed again while this was in flight.
-    if (_currentWalletId != walletId) return;
+    if (_currentWalletId != walletId || epoch != _descriptorEpoch) return;
     // This runs unawaited after a wallet switch, so a sync may already have
     // resolved descriptors that are newer than the table on disk. Disk fills
     // gaps; it never overwrites what this session just learned.
@@ -1025,8 +1029,9 @@ class WalletService with WidgetsBindingObserver {
     if (walletId == null || walletId.isEmpty) return Future<void>.value();
     if (_tableLoadedFor == walletId && _tableLoad != null) return _tableLoad!;
     _tableLoadedFor = walletId;
+    final epoch = _descriptorEpoch;
     return _tableLoad = flushPendingDescriptors()
-        .then((_) => loadWalletTokenMeta(walletId))
+        .then((_) => loadWalletTokenMeta(walletId, expectedEpoch: epoch))
         .catchError((_) {});
   }
 
@@ -1343,10 +1348,6 @@ class WalletService with WidgetsBindingObserver {
   /// for. Without it a wallet of unresolvable tokens re-asks on every sync.
   final Set<String> _metadataMisses = {};
 
-  /// Descriptors fetched without their issuance registers because the box
-  /// request failed. Cached so the name shows, but still re-fetchable.
-  final Set<String> _incompleteDescriptors = {};
-
   /// Set when the node cannot serve issuance lookups at all — no extraIndex,
   /// or an endpoint `token_descriptor::load_from` refuses (it is HTTPS-only,
   /// so a user-configured `http://ip:port` node can never answer). One such
@@ -1424,9 +1425,11 @@ class WalletService with WidgetsBindingObserver {
       if (_metadataUnsupported) return resolvedNow;
       final wanted = [
         for (final id in requested)
-          if ((!_descriptorCache.containsKey(id) ||
-                  _incompleteDescriptors.contains(id) ||
-                  _descriptorCache[id]!.incomplete) &&
+          // The descriptor's own flag is the only authority. A parallel set
+          // in memory survived wallet switches and forced refetches of
+          // another wallet's complete descriptors, which a second box
+          // failure could then downgrade.
+          if ((_descriptorCache[id]?.incomplete ?? true) &&
               !_legacyTokenMeta.containsKey(id) &&
               !_metadataMisses.contains(id))
             id,
@@ -1435,7 +1438,9 @@ class WalletService with WidgetsBindingObserver {
       // Rotate the starting point. A pass always restarting at the head
       // would let a few permanently failing ids monopolise the budget and
       // starve everything behind them.
-      final start = wanted.isEmpty ? 0 : _passCursor % wanted.length;
+      final cursorKey = '$walletId|$servedBy';
+      final cursor = _passCursors[cursorKey] ?? 0;
+      final start = wanted.isEmpty ? 0 : cursor % wanted.length;
       final ordered = [...wanted.skip(start), ...wanted.take(start)];
 
       // Pass-local: an exhausted counter inherited from a previous pass
@@ -1466,11 +1471,6 @@ class WalletService with WidgetsBindingObserver {
           // registers are missing. Keep what came back — a name beats an id
           // — but leave the token eligible so a later pass can complete it
           // rather than caching a register-less descriptor forever.
-          if (m['incomplete'] == true) {
-            _incompleteDescriptors.add(id);
-          } else {
-            _incompleteDescriptors.remove(id);
-          }
               final meta = cachedTokenMeta(id);
           if (meta != null) resolvedNow[id] = meta;
         } catch (e) {
@@ -1526,7 +1526,8 @@ class WalletService with WidgetsBindingObserver {
       }
       return resolvedNow;
     } finally {
-      _passCursor += attempted == 0 ? 1 : attempted;
+      final key = '$walletId|$servedBy';
+      _passCursors[key] = (_passCursors[key] ?? 0) + (attempted == 0 ? 1 : attempted);
       // Covers every exit, including the ones that resolve nothing: a pass
       // invalidated after some successes would otherwise leave them dirty
       // and lose them at the next wallet switch.
@@ -1565,8 +1566,10 @@ class WalletService with WidgetsBindingObserver {
   static const maxConsecutiveRetryable = 3;
 
   /// Where the next pass starts in the candidate list, so a stubborn prefix
-  /// cannot starve the ids behind it.
-  int _passCursor = 0;
+  /// cannot starve the ids behind it. Keyed by wallet and provider: a single
+  /// counter let one wallet's passes advance another's, so alternating
+  /// wallets could land the same id at the head every time and never ask it.
+  final Map<String, int> _passCursors = {};
 
   /// Marker the Rust side puts on an error the provider failed to answer,
   /// as opposed to one it answered negatively.

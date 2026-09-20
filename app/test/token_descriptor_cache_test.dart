@@ -819,6 +819,102 @@ void main() {
         reason: 'a queued write must not recreate a deleted wallet');
   });
 
+  test('one wallet cannot starve another by advancing a shared cursor',
+      () async {
+    // A has three ids that never answer plus one that does; B has one id to
+    // fetch. Both must genuinely own their passes, so the wallet is switched
+    // between them. With one shared cursor, A's start index advances by
+    // three and B's by one — four per round, exactly A's candidate count —
+    // so A restarts at the same head forever and never reaches its fourth.
+    final svc = WalletService();
+    final good = 'deadbeef' * 8;
+    final aIds = [
+      for (var i = 0; i < 3; i++) i.toRadixString(16).padLeft(2, '0') * 32,
+      good,
+    ];
+    api.onAsk = (id) => id == good
+        ? null
+        : 'RETRYABLE: error sending request for url (https://n/$id)';
+
+    for (var round = 0; round < 10 && !api.asked.contains(good); round++) {
+      await svc.restoreWallet('mock', walletId: 'wA');
+      await svc.prefetchTokenMeta(
+        aIds,
+        walletId: 'wA',
+        servedBy: networkController.activeUrl!,
+        stillCurrent: () => true,
+      );
+      await svc.restoreWallet('mock', walletId: 'wB');
+      await svc.prefetchTokenMeta(
+        [_id('cd')],
+        walletId: 'wB',
+        servedBy: networkController.activeUrl!,
+        stillCurrent: () => true,
+      );
+    }
+    api.onAsk = null;
+    expect(api.asked, contains(good),
+        reason: "another wallet's passes must not move this one's cursor");
+  });
+
+  test('a wipe during a table load does not restore it in memory', () async {
+    // Populate a table, then start a fresh service that loads it and wipe
+    // while the load is in flight.
+    final first = await unlocked('wW');
+    await first.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wW',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect((await TokenDescriptorStore.load('wW'))[_id('ab')], isNotNull);
+
+    final second = WalletService();
+    await second.restoreWallet('mock', walletId: 'wW');
+    final loading = second.ensureWalletTable();
+    unawaited(second.clearCollectibleData());
+    await loading;
+
+    expect(second.cachedTokenMeta(_id('ab')), isNull,
+        reason: 'a load in flight must not undo the wipe that overtook it');
+  });
+
+  test('incompleteness does not follow a wallet switch', () async {
+    // X is incomplete in A. B's persisted X is complete and must not be
+    // refetched — a second box failure would downgrade it.
+    final svc = await unlocked('wI');
+    api.incomplete = true;
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wI',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+
+    api.incomplete = false;
+    _wallet = 'wJ';
+    await svc.restoreWallet('mock', walletId: 'wJ');
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wJ',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(svc.cachedTokenMeta(_id('ab'))?.name, 'Name ab');
+    api.asked.clear();
+
+    // Back to a wallet whose copy is complete: nothing to ask about.
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wJ',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(api.asked, isEmpty,
+        reason: "a complete descriptor must not be refetched because another "
+            'wallet once saw it incomplete');
+  });
+
   test('an unparseable table is not a descriptor', () async {
     SharedPreferences.setMockInitialValues({
       'argus_token_descriptors_v1_w9': 'not json',
