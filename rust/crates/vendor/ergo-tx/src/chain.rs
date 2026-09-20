@@ -230,4 +230,37 @@ mod tests {
         let (id_b, _) = derive_output_boxes(&tx_b).unwrap();
         assert_ne!(id_a, id_b);
     }
+
+    /// `box_bytes` is what the packer trusts to stay under the node's limit
+    /// and to price the per-byte floor, so it must never undercount the real
+    /// serialized box.
+    #[test]
+    fn box_bytes_is_an_upper_bound_on_the_serialized_box() {
+        use ergo_lib::chain::transaction::TxId;
+        let tree = "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+        for (n, amount) in [
+            (1usize, 1i64),
+            (60, 1_000_000_000),
+            (110, 1),
+            (110, i64::MAX),
+        ] {
+            let assets: Vec<crate::Eip12Asset> = (0..n)
+                .map(|i| crate::Eip12Asset::new(format!("{i:064x}"), amount))
+                .collect();
+            let output = Eip12Output::change(50_000_000_000, tree, assets.clone(), 1_000_000);
+            let candidate = output_to_candidate(&output).unwrap();
+            let ergo_box = ErgoBox::from_box_candidate(&candidate, TxId::zero(), 0).unwrap();
+            let real = ergo_box.sigma_serialize_bytes().unwrap().len();
+            let estimate = crate::box_bytes(tree, &assets, &HashMap::new());
+            assert!(
+                estimate >= real,
+                "{n} tokens of {amount}: estimate {estimate} < real {real}"
+            );
+            assert!(
+                estimate - real <= 24,
+                "{n} tokens: estimate {estimate} is loose by {}",
+                estimate - real
+            );
+        }
+    }
 }

@@ -63,6 +63,9 @@ pub enum BurnError {
 
     #[error("Citadel fee config error: {0}")]
     DevFee(String),
+
+    #[error("{0}")]
+    ChangeBox(String),
 }
 
 /// Build an EIP-12 unsigned tx that burns a specified amount of a token.
@@ -136,9 +139,12 @@ pub fn build_burn_tx(
         current_height,
         citadel_core::constants::MIN_BOX_VALUE_NANO as u64,
     )
-    .map_err(|e| BurnError::InsufficientErg {
-        have: total_erg,
-        need: TX_FEE + citadel_fee + e.min_value as i64,
+    .map_err(|e| match e {
+        crate::ChangeOutputError::NotEnoughErg { min_value, .. } => BurnError::InsufficientErg {
+            have: total_erg,
+            need: TX_FEE + citadel_fee + min_value as i64,
+        },
+        other => BurnError::ChangeBox(other.to_string()),
     })?;
     append_dev_fee_output(&mut outputs, &fee_cfg, current_height)
         .map_err(|e| BurnError::DevFee(e.to_string()))?;
@@ -246,9 +252,12 @@ pub fn build_multi_burn_tx(
         current_height,
         min_box as u64,
     )
-    .map_err(|e| BurnError::InsufficientErg {
-        have: total_change_erg,
-        need: e.min_value as i64,
+    .map_err(|e| match e {
+        crate::ChangeOutputError::NotEnoughErg { min_value, .. } => BurnError::InsufficientErg {
+            have: total_change_erg,
+            need: min_value as i64,
+        },
+        other => BurnError::ChangeBox(other.to_string()),
     })?;
     append_dev_fee_output(&mut outputs, &fee_cfg, current_height)
         .map_err(|e| BurnError::DevFee(e.to_string()))?;

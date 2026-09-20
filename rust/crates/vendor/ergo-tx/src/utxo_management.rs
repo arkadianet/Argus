@@ -66,6 +66,9 @@ pub enum UtxoManagementError {
     #[error("ERG over-allocated: outputs use {allocated} nanoERG but only {available} available after fee")]
     ErgOverAllocated { allocated: i64, available: i64 },
 
+    #[error("{0}")]
+    ChangeBox(String),
+
     #[error("Citadel fee config error: {0}")]
     DevFee(String),
 }
@@ -140,9 +143,14 @@ pub fn build_consolidate_tx(
         current_height,
         MIN_BOX_VALUE as u64,
     )
-    .map_err(|e| UtxoManagementError::InsufficientErg {
-        have: total_erg,
-        need: TX_FEE + citadel_fee + e.min_value as i64,
+    .map_err(|e| match e {
+        crate::ChangeOutputError::NotEnoughErg { min_value, .. } => {
+            UtxoManagementError::InsufficientErg {
+                have: total_erg,
+                need: TX_FEE + citadel_fee + min_value as i64,
+            }
+        }
+        other => UtxoManagementError::ChangeBox(other.to_string()),
     })?;
     append_dev_fee_output(&mut outputs, &fee_cfg, current_height)
         .map_err(|e| UtxoManagementError::DevFee(e.to_string()))?;
