@@ -218,18 +218,15 @@ void main() {
     final svc = await unlocked('w5b');
     // One success, then a run of not-founds long enough to write the node
     // off. The success must survive a restart.
-    final ids = [
-      _id('ab'),
-      for (var i = 0; i < WalletService.notFoundRunBeforeUnsupported; i++)
-        i.toRadixString(16).padLeft(2, '0') * 32,
-    ];
+    final ids = [_id('ab'), _id('cd')];
     var first = true;
     api.onAsk = (_) {
       if (first) {
         first = false;
         return null;
       }
-      return '404 not found';
+      // Unambiguous capability failure, which IS a verdict about the node.
+      return 'extraIndex is required for this endpoint';
     };
     await svc.prefetchTokenMeta(
       ids,
@@ -329,17 +326,95 @@ void main() {
     expect(svc.cachedTokenMeta(_id('cd'))?.name, 'Name cd');
   });
 
-  test('a run of not-founds is treated as an incapable node', () async {
+  test('a run of not-founds ends the pass without condemning the node',
+      () async {
     final svc = await unlocked('w6c');
     api.failWith = 'missing';
     final many = [
-      for (var i = 0; i < 12; i++)
-        i.toRadixString(16).padLeft(2, '0') * 32,
+      for (var i = 0; i < 12; i++) i.toRadixString(16).padLeft(2, '0') * 32,
     ];
-    await svc.prefetchTokenMeta(many, walletId: _wallet, servedBy: networkController.activeUrl!, stillCurrent: () => true);
-    expect(svc.metadataLookupUnsupported, isTrue);
+    await svc.prefetchTokenMeta(
+      many,
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
     expect(api.asked, hasLength(WalletService.notFoundRunBeforeUnsupported),
-        reason: 'a node that answers nothing must not be asked 194 times');
+        reason: 'a node answering nothing must not be asked 194 times');
+    expect(svc.metadataLookupUnsupported, isFalse,
+        reason: 'unknown tokens and a missing index look alike; 404s are not '
+            'evidence about the endpoint');
+  });
+
+  test('tokens behind repeatedly-unanswered ones still resolve', () async {
+    // Retryable failures are deliberately NOT remembered, so they reappear
+    // as candidates on every pass. Without rotation the same three would be
+    // retried forever and the resolvable tail would never be reached.
+    final svc = await unlocked('w27');
+    final good = 'deadbeef' * 8;
+    final ids = [
+      for (var i = 0; i < 12; i++) i.toRadixString(16).padLeft(2, '0') * 32,
+      good,
+    ];
+    api.onAsk = (id) => id == good
+        ? null
+        : 'RETRYABLE: error sending request for url (https://n/$id)';
+
+    for (var pass = 0; pass < 12 && svc.cachedTokenMeta(good) == null; pass++) {
+      await svc.prefetchTokenMeta(
+        ids,
+        walletId: _wallet,
+        servedBy: networkController.activeUrl!,
+        stillCurrent: () => true,
+      );
+    }
+    api.onAsk = null;
+    expect(svc.cachedTokenMeta(good)?.name, isNotNull,
+        reason: 'a prefix that never answers must not monopolise every pass');
+  });
+
+  test('a wipe while the table is loading discards the pass', () async {
+    final svc = await unlocked('w28');
+    // The pass runs synchronously up to its first await, which is
+    // ensureWalletTable(); bump the epoch inside that window.
+    final pass = svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    unawaited(svc.clearCollectibleData());
+    final out = await pass;
+
+    expect(api.asked, isEmpty,
+        reason: 'a pass suspended across a wipe must not go on to request');
+    expect(out, isEmpty);
+    expect(await TokenDescriptorStore.load('w28'), isEmpty);
+  });
+
+  test('tokens behind a wall of unknown ones still resolve eventually',
+      () async {
+    // Twelve ids the node does not know, then one it does. The unknown
+    // prefix must not starve the resolvable tail across passes.
+    final svc = await unlocked('w26');
+    final good = 'deadbeef' * 8;
+    final ids = [
+      for (var i = 0; i < 12; i++) i.toRadixString(16).padLeft(2, '0') * 32,
+      good,
+    ];
+    api.onAsk = (id) => id == good ? null : '404 not found';
+
+    for (var pass = 0; pass < 6 && svc.cachedTokenMeta(good) == null; pass++) {
+      await svc.prefetchTokenMeta(
+        ids,
+        walletId: _wallet,
+        servedBy: networkController.activeUrl!,
+        stillCurrent: () => true,
+      );
+    }
+    api.onAsk = null;
+    expect(svc.cachedTokenMeta(good)?.name, isNotNull,
+        reason: 'a stubborn prefix must not monopolise every pass');
   });
 
   test('descriptors do not leak between wallets', () async {

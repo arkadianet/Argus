@@ -1387,11 +1387,13 @@ class WalletService with WidgetsBindingObserver {
   }) async {
     if (walletId.isEmpty || servedBy.isEmpty) return const {};
     if (!isUnlocked || !stillCurrent()) return const {};
-    await ensureWalletTable();
-    if (!_owns(walletId, stillCurrent)) return const {};
-
+    // Captured before the first await. Taking it afterwards would let a pass
+    // that was suspended across a wipe adopt the new epoch and write its
+    // pre-wipe results back.
     final epoch = _descriptorEpoch;
     bool owns() => _owns(walletId, stillCurrent) && epoch == _descriptorEpoch;
+    await ensureWalletTable();
+    if (!owns()) return const {};
 
     // Capability and miss state belong to a provider. Only the pass that
     // introduced this provider may reset them, or an overlapping pass on
@@ -1400,7 +1402,6 @@ class WalletService with WidgetsBindingObserver {
     if (!ownsProvider) {
       _metadataCapabilityFor = servedBy;
       _metadataUnsupported = false;
-      _consecutiveNotFound = 0;
       _metadataMisses.clear();
     }
 
@@ -1417,6 +1418,8 @@ class WalletService with WidgetsBindingObserver {
         if (cachedTokenMeta(id) != null) id: cachedTokenMeta(id)!,
     };
 
+    // Declared outside the try so the finally can advance the cursor.
+    var attempted = 0;
     try {
       if (_metadataUnsupported) return resolvedNow;
       final wanted = [
@@ -1429,8 +1432,17 @@ class WalletService with WidgetsBindingObserver {
             id,
       ];
 
-      var attempted = 0;
-      for (final id in wanted) {
+      // Rotate the starting point. A pass always restarting at the head
+      // would let a few permanently failing ids monopolise the budget and
+      // starve everything behind them.
+      final start = wanted.isEmpty ? 0 : _passCursor % wanted.length;
+      final ordered = [...wanted.skip(start), ...wanted.take(start)];
+
+      // Pass-local: an exhausted counter inherited from a previous pass
+      // would end a healthy one on its first hiccup.
+      var consecutiveRetryable = 0;
+      var consecutiveNotFound = 0;
+      for (final id in ordered) {
         if (!owns() || _metadataUnsupported) return resolvedNow;
         if (attempted >= maxTokenMetaPerSync) return resolvedNow;
         // An explicit request owns the job. Yield rather than compete.
@@ -1448,6 +1460,7 @@ class WalletService with WidgetsBindingObserver {
           if (!owns()) return const {};
           final m = jsonDecode(raw) as Map<String, dynamic>;
           if (m['id'] != id) continue;
+          consecutiveNotFound = 0;
           _rememberDescriptor(id, m, servedBy);
           // The index answered but the issuance box did not, so the
           // registers are missing. Keep what came back — a name beats an id
@@ -1458,9 +1471,7 @@ class WalletService with WidgetsBindingObserver {
           } else {
             _incompleteDescriptors.remove(id);
           }
-          _consecutiveRetryable = 0;
-          _consecutiveNotFound = 0;
-          final meta = cachedTokenMeta(id);
+              final meta = cachedTokenMeta(id);
           if (meta != null) resolvedNow[id] = meta;
         } catch (e) {
           if (!owns()) return const {};
@@ -1482,28 +1493,32 @@ class WalletService with WidgetsBindingObserver {
           // as a not-found, and one containing "extraindex" would write the
           // node off outright.
           if (!_looksDurableNegative(e)) {
-            if (++_consecutiveRetryable >= maxConsecutiveRetryable) {
+            if (++consecutiveRetryable >= maxConsecutiveRetryable) {
               // The node is not answering at all; stop burning the budget.
               return resolvedNow;
             }
             continue;
           }
-          _consecutiveRetryable = 0;
+          consecutiveRetryable = 0;
           // A miss recorded before the request would outlive a pass that
           // never finished, suppressing a token that might have resolved.
           _metadataMisses.add(id);
           if (_looksUnsupported(e)) {
+            // Unambiguous: the endpoint says it cannot do this at all.
             _metadataUnsupported = true;
             return resolvedNow;
           }
           if (_looksNotFound(e)) {
-            _consecutiveNotFound++;
-            if (_consecutiveNotFound >= notFoundRunBeforeUnsupported) {
-              _metadataUnsupported = true;
+            // A run of these ends THIS pass but records no verdict. A node
+            // without the index answers 404, but so does a capable node
+            // asked about tokens it has never seen — and eight unknown
+            // tokens must not disable a provider that would have resolved
+            // the ninth.
+            if (++consecutiveNotFound >= notFoundRunBeforeUnsupported) {
               return resolvedNow;
             }
           } else {
-            _consecutiveNotFound = 0;
+            consecutiveNotFound = 0;
           }
         } finally {
           _metadataBusy = false;
@@ -1511,6 +1526,7 @@ class WalletService with WidgetsBindingObserver {
       }
       return resolvedNow;
     } finally {
+      _passCursor += attempted == 0 ? 1 : attempted;
       // Covers every exit, including the ones that resolve nothing: a pass
       // invalidated after some successes would otherwise leave them dirty
       // and lose them at the next wallet switch.
@@ -1540,18 +1556,17 @@ class WalletService with WidgetsBindingObserver {
         text.contains('must be an https url');
   }
 
-  /// Consecutive not-found answers from this provider. Ambiguous alone, but
-  /// a node that cannot answer for anything looks exactly like this, so a run
-  /// of them is treated as incapable. A single success resets it.
-  int _consecutiveNotFound = 0;
-
-  /// How long a run of not-founds must be before the node is written off.
+  /// How long a run of not-founds ends a pass. Deliberately not a verdict
+  /// about the provider: unknown tokens and a missing index look alike.
   static const notFoundRunBeforeUnsupported = 8;
 
   /// Consecutive failures-to-answer before the pass gives up. Bounded so a
   /// node that is simply down cannot consume the whole per-pass budget.
   static const maxConsecutiveRetryable = 3;
-  int _consecutiveRetryable = 0;
+
+  /// Where the next pass starts in the candidate list, so a stubborn prefix
+  /// cannot starve the ids behind it.
+  int _passCursor = 0;
 
   /// Marker the Rust side puts on an error the provider failed to answer,
   /// as opposed to one it answered negatively.
