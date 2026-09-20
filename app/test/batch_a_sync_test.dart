@@ -32,6 +32,27 @@ class GatedGateway extends FakeGateway {
   @override
   Future<Map<String, dynamic>?> loadCachedState(String walletKey) =>
       cacheGate?.future ?? super.loadCachedState(walletKey);
+  final List<String> resolved = [];
+  @override
+  Future<Map<String, TokenBalance>> resolveTokenNames(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
+  }) async {
+    resolved.addAll(ids);
+    resolveProviders.add(servedBy);
+    return {
+      for (final id in ids)
+        if (resolvedNames.containsKey(id))
+          id: TokenBalance(id: id, amount: 0, name: resolvedNames[id]),
+    };
+  }
+
+  /// Names the fake will hand back, so a test can check they reach the UI.
+  final Map<String, String> resolvedNames = {};
+  final List<String> resolveProviders = [];
+
   @override
   Future<List<TokenBalance>> hydrateTokens(dynamic raw) async => [
     for (final t in raw as List)

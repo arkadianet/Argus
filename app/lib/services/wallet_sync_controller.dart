@@ -48,15 +48,22 @@ abstract class WalletSyncGateway {
   Future<Map<String, dynamic>> getBalance(String address);
   Future<List<TokenBalance>> hydrateTokens(dynamic raw);
 
+  /// Resolves names for ordinary public holdings, after balances publish.
+  /// Never called with stealth-only ids. Returns what it resolved, so the
+  /// caller can apply it to holdings already on screen.
+  Future<Map<String, TokenBalance>> resolveTokenNames(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
+  });
+
   /// Keeps missing-address status attached to the request that produced the rows.
   Future<HistoryResult> loadHistory(List<String> addresses, {int limit = 20});
   Future<int> countUnspentBoxes(List<String> addresses);
   Future<Map<String, dynamic>?> loadCachedState(String walletKey);
   Future<void> saveCachedState(Map<String, dynamic> snapshot);
   void probeNetwork();
-
-  /// Learns names and decimals for tokens seen in activity, best effort.
-  Future<void> prefetchTokenMeta(Iterable<String> ids);
 
   /// Whether the user has left the stealth scan on.
   bool get stealthScanEnabled;
@@ -72,6 +79,12 @@ abstract interface class WalletSyncRead {
   Future<Map<String, dynamic>> balance(String address);
   Future<HistoryResult> history();
   Future<int> count();
+
+  /// The node that actually answered this read. `connect` falls back past
+  /// the preferred URL, so this is not necessarily the configured one — and
+  /// it is the only endpoint that has already been shown these addresses and
+  /// the token ids in their boxes. Null when it cannot be established.
+  Future<String?> servedBy();
 }
 
 abstract interface class WalletSyncBatchGateway {
@@ -119,6 +132,16 @@ class _LiveSyncRead implements WalletSyncRead {
     if (count == null) throw StateError('UTXO listing incomplete');
     return count;
   }
+
+  @override
+  Future<String?> servedBy() async {
+    try {
+      final url = (await _inputs)['served_by'];
+      return url is String && url.isNotEmpty ? url : null;
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 /// Production gateway over the app's singleton services.
@@ -158,6 +181,19 @@ class LiveWalletSyncGateway
   @override
   Future<List<TokenBalance>> hydrateTokens(dynamic raw) =>
       walletService.hydrateTokens(raw);
+
+  @override
+  Future<Map<String, TokenBalance>> resolveTokenNames(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
+  }) => walletService.prefetchTokenMeta(
+    ids,
+    walletId: walletId,
+    servedBy: servedBy,
+    stillCurrent: stillCurrent,
+  );
 
   /// Passes request-local completeness through without consulting shared state.
   @override
@@ -212,10 +248,6 @@ class LiveWalletSyncGateway
   void probeNetwork() {
     networkController.probe();
   }
-
-  @override
-  Future<void> prefetchTokenMeta(Iterable<String> ids) =>
-      walletService.prefetchTokenMeta(ids).catchError((_) {});
 
   @override
   bool get stealthScanEnabled => stealthService.scanEnabled;
@@ -854,21 +886,83 @@ class WalletSyncController extends ChangeNotifier {
     notifyListeners();
     if (!_current(generation, walletId)) return;
 
-    // Names for tokens that moved, so activity rows can say "1 SigUSD".
-    final tokenIds = <String>{
-      for (final tx in recentTxs)
-        for (final key in const ['tokens_received', 'tokens_sent'])
-          for (final t in (tx[key] as List? ?? const []))
-            if (t is Map) t['token_id']?.toString() ?? '',
-    }..remove('');
-    if (tokenIds.isNotEmpty) {
-      await _gw.prefetchTokenMeta(tokenIds);
-      if (!_current(generation, walletId)) return;
-      notifyListeners();
+    // Names. Candidates come only from balance responses that SUCCEEDED in
+    // this refresh — `tokens` is retained on failure, so using the field
+    // could send a previous wallet state to a node that never returned it.
+    // Ids seen moving in recent activity are deliberately excluded: history
+    // is fetched through a separate client that can resolve to a different
+    // node, so those ids were not necessarily served by `servedBy`.
+    //
+    // Stealth containment is structural, not a filter: candidates are the
+    // ids the node itself just returned in `balances.tokens`, so a holding
+    // that exists only in stealth boxes cannot be among them. A token held
+    // in BOTH stays resolvable — its id is already in the node's own boxes.
+    // Widening this set is what would need a filter; narrowing it here
+    // would only be decoration.
+    final ordinaryIds = <String>{
+      if (failed < addresses.length) for (final t in balances.tokens) t.id,
+    };
+    final servedBy = read == null ? null : await read.servedBy();
+    if (!_current(generation, walletId)) return;
+    if (ordinaryIds.isNotEmpty && servedBy != null && walletId != null) {
+      _startNameResolution(ordinaryIds, generation, walletId, servedBy);
     }
 
     if (!_current(generation, walletId)) return;
     await _saveSnapshot(walletId);
+  }
+
+  /// Name resolution owned by the controller rather than awaited by the
+  /// refresh. A slow node must not hold `_inFlight`: polls, manual
+  /// refreshes, post-broadcast refreshes and scheduled discovery all join
+  /// that future, and forty 15-second timeouts would block them for ten
+  /// minutes. Cancellation is by generation, checked inside the pass.
+  Future<void>? _nameResolution;
+
+  /// Exposed so tests can await the pass instead of racing it.
+  @visibleForTesting
+  Future<void>? get pendingNameResolution => _nameResolution;
+
+  void _startNameResolution(
+    Set<String> ids,
+    int generation,
+    String walletId,
+    String servedBy,
+  ) {
+    _nameResolution = _gw
+        .resolveTokenNames(
+          ids,
+          walletId: walletId,
+          servedBy: servedBy,
+          stillCurrent: () => _current(generation, walletId),
+        )
+        .then((resolved) async {
+          if (resolved.isEmpty || !_current(generation, walletId)) return;
+          _applyResolved(resolved);
+          notifyListeners();
+          // The snapshot was written before this pass finished, so it still
+          // carries the pre-resolution scale. Without re-saving, a wallet
+          // locked before its next sync keeps a persisted holding of five
+          // base units reading as five rather than 0.05 — and a later public
+          // refresh carries that zero forward indefinitely.
+          if (!_current(generation, walletId)) return;
+          await _saveSnapshot(walletId);
+        })
+        .catchError((_) {})
+        .whenComplete(() => _nameResolution = null);
+  }
+
+  /// Folds resolved descriptors into the holdings already on screen. Without
+  /// this a completed refresh keeps showing truncated ids and zero-decimal
+  /// amounts until some later hydration happens to pick them up.
+  void _applyResolved(Map<String, TokenBalance> resolved) {
+    List<TokenBalance> apply(List<TokenBalance> current) => [
+      for (final t in current)
+        resolved[t.id]?.withHolding(t.amount, stealthAmount: t.stealthAmount) ??
+            t,
+    ];
+    tokens = apply(tokens);
+    stealthTokens = apply(stealthTokens);
   }
 
   Future<void> _saveSnapshot(String? walletId) async {
@@ -1048,15 +1142,21 @@ class WalletSyncController extends ChangeNotifier {
     final meta = {for (final t in hydrated) t.id: t};
     stealthTokens = [
       for (final t in result.tokens)
-        TokenBalance(
-          id: t.id,
-          amount: t.amount.toInt(),
-          name: meta[t.id]?.name,
-          decimals: meta[t.id]?.decimals ?? 0,
-          emissionAmount: meta[t.id]?.emissionAmount,
-          iconUrl: meta[t.id]?.iconUrl,
-          stealthAmount: t.amount.toInt(),
-        ),
+        // withHolding rather than a hand-copied subset: rebuilding by field
+        // dropped supplyEvidence, decimalsEvidence, declaredAssetKind,
+        // metadataState and provenance, so a resolved collectible held only
+        // in stealth boxes vanished from the Collectibles filter — and
+        // stealth-only ids are excluded from resolution, so nothing could
+        // repair it afterwards.
+        meta[t.id]?.withHolding(
+              t.amount.toInt(),
+              stealthAmount: t.amount.toInt(),
+            ) ??
+            TokenBalance(
+              id: t.id,
+              amount: t.amount.toInt(),
+              stealthAmount: t.amount.toInt(),
+            ),
     ];
     _stealthBoxIds = List.of(result.boxIds);
     stealthRows = stealthActivityRows(result.boxes);

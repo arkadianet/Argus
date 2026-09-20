@@ -173,11 +173,10 @@ class _MixScreenState extends State<MixScreen> with TxReceiptOwner {
             'nobody can enter the pool. Try again later.',
           );
         }
-        // Token rings are named by their token; look the names up first.
-        await walletService.prefetchTokenMeta([
-          for (final r in (pool['rings'] as List? ?? const []))
-            if ((r as Map)['token_id'] is String) r['token_id'] as String,
-        ]);
+        // Names already known for this wallet. Opening a screen must not
+        // put a request on the wire: that would tell the node when the user
+        // looked, which resolving during sync deliberately avoids.
+        await walletService.ensureWalletTable();
         if (!mounted) return;
         final choice = await showModalBottomSheet<_StartChoice>(
           context: context,

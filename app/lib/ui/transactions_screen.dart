@@ -174,8 +174,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
             if (t is Map) t['token_id']?.toString() ?? '',
     }..remove('');
     if (ids.isEmpty) return;
+    // Cache only. A screen opening must not put a request on the wire.
     try {
-      await walletService.prefetchTokenMeta(ids);
+      await walletService.ensureWalletTable();
     } catch (_) {}
     if (mounted) setState(() {});
   }

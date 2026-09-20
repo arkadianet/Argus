@@ -1116,6 +1116,11 @@ pub async fn get_sync_inputs(
         // Null means unavailable; an empty array would claim no pending activity.
         "pending": if count_complete { Some(pending_from_inputs(&txs, &trees, &values)) } else { None },
         "utxo_count": if count_complete { Some(values.len()) } else { None },
+        // The node that actually answered. `connect` falls back past the
+        // preferred URL, so this is not necessarily the one the app asked
+        // for, and it is the only endpoint that has already been shown these
+        // addresses and the token ids in their boxes.
+        "served_by": client.url(),
     })
     .to_string())
 }

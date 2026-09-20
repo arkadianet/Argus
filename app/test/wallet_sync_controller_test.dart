@@ -6,7 +6,35 @@ import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-class FakeGateway implements WalletSyncGateway {
+/// Batch read over [FakeGateway], so tests can exercise the path that knows
+/// which endpoint served the balances. The live gateway is always batch.
+class _FakeRead implements WalletSyncRead {
+  _FakeRead(this.gw, this.addresses);
+  final FakeGateway gw;
+
+  /// Carried through: subclasses gate on which addresses were asked for, so
+  /// dropping them here silently changes the behaviour under test.
+  final List<String> addresses;
+  @override
+  Future<Map<String, dynamic>> balance(String address) =>
+      gw.getBalance(address);
+  @override
+  Future<HistoryResult> history() => gw.loadHistory(addresses);
+  @override
+  Future<int> count() => gw.countUnspentBoxes(addresses);
+  @override
+  Future<String?> servedBy() async => gw.servedByUrl;
+}
+
+class FakeGateway implements WalletSyncGateway, WalletSyncBatchGateway {
+  /// Null models a read that cannot say which node answered, in which case
+  /// nothing may be resolved.
+  String? servedByUrl = 'https://served.example';
+
+  @override
+  WalletSyncRead startRead(List<String> addresses) =>
+      _FakeRead(this, addresses);
+
   bool unlocked = true;
   int pinnedIndex = 0;
   int maxIndex = 5;
@@ -59,16 +87,66 @@ class FakeGateway implements WalletSyncGateway {
   @override
   bool useUnusedChangeAddress(String? walletId) => unusedChange;
 
+  bool balanceThrows = false;
   @override
   Future<Map<String, dynamic>> getBalance(String address) async {
     balanceCalls.add(address);
+    if (balanceThrows) throw Exception('node down');
     final b = balances[address];
     if (b == null) throw Exception('node down');
     return b;
   }
 
+  final List<String> resolved = [];
+  @override
+  Future<Map<String, TokenBalance>> resolveTokenNames(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
+  }) async {
+    resolved.addAll(ids);
+    resolveProviders.add(servedBy);
+    final gate = resolveGate;
+    if (gate != null) {
+      resolveGate = null;
+      await gate.future;
+    }
+    return {
+      for (final id in ids)
+        if (resolvedNames.containsKey(id))
+          id: TokenBalance(
+            id: id,
+            amount: 0,
+            name: resolvedNames[id],
+            decimals: resolvedDecimals[id] ?? 0,
+          ),
+    };
+  }
+
+  /// Names the fake will hand back, so a test can check they reach the UI.
+  final Map<String, String> resolvedNames = {};
+
+  /// Scales the fake will hand back alongside those names.
+  final Map<String, int> resolvedDecimals = {};
+
+  /// Holds resolution open, so a test can let the refresh write its own
+  /// snapshot first — which is when the scale is actually lost.
+  Completer<void>? resolveGate;
+  final List<String> resolveProviders = [];
+
+  /// Overrides what hydration returns, so a test can supply a fully
+  /// resolved descriptor.
+  Map<String, TokenBalance>? hydrated;
+
   @override
   Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
+    if (hydrated != null) {
+      return [
+        for (final t in (raw as List))
+          if (hydrated!.containsKey(t['id'])) hydrated![t['id']]!,
+      ];
+    }
     final items = raw is List ? raw : const [];
     return [
       for (final t in items)
@@ -112,10 +190,6 @@ class FakeGateway implements WalletSyncGateway {
   void probeNetwork() {
     probeCalls++;
   }
-
-  final prefetched = <String>[];
-  @override
-  Future<void> prefetchTokenMeta(Iterable<String> ids) async => prefetched.addAll(ids);
 
   bool stealthEnabled = true;
 
@@ -476,6 +550,232 @@ void main() {
       expect(aa.amount, 7);
       expect(aa.stealthAmount, 7);
       expect(c.phase, SyncPhase.synced);
+    });
+
+    test('stealth-only ids are never handed to name resolution', () async {
+      const ordinary = 'a1';
+      const stealthOnly = 's1';
+      const both = 'b1';
+      // A stealth-only holding is one the ordinary balance does not carry,
+      // so it is absent here. Deleting `removeWhere(stealthOnly.contains)`
+      // will NOT fail this test, and that is the point being asserted: the
+      // containment is structural — candidates are the ids the node itself
+      // returned — rather than a filter that could be removed by accident.
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': ordinary, 'amount': 5},
+            {'id': both, 'amount': 5},
+          ],
+        },
+      };
+      gw.stealthResult = StealthScanResult(
+        scanned: 20,
+        ownedCount: 2,
+        totalNanoErg: 750,
+        tokens: [
+          StealthToken(id: stealthOnly, amount: BigInt.from(3)),
+          StealthToken(id: both, amount: BigInt.from(2)),
+        ],
+        boxIds: const ['bx1', 'bx2'],
+      );
+      gw.resolved.clear();
+
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+
+      expect(gw.resolved, contains(ordinary),
+          reason: 'positive control: ordinary holdings do resolve');
+      expect(gw.resolved, contains(both),
+          reason: 'held in ordinary boxes too, so the node already has it');
+      expect(gw.resolved, isNot(contains(stealthOnly)),
+          reason: 'entirely stealth-held, so the node that served these '
+              'addresses has never seen this id');
+      expect(c.stealthTokens.map((t) => t.id), contains(stealthOnly),
+          reason: 'positive control: the holding exists and is displayed, '
+              'so its absence above is containment and not a missing token');
+    });
+
+    test('a failed balance read resolves nothing from retained state',
+        () async {
+      // `tokens` survives a failed refresh. Those ids came from a previous
+      // response, possibly from another node, so they must not be sent.
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'old', 'amount': 1},
+          ],
+        },
+      };
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+      expect(gw.resolved, contains('old'));
+
+      gw.resolved.clear();
+      gw.balanceThrows = true;
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+      expect(c.tokens.map((t) => t.id), contains('old'),
+          reason: 'the holding is still displayed');
+      expect(gw.resolved, isEmpty,
+          reason: 'but nothing may be re-sent from retained state');
+      gw.balanceThrows = false;
+    });
+
+    test('resolved names reach the published holdings', () async {
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'a1', 'amount': 5},
+          ],
+        },
+      };
+      gw.resolvedNames['a1'] = 'Resolved';
+
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+
+      expect(c.tokens.single.name, 'Resolved',
+          reason: 'a first refresh must not leave the id on screen until '
+              'some later hydration happens to pick it up');
+      expect(c.tokens.single.amount, 5, reason: 'amount preserved');
+      gw.resolvedNames.clear();
+    });
+
+    test('a scale resolved after the snapshot still reaches the snapshot',
+        () async {
+      // The refresh writes its snapshot before resolution finishes, so
+      // without a re-save the screen shows 0.05 while the persisted holding
+      // says 5 — and a later public refresh carries that zero forward.
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'a1', 'amount': 5},
+          ],
+        },
+      };
+      gw.resolvedNames['a1'] = 'Resolved';
+      gw.resolvedDecimals['a1'] = 2;
+      final gate = Completer<void>();
+      gw.resolveGate = gate;
+
+      await c.refresh(discover: false);
+      expect((gw.savedCache?['tokens'] as List?)?.single['decimals'], 0,
+          reason: 'the refresh writes its snapshot before resolution lands');
+
+      gate.complete();
+      await c.pendingNameResolution;
+
+      expect(c.tokens.single.decimals, 2, reason: 'corrected on screen');
+      final saved = gw.savedCache?['tokens'] as List?;
+      expect(saved?.single['decimals'], 2,
+          reason: 'and in the snapshot a lock would leave behind');
+      expect(saved?.single['amount'], 5);
+      gw.resolvedNames.clear();
+      gw.resolvedDecimals.clear();
+    });
+
+    test('retaining a wallet preserves names already on screen', () async {
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'a1', 'amount': 5},
+          ],
+        },
+      };
+      gw.resolvedNames['a1'] = 'Resolved';
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+      expect(c.tokens.single.name, 'Resolved', reason: 'control');
+
+      c.deactivate();
+      c.activateWallet('w1');
+
+      expect(c.tokens.single.name, 'Resolved',
+          reason: 'the retained balance view keeps its metadata');
+      expect(c.tokens.single.amount, 5, reason: 'the holding itself stays');
+      gw.resolvedNames.clear();
+    });
+
+    test('nothing resolves when the serving node is unknown', () async {
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'a1', 'amount': 5},
+          ],
+        },
+      };
+      gw.servedByUrl = null;
+      gw.resolved.clear();
+
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+
+      expect(gw.resolved, isEmpty,
+          reason: 'without knowing who answered, the disclosure argument '
+              'does not hold');
+      gw.servedByUrl = 'https://served.example';
+    });
+
+    test('resolution addresses the node that answered', () async {
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'a1', 'amount': 5},
+          ],
+        },
+      };
+      gw.servedByUrl = 'https://fellback.example';
+      gw.resolveProviders.clear();
+
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+
+      expect(gw.resolveProviders, ['https://fellback.example'],
+          reason: 'not the configured node, the one that served');
+      gw.servedByUrl = 'https://served.example';
+    });
+
+    test('a stealth-only collectible keeps its classification', () async {
+      // Rebuilding stealth holdings field-by-field dropped the evidence that
+      // makes isCollectible true, and stealth-only ids are never resolved,
+      // so nothing downstream could put it back.
+      gw.hydrated = {
+        'nft1': TokenBalance(
+          id: 'nft1',
+          amount: 0,
+          name: 'Art',
+          decimals: 0,
+          emissionAmount: 1,
+          supplyEvidence: SupplyEvidence.originalEmission,
+          decimalsEvidence: DecimalsEvidence.valid,
+          declaredAssetKind: DeclaredAssetKind.picture,
+          metadataState: MetadataState.complete,
+        ),
+      };
+      gw.stealthResult = StealthScanResult(
+        scanned: 1,
+        ownedCount: 1,
+        totalNanoErg: 0,
+        tokens: [StealthToken(id: 'nft1', amount: BigInt.one)],
+        boxIds: const ['bx'],
+      );
+
+      await c.refresh(discover: false);
+
+      final held = c.stealthTokens.singleWhere((t) => t.id == 'nft1');
+      expect(held.isCollectible, isTrue,
+          reason: 'a resolved collectible held only in stealth must not drop '
+              'out of the Collectibles filter');
+      expect(held.stealthAmount, 1);
+      gw.hydrated = null;
     });
 
     test('an unreachable explorer leaves the balance unknown, not the sync',

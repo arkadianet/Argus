@@ -12,6 +12,7 @@ import '../bridge/frb_generated.dart';
 import 'app_fee.dart';
 import 'network_controller.dart';
 import 'privacy_service.dart';
+import 'token_descriptor_store.dart';
 import 'token_evidence.dart';
 export 'token_evidence.dart';
 import 'mix_service.dart';
@@ -730,6 +731,17 @@ bool isIncorrectPin(Object error) {
 /// Completeness belongs to one history request, including its pending rows.
 typedef HistoryResult = ({List<Map<String, dynamic>> rows, bool partial});
 
+/// The single metadata job is already held. Typed rather than matched on
+/// message text: Dart and Rust word this differently ("Another metadata
+/// request is running" vs "Metadata request already running"), and a
+/// substring check silently missed one of them.
+/// Extends [StateError] so the pre-existing contract — callers and tests
+/// that expect a StateError for a concurrent job — keeps holding, while the
+/// type lets contention be told apart from a provider failure.
+class MetadataBusyException extends StateError {
+  MetadataBusyException() : super('Another metadata request is running');
+}
+
 class WalletService with WidgetsBindingObserver {
   bool _observingMetadata = false;
   @override
@@ -752,6 +764,11 @@ class WalletService with WidgetsBindingObserver {
   final ValueNotifier<bool> unlocked = ValueNotifier(false);
   final ValueNotifier<String?> currentWalletId = ValueNotifier<String?>(null);
   final Map<String, TokenBalance> _tokenMeta = {};
+
+  /// The old app-wide table, read once at startup and never written again.
+  /// Kept as a base layer so names known before this change do not vanish;
+  /// the active wallet's own descriptors overlay it.
+  final Map<String, TokenBalance> _legacyTokenMeta = {};
   static const _tokenMetaKey = 'argus_token_meta_v2';
   bool _tokenMetaDirty = false;
 
@@ -774,16 +791,50 @@ class WalletService with WidgetsBindingObserver {
       try { RustLib.instance.api.crateApiCancelTokenMetadata(); } catch (_) {}
     }
     _descriptorEpoch++;
+    // An in-flight table load belongs to the epoch just discarded and will
+    // refuse to apply itself. Drop the memoization with it, or the next
+    // reader awaits that same aborted future and silently gets no table —
+    // leaving persisted names unavailable until the wallet is reactivated,
+    // and letting a later pass overwrite the stored table with only the
+    // subset it happened to fetch.
+    _tableLoadedFor = null;
+    _tableLoad = null;
     _descriptors.clear();
     metadataChanges.value++;
   }
 
+  /// Non-null while a wipe is in progress. Table loads wait behind it:
+  /// clearing memory and bumping the epoch happens first, but the stored
+  /// tables are deleted several awaits later, and a load starting in that
+  /// window would capture the NEW epoch, read the not-yet-deleted table and
+  /// put it all back — passing every epoch check on the way.
+  Future<void>? _wipe;
+
   Future<void> clearCollectibleData() async {
-    clearSessionMetadata();
-    _tokenMeta.clear();
-    _tokenMetaDirty = false;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_tokenMetaKey);
+    final done = Completer<void>();
+    _wipe = done.future;
+    try {
+      clearSessionMetadata();
+      // Balance snapshots and published holdings remain intact. This clears
+      // lookup caches, not the wallet's last known view of its holdings.
+      _tokenMeta.clear();
+      _legacyTokenMeta.clear();
+      _descriptorCache.clear();
+      _metadataMisses.clear();
+      // A queued write would otherwise recreate what this just cleared.
+      _pendingFlush.clear();
+      _tokenMetaDirty = false;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_tokenMetaKey);
+      await TokenDescriptorStore.clearAll();
+    } finally {
+      _wipe = null;
+      done.complete();
+      // Anything that queued behind the wipe reloads from storage that is
+      // now empty, so there is nothing left to restore.
+      _tableLoadedFor = null;
+      _tableLoad = null;
+    }
   }
 
   /// One explicit per-item request. New descriptors are memory-only, scoped
@@ -800,7 +851,7 @@ class WalletService with WidgetsBindingObserver {
     }
     if (provider != (providerIsNode ? networkController.activeUrl : networkController.explorer))
       throw StateError('Metadata provider changed');
-    if (_metadataBusy) throw StateError('Another metadata request is running');
+    if (_metadataBusy) throw MetadataBusyException();
     if (!_observingMetadata) {
       WidgetsBinding.instance.addObserver(this);
       _observingMetadata = true;
@@ -889,10 +940,9 @@ class WalletService with WidgetsBindingObserver {
             .length >
         16384)
       return;
-    _tokenMeta.remove(meta.id);
-    while (_tokenMeta.length >= 1000) {
-      _tokenMeta.remove(_tokenMeta.keys.first);
-    }
+    // No independent eviction: `_descriptorCache` bounds growth, and the
+    // two must agree. Dropping an entry here while the cache still holds it
+    // would show an unresolved id that is never requested again.
     _tokenMeta[meta.id] = meta;
     _tokenMetaDirty = true;
   }
@@ -911,7 +961,7 @@ class WalletService with WidgetsBindingObserver {
       for (final entry in map.entries.take(1000)) {
         final v = entry.value;
         if (v is! Map) continue;
-        _tokenMeta[entry.key] = TokenBalance(
+        _legacyTokenMeta[entry.key] = TokenBalance(
           id: entry.key,
           amount: 0,
           name: v['name'] as String?,
@@ -920,29 +970,128 @@ class WalletService with WidgetsBindingObserver {
           iconUrl: v['iconUrl'] as String?,
           metadataState: MetadataState.partial,
         );
+        _tokenMeta[entry.key] = _legacyTokenMeta[entry.key]!;
       }
     } catch (_) {
       // A corrupt cache only costs a refetch.
     }
   }
 
+  /// Writes descriptors to the active wallet's table. The legacy app-wide
+  /// store is read at startup but never written again: it recorded no
+  /// evidence, and one table shared by every wallet associates them.
   Future<void> persistTokenMeta() async {
     if (!_tokenMetaDirty) return;
+    final walletId = _currentWalletId;
+    if (walletId == null || walletId.isEmpty) return;
     _tokenMetaDirty = false;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(
-      _tokenMetaKey,
-      jsonEncode({
-        for (final e in _tokenMeta.entries)
-          e.key: {
-            'name': e.value.name,
-            'decimals': e.value.decimals,
-            'emissionAmount': e.value.emissionAmount,
-            'iconUrl': e.value.iconUrl,
-          },
-      }),
+    // Snapshot synchronously. `save` suspends on SharedPreferences, and a
+    // wallet switch in that window clears or repopulates `_descriptorCache`
+    // in place — passing it by reference could write the new wallet's
+    // descriptors under the old wallet's key, or erase the old table.
+    await TokenDescriptorStore.save(
+      walletId,
+      Map<String, CachedDescriptor>.from(_descriptorCache),
     );
   }
+
+  /// Loads the active wallet's descriptors over whatever the legacy store
+  /// supplied. Called when a wallet becomes active, not once at startup.
+  /// [expectedEpoch] is the descriptor epoch at the moment the load was
+  /// *requested*. Capturing it here instead would be too late: the load is
+  /// chained behind a flush, so a wipe can land before this body starts and
+  /// the load would then adopt the new epoch and undo it.
+  Future<void> loadWalletTokenMeta(String walletId, {int? expectedEpoch}) async {
+    final epoch = expectedEpoch ?? _descriptorEpoch;
+    if (epoch != _descriptorEpoch) return;
+    final loaded = await TokenDescriptorStore.load(walletId);
+    if (_currentWalletId != walletId || epoch != _descriptorEpoch) return;
+    // This runs unawaited after a wallet switch, so a sync may already have
+    // resolved descriptors that are newer than the table on disk. Disk fills
+    // gaps; it never overwrites what this session just learned.
+    _descriptorOwner = walletId;
+    for (final e in loaded.entries) {
+      _descriptorCache.putIfAbsent(e.key, () => e.value);
+    }
+    // Deliberately not clearing _metadataMisses: wiping it here would race a
+    // sync in flight and let it re-ask about ids that just failed.
+    // _setHandle clears it synchronously, where the wallet actually changes.
+    _rebuildTokenMetaView();
+  }
+
+  String? _tableLoadedFor;
+  Future<void>? _tableLoad;
+
+  /// Loads the active wallet's descriptor table once, on the first path that
+  /// needs it. Memoized per wallet so concurrent syncs share one read.
+  /// Tables captured from a wallet that was switched away from before its
+  /// descriptors were written. Drained on the next awaited path rather than
+  /// fired and forgotten, which would leave a platform-channel future owned
+  /// by nobody.
+  final List<(String, Map<String, CachedDescriptor>)> _pendingFlush = [];
+
+  /// Snapshots [walletId]'s dirty descriptors for writing, synchronously, so
+  /// whatever happens next cannot alter what gets saved or where.
+  void _captureUnwrittenDescriptors(String? walletId) {
+    if (!_tokenMetaDirty || walletId == null || walletId.isEmpty) return;
+    if (_descriptorCache.isEmpty) return;
+    _pendingFlush.add((
+      walletId,
+      Map<String, CachedDescriptor>.from(_descriptorCache),
+    ));
+    _tokenMetaDirty = false;
+  }
+
+  Future<void> flushPendingDescriptors() async {
+    while (_pendingFlush.isNotEmpty) {
+      final (walletId, table) = _pendingFlush.removeAt(0);
+      try {
+        await TokenDescriptorStore.save(walletId, table);
+      } catch (_) {
+        // A table that cannot be written is not worth retrying forever.
+      }
+    }
+  }
+
+  Future<void> ensureWalletTable() {
+    final walletId = _currentWalletId;
+    if (walletId == null || walletId.isEmpty) return Future<void>.value();
+    if (_tableLoadedFor == walletId && _tableLoad != null) return _tableLoad!;
+    _tableLoadedFor = walletId;
+    final epoch = _descriptorEpoch;
+    final barrier = _wipe ?? Future<void>.value();
+    return _tableLoad = barrier
+        .then((_) => flushPendingDescriptors())
+        .then((_) => loadWalletTokenMeta(walletId, expectedEpoch: epoch))
+        .catchError((_) {});
+  }
+
+  /// The legacy app-wide table as a base layer, with this wallet's own
+  /// descriptors over the top.
+  void _rebuildTokenMetaView() {
+    _tokenMeta
+      ..clear()
+      ..addAll(_legacyTokenMeta);
+    for (final e in _descriptorCache.entries) {
+      _tokenMeta[e.key] = _asBalance(e.value);
+    }
+  }
+
+  static TokenBalance _asBalance(CachedDescriptor d) => TokenBalance(
+    id: d.id,
+    amount: 0,
+    name: d.name,
+    decimals: d.decimals,
+    emissionAmount: d.emissionAmount,
+    iconUrl: d.iconUrl,
+    supplyEvidence: d.supplyEvidence,
+    decimalsEvidence: d.decimalsEvidence,
+    declaredAssetKind: d.declaredAssetKind,
+    metadataState: d.metadataState,
+    mediaState: d.mediaState,
+    source: d.source,
+  );
+
 
   /// Migrate pre-multi-wallet single-slot storage to a new wallet ID.
   Future<void> _migrateLegacyIfNeeded() async {
@@ -1025,6 +1174,9 @@ class WalletService with WidgetsBindingObserver {
       wrapKey: map['wrap_key'] as String,
     );
     _setHandle(id, session.handleId);
+    // Write the outgoing wallet's table now rather than waiting for the
+    // incoming wallet's first sync, which may never come.
+    await flushPendingDescriptors();
     return session;
   }
 
@@ -1055,6 +1207,7 @@ class WalletService with WidgetsBindingObserver {
     );
     final id = walletId ?? const Uuid().v4();
     _setHandle(id, raw);
+    await flushPendingDescriptors();
   }
 
   /// Lock the currently active wallet. If [walletId] is provided, lock only
@@ -1066,6 +1219,14 @@ class WalletService with WidgetsBindingObserver {
   Future<void> _lock(String? walletId, {required bool switching}) async {
     clearSessionMetadata();
     final wid = walletId ?? _currentWalletId;
+    // Locking clears the active wallet id, so a metadata pass still in
+    // flight can no longer prove ownership and its finally will skip the
+    // write. Capture here as well as in `_setHandle`: switching goes
+    // through lock first, and `_setHandle` would then see no outgoing id.
+    // Only when the wallet being locked is the one whose descriptors are in
+    // memory. Locking some other wallet must not file the active wallet's
+    // table under its id.
+    if (wid == _currentWalletId) _captureUnwrittenDescriptors(wid);
     final active = wid == _currentWalletId;
     final id = _handles[wid];
     if (active) {
@@ -1214,11 +1375,336 @@ class WalletService with WidgetsBindingObserver {
   /// Token metadata already known (persisted cache), without a node call.
   TokenBalance? cachedTokenMeta(String id) => _tokenMeta[id];
 
-  /// Fetches metadata for any of [ids] not yet known and persists it.
-  Future<void> prefetchTokenMeta(Iterable<String> ids) async {
-    // Deliberately cache-only. Receiving or displaying an ID is not consent
-    // to disclose it to a metadata provider.
+  /// Ids this session already asked the node about and did not get an answer
+  /// for. Without it a wallet of unresolvable tokens re-asks on every sync.
+  final Set<String> _metadataMisses = {};
+
+  /// Set when the node cannot serve issuance lookups at all — no extraIndex,
+  /// or an endpoint `token_descriptor::load_from` refuses (it is HTTPS-only,
+  /// so a user-configured `http://ip:port` node can never answer). One such
+  /// failure stops the whole wallet from retrying every sync.
+  bool _metadataUnsupported = false;
+
+  /// True when the active node has proved unable to resolve issuance data,
+  /// so the UI can say so instead of leaving ids unexplained.
+  bool get metadataLookupUnsupported => _metadataUnsupported;
+
+  /// Cleared when the provider changes: a new node deserves one chance.
+  String? _metadataCapabilityFor;
+
+  /// Resolves any of [ids] not already cached, from [servedBy] — the node
+  /// that actually answered the balance request these ids came from.
+  ///
+  /// Every piece of context is an argument rather than an ambient read.
+  /// `_currentWalletId` and `networkController.activeUrl` can both change
+  /// while this runs, and reading them here would let a response for wallet
+  /// A be written under wallet B, or send A's ids to a node that never saw
+  /// them. [stillCurrent] is the caller's own generation check.
+  ///
+  /// Only ordinary public holdings are passed in. Stealth-only ids are never
+  /// given to this method: they are not derivable from the wallet's public
+  /// addresses, so [servedBy] has never seen them.
+  ///
+  /// This is the reversal of an earlier posture that held "receiving or
+  /// displaying an ID is not consent to disclose it to a metadata provider".
+  /// The balance request already crossed that line: [servedBy] received the
+  /// addresses and answered with the boxes these ids come from. Running it
+  /// after sync publishes — rather than when a token is tapped — also keeps
+  /// the provider from learning which token the user looked at.
+  Future<Map<String, TokenBalance>> prefetchTokenMeta(
+    Iterable<String> ids, {
+    required String walletId,
+    required String servedBy,
+    required bool Function() stillCurrent,
+  }) async {
+    if (walletId.isEmpty || servedBy.isEmpty) return const {};
+    if (!isUnlocked || !stillCurrent()) return const {};
+    // Captured before the first await. Taking it afterwards would let a pass
+    // that was suspended across a wipe adopt the new epoch and write its
+    // pre-wipe results back.
+    final epoch = _descriptorEpoch;
+    bool owns() => _owns(walletId, stillCurrent) && epoch == _descriptorEpoch;
+    await ensureWalletTable();
+    if (!owns()) return const {};
+
+    // Capability and miss state belong to a provider. Only the pass that
+    // introduced this provider may reset them, or an overlapping pass on
+    // another node would clear the verdict this one is about to record.
+    final ownsProvider = _metadataCapabilityFor == servedBy;
+    if (!ownsProvider) {
+      _metadataCapabilityFor = servedBy;
+      _metadataUnsupported = false;
+      _metadataMisses.clear();
+    }
+
+    final requested = [
+      for (final id in ids)
+        if (id.length == 64) id,
+    ];
+    // Already-known descriptors go back to the caller too. After a restart
+    // the display cache is empty when holdings publish, so returning only
+    // freshly fetched entries would leave a wallet full of cached names
+    // showing raw ids until some later hydration.
+    final resolvedNow = <String, TokenBalance>{
+      for (final id in requested)
+        if (cachedTokenMeta(id) != null) id: cachedTokenMeta(id)!,
+    };
+
+    // Declared outside the try so the finally can advance the cursor.
+    var attempted = 0;
+    try {
+      if (_metadataUnsupported) return resolvedNow;
+      final wanted = [
+        for (final id in requested)
+          // The descriptor's own flag is the only authority. A parallel set
+          // in memory survived wallet switches and forced refetches of
+          // another wallet's complete descriptors, which a second box
+          // failure could then downgrade.
+          if ((_descriptorCache[id]?.incomplete ?? true) &&
+              !_legacyTokenMeta.containsKey(id) &&
+              !_metadataMisses.contains(id))
+            id,
+      ];
+
+      // Rotate the starting point. A pass always restarting at the head
+      // would let a few permanently failing ids monopolise the budget and
+      // starve everything behind them.
+      final cursorKey = '$walletId|$servedBy';
+      final cursor = _passCursors[cursorKey] ?? 0;
+      final start = wanted.isEmpty ? 0 : cursor % wanted.length;
+      final ordered = [...wanted.skip(start), ...wanted.take(start)];
+
+      // Pass-local: an exhausted counter inherited from a previous pass
+      // would end a healthy one on its first hiccup.
+      var consecutiveRetryable = 0;
+      var consecutiveNotFound = 0;
+      for (final id in ordered) {
+        if (!owns() || _metadataUnsupported) return resolvedNow;
+        if (attempted >= maxTokenMetaPerSync) return resolvedNow;
+        // An explicit request owns the job. Yield rather than compete.
+        if (_metadataBusy) return resolvedNow;
+        _metadataBusy = true;
+        attempted++;
+        try {
+          final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
+            tokenId: id,
+            providerUrl: servedBy,
+            providerIsNode: true,
+          );
+          // Discard rather than return: results from a session the user has
+          // discarded must not reach the screen.
+          if (!owns()) return const {};
+          final m = jsonDecode(raw) as Map<String, dynamic>;
+          if (m['id'] != id) continue;
+          consecutiveNotFound = 0;
+          _rememberDescriptor(id, m, servedBy);
+          // The index answered but the issuance box did not, so the
+          // registers are missing. Keep what came back — a name beats an id
+          // — but leave the token eligible so a later pass can complete it
+          // rather than caching a register-less descriptor forever.
+          final meta = cachedTokenMeta(id);
+          if (meta != null) resolvedNow[id] = meta;
+        } catch (e) {
+          if (!owns()) return const {};
+          if (e is MetadataBusyException) return resolvedNow;
+          final text = e.toString().toLowerCase();
+          if (text.contains('already running')) return resolvedNow;
+          if (text.contains('cancelled') || text.contains('canceled')) {
+            return const {};
+          }
+          // Only the pass that owns this provider may record anything about
+          // it — misses included. A late failure from a node that no longer
+          // holds the slot would otherwise suppress this token for whichever
+          // node does.
+          if (_metadataCapabilityFor != servedBy) return resolvedNow;
+          // A provider that failed to answer has said nothing — not about
+          // this token and not about its own capabilities. Short-circuit
+          // before any classification: these error strings carry the request
+          // URL, so a token id containing "404" would otherwise be counted
+          // as a not-found, and one containing "extraindex" would write the
+          // node off outright.
+          if (!_looksDurableNegative(e)) {
+            if (++consecutiveRetryable >= maxConsecutiveRetryable) {
+              // The node is not answering at all; stop burning the budget.
+              return resolvedNow;
+            }
+            continue;
+          }
+          consecutiveRetryable = 0;
+          // A miss recorded before the request would outlive a pass that
+          // never finished, suppressing a token that might have resolved.
+          _metadataMisses.add(id);
+          if (_looksUnsupported(e)) {
+            // Unambiguous: the endpoint says it cannot do this at all.
+            _metadataUnsupported = true;
+            return resolvedNow;
+          }
+          if (_looksNotFound(e)) {
+            // A run of these ends THIS pass but records no verdict. A node
+            // without the index answers 404, but so does a capable node
+            // asked about tokens it has never seen — and eight unknown
+            // tokens must not disable a provider that would have resolved
+            // the ninth.
+            if (++consecutiveNotFound >= notFoundRunBeforeUnsupported) {
+              return resolvedNow;
+            }
+          } else {
+            consecutiveNotFound = 0;
+          }
+        } finally {
+          _metadataBusy = false;
+        }
+      }
+      return resolvedNow;
+    } finally {
+      final key = '$walletId|$servedBy';
+      _passCursors[key] = (_passCursors[key] ?? 0) + (attempted == 0 ? 1 : attempted);
+      // Covers every exit, including the ones that resolve nothing: a pass
+      // invalidated after some successes would otherwise leave them dirty
+      // and lose them at the next wallet switch.
+      if (_tokenMetaDirty && _currentWalletId == walletId) {
+        await persistTokenMeta();
+      }
+      // That await is itself a window: a wipe landing in it would leave the
+      // already-selected map free to reach the caller and repopulate the
+      // display that was just cleared. Emptying it here is visible to the
+      // caller because the map is returned by reference.
+      if (!owns()) resolvedNow.clear();
+    }
   }
+
+  /// Whether this pass still belongs to the wallet that started it.
+  bool _owns(String walletId, bool Function() stillCurrent) =>
+      isUnlocked && _currentWalletId == walletId && stillCurrent();
+
+  /// Ceiling for one refresh. What is left resolves on later refreshes,
+  /// since misses are only remembered for ids actually attempted.
+  static const maxTokenMetaPerSync = 40;
+
+  /// An unambiguous "this endpoint cannot serve issuance lookups at all".
+  /// A 404 is deliberately NOT here: `/blockchain/token/byId/{id}` answers
+  /// that both for a node without the index and for a token the node simply
+  /// does not know, and treating the first missing dust token as a dead node
+  /// would unname the whole wallet.
+  static bool _looksUnsupported(Object error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('extraindex') ||
+        text.contains('extra_index') ||
+        text.contains('must be an https url');
+  }
+
+  /// How long a run of not-founds ends a pass. Deliberately not a verdict
+  /// about the provider: unknown tokens and a missing index look alike.
+  static const notFoundRunBeforeUnsupported = 8;
+
+  /// Consecutive failures-to-answer before the pass gives up. Bounded so a
+  /// node that is simply down cannot consume the whole per-pass budget.
+  static const maxConsecutiveRetryable = 3;
+
+  /// Where the next pass starts in the candidate list, so a stubborn prefix
+  /// cannot starve the ids behind it. Keyed by wallet and provider: a single
+  /// counter let one wallet's passes advance another's, so alternating
+  /// wallets could land the same id at the head every time and never ask it.
+  final Map<String, int> _passCursors = {};
+
+  /// Marker the Rust side puts on an error the provider failed to answer,
+  /// as opposed to one it answered negatively.
+  static const retryableMarker = 'RETRYABLE:';
+
+  /// Whether the provider gave a definite "no such token", as opposed to
+  /// failing to answer. Only the former is worth remembering.
+  ///
+  /// The distinction is made in Rust, where the error still has a type:
+  /// `reqwest::Error`'s Display collapses connection refusal, DNS and TLS
+  /// failures into one opaque string, so no amount of matching here could
+  /// tell them apart from an answer. The timeout raised on this side is
+  /// recognised too, since it never reaches that layer.
+  static bool _looksDurableNegative(Object error) {
+    final text = error.toString();
+    if (text.contains(retryableMarker)) return false;
+    final lower = text.toLowerCase();
+    return !lower.contains('timed out') && !lower.contains('cancelled');
+  }
+
+  static bool _looksNotFound(Object error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('404') || text.contains('not found');
+  }
+
+  void _rememberDescriptor(String id, Map<String, dynamic> m, String source) {
+    final descriptor = CachedDescriptor(
+      id: id,
+      name: m['name'] as String?,
+      decimals: (m['decimals'] as num?)?.toInt() ?? 0,
+      emissionAmount: (m['emissionAmount'] as num?)?.toInt(),
+      iconUrl: m['iconUrl'] as String?,
+      supplyEvidence: TokenDescriptorStore.byName(
+        SupplyEvidence.values,
+        m['supplyEvidence'],
+        SupplyEvidence.unknown,
+      ),
+      decimalsEvidence: TokenDescriptorStore.byName(
+        DecimalsEvidence.values,
+        m['decimalsEvidence'],
+        DecimalsEvidence.unknown,
+      ),
+      declaredAssetKind: TokenDescriptorStore.byName(
+        DeclaredAssetKind.values,
+        m['declaredAssetKind'],
+        DeclaredAssetKind.none,
+      ),
+      metadataState: TokenDescriptorStore.byName(
+        MetadataState.values,
+        m['metadataState'],
+        MetadataState.partial,
+      ),
+      mediaState: TokenDescriptorStore.byName(
+        MediaState.values,
+        m['mediaState'],
+        MediaState.unknown,
+      ),
+      source: source,
+      // Persisted, so a restart can still tell that the issuance registers
+      // were never read and ask for them again.
+      incomplete: m['incomplete'] == true,
+    );
+    // One bound, shared with the display view and the persisted table, so
+    // an eviction here cannot leave a resolved token looking unresolved and
+    // be requested again on every refresh forever.
+    _descriptorCache.remove(id);
+    while (_descriptorCache.length >= TokenDescriptorStore.maxEntries) {
+      final oldest = _descriptorCache.keys.first;
+      _descriptorCache.remove(oldest);
+      _tokenMeta.remove(oldest);
+    }
+    _descriptorCache[id] = descriptor;
+    // `TokenBalance`'s constructor runs issuerText() over the name, so a
+    // hostile label is sanitised on the way in as well as on the way out.
+    rememberTokenMeta(
+      TokenBalance(
+        id: id,
+        amount: 0,
+        name: descriptor.name,
+        decimals: descriptor.decimals,
+        emissionAmount: descriptor.emissionAmount,
+        iconUrl: descriptor.iconUrl,
+        supplyEvidence: descriptor.supplyEvidence,
+        decimalsEvidence: descriptor.decimalsEvidence,
+        declaredAssetKind: descriptor.declaredAssetKind,
+        metadataState: descriptor.metadataState,
+        mediaState: descriptor.mediaState,
+        source: source,
+      ),
+    );
+  }
+
+  final Map<String, CachedDescriptor> _descriptorCache = {};
+
+  /// Which wallet the in-memory descriptors belong to. Tracked separately
+  /// from `_currentWalletId`, which is null whenever the wallet is locked —
+  /// deleting an already-locked wallet would otherwise look like it
+  /// concerned someone else and leave its descriptors behind.
+  String? _descriptorOwner;
 
   /// Delete a wallet and all its secure storage.
   Future<void> deleteWallet(String walletId) async {
@@ -1227,6 +1713,28 @@ class WalletService with WidgetsBindingObserver {
     if (_handles.containsKey(walletId)) {
       await lock(walletId);
     }
+    // Invalidate before clearing, so a load or save still in flight for this
+    // wallet cannot recreate the table after it is gone.
+    if (_tableLoadedFor == walletId) {
+      _tableLoadedFor = null;
+      _tableLoad = null;
+    }
+    if (_descriptorOwner == walletId) {
+      // Its descriptors must not outlive it in memory. Guarded on nothing
+      // having been activated since, so a newly opened wallet is not emptied
+      // by a deletion that preceded it.
+      _descriptorCache.clear();
+      _tokenMeta
+        ..clear()
+        ..addAll(_legacyTokenMeta);
+      _metadataMisses.clear();
+      _tokenMetaDirty = false;
+      _descriptorOwner = null;
+    }
+    // Drop queued writes for this wallet first, or a flush after the delete
+    // would write its table straight back.
+    _pendingFlush.removeWhere((entry) => entry.$1 == walletId);
+    await TokenDescriptorStore.clear(walletId).catchError((_) {});
     await SecureStorageService.deleteWallet(walletId);
     await _removeWalletMeta(walletId);
   }
@@ -2075,6 +2583,11 @@ class WalletService with WidgetsBindingObserver {
     return hydrateTokens(map['tokens']);
   }
 
+  /// Cache-only, always. Resolution is a separate pass the sync controller
+  /// runs after balances are published, so a slow node cannot hold up the
+  /// balance the user is waiting for, and so the ids that go to the network
+  /// are chosen at one explicit call site rather than by a flag threaded
+  /// through this interface.
   Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
     final items = raw is List ? raw : const [];
     final jobs = <Future<TokenBalance>>[];
@@ -2085,10 +2598,7 @@ class WalletService with WidgetsBindingObserver {
       if (id.isEmpty || amount <= 0) continue;
       jobs.add(tokenMeta(id, amount));
     }
-    final out = await Future.wait(jobs);
-    // Fire and forget: the write must not slow the balance refresh.
-    persistTokenMeta().catchError((_) {});
-    return out;
+    return Future.wait(jobs);
   }
 
   /// Carries completeness with the rows so overlapping wallet requests cannot
@@ -2352,8 +2862,20 @@ class WalletService with WidgetsBindingObserver {
     walletSyncController.deactivate();
     stealthService.reset();
     mixService.reset();
+    // Capture the outgoing wallet's unwritten table BEFORE
+    // `_currentWalletId` moves — reading it afterwards would file the old
+    // wallet's descriptors under the new wallet's key.
+    _captureUnwrittenDescriptors(_currentWalletId);
     _handles[walletId] = id;
     _currentWalletId = walletId;
+    _descriptorOwner = walletId;
+    _descriptorCache.clear();
+    _metadataMisses.clear();
+    _tokenMeta
+      ..clear()
+      ..addAll(_legacyTokenMeta);
+    // The table loads lazily, on the first path that needs it; the
+    // memoization was already dropped by clearSessionMetadata above.
     walletSyncController.activateWallet(walletId);
     currentWalletId.value = walletId;
     unlocked.value = true;
