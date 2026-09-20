@@ -178,13 +178,13 @@ pub fn build_swap_dexy_tx(
             ),
         ),
     };
-    // As before: an ERG-funded swap keeps its change in the user's own box
-    // after the swap output; a Dexy-funded one merges the ERG it receives
-    // with the change in the output box.
-    let (merge_change, change_tree) = match request.direction {
-        SwapDirection::ErgToDexy => (false, request.user_ergo_tree.as_str()),
-        SwapDirection::DexyToErg => (true, output_ergo_tree),
-    };
+    // An ERG-funded swap keeps its change in the user's own box after the
+    // swap output. A Dexy-funded one merges the ERG it receives with the
+    // change, but only into the user's own box: with a recipient set, the
+    // change (and every leftover token) stays with the user.
+    let merge_change = matches!(request.direction, SwapDirection::DexyToErg)
+        && request.recipient_ergo_tree.is_none();
+    let change_tree = request.user_ergo_tree.as_str();
     let (selected, user_side) = ergo_tx::select_and_lay_out(
         erg_needed as u64,
         |budget| select_inputs_for_spend(&request.user_inputs, budget, token_requirement),

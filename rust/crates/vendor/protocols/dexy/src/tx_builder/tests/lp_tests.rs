@@ -532,3 +532,32 @@ fn test_action_nft_output_self_preservation() {
     assert_eq!(output.assets[0].token_id, LP_MINT_NFT_ID);
     assert_eq!(output.assets[0].amount, "1");
 }
+
+#[test]
+fn lp_deposit_with_a_recipient_keeps_the_change_tokens_with_the_user() {
+    let ctx = create_deposit_context(1_000_000_000_000, 500_000, 99_900_000_000);
+    let request = LpDepositRequest {
+        variant: DexyVariant::Gold,
+        deposit_erg: 10_000_000_000,
+        deposit_dexy: 5_000,
+        user_address: "user_addr".to_string(),
+        user_ergo_tree: "user_ergo_tree".to_string(),
+        user_inputs: vec![create_test_input(
+            100_000_000_000,
+            vec![(DEXY_TOKEN_ID, 10_000), ("other_token", 3)],
+        )],
+        current_height: 100000,
+        recipient_ergo_tree: Some("recipient_ergo_tree".to_string()),
+    };
+    let tx = build_lp_deposit_tx(&request, &ctx, DEXY_TOKEN_ID, LP_TOKEN_ID, INITIAL_LP)
+        .unwrap()
+        .unsigned_tx;
+    let recipient = &tx.outputs[2];
+    assert_eq!(recipient.ergo_tree, "recipient_ergo_tree");
+    assert_eq!(recipient.assets.len(), 1, "LP tokens only: {:?}", recipient.assets);
+    assert_eq!(recipient.assets[0].token_id, LP_TOKEN_ID);
+    let user: Vec<_> = tx.outputs.iter().filter(|o| o.ergo_tree == "user_ergo_tree").collect();
+    assert_eq!(user.len(), 1);
+    let ids: Vec<&str> = user[0].assets.iter().map(|a| a.token_id.as_str()).collect();
+    assert!(ids.contains(&DEXY_TOKEN_ID) && ids.contains(&"other_token"), "{ids:?}");
+}

@@ -141,11 +141,14 @@ pub fn merge_assets(assets: Vec<Eip12Asset>) -> Vec<Eip12Asset> {
             }
         }
     }
+    // Kept as the u64 string: a sum past `i64::MAX` cannot come from valid
+    // inputs (a token's whole supply fits an i64), and if it ever did the
+    // later conversion rejects it instead of a wrapped negative slipping by.
     order
         .into_iter()
-        .map(|id| {
-            let amount = totals[&id];
-            Eip12Asset::new(id, amount as i64)
+        .map(|id| Eip12Asset {
+            amount: totals[&id].to_string(),
+            token_id: id,
         })
         .collect()
 }

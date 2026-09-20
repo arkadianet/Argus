@@ -201,8 +201,8 @@ pub fn build_lp_deposit_tx(
         |change_erg, change_tokens| {
             ergo_tx::user_outputs(
                 lp_output.clone(),
-                true,
-                output_ergo_tree,
+                request.recipient_ergo_tree.is_none(),
+                &request.user_ergo_tree,
                 change_erg,
                 change_tokens,
                 request.current_height,
