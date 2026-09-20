@@ -5,6 +5,7 @@ import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/network_controller.dart';
 import 'package:argus_wallet/services/token_descriptor_store.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -63,8 +64,11 @@ class ResolverApi extends RustLibApi {
     // What reqwest actually emits for connection refusal, DNS and TLS
     // failure — indistinguishable from each other, hence the Rust marker.
     if (failWith == 'transport') {
+      // The real message carries the request URL, and therefore the token
+      // id: ids containing "404" or "extraindex" must not be misread.
       throw StateError(
-        'RETRYABLE: error sending request for url (https://node.example/x)',
+        'RETRYABLE: error sending request for url '
+        '(https://node.example/blockchain/token/byId/$tokenId)',
       );
     }
     if (failWith == 'server') {
@@ -94,7 +98,15 @@ class ResolverApi extends RustLibApi {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final api = ResolverApi();
-  setUpAll(() => RustLib.initMock(api: api));
+  setUpAll(() {
+    RustLib.initMock(api: api);
+    // Secure storage is a platform channel; deletion touches it.
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+          const MethodChannel('com.argus.wallet/secure_storage'),
+          (call) async => null,
+        );
+  });
   tearDownAll(RustLib.dispose);
 
   setUp(() {
@@ -614,6 +626,122 @@ void main() {
     expect(onDisk[_id('ab')]?.name, 'Name ab',
         reason: 'locking clears the wallet id, so the capture cannot wait '
             'for _setHandle');
+  });
+
+  test('a retryable error carrying 404 in the url is not a not-found',
+      () async {
+    final svc = await unlocked('w22');
+    api.failWith = 'transport';
+    // A perfectly ordinary token id that happens to contain "404".
+    const id = '404404404404404404404404404404404404404404404404404404404404'
+        '4044';
+    for (var i = 0; i < 12; i++) {
+      await svc.prefetchTokenMeta(
+        [id],
+        walletId: _wallet,
+        servedBy: networkController.activeUrl!,
+        stillCurrent: () => true,
+      );
+    }
+    expect(svc.metadataLookupUnsupported, isFalse,
+        reason: 'the url in the error text is not an answer about the node');
+
+    api.failWith = null;
+    api.asked.clear();
+    await svc.prefetchTokenMeta(
+      [id],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(api.asked, [id], reason: 'and the token is still asked about');
+  });
+
+  test('an incomplete descriptor is still completed after a restart',
+      () async {
+    final svc = await unlocked('w23');
+    api.incomplete = true;
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+
+    // A fresh service reading the persisted table must still know the
+    // registers are missing.
+    _wallet = 'w23';
+    final second = WalletService();
+    await second.restoreWallet('mock', walletId: 'w23');
+    api.incomplete = false;
+    api.asked.clear();
+    await second.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'w23',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(api.asked, [_id('ab')],
+        reason: 'otherwise one box-endpoint failure hides the registers for '
+            'the life of the install');
+  });
+
+  test('locking another wallet does not file this one under its id',
+      () async {
+    final svc = await unlocked('w24');
+    // The table has to be DIRTY at lock time for the capture to be reached
+    // at all, so keep a pass in flight rather than letting it persist.
+    final gate = Completer<String?>();
+    api.gate = gate;
+    api.gateOnCall = 2;
+    final pass = svc.prefetchTokenMeta(
+      [_id('ab'), _id('cd')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    while (api.asked.length < 2) {
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    // Lock a different, inactive wallet while w24 is active and dirty.
+    await svc.lock('some-other-wallet');
+    gate.complete(null);
+    await pass;
+    await svc.flushPendingDescriptors();
+
+    expect(await TokenDescriptorStore.load('some-other-wallet'), isEmpty,
+        reason: "the active wallet's table must not be written under another "
+            "wallet's id");
+    expect((await TokenDescriptorStore.load('w24'))[_id('ab')]?.name,
+        'Name ab',
+        reason: 'and must still reach its own');
+  });
+
+  test('deleting a wallet does not leave a queued write to resurrect it',
+      () async {
+    final svc = await unlocked('w25');
+    final gate = Completer<String?>();
+    api.gate = gate;
+    api.gateOnCall = 2;
+    final pass = svc.prefetchTokenMeta(
+      [_id('ab'), _id('cd')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    while (api.asked.length < 2) {
+      await Future<void>.delayed(Duration.zero);
+    }
+    await svc.lockForSwitch();
+    gate.complete(null);
+    await pass;
+
+    await svc.deleteWallet('w25');
+    await svc.flushPendingDescriptors();
+
+    expect(await TokenDescriptorStore.load('w25'), isEmpty,
+        reason: 'a queued write must not recreate a deleted wallet');
   });
 
   test('an unparseable table is not a descriptor', () async {

@@ -801,6 +801,9 @@ class WalletService with WidgetsBindingObserver {
     _legacyTokenMeta.clear();
     _descriptorCache.clear();
     _metadataMisses.clear();
+    _incompleteDescriptors.clear();
+    // A queued write would otherwise recreate what this just cleared.
+    _pendingFlush.clear();
     _tokenMetaDirty = false;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenMetaKey);
@@ -1184,7 +1187,10 @@ class WalletService with WidgetsBindingObserver {
     // flight can no longer prove ownership and its finally will skip the
     // write. Capture here as well as in `_setHandle`: switching goes
     // through lock first, and `_setHandle` would then see no outgoing id.
-    _captureUnwrittenDescriptors(wid);
+    // Only when the wallet being locked is the one whose descriptors are in
+    // memory. Locking some other wallet must not file the active wallet's
+    // table under its id.
+    if (wid == _currentWalletId) _captureUnwrittenDescriptors(wid);
     final active = wid == _currentWalletId;
     final id = _handles[wid];
     if (active) {
@@ -1416,7 +1422,8 @@ class WalletService with WidgetsBindingObserver {
       final wanted = [
         for (final id in requested)
           if ((!_descriptorCache.containsKey(id) ||
-                  _incompleteDescriptors.contains(id)) &&
+                  _incompleteDescriptors.contains(id) ||
+                  _descriptorCache[id]!.incomplete) &&
               !_legacyTokenMeta.containsKey(id) &&
               !_metadataMisses.contains(id))
             id,
@@ -1451,6 +1458,7 @@ class WalletService with WidgetsBindingObserver {
           } else {
             _incompleteDescriptors.remove(id);
           }
+          _consecutiveRetryable = 0;
           _consecutiveNotFound = 0;
           final meta = cachedTokenMeta(id);
           if (meta != null) resolvedNow[id] = meta;
@@ -1467,14 +1475,23 @@ class WalletService with WidgetsBindingObserver {
           // holds the slot would otherwise suppress this token for whichever
           // node does.
           if (_metadataCapabilityFor != servedBy) return resolvedNow;
-          // Durable negatives only. A timeout, a dropped connection or a 5xx
-          // says nothing about the token: recording those would stop it ever
-          // being asked for again this session, even after the node recovers.
-          if (_looksDurableNegative(e)) {
-            // A miss recorded before the request would outlive a pass that
-            // never finished, suppressing a token that might have resolved.
-            _metadataMisses.add(id);
+          // A provider that failed to answer has said nothing — not about
+          // this token and not about its own capabilities. Short-circuit
+          // before any classification: these error strings carry the request
+          // URL, so a token id containing "404" would otherwise be counted
+          // as a not-found, and one containing "extraindex" would write the
+          // node off outright.
+          if (!_looksDurableNegative(e)) {
+            if (++_consecutiveRetryable >= maxConsecutiveRetryable) {
+              // The node is not answering at all; stop burning the budget.
+              return resolvedNow;
+            }
+            continue;
           }
+          _consecutiveRetryable = 0;
+          // A miss recorded before the request would outlive a pass that
+          // never finished, suppressing a token that might have resolved.
+          _metadataMisses.add(id);
           if (_looksUnsupported(e)) {
             _metadataUnsupported = true;
             return resolvedNow;
@@ -1530,6 +1547,11 @@ class WalletService with WidgetsBindingObserver {
 
   /// How long a run of not-founds must be before the node is written off.
   static const notFoundRunBeforeUnsupported = 8;
+
+  /// Consecutive failures-to-answer before the pass gives up. Bounded so a
+  /// node that is simply down cannot consume the whole per-pass budget.
+  static const maxConsecutiveRetryable = 3;
+  int _consecutiveRetryable = 0;
 
   /// Marker the Rust side puts on an error the provider failed to answer,
   /// as opposed to one it answered negatively.
@@ -1588,6 +1610,9 @@ class WalletService with WidgetsBindingObserver {
         MediaState.unknown,
       ),
       source: source,
+      // Persisted, so a restart can still tell that the issuance registers
+      // were never read and ask for them again.
+      incomplete: m['incomplete'] == true,
     );
     // One bound, shared with the display view and the persisted table, so
     // an eviction here cannot leave a resolved token looking unresolved and
@@ -1638,6 +1663,9 @@ class WalletService with WidgetsBindingObserver {
       _descriptorCache.clear();
       _tokenMetaDirty = false;
     }
+    // Drop queued writes for this wallet first, or a flush after the delete
+    // would write its table straight back.
+    _pendingFlush.removeWhere((entry) => entry.$1 == walletId);
     await TokenDescriptorStore.clear(walletId).catchError((_) {});
     await SecureStorageService.deleteWallet(walletId);
     await _removeWalletMeta(walletId);

@@ -38,6 +38,7 @@ class TokenDescriptorStore {
     'metadataState': d.metadataState.name,
     'mediaState': d.mediaState.name,
     'source': d.source,
+    if (d.incomplete) 'incomplete': true,
   };
 
   static CachedDescriptor? decode(String id, Object? raw) {
@@ -75,6 +76,7 @@ class TokenDescriptorStore {
           MediaState.unknown,
         ),
         source: raw['source'] as String?,
+        incomplete: raw['incomplete'] == true,
       );
     } catch (_) {
       // One unreadable row costs a refetch, not the whole table.
@@ -155,6 +157,7 @@ class CachedDescriptor {
     this.metadataState = MetadataState.partial,
     this.mediaState = MediaState.unknown,
     this.source,
+    this.incomplete = false,
   });
 
   final String id;
@@ -171,4 +174,9 @@ class CachedDescriptor {
   /// Endpoint this came from, so a descriptor's provenance survives a
   /// restart and is not silently attributed to whatever node is current.
   final String? source;
+
+  /// The issuance box could not be read, so the registers are missing.
+  /// Persisted: without it a restart cannot tell a partial descriptor from
+  /// a complete one, and would never ask for the rest again.
+  final bool incomplete;
 }
