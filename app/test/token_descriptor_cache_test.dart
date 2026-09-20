@@ -5,6 +5,7 @@ import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/network_controller.dart';
 import 'package:argus_wallet/services/token_descriptor_store.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
+import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -917,9 +918,29 @@ void main() {
     );
     expect(svc.cachedTokenMeta(_id('ab')), isNotNull, reason: 'control');
 
+    // Locked first: the id is already null by the time deletion runs, so
+    // anything keyed on "is this the active wallet" misses the cleanup.
+    await svc.lock('wD');
     await svc.deleteWallet('wD');
     expect(svc.cachedTokenMeta(_id('ab')), isNull,
         reason: "a deleted wallet's descriptors must not outlive it");
+  });
+
+  test('clearing collectible data strips names already published', () async {
+    // Goes through clearCollectibleData rather than calling the strip
+    // directly, so removing that call from the wipe fails here.
+    final svc = await unlocked('wS');
+    walletSyncController.tokens = [
+      TokenBalance(id: _id('ab'), amount: 5, name: 'Published'),
+    ];
+    addTearDown(walletSyncController.reset);
+
+    await svc.clearCollectibleData();
+
+    expect(walletSyncController.tokens.single.name, isNull,
+        reason: 'displayMetadata falls back to the holding, so a wiped name '
+            'would stay on screen');
+    expect(walletSyncController.tokens.single.amount, 5);
   });
 
   test('a load started during a wipe restores nothing', () async {

@@ -954,6 +954,25 @@ class WalletSyncController extends ChangeNotifier {
         .whenComplete(() => _nameResolution = null);
   }
 
+  /// Strips resolved metadata back out of the published holdings, keeping
+  /// the holdings themselves. `_applyResolved` copies names, evidence and
+  /// classification into `tokens`/`stealthTokens`, so clearing the service
+  /// caches alone would leave a wiped collectible still named and still
+  /// classified on screen.
+  void stripResolvedMetadata() {
+    List<TokenBalance> bare(List<TokenBalance> current) => [
+      for (final t in current)
+        TokenBalance(
+          id: t.id,
+          amount: t.amount,
+          stealthAmount: t.stealthAmount,
+        ),
+    ];
+    tokens = bare(tokens);
+    stealthTokens = bare(stealthTokens);
+    notifyListeners();
+  }
+
   /// Folds resolved descriptors into the holdings already on screen. Without
   /// this a completed refresh keeps showing truncated ids and zero-decimal
   /// amounts until some later hydration happens to pick them up.

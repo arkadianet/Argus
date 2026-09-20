@@ -618,6 +618,29 @@ void main() {
       gw.resolvedNames.clear();
     });
 
+    test('a wipe strips names from holdings already on screen', () async {
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'a1', 'amount': 5},
+          ],
+        },
+      };
+      gw.resolvedNames['a1'] = 'Resolved';
+      await c.refresh(discover: false);
+      await c.pendingNameResolution;
+      expect(c.tokens.single.name, 'Resolved', reason: 'control');
+
+      c.stripResolvedMetadata();
+
+      expect(c.tokens.single.name, isNull,
+          reason: 'clearing collectible data must not leave the name on '
+              'screen, since displayMetadata falls back to the holding');
+      expect(c.tokens.single.amount, 5, reason: 'the holding itself stays');
+      gw.resolvedNames.clear();
+    });
+
     test('nothing resolves when the serving node is unknown', () async {
       gw.balances = {
         'addr0': {

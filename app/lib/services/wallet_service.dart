@@ -815,6 +815,9 @@ class WalletService with WidgetsBindingObserver {
     _wipe = done.future;
     try {
       clearSessionMetadata();
+      // Descriptors already copied into the published holdings have to go
+      // too, or a wiped collectible keeps its name and classification.
+      walletSyncController.stripResolvedMetadata();
       _tokenMeta.clear();
       _legacyTokenMeta.clear();
       _descriptorCache.clear();
@@ -1007,6 +1010,7 @@ class WalletService with WidgetsBindingObserver {
     // This runs unawaited after a wallet switch, so a sync may already have
     // resolved descriptors that are newer than the table on disk. Disk fills
     // gaps; it never overwrites what this session just learned.
+    _descriptorOwner = walletId;
     for (final e in loaded.entries) {
       _descriptorCache.putIfAbsent(e.key, () => e.value);
     }
@@ -1697,12 +1701,15 @@ class WalletService with WidgetsBindingObserver {
 
   final Map<String, CachedDescriptor> _descriptorCache = {};
 
+  /// Which wallet the in-memory descriptors belong to. Tracked separately
+  /// from `_currentWalletId`, which is null whenever the wallet is locked —
+  /// deleting an already-locked wallet would otherwise look like it
+  /// concerned someone else and leave its descriptors behind.
+  String? _descriptorOwner;
+
   /// Delete a wallet and all its secure storage.
   Future<void> deleteWallet(String walletId) async {
     walletSyncController.forgetWallet(walletId);
-    // Recorded before locking, which clears the active wallet id and would
-    // otherwise make the cleanup below look like it concerns another wallet.
-    final wasActive = _currentWalletId == walletId;
     await WalletDatabaseService.clearWallet(walletId).catchError((_) {});
     if (_handles.containsKey(walletId)) {
       await lock(walletId);
@@ -1713,7 +1720,7 @@ class WalletService with WidgetsBindingObserver {
       _tableLoadedFor = null;
       _tableLoad = null;
     }
-    if (wasActive && _currentWalletId == null) {
+    if (_descriptorOwner == walletId) {
       // Its descriptors must not outlive it in memory. Guarded on nothing
       // having been activated since, so a newly opened wallet is not emptied
       // by a deletion that preceded it.
@@ -1723,6 +1730,7 @@ class WalletService with WidgetsBindingObserver {
         ..addAll(_legacyTokenMeta);
       _metadataMisses.clear();
       _tokenMetaDirty = false;
+      _descriptorOwner = null;
     }
     // Drop queued writes for this wallet first, or a flush after the delete
     // would write its table straight back.
@@ -2861,6 +2869,7 @@ class WalletService with WidgetsBindingObserver {
     _captureUnwrittenDescriptors(_currentWalletId);
     _handles[walletId] = id;
     _currentWalletId = walletId;
+    _descriptorOwner = walletId;
     _descriptorCache.clear();
     _metadataMisses.clear();
     _tokenMeta
