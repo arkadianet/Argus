@@ -1562,6 +1562,11 @@ class WalletService with WidgetsBindingObserver {
       if (_tokenMetaDirty && _currentWalletId == walletId) {
         await persistTokenMeta();
       }
+      // That await is itself a window: a wipe landing in it would leave the
+      // already-selected map free to reach the caller and repopulate the
+      // display that was just cleared. Emptying it here is visible to the
+      // caller because the map is returned by reference.
+      if (!owns()) resolvedNow.clear();
     }
   }
 
@@ -1695,6 +1700,9 @@ class WalletService with WidgetsBindingObserver {
   /// Delete a wallet and all its secure storage.
   Future<void> deleteWallet(String walletId) async {
     walletSyncController.forgetWallet(walletId);
+    // Recorded before locking, which clears the active wallet id and would
+    // otherwise make the cleanup below look like it concerns another wallet.
+    final wasActive = _currentWalletId == walletId;
     await WalletDatabaseService.clearWallet(walletId).catchError((_) {});
     if (_handles.containsKey(walletId)) {
       await lock(walletId);
@@ -1705,8 +1713,15 @@ class WalletService with WidgetsBindingObserver {
       _tableLoadedFor = null;
       _tableLoad = null;
     }
-    if (_currentWalletId == walletId) {
+    if (wasActive && _currentWalletId == null) {
+      // Its descriptors must not outlive it in memory. Guarded on nothing
+      // having been activated since, so a newly opened wallet is not emptied
+      // by a deletion that preceded it.
       _descriptorCache.clear();
+      _tokenMeta
+        ..clear()
+        ..addAll(_legacyTokenMeta);
+      _metadataMisses.clear();
       _tokenMetaDirty = false;
     }
     // Drop queued writes for this wallet first, or a flush after the delete

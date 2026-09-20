@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'token_evidence.dart';
@@ -112,11 +113,19 @@ class TokenDescriptorStore {
     }
   }
 
+  /// Test seam: runs just before a write. The window between selecting
+  /// descriptors and writing them is real and has to be reachable
+  /// deterministically, not by hoping a timer lands inside it.
+  @visibleForTesting
+  static Future<void> Function()? beforeSave;
+
   static Future<void> save(
     String walletId,
     Map<String, CachedDescriptor> entries,
   ) async {
     if (walletId.isEmpty) return;
+    final hook = beforeSave;
+    if (hook != null) await hook();
     // Serialize before suspending. Callers may hand over a map they mutate;
     // enumerating it after an await could capture a different wallet's data.
     final payload = jsonEncode({

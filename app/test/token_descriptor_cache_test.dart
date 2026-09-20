@@ -881,6 +881,47 @@ void main() {
         reason: 'a later reader must get a fresh load, not the aborted one');
   });
 
+  test('a wipe during persistence does not hand back its results', () async {
+    // The write itself is the window: the map is already selected, the pass
+    // suspends in its finally, and a wipe lands there. The caller must not
+    // receive descriptors the user has just cleared.
+    final svc = await unlocked('wP');
+    // The response is accepted and enters the result map while ownership
+    // holds; the wipe then lands inside the write itself.
+    var wiped = false;
+    TokenDescriptorStore.beforeSave = () async {
+      if (wiped) return;
+      wiped = true;
+      await svc.clearCollectibleData();
+    };
+    addTearDown(() => TokenDescriptorStore.beforeSave = null);
+
+    final out = await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wP',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(out, isEmpty,
+        reason: 'a pass invalidated before it returns must hand back nothing');
+  });
+
+  test('deleting the active wallet clears its descriptors from memory',
+      () async {
+    final svc = await unlocked('wD');
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wD',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(svc.cachedTokenMeta(_id('ab')), isNotNull, reason: 'control');
+
+    await svc.deleteWallet('wD');
+    expect(svc.cachedTokenMeta(_id('ab')), isNull,
+        reason: "a deleted wallet's descriptors must not outlive it");
+  });
+
   test('a load started during a wipe restores nothing', () async {
     // The other ordering: the load begins AFTER the wipe has cleared memory
     // and bumped the epoch, but BEFORE it has deleted the stored tables. It
