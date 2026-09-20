@@ -9,7 +9,7 @@ use citadel_core::constants::{MIN_BOX_VALUE_NANO as MIN_BOX_VALUE, TX_FEE_NANO a
 // block cost/size may still limit practical size before that hard ceiling.
 const MAX_SPLIT_OUTPUTS: usize = 100;
 const MAX_RESTRUCTURE_OUTPUTS: usize = 150;
-const MAX_TOKENS_PER_BOX: usize = 255;
+use crate::tx_helpers::MAX_TOKENS_PER_BOX;
 
 #[derive(Debug, thiserror::Error)]
 pub enum UtxoManagementError {
@@ -122,30 +122,28 @@ pub fn build_consolidate_tx(
         }
     }
 
-    if token_totals.len() > 255 {
-        return Err(UtxoManagementError::TooManyTokenTypes {
-            count: token_totals.len(),
-            max: 255,
-        });
-    }
-
     let change_erg = total_erg - TX_FEE - citadel_fee;
     let token_count = token_totals.len();
 
-    let change_assets: Vec<Eip12Asset> = token_totals
+    let mut change_assets: Vec<Eip12Asset> = token_totals
         .into_iter()
         .map(|(id, amt)| Eip12Asset::new(id, amt as i64))
         .collect();
+    change_assets.sort_by(|a, b| a.token_id.cmp(&b.token_id));
 
-    let change_output = Eip12Output {
-        value: change_erg.to_string(),
-        ergo_tree: user_ergo_tree.to_string(),
-        assets: change_assets,
-        creation_height: current_height,
-        additional_registers: HashMap::new(),
-    };
-
-    let mut outputs = vec![change_output];
+    // Consolidating into as few boxes as the token cap allows still
+    // consolidates; a wallet over the cap gets two boxes, not an error.
+    let mut outputs = crate::token_outputs(
+        change_erg as u64,
+        user_ergo_tree,
+        change_assets,
+        current_height,
+        MIN_BOX_VALUE as u64,
+    )
+    .map_err(|e| UtxoManagementError::InsufficientErg {
+        have: total_erg,
+        need: TX_FEE + citadel_fee + e.min_value as i64,
+    })?;
     append_dev_fee_output(&mut outputs, &fee_cfg, current_height)
         .map_err(|e| UtxoManagementError::DevFee(e.to_string()))?;
     outputs.push(Eip12Output::fee(TX_FEE, current_height));
@@ -1234,5 +1232,34 @@ mod tests {
             } if count == n => {}
             _ => panic!("Expected TooManyOutputs, got {err:?}"),
         }
+    }
+
+    #[test]
+    fn consolidation_splits_change_when_the_tokens_exceed_one_box() {
+        let ids: Vec<String> = (0..123).map(|i| format!("tok{i:04}")).collect();
+        let a: Vec<(&str, i64)> = ids[..60].iter().map(|id| (id.as_str(), 3)).collect();
+        let b: Vec<(&str, i64)> = ids[60..].iter().map(|id| (id.as_str(), 3)).collect();
+        let inputs = vec![
+            mock_input("box1", 3_000_000_000, a),
+            mock_input("box2", 2_000_000_000, b),
+        ];
+        let built = build_consolidate_tx(&inputs, USER_TREE, 1000).unwrap();
+        let change: Vec<_> = built
+            .unsigned_tx
+            .outputs
+            .iter()
+            .filter(|o| o.ergo_tree == USER_TREE)
+            .collect();
+        assert_eq!(change.len(), 2);
+        assert!(change.iter().all(|o| o.assets.len() <= MAX_TOKENS_PER_BOX));
+        assert_eq!(change.iter().map(|o| o.assets.len()).sum::<usize>(), 123);
+        assert_eq!(built.summary.token_count, 123);
+        let out_total: i64 = built
+            .unsigned_tx
+            .outputs
+            .iter()
+            .map(|o| o.value.parse::<i64>().unwrap())
+            .sum();
+        assert_eq!(out_total, 5_000_000_000);
     }
 }

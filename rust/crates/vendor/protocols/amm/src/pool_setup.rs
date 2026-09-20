@@ -184,17 +184,24 @@ pub fn build_pool_bootstrap_eip12(
     }
     let change_tokens = collect_multi_change_tokens(&selected.boxes, &spent_tokens);
 
-    let change_output = Eip12Output::change(
-        (MIN_BOX_VALUE + change_erg) as i64,
+    // The LP token id is minted from the first selected box, so selection
+    // is not rerun here; a wallet short of ERG for the extra change boxes
+    // gets the shortfall as an error instead.
+    let change_outputs = ergo_tx::token_outputs(
+        MIN_BOX_VALUE + change_erg,
         user_ergo_tree,
-        change_tokens,
+        ergo_tx::merge_assets(change_tokens),
         current_height,
-    );
+        MIN_BOX_VALUE,
+    )
+    .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
 
     let fee_output = Eip12Output::fee(TX_FEE as i64, current_height);
 
     let inputs = selected.boxes;
-    let outputs = vec![bootstrap_output, change_output, fee_output];
+    let mut outputs = vec![bootstrap_output];
+    outputs.extend(change_outputs);
+    outputs.push(fee_output);
 
     let unsigned_tx = Eip12UnsignedTx {
         inputs,

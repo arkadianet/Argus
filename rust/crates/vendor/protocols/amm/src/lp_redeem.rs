@@ -172,27 +172,33 @@ fn build_n2t_lp_redeem(
 
     // User only needs TX_FEE -- ERG output comes from pool
     let user_erg_needed = TX_FEE;
-    let selected =
-        select_token_boxes(user_utxos, &pool.lp_token_id, lp_amount, user_erg_needed)
-            .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
-
-    let change_erg = selected.total_erg - user_erg_needed;
     let spent_token = Some((pool.lp_token_id.as_str(), lp_amount));
-    let change_tokens = collect_change_tokens(&selected.boxes, spent_token);
-
-    let user_erg = erg_out + change_erg;
-    let mut user_assets = vec![Eip12Asset {
-        token_id: pool.token_y.token_id.clone(),
-        amount: token_out.to_string(),
-    }];
-    user_assets.extend(change_tokens);
-
-    let user_output = Eip12Output::change(
-        user_erg as i64,
+    let redeemed = Eip12Output::change(
+        erg_out as i64,
         user_ergo_tree,
-        user_assets,
+        vec![Eip12Asset {
+            token_id: pool.token_y.token_id.clone(),
+            amount: token_out.to_string(),
+        }],
         current_height,
     );
+    let (selected, user_side) = ergo_tx::select_and_lay_out(
+        user_erg_needed,
+        |budget| select_token_boxes(user_utxos, &pool.lp_token_id, lp_amount, budget),
+        |boxes| collect_change_tokens(boxes, spent_token),
+        |change_erg, change_tokens| {
+            ergo_tx::user_outputs(
+                redeemed.clone(),
+                true,
+                user_ergo_tree,
+                change_erg,
+                change_tokens,
+                current_height,
+                MIN_BOX_VALUE,
+            )
+        },
+    )
+    .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
 
     let fee_output = Eip12Output::fee(TX_FEE as i64, current_height);
 
@@ -200,7 +206,9 @@ fn build_n2t_lp_redeem(
     let mut inputs = vec![pool_box.clone()];
     inputs.extend(selected.boxes);
 
-    let outputs = vec![new_pool_output, user_output, fee_output];
+    let mut outputs = vec![new_pool_output];
+    outputs.extend(user_side);
+    outputs.push(fee_output);
 
     let unsigned_tx = Eip12UnsignedTx {
         inputs,
@@ -337,40 +345,48 @@ fn build_t2t_lp_redeem(
         .checked_add(TX_FEE)
         .ok_or_else(|| AmmError::TxBuildError("ERG cost overflow".to_string()))?;
 
-    let selected =
-        select_token_boxes(user_utxos, &pool.lp_token_id, lp_amount, user_erg_needed)
-            .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
-
-    let change_erg = selected.total_erg - user_erg_needed;
     let spent_token = Some((pool.lp_token_id.as_str(), lp_amount));
-    let change_tokens = collect_change_tokens(&selected.boxes, spent_token);
-
-    let user_erg = MIN_BOX_VALUE + change_erg;
-    let mut user_assets = vec![
-        Eip12Asset {
-            token_id: token_x.token_id.clone(),
-            amount: x_out.to_string(),
-        },
-        Eip12Asset {
-            token_id: pool.token_y.token_id.clone(),
-            amount: y_out.to_string(),
-        },
-    ];
-    user_assets.extend(change_tokens);
-
-    let user_output = Eip12Output::change(
-        user_erg as i64,
+    let redeemed = Eip12Output::change(
+        MIN_BOX_VALUE as i64,
         user_ergo_tree,
-        user_assets,
+        vec![
+            Eip12Asset {
+                token_id: token_x.token_id.clone(),
+                amount: x_out.to_string(),
+            },
+            Eip12Asset {
+                token_id: pool.token_y.token_id.clone(),
+                amount: y_out.to_string(),
+            },
+        ],
         current_height,
     );
+    let (selected, user_side) = ergo_tx::select_and_lay_out(
+        user_erg_needed,
+        |budget| select_token_boxes(user_utxos, &pool.lp_token_id, lp_amount, budget),
+        |boxes| collect_change_tokens(boxes, spent_token),
+        |change_erg, change_tokens| {
+            ergo_tx::user_outputs(
+                redeemed.clone(),
+                true,
+                user_ergo_tree,
+                change_erg,
+                change_tokens,
+                current_height,
+                MIN_BOX_VALUE,
+            )
+        },
+    )
+    .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
 
     let fee_output = Eip12Output::fee(TX_FEE as i64, current_height);
 
     let mut inputs = vec![pool_box.clone()];
     inputs.extend(selected.boxes);
 
-    let outputs = vec![new_pool_output, user_output, fee_output];
+    let mut outputs = vec![new_pool_output];
+    outputs.extend(user_side);
+    outputs.push(fee_output);
 
     let unsigned_tx = Eip12UnsignedTx {
         inputs,

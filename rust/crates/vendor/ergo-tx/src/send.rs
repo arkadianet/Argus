@@ -215,13 +215,19 @@ pub fn build_send_tx_with_fee(
             .into_iter()
             .map(|(id, amt)| Eip12Asset::new(id, amt as i64))
             .collect();
-        outputs.push(Eip12Output {
-            value: change_value.to_string(),
-            ergo_tree: change_ergo_tree.to_string(),
-            assets: change_assets,
-            creation_height: current_height,
-            additional_registers: HashMap::new(),
-        });
+        outputs.extend(
+            crate::token_outputs(
+                change_value as u64,
+                change_ergo_tree,
+                change_assets,
+                current_height,
+                MIN_BOX_VALUE as u64,
+            )
+            .map_err(|e| SendError::TokenChangeInsufficientErg {
+                have: e.available as i64,
+                min: e.min_value as i64,
+            })?,
+        );
         change_value
     } else {
         0
@@ -290,15 +296,38 @@ mod tests {
         let inputs = vec![make_box("996727888", vec![]), small];
         let balance = 997_799_953;
         let amount = balance - TX_FEE - fee.budget() - MIN_BOX_VALUE;
-        let old = crate::select_erg_boxes(&inputs, (amount + TX_FEE + MIN_BOX_VALUE) as u64).unwrap();
-        let error = build_send_tx_with_fee(&old.boxes, RECIPIENT_TREE, USER_TREE, amount, None, 1, &fee).unwrap_err();
-        assert_eq!(error.to_string(), "Insufficient ERG: have 996727888 nanoERG, need 996799953 nanoERG");
+        let old =
+            crate::select_erg_boxes(&inputs, (amount + TX_FEE + MIN_BOX_VALUE) as u64).unwrap();
+        let error =
+            build_send_tx_with_fee(&old.boxes, RECIPIENT_TREE, USER_TREE, amount, None, 1, &fee)
+                .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Insufficient ERG: have 996727888 nanoERG, need 996799953 nanoERG"
+        );
         let required = amount + TX_FEE + fee.budget() + MIN_BOX_VALUE;
         let selected = crate::select_erg_boxes(&inputs, required as u64).unwrap();
         assert_eq!(selected.total_erg, balance as u64);
-        let built = build_send_tx_with_fee(&selected.boxes, RECIPIENT_TREE, USER_TREE, amount, None, 1, &fee).unwrap();
+        let built = build_send_tx_with_fee(
+            &selected.boxes,
+            RECIPIENT_TREE,
+            USER_TREE,
+            amount,
+            None,
+            1,
+            &fee,
+        )
+        .unwrap();
         assert_eq!(built.summary.change_erg, MIN_BOX_VALUE);
-        assert_eq!(built.unsigned_tx.outputs.iter().map(|o| o.value.parse::<i64>().unwrap()).sum::<i64>(), balance);
+        assert_eq!(
+            built
+                .unsigned_tx
+                .outputs
+                .iter()
+                .map(|o| o.value.parse::<i64>().unwrap())
+                .sum::<i64>(),
+            balance
+        );
     }
 
     #[test]
@@ -434,5 +463,79 @@ mod tests {
         assert_eq!(result.summary.change_erg, 0);
         assert_eq!(result.summary.miner_fee, TX_FEE + 900_000);
         assert_eq!(result.unsigned_tx.outputs.len(), 2); // recipient + fee only
+    }
+
+    #[test]
+    fn a_wallet_with_more_tokens_than_a_box_holds_gets_split_change() {
+        let fee = DevFeeConfig::disabled();
+        let ids: Vec<String> = (0..123).map(|i| format!("tok{i:04}")).collect();
+        let assets: Vec<(&str, &str)> = ids.iter().map(|id| (id.as_str(), "7")).collect();
+        let inputs = vec![make_box("5000000000", assets)];
+        let built = build_send_tx_with_fee(
+            &inputs,
+            RECIPIENT_TREE,
+            USER_TREE,
+            1_000_000_000,
+            None,
+            1,
+            &fee,
+        )
+        .unwrap();
+        let change: Vec<_> = built
+            .unsigned_tx
+            .outputs
+            .iter()
+            .filter(|o| o.ergo_tree == USER_TREE)
+            .collect();
+        assert_eq!(change.len(), 2);
+        assert!(change
+            .iter()
+            .all(|o| o.assets.len() <= crate::MAX_TOKENS_PER_BOX));
+        assert_eq!(change.iter().map(|o| o.assets.len()).sum::<usize>(), 123);
+        let out_total: i64 = built
+            .unsigned_tx
+            .outputs
+            .iter()
+            .map(|o| o.value.parse::<i64>().unwrap())
+            .sum();
+        assert_eq!(
+            out_total, 5_000_000_000,
+            "ERG is conserved across the split"
+        );
+        assert_eq!(
+            built.summary.change_erg,
+            5_000_000_000 - 1_000_000_000 - TX_FEE
+        );
+    }
+
+    #[test]
+    fn split_change_short_of_erg_is_a_token_change_error() {
+        let fee = DevFeeConfig::disabled();
+        let ids: Vec<String> = (0..123).map(|i| format!("tok{i:04}")).collect();
+        let assets: Vec<(&str, &str)> = ids.iter().map(|id| (id.as_str(), "7")).collect();
+        let inputs = vec![make_box(
+            &(1_000_000_000 + TX_FEE + 1_500_000).to_string(),
+            assets,
+        )];
+        let err = build_send_tx_with_fee(
+            &inputs,
+            RECIPIENT_TREE,
+            USER_TREE,
+            1_000_000_000,
+            None,
+            1,
+            &fee,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SendError::TokenChangeInsufficientErg {
+                    have: 1_500_000,
+                    min: 2_000_000
+                }
+            ),
+            "{err}"
+        );
     }
 }

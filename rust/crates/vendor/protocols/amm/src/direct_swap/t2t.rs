@@ -3,7 +3,6 @@
 use crate::calculator;
 use crate::constants::fees;
 use crate::state::{AmmError, AmmPool, SwapInput};
-use crate::tx_builder::MIN_CHANGE_VALUE;
 use ergo_tx::{
     append_dev_fee_output, collect_change_tokens, resolved_dev_fee_config, select_token_boxes,
     Eip12Asset, Eip12InputBox, Eip12Output, Eip12UnsignedTx,
@@ -168,64 +167,28 @@ pub(crate) fn build_t2t_direct_swap(
         .and_then(|v| v.checked_add(citadel_fee))
         .ok_or_else(|| AmmError::TxBuildError("ERG cost overflow".to_string()))?;
 
-    let selected = select_token_boxes(user_utxos, input_token_id, input_amount, user_erg_needed)
-        .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
-
-    let change_erg = selected.total_erg - user_erg_needed;
     let spent_token = Some((input_token_id, input_amount));
-    let change_tokens = collect_change_tokens(&selected.boxes, spent_token);
 
-    let mut outputs = vec![new_pool_output];
-
-    if recipient_ergo_tree.is_none() {
-        let user_erg = MIN_BOX_VALUE + change_erg;
-
-        let mut user_tokens = vec![Eip12Asset {
-            token_id: output_token_id.clone(),
-            amount: output_amount.to_string(),
-        }];
-        user_tokens.extend(change_tokens);
-
-        outputs.push(Eip12Output::change(
-            user_erg as i64,
-            user_ergo_tree,
-            user_tokens,
-            current_height,
-        ));
-    } else {
-        if !change_tokens.is_empty() && change_erg < MIN_CHANGE_VALUE {
-            return Err(AmmError::TxBuildError(format!(
-                "Change tokens exist but not enough ERG for change box (need {MIN_CHANGE_VALUE}, have {change_erg})"
-            )));
-        }
-
-        // If change ERG is too small for a separate box and there are no change
-        // tokens, fold it into the swap output to avoid losing ERG.
-        let user_swap_output =
-            if change_erg > 0 && change_erg < MIN_CHANGE_VALUE && change_tokens.is_empty() {
-                let base_value: u64 = user_swap_output
-                    .value
-                    .parse()
-                    .map_err(|_| AmmError::TxBuildError("Invalid swap output value".to_string()))?;
-                Eip12Output {
-                    value: (base_value + change_erg).to_string(),
-                    ..user_swap_output
-                }
-            } else {
-                user_swap_output
-            };
-
-        outputs.push(user_swap_output);
-
-        if change_erg >= MIN_CHANGE_VALUE || !change_tokens.is_empty() {
-            outputs.push(Eip12Output::change(
-                change_erg as i64,
+    let (selected, user_side) = ergo_tx::select_and_lay_out(
+        user_erg_needed,
+        |budget| select_token_boxes(user_utxos, input_token_id, input_amount, budget),
+        |boxes| collect_change_tokens(boxes, spent_token),
+        |change_erg, change_tokens| {
+            ergo_tx::user_outputs(
+                user_swap_output.clone(),
+                recipient_ergo_tree.is_none(),
                 user_ergo_tree,
+                change_erg,
                 change_tokens,
                 current_height,
-            ));
-        }
-    }
+                MIN_BOX_VALUE,
+            )
+        },
+    )
+    .map_err(|e| AmmError::TxBuildError(e.to_string()))?;
+
+    let mut outputs = vec![new_pool_output];
+    outputs.extend(user_side);
 
     append_dev_fee_output(&mut outputs, &fee_cfg, current_height)
         .map_err(|e| AmmError::TxBuildError(e.to_string()))?;

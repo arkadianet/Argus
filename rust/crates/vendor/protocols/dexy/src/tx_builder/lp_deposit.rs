@@ -182,10 +182,33 @@ pub fn build_lp_deposit_tx(
     let citadel_fee = fee_cfg.budget();
     let min_erg =
         calc.consumed_erg + constants::TX_FEE_NANO + citadel_fee + constants::MIN_BOX_VALUE_NANO;
-    let selected = select_inputs_for_spend(
-        &request.user_inputs,
+    let lp_output = Eip12Output::change(
+        constants::MIN_BOX_VALUE_NANO,
+        output_ergo_tree,
+        vec![Eip12Asset::new(lp_token_id, calc.lp_tokens_out)],
+        request.current_height,
+    );
+    let (selected, user_side) = ergo_tx::select_and_lay_out(
         min_erg as u64,
-        Some((dexy_token_id, calc.consumed_dexy as u64)),
+        |budget| {
+            select_inputs_for_spend(
+                &request.user_inputs,
+                budget,
+                Some((dexy_token_id, calc.consumed_dexy as u64)),
+            )
+        },
+        |boxes| collect_change_tokens(boxes, Some((dexy_token_id, calc.consumed_dexy as u64))),
+        |change_erg, change_tokens| {
+            ergo_tx::user_outputs(
+                lp_output.clone(),
+                request.recipient_ergo_tree.is_none(),
+                &request.user_ergo_tree,
+                change_erg,
+                change_tokens,
+                request.current_height,
+                constants::MIN_BOX_VALUE_NANO as u64,
+            )
+        },
     )
     .map_err(|e| TxError::BuildFailed {
         message: e.to_string(),
@@ -198,19 +221,11 @@ pub fn build_lp_deposit_tx(
     let new_lp_dexy = ctx.lp_dexy_reserves + calc.consumed_dexy;
     let new_lp_token_reserves = ctx.lp_token_reserves - calc.lp_tokens_out;
 
-    let mut user_tokens = vec![Eip12Asset::new(lp_token_id, calc.lp_tokens_out)];
-    user_tokens.extend(collect_change_tokens(
-        &selected.boxes,
-        Some((dexy_token_id, calc.consumed_dexy as u64)),
-    ));
-
-    let user_erg =
-        selected.total_erg as i64 - calc.consumed_erg - constants::TX_FEE_NANO - citadel_fee;
     let mut outputs = vec![
         build_lp_pool_output(ctx, new_lp_erg, new_lp_token_reserves, new_lp_dexy, lp_token_id, dexy_token_id, request.current_height),
         build_action_nft_output(ctx, request.current_height),
-        Eip12Output::change(user_erg.max(constants::MIN_BOX_VALUE_NANO), output_ergo_tree, user_tokens, request.current_height),
     ];
+    outputs.extend(user_side);
     append_dev_fee_output(&mut outputs, &fee_cfg, request.current_height).map_err(|e| {
         TxError::BuildFailed {
             message: e.to_string(),

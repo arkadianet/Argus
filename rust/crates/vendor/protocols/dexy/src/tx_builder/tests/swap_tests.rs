@@ -510,3 +510,30 @@ fn erg_to_dexy_swap_tops_up_held_tokens() {
         .sum();
     assert_eq!(change_dexy, 0, "held tokens must not also return as change");
 }
+
+#[test]
+fn dexy_to_erg_with_a_recipient_keeps_the_change_tokens_with_the_user() {
+    no_citadel_fee(|| {
+        let ctx = create_test_swap_context(1_000_000_000_000, 1_000_000);
+        let state = create_swap_state();
+        let mut request = create_dexy_to_erg_request(100, 1, 10_000_000_000, 1_000);
+        request.recipient_ergo_tree = Some("recipient_ergo_tree".to_string());
+        request.user_inputs = vec![create_test_input(
+            10_000_000_000,
+            vec![(DEXY_TOKEN_ID, 1_000), ("other_token", 7)],
+        )];
+
+        let build = build_swap_dexy_tx(&request, &ctx, &state).unwrap();
+        let tx = &build.unsigned_tx;
+        let recipient = &tx.outputs[2];
+        assert_eq!(recipient.ergo_tree, "recipient_ergo_tree");
+        assert!(recipient.assets.is_empty(), "recipient gets ERG only: {:?}", recipient.assets);
+        let user: Vec<_> = tx.outputs.iter().filter(|o| o.ergo_tree == "user_ergo_tree").collect();
+        assert_eq!(user.len(), 1);
+        let ids: Vec<&str> = user[0].assets.iter().map(|a| a.token_id.as_str()).collect();
+        assert!(ids.contains(&DEXY_TOKEN_ID) && ids.contains(&"other_token"), "{ids:?}");
+        let ins: i64 = tx.inputs.iter().map(|i| i.value.parse::<i64>().unwrap()).sum();
+        let outs: i64 = tx.outputs.iter().map(|o| o.value.parse::<i64>().unwrap()).sum();
+        assert_eq!(ins, outs);
+    });
+}
