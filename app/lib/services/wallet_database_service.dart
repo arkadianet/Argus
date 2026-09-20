@@ -231,7 +231,19 @@ class WalletDatabaseService {
       if (tokens is! List) continue;
       map['tokens'] = [
         for (final t in tokens)
-          if (t is Map) {'id': t['id'], 'amount': t['amount']} else t,
+          if (t is Map)
+            {
+              'id': t['id'],
+              'amount': t['amount'],
+              // Kept deliberately. Decimals are the scale of the amount, not
+              // issuer identity: dropping them makes `_applyPublic` pass null
+              // into a non-nullable parameter, and makes `lastKnownBalance`
+              // read raw units as whole tokens — valuing a two-decimal
+              // holding at a hundred times its worth.
+              'decimals': t['decimals'] ?? 0,
+            }
+          else
+            t,
       ];
       await prefs.setString(key, _obfuscate(jsonEncode(map), walletId));
     }

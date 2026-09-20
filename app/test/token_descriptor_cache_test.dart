@@ -1039,6 +1039,18 @@ void main() {
         reason: 'but its copy of the names must be gone');
     expect((after['tokens'] as List).single['amount'], 5,
         reason: 'while the holding itself stays');
+    expect((after['tokens'] as List).single['decimals'], 2,
+        reason: 'decimals are the scale of the amount, not issuer identity: '
+            'dropping them crashes wallet activation and values a '
+            'two-decimal holding at a hundred times its worth');
+
+    // The consumer that would crash: a public snapshot reused on activation.
+    expect(
+      () => walletSyncController.activateWallet('wV'),
+      returnsNormally,
+    );
+    final known = await WalletDatabaseService.lastKnownBalance('wV');
+    expect(known, isNotNull);
   });
 
   test('a public refresh in flight cannot write names back after a wipe',
