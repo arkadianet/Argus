@@ -28,11 +28,20 @@ class TokenDescriptorStore {
   /// Bounds one wallet's table. Matches the legacy cache's ceiling.
   static const maxEntries = 1000;
 
-  /// Bumped by every deletion. A write that was already in flight when a
-  /// wipe or a wallet deletion ran must not land afterwards: the caller's
-  /// queue can be emptied, but a snapshot already handed to [save] is past
-  /// the point where any caller-side check can reach it.
-  static int _generation = 0;
+  /// Bumped by a full wipe. A write already in flight when a wipe or a
+  /// deletion ran must not land afterwards: the caller's queue can be
+  /// emptied, but a snapshot already handed to [save] is past the point
+  /// where any caller-side check can reach it.
+  static int _wipeGeneration = 0;
+
+  /// Per wallet, bumped by that wallet's deletion. Kept separate from the
+  /// wipe counter so deleting one wallet does not silently discard another
+  /// wallet's suspended write — whose caller has already cleared its dirty
+  /// flag and will never offer those descriptors again.
+  static final Map<String, int> _walletGenerations = {};
+
+  static int _generationFor(String walletId) =>
+      _walletGenerations[walletId] ?? 0;
 
   static Map<String, dynamic> encode(CachedDescriptor d) => {
     'name': d.name,
@@ -130,7 +139,8 @@ class TokenDescriptorStore {
     Map<String, CachedDescriptor> entries,
   ) async {
     if (walletId.isEmpty) return;
-    final generation = _generation;
+    final wipeGeneration = _wipeGeneration;
+    final walletGeneration = _generationFor(walletId);
     final hook = beforeSave;
     if (hook != null) await hook();
     // Serialize before suspending. Callers may hand over a map they mutate;
@@ -139,21 +149,24 @@ class TokenDescriptorStore {
       for (final e in entries.entries.take(maxEntries)) e.key: encode(e.value),
     });
     final prefs = await SharedPreferences.getInstance();
-    // A deletion overtook this write; its data is no longer wanted on disk.
-    if (generation != _generation) return;
+    // A wipe, or this wallet's own deletion, overtook the write.
+    if (wipeGeneration != _wipeGeneration ||
+        walletGeneration != _generationFor(walletId)) {
+      return;
+    }
     await prefs.setString(_key(walletId), payload);
   }
 
   static Future<void> clear(String walletId) async {
     if (walletId.isEmpty) return;
-    _generation++;
+    _walletGenerations[walletId] = _generationFor(walletId) + 1;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_key(walletId));
   }
 
   /// Every wallet's table, for a global wipe.
   static Future<void> clearAll() async {
-    _generation++;
+    _wipeGeneration++;
     final prefs = await SharedPreferences.getInstance();
     for (final key in prefs.getKeys().toList()) {
       if (key.startsWith(_prefix)) await prefs.remove(key);

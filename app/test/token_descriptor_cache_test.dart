@@ -953,6 +953,49 @@ void main() {
     expect(walletSyncController.tokens.single.amount, 5);
   });
 
+  test("deleting one wallet does not discard another's pending write",
+      () async {
+    // B's write is suspended when A is deleted. B's caller has already
+    // cleared its dirty flag, so a dropped write is silent and permanent:
+    // later passes serve the cached descriptor and never offer it again.
+    final svc = await unlocked('wB1');
+    TokenDescriptorStore.beforeSave = () async {
+      TokenDescriptorStore.beforeSave = null;
+      await TokenDescriptorStore.clear('wA1');
+    };
+    addTearDown(() => TokenDescriptorStore.beforeSave = null);
+
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wB1',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+
+    expect((await TokenDescriptorStore.load('wB1'))[_id('ab')]?.name,
+        'Name ab',
+        reason: "another wallet's deletion must not drop this write");
+  });
+
+  test("deleting the wallet being written to does discard it", () async {
+    final svc = await unlocked('wB2');
+    TokenDescriptorStore.beforeSave = () async {
+      TokenDescriptorStore.beforeSave = null;
+      await TokenDescriptorStore.clear('wB2');
+    };
+    addTearDown(() => TokenDescriptorStore.beforeSave = null);
+
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: 'wB2',
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+
+    expect(await TokenDescriptorStore.load('wB2'), isEmpty,
+        reason: 'its own deletion must still invalidate the write');
+  });
+
   test('a load started during a wipe restores nothing', () async {
     // The other ordering: the load begins AFTER the wipe has cleared memory
     // and bumped the epoch, but BEFORE it has deleted the stored tables. It
