@@ -970,6 +970,10 @@ class WalletSyncController extends ChangeNotifier {
     // Dropping them costs a resync, not data.
     _remembered.clear();
     _publicWarm.clear();
+    // A public refresh already holding named tokens would otherwise resume
+    // after the wipe, pass its own validity check, and write them straight
+    // back to disk and memory. The descriptor epoch does not reach it.
+    _publicGeneration++;
     notifyListeners();
   }
 

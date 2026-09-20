@@ -818,8 +818,10 @@ class WalletService with WidgetsBindingObserver {
       // Descriptors already copied into the published holdings have to go
       // too, or a wiped collectible keeps its name and classification.
       walletSyncController.stripResolvedMetadata();
-      // The persisted balance snapshot carries its own copy of the names.
-      await WalletDatabaseService.clearAllSnapshots().catchError((_) {});
+      // The persisted balance snapshots carry their own copy of the names;
+      // strip those rather than deleting the snapshots, which would also
+      // take balances, history and discovered addresses.
+      await WalletDatabaseService.stripSnapshotMetadata().catchError((_) {});
       _tokenMeta.clear();
       _legacyTokenMeta.clear();
       _descriptorCache.clear();

@@ -210,13 +210,30 @@ class WalletDatabaseService {
     await prefs.remove(_snapshotKey(walletId));
   }
 
-  /// Every wallet's cached snapshot. Used when clearing collectible data:
-  /// the snapshots carry their own copy of token names, so leaving them
-  /// would restore the wiped metadata at the next offline start.
-  static Future<void> clearAllSnapshots() async {
+  /// Removes token metadata from every wallet's cached snapshot, keeping
+  /// the snapshot itself.
+  ///
+  /// The snapshots carry their own copy of names, decimals and icons, so
+  /// leaving them would restore wiped metadata at the next offline start.
+  /// Deleting them outright would take balances, history, discovered
+  /// addresses and last-known stealth totals with it — state that has
+  /// nothing to do with collectibles, and which a locked wallet cannot
+  /// rebuild until it is unlocked and rediscovered.
+  static Future<void> stripSnapshotMetadata() async {
+    const prefix = 'argus_local_wallet_db_v3_';
     final prefs = await SharedPreferences.getInstance();
     for (final key in prefs.getKeys().toList()) {
-      if (key.startsWith('argus_local_wallet_db_v3_')) await prefs.remove(key);
+      if (!key.startsWith(prefix)) continue;
+      final walletId = key.substring(prefix.length);
+      final map = await loadCachedState(expectedWalletId: walletId);
+      if (map == null) continue;
+      final tokens = map['tokens'];
+      if (tokens is! List) continue;
+      map['tokens'] = [
+        for (final t in tokens)
+          if (t is Map) {'id': t['id'], 'amount': t['amount']} else t,
+      ];
+      await prefs.setString(key, _obfuscate(jsonEncode(map), walletId));
     }
   }
 

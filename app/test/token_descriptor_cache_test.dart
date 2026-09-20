@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/network_controller.dart';
 import 'package:argus_wallet/services/token_descriptor_store.dart';
+import 'package:argus_wallet/services/wallet_database_service.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:flutter/services.dart';
@@ -1005,8 +1006,15 @@ void main() {
     addTearDown(walletSyncController.reset);
     // A retained view of this wallet, as a switch away would leave behind.
     walletSyncController.deactivate();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('argus_local_wallet_db_v3_wV', 'snapshot-with-names');
+    // A real snapshot: balances and history alongside the token names.
+    await WalletDatabaseService.savePublicSnapshot('wV', {
+      'wallet_id': 'wV',
+      'balance_nano_erg': 4200,
+      'used_addresses': ['addr0', 'addr1'],
+      'tokens': [
+        {'id': _id('ab'), 'amount': 5, 'name': 'Published', 'decimals': 2},
+      ],
+    }, () => true);
 
     await svc.clearCollectibleData();
 
@@ -1017,9 +1025,55 @@ void main() {
       isEmpty,
       reason: 'a retained view would otherwise put the wiped names back',
     );
-    expect(prefs.getString('argus_local_wallet_db_v3_wV'), isNull,
-        reason: 'and the persisted snapshot would restore them at the next '
-            'offline start');
+
+    final after = await WalletDatabaseService.loadCachedState(
+      expectedWalletId: 'wV',
+    );
+    expect(after, isNotNull,
+        reason: 'the snapshot itself must survive: it holds balances, '
+            'history and discovered addresses, none of which are '
+            'collectible data');
+    expect(after!['balance_nano_erg'], 4200);
+    expect(after['used_addresses'], ['addr0', 'addr1']);
+    expect((after['tokens'] as List).single['name'], isNull,
+        reason: 'but its copy of the names must be gone');
+    expect((after['tokens'] as List).single['amount'], 5,
+        reason: 'while the holding itself stays');
+  });
+
+  test('a public refresh in flight cannot write names back after a wipe',
+      () async {
+    // The refresh captured its generation before the wipe; on resuming, its
+    // own validity check would otherwise still pass and repopulate the warm
+    // snapshot with the names that were just cleared.
+    // The GLOBAL service: `walletSyncController`'s live gateway reads it,
+    // so a fresh instance would leave it locked and rememberPublic would
+    // refuse for that reason instead of the one under test.
+    await walletService.restoreWallet('mock', walletId: 'wG');
+    addTearDown(() => walletService.lock('wG'));
+    final generation = walletSyncController.publicGeneration;
+    final snapshot = {
+      'wallet_id': 'other-wallet',
+      'balance_nano_erg': 1,
+      'tokens': [
+        {'id': _id('ab'), 'amount': 5, 'name': 'Published'},
+      ],
+    };
+    addTearDown(walletSyncController.reset);
+
+    // Control: before any wipe, this write is accepted.
+    expect(
+      walletSyncController.rememberPublic('other-wallet', snapshot, generation),
+      isTrue,
+    );
+
+    await walletService.clearCollectibleData();
+
+    expect(
+      walletSyncController.rememberPublic('other-wallet', snapshot, generation),
+      isFalse,
+      reason: 'work begun before the wipe must not land after it',
+    );
   });
 
   test('a load started during a wipe restores nothing', () async {
