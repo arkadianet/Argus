@@ -42,6 +42,16 @@ android {
         }
     }
 
+    // libwallet_ffi.so is built for arm64-v8a and x86_64 only. Dependencies
+    // (ML Kit, CameraX, DataStore) ship armeabi-v7a natives, and the
+    // universal APK picked them up in alpha.57's build, which would let a
+    // 32-bit device install an app that dies loading the wallet library.
+    packaging {
+        jniLibs {
+            excludes += listOf("lib/armeabi-v7a/**", "lib/x86/**")
+        }
+    }
+
     val releaseStore = System.getenv("ARGUS_KEYSTORE")
     signingConfigs {
         create("release") {
