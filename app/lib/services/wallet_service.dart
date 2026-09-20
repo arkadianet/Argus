@@ -994,6 +994,18 @@ class WalletService with WidgetsBindingObserver {
   /// by nobody.
   final List<(String, Map<String, CachedDescriptor>)> _pendingFlush = [];
 
+  /// Snapshots [walletId]'s dirty descriptors for writing, synchronously, so
+  /// whatever happens next cannot alter what gets saved or where.
+  void _captureUnwrittenDescriptors(String? walletId) {
+    if (!_tokenMetaDirty || walletId == null || walletId.isEmpty) return;
+    if (_descriptorCache.isEmpty) return;
+    _pendingFlush.add((
+      walletId,
+      Map<String, CachedDescriptor>.from(_descriptorCache),
+    ));
+    _tokenMetaDirty = false;
+  }
+
   Future<void> flushPendingDescriptors() async {
     while (_pendingFlush.isNotEmpty) {
       final (walletId, table) = _pendingFlush.removeAt(0);
@@ -1168,6 +1180,11 @@ class WalletService with WidgetsBindingObserver {
   Future<void> _lock(String? walletId, {required bool switching}) async {
     clearSessionMetadata();
     final wid = walletId ?? _currentWalletId;
+    // Locking clears the active wallet id, so a metadata pass still in
+    // flight can no longer prove ownership and its finally will skip the
+    // write. Capture here as well as in `_setHandle`: switching goes
+    // through lock first, and `_setHandle` would then see no outgoing id.
+    _captureUnwrittenDescriptors(wid);
     final active = wid == _currentWalletId;
     final id = _handles[wid];
     if (active) {
@@ -1320,6 +1337,10 @@ class WalletService with WidgetsBindingObserver {
   /// for. Without it a wallet of unresolvable tokens re-asks on every sync.
   final Set<String> _metadataMisses = {};
 
+  /// Descriptors fetched without their issuance registers because the box
+  /// request failed. Cached so the name shows, but still re-fetchable.
+  final Set<String> _incompleteDescriptors = {};
+
   /// Set when the node cannot serve issuance lookups at all — no extraIndex,
   /// or an endpoint `token_descriptor::load_from` refuses (it is HTTPS-only,
   /// so a user-configured `http://ip:port` node can never answer). One such
@@ -1394,7 +1415,8 @@ class WalletService with WidgetsBindingObserver {
       if (_metadataUnsupported) return resolvedNow;
       final wanted = [
         for (final id in requested)
-          if (!_descriptorCache.containsKey(id) &&
+          if ((!_descriptorCache.containsKey(id) ||
+                  _incompleteDescriptors.contains(id)) &&
               !_legacyTokenMeta.containsKey(id) &&
               !_metadataMisses.contains(id))
             id,
@@ -1420,6 +1442,15 @@ class WalletService with WidgetsBindingObserver {
           final m = jsonDecode(raw) as Map<String, dynamic>;
           if (m['id'] != id) continue;
           _rememberDescriptor(id, m, servedBy);
+          // The index answered but the issuance box did not, so the
+          // registers are missing. Keep what came back — a name beats an id
+          // — but leave the token eligible so a later pass can complete it
+          // rather than caching a register-less descriptor forever.
+          if (m['incomplete'] == true) {
+            _incompleteDescriptors.add(id);
+          } else {
+            _incompleteDescriptors.remove(id);
+          }
           _consecutiveNotFound = 0;
           final meta = cachedTokenMeta(id);
           if (meta != null) resolvedNow[id] = meta;
@@ -1500,20 +1531,23 @@ class WalletService with WidgetsBindingObserver {
   /// How long a run of not-founds must be before the node is written off.
   static const notFoundRunBeforeUnsupported = 8;
 
+  /// Marker the Rust side puts on an error the provider failed to answer,
+  /// as opposed to one it answered negatively.
+  static const retryableMarker = 'RETRYABLE:';
+
   /// Whether the provider gave a definite "no such token", as opposed to
   /// failing to answer. Only the former is worth remembering.
+  ///
+  /// The distinction is made in Rust, where the error still has a type:
+  /// `reqwest::Error`'s Display collapses connection refusal, DNS and TLS
+  /// failures into one opaque string, so no amount of matching here could
+  /// tell them apart from an answer. The timeout raised on this side is
+  /// recognised too, since it never reaches that layer.
   static bool _looksDurableNegative(Object error) {
-    final text = error.toString().toLowerCase();
-    if (text.contains('timed out') ||
-        text.contains('timeout') ||
-        text.contains('connection') ||
-        text.contains('unreachable') ||
-        text.contains('socket') ||
-        text.contains('handshake') ||
-        RegExp(r'\b5\d\d\b').hasMatch(text)) {
-      return false;
-    }
-    return true;
+    final text = error.toString();
+    if (text.contains(retryableMarker)) return false;
+    final lower = text.toLowerCase();
+    return !lower.contains('timed out') && !lower.contains('cancelled');
   }
 
   static bool _looksNotFound(Object error) {
@@ -2732,19 +2766,10 @@ class WalletService with WidgetsBindingObserver {
     walletSyncController.deactivate();
     stealthService.reset();
     mixService.reset();
-    // Descriptors are per wallet. Capture the outgoing wallet's unwritten
-    // table BEFORE `_currentWalletId` moves — reading it afterwards would
-    // file the old wallet's descriptors under the new wallet's key.
-    // Snapshotted synchronously so the incoming wallet cannot alter what
-    // gets saved, and cleared here so nothing can read it under the new
-    // wallet; the replacement loads behind that.
-    final outgoing = _currentWalletId;
-    if (_tokenMetaDirty && outgoing != null && outgoing.isNotEmpty) {
-      _pendingFlush.add((outgoing, Map<String, CachedDescriptor>.from(
-        _descriptorCache,
-      )));
-      _tokenMetaDirty = false;
-    }
+    // Capture the outgoing wallet's unwritten table BEFORE
+    // `_currentWalletId` moves — reading it afterwards would file the old
+    // wallet's descriptors under the new wallet's key.
+    _captureUnwrittenDescriptors(_currentWalletId);
     _handles[walletId] = id;
     _currentWalletId = walletId;
     _descriptorCache.clear();

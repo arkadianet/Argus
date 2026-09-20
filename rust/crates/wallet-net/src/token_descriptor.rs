@@ -8,13 +8,31 @@ use std::time::Duration;
 
 const MAX_RESPONSE: usize = 64 * 1024;
 
+/// Marks an error the caller may usefully retry: the provider failed to
+/// answer rather than answering "no". Classified here, while the error still
+/// has a type — `reqwest::Error`'s Display collapses connection refusal, DNS
+/// and TLS failures into one opaque "error sending request for url (…)", so
+/// nothing downstream can tell them apart from a real answer.
+pub const RETRYABLE: &str = "RETRYABLE: ";
+
+fn retryable(e: impl std::fmt::Display) -> String {
+    format!("{RETRYABLE}{e}")
+}
+
 async fn read(client: &reqwest::Client, url: reqwest::Url) -> Result<Value, String> {
-    let mut response = client.get(url).send().await.map_err(|e| e.to_string())?;
+    let mut response = client.get(url).send().await.map_err(retryable)?;
     if response.status().is_redirection() {
         return Err("Redirect blocked".into());
     }
     if !response.status().is_success() {
-        return Err(format!("Metadata provider returned {}", response.status()));
+        let status = response.status();
+        let message = format!("Metadata provider returned {status}");
+        // 5xx and 429 are the provider failing, not the token missing.
+        return Err(if status.is_server_error() || status.as_u16() == 429 {
+            retryable(message)
+        } else {
+            message
+        });
     }
     if response
         .content_length()
@@ -23,13 +41,15 @@ async fn read(client: &reqwest::Client, url: reqwest::Url) -> Result<Value, Stri
         return Err("Metadata response too large".into());
     }
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+    while let Some(chunk) = response.chunk().await.map_err(retryable)? {
         if bytes.len() + chunk.len() > MAX_RESPONSE {
             return Err("Metadata response too large".into());
         }
         bytes.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+    // A body that will not parse is the provider misbehaving, not an answer
+    // about this token.
+    serde_json::from_slice(&bytes).map_err(retryable)
 }
 
 /// `provider` is the explorer API explicitly named in the user's action.
@@ -83,17 +103,33 @@ pub async fn load_from(id: &str, provider: &str, node: bool) -> Result<Value, St
     let box_id = index["boxId"]
         .as_str()
         .filter(|v| v.len() == 64 && v.bytes().all(|c| c.is_ascii_hexdigit()));
+    let mut incomplete = false;
     let bx = if let Some(bid) = box_id {
-        read(
+        match read(
             &client,
             reqwest::Url::parse(&format!("{root}/{box_path}/{bid}")).map_err(|e| e.to_string())?,
         )
         .await
-        .ok()
+        {
+            Ok(v) => Some(v),
+            Err(e) => {
+                // The index answered but the issuance box did not. Keep what
+                // we have, and say so, so the caller can ask again instead of
+                // caching a register-less descriptor forever.
+                incomplete = e.starts_with(RETRYABLE);
+                None
+            }
+        }
     } else {
         None
     };
-    Ok(describe(id, provider, &index, bx.as_ref()))
+    let mut described = describe(id, provider, &index, bx.as_ref());
+    if incomplete {
+        if let Some(map) = described.as_object_mut() {
+            map.insert("incomplete".into(), Value::Bool(true));
+        }
+    }
+    Ok(described)
 }
 
 // Admit only the flat byte collection type before invoking Sigma's recursive

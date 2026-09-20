@@ -28,6 +28,9 @@ class ResolverApi extends RustLibApi {
   /// 1-based index of the request the gate applies to.
   int gateOnCall = 1;
 
+  /// Mimics the index answering while the issuance box does not.
+  bool incomplete = false;
+
   @override
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
@@ -57,7 +60,21 @@ class ResolverApi extends RustLibApi {
     }
     if (failWith == 'missing') throw StateError('404 not found');
     if (failWith == 'timeout') throw StateError('Metadata request timed out');
+    // What reqwest actually emits for connection refusal, DNS and TLS
+    // failure — indistinguishable from each other, hence the Rust marker.
+    if (failWith == 'transport') {
+      throw StateError(
+        'RETRYABLE: error sending request for url (https://node.example/x)',
+      );
+    }
+    if (failWith == 'server') {
+      throw StateError('RETRYABLE: Metadata provider returned 503');
+    }
+    if (failWith == 'badbody') {
+      throw StateError('RETRYABLE: expected value at line 1 column 1');
+    }
     return jsonEncode({
+      if (incomplete) 'incomplete': true,
       'id': tokenId,
       'name': 'Name ${tokenId.substring(0, 2)}',
       'decimals': 2,
@@ -86,6 +103,7 @@ void main() {
     api.failWith = null;
     api.gate = null;
     api.gateOnCall = 1;
+    api.incomplete = false;
     networkController.activeUrl = _node;
   });
 
@@ -517,6 +535,85 @@ void main() {
     final onDisk = await TokenDescriptorStore.load('w16');
     expect(onDisk[_id('ab')]?.name, 'Name ab',
         reason: 'a switch must not discard what the old wallet resolved');
+  });
+
+  for (final kind in ['transport', 'server', 'badbody']) {
+    test('a $kind failure is retried, not remembered', () async {
+      final svc = await unlocked('w18-$kind');
+      api.failWith = kind;
+      await svc.prefetchTokenMeta(
+        [_id('ab')],
+        walletId: _wallet,
+        servedBy: networkController.activeUrl!,
+        stillCurrent: () => true,
+      );
+      expect(api.asked, [_id('ab')]);
+
+      api.failWith = null;
+      await svc.prefetchTokenMeta(
+        [_id('ab')],
+        walletId: _wallet,
+        servedBy: networkController.activeUrl!,
+        stillCurrent: () => true,
+      );
+      expect(api.asked, [_id('ab'), _id('ab')],
+          reason: 'the provider failed to answer; it said nothing about the '
+              'token, so the next pass must ask again');
+      expect(svc.cachedTokenMeta(_id('ab'))?.name, 'Name ab');
+    });
+  }
+
+  test('a partial descriptor is shown but still completed later', () async {
+    final svc = await unlocked('w19');
+    api.incomplete = true;
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(svc.cachedTokenMeta(_id('ab'))?.name, 'Name ab',
+        reason: 'a name beats an id, so keep what came back');
+
+    api.incomplete = false;
+    await svc.prefetchTokenMeta(
+      [_id('ab')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    expect(api.asked, hasLength(2),
+        reason: 'a descriptor missing its registers must not be cached as '
+            'final, or one box-endpoint failure hides them forever');
+  });
+
+  test('locking before a switch still writes what was resolved', () async {
+    // The production path: the dashboard locks for the switch first, which
+    // clears the active wallet id before _setHandle ever runs.
+    final svc = await unlocked('w20');
+    final gate = Completer<String?>();
+    api.gate = gate;
+    api.gateOnCall = 2;
+    final pass = svc.prefetchTokenMeta(
+      [_id('ab'), _id('cd')],
+      walletId: _wallet,
+      servedBy: networkController.activeUrl!,
+      stillCurrent: () => true,
+    );
+    while (api.asked.length < 2) {
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    await svc.lockForSwitch();
+    gate.complete(null);
+    await pass;
+    _wallet = 'w21';
+    await svc.restoreWallet('mock', walletId: 'w21');
+
+    final onDisk = await TokenDescriptorStore.load('w20');
+    expect(onDisk[_id('ab')]?.name, 'Name ab',
+        reason: 'locking clears the wallet id, so the capture cannot wait '
+            'for _setHandle');
   });
 
   test('an unparseable table is not a descriptor', () async {
