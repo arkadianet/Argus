@@ -960,6 +960,9 @@ class WalletSyncController extends ChangeNotifier {
           id: t.id,
           amount: t.amount,
           stealthAmount: t.stealthAmount,
+          // Scale, not issuer identity. Dropping it here would display and
+          // price 5 base units of a two-decimal token as 5 rather than 0.05.
+          decimals: t.decimals,
         ),
     ];
     tokens = bare(tokens);

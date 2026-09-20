@@ -942,12 +942,15 @@ void main() {
     // directly, so removing that call from the wipe fails here.
     final svc = await unlocked('wS');
     walletSyncController.tokens = [
-      TokenBalance(id: _id('ab'), amount: 5, name: 'Published'),
+      TokenBalance(id: _id('ab'), amount: 5, name: 'Published', decimals: 2),
     ];
     addTearDown(walletSyncController.reset);
 
     await svc.clearCollectibleData();
 
+    expect(walletSyncController.tokens.single.decimals, 2,
+        reason: 'the scale must survive the wipe, or 5 base units of a '
+            'two-decimal token display and price as 5 rather than 0.05');
     expect(walletSyncController.tokens.single.name, isNull,
         reason: 'displayMetadata falls back to the holding, so a wiped name '
             'would stay on screen');
@@ -1044,13 +1047,22 @@ void main() {
             'dropping them crashes wallet activation and values a '
             'two-decimal holding at a hundred times its worth');
 
-    // The consumer that would crash: a public snapshot reused on activation.
-    expect(
-      () => walletSyncController.activateWallet('wV'),
-      returnsNormally,
+    // The consumer that would crash: a stripped snapshot installed as a
+    // warm public snapshot, then activated. Activation is a no-op for a
+    // wallet that is already current, so switch away first.
+    walletSyncController.deactivate();
+    walletSyncController.rememberPublic(
+      'wV',
+      after,
+      walletSyncController.publicGeneration,
     );
+    expect(() => walletSyncController.activateWallet('wV'), returnsNormally);
+
     final known = await WalletDatabaseService.lastKnownBalance('wV');
-    expect(known, isNotNull);
+    expect(known!.tokens.single.decimals, 2,
+        reason: 'a lost scale prices this holding at a hundred times its '
+            'worth, which a non-null check cannot see');
+    expect(known.tokens.single.amount, 5);
   });
 
   test('a public refresh in flight cannot write names back after a wipe',
