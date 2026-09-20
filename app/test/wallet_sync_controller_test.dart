@@ -107,15 +107,32 @@ class FakeGateway implements WalletSyncGateway, WalletSyncBatchGateway {
   }) async {
     resolved.addAll(ids);
     resolveProviders.add(servedBy);
+    final gate = resolveGate;
+    if (gate != null) {
+      resolveGate = null;
+      await gate.future;
+    }
     return {
       for (final id in ids)
         if (resolvedNames.containsKey(id))
-          id: TokenBalance(id: id, amount: 0, name: resolvedNames[id]),
+          id: TokenBalance(
+            id: id,
+            amount: 0,
+            name: resolvedNames[id],
+            decimals: resolvedDecimals[id] ?? 0,
+          ),
     };
   }
 
   /// Names the fake will hand back, so a test can check they reach the UI.
   final Map<String, String> resolvedNames = {};
+
+  /// Scales the fake will hand back alongside those names.
+  final Map<String, int> resolvedDecimals = {};
+
+  /// Holds resolution open, so a test can let the refresh write its own
+  /// snapshot first — which is when the scale is actually lost.
+  Completer<void>? resolveGate;
   final List<String> resolveProviders = [];
 
   /// Overrides what hydration returns, so a test can supply a fully
@@ -626,6 +643,40 @@ void main() {
               'some later hydration happens to pick it up');
       expect(c.tokens.single.amount, 5, reason: 'amount preserved');
       gw.resolvedNames.clear();
+    });
+
+    test('a scale resolved after the snapshot still reaches the snapshot',
+        () async {
+      // The refresh writes its snapshot before resolution finishes, so
+      // without a re-save the screen shows 0.05 while the persisted holding
+      // says 5 — and a later public refresh carries that zero forward.
+      gw.balances = {
+        'addr0': {
+          'balance_nano_erg': 100,
+          'tokens': [
+            {'id': 'a1', 'amount': 5},
+          ],
+        },
+      };
+      gw.resolvedNames['a1'] = 'Resolved';
+      gw.resolvedDecimals['a1'] = 2;
+      final gate = Completer<void>();
+      gw.resolveGate = gate;
+
+      await c.refresh(discover: false);
+      expect((gw.savedCache?['tokens'] as List?)?.single['decimals'], 0,
+          reason: 'the refresh writes its snapshot before resolution lands');
+
+      gate.complete();
+      await c.pendingNameResolution;
+
+      expect(c.tokens.single.decimals, 2, reason: 'corrected on screen');
+      final saved = gw.savedCache?['tokens'] as List?;
+      expect(saved?.single['decimals'], 2,
+          reason: 'and in the snapshot a lock would leave behind');
+      expect(saved?.single['amount'], 5);
+      gw.resolvedNames.clear();
+      gw.resolvedDecimals.clear();
     });
 
     test('retaining a wallet preserves names already on screen', () async {

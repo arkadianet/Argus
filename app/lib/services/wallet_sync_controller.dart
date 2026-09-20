@@ -936,10 +936,17 @@ class WalletSyncController extends ChangeNotifier {
           servedBy: servedBy,
           stillCurrent: () => _current(generation, walletId),
         )
-        .then((resolved) {
+        .then((resolved) async {
           if (resolved.isEmpty || !_current(generation, walletId)) return;
           _applyResolved(resolved);
           notifyListeners();
+          // The snapshot was written before this pass finished, so it still
+          // carries the pre-resolution scale. Without re-saving, a wallet
+          // locked before its next sync keeps a persisted holding of five
+          // base units reading as five rather than 0.05 — and a later public
+          // refresh carries that zero forward indefinitely.
+          if (!_current(generation, walletId)) return;
+          await _saveSnapshot(walletId);
         })
         .catchError((_) {})
         .whenComplete(() => _nameResolution = null);
