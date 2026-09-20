@@ -175,6 +175,10 @@ class WalletDatabaseService {
     // would value five base units of a two-decimal token as five. Keep what
     // the stored snapshot already knows where the incoming row is bare.
     await _mergeKnownTokenMetadata(walletId, snapshot);
+    // The merge suspends, so re-check: a lock, wallet switch or wipe landing
+    // in it would otherwise let this write overwrite newer state or restore
+    // names that were just cleared.
+    if (!valid()) return;
     await prefs.setString(
       _snapshotKey(walletId),
       _obfuscate(jsonEncode(snapshot), walletId),
@@ -232,16 +236,24 @@ class WalletDatabaseService {
       if (t is! Map) continue;
       final prior = known[t['id']?.toString()];
       if (prior == null) continue;
+      // Whole-row, not field-by-field. A row carrying any metadata is
+      // authoritative and replaces what was stored — including a resolved
+      // scale of zero, which most NFTs legitimately have and which a
+      // "zero means missing" rule could never write down. Only a row with
+      // no metadata at all is the refresh-resolved-against-the-wrong-cache
+      // case this exists for.
+      final carriesMetadata = t['name'] != null ||
+          t['iconUrl'] != null ||
+          t['emissionAmount'] != null ||
+          (t['decimals'] is num && (t['decimals'] as num) != 0);
+      if (carriesMetadata) continue;
       for (final field in const [
         'name',
         'decimals',
         'iconUrl',
         'emissionAmount',
       ]) {
-        final incomingValue = t[field];
-        final bare = incomingValue == null ||
-            (field == 'decimals' && incomingValue == 0);
-        if (bare && prior[field] != null) t[field] = prior[field];
+        if (prior[field] != null) t[field] = prior[field];
       }
     }
   }

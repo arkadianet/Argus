@@ -1027,6 +1027,50 @@ void main() {
     expect((after['tokens'] as List).single['decimals'], 2,
         reason: 'but it must not blank a scale the snapshot already knew');
     expect((after['tokens'] as List).single['name'], 'Known');
+
+    // The other direction: a row that DOES carry metadata is authoritative,
+    // including a resolved scale of zero, which most NFTs have.
+    await WalletDatabaseService.savePublicSnapshot('wM', {
+      'wallet_id': 'wM',
+      'balance_nano_erg': 12,
+      'tokens': [
+        {'id': _id('ab'), 'amount': 5, 'name': 'Corrected', 'decimals': 0},
+      ],
+    }, () => true);
+    final corrected = await WalletDatabaseService.loadCachedState(
+      expectedWalletId: 'wM',
+    );
+    expect((corrected!['tokens'] as List).single['decimals'], 0,
+        reason: 'a resolved zero must be able to replace a stale scale, or '
+            'the 100x error can never be corrected');
+    expect((corrected['tokens'] as List).single['name'], 'Corrected');
+  });
+
+  test('a refresh invalidated during the merge does not land', () async {
+    await WalletDatabaseService.savePublicSnapshot('wN', {
+      'wallet_id': 'wN',
+      'balance_nano_erg': 1,
+      'tokens': [
+        {'id': _id('ab'), 'amount': 5, 'name': 'Known', 'decimals': 2},
+      ],
+    }, () => true);
+
+    // Invalid by the time the merge's await completes.
+    var checks = 0;
+    await WalletDatabaseService.savePublicSnapshot('wN', {
+      'wallet_id': 'wN',
+      'balance_nano_erg': 999,
+      'tokens': [
+        {'id': _id('ab'), 'amount': 5},
+      ],
+    }, () => checks++ == 0);
+
+    final after = await WalletDatabaseService.loadCachedState(
+      expectedWalletId: 'wN',
+    );
+    expect(after!['balance_nano_erg'], 1,
+        reason: 'a write whose validity lapsed during the merge must not '
+            'overwrite newer state');
   });
 
   test('a wipe does not leave names in retained or persisted snapshots',
