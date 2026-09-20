@@ -905,6 +905,16 @@ void main() {
     );
     expect(out, isEmpty,
         reason: 'a pass invalidated before it returns must hand back nothing');
+    // And the suspended write must not land either: emptying the caller's
+    // queue cannot reach a snapshot already inside save().
+    expect(await TokenDescriptorStore.load('wP'), isEmpty,
+        reason: 'a write overtaken by a wipe must not recreate the table');
+
+    final reloaded = WalletService();
+    await reloaded.restoreWallet('mock', walletId: 'wP');
+    await reloaded.ensureWalletTable();
+    expect(reloaded.cachedTokenMeta(_id('ab')), isNull,
+        reason: 'and nothing may come back on the next load');
   });
 
   test('deleting the active wallet clears its descriptors from memory',
