@@ -2,11 +2,14 @@ import 'package:argus_wallet/services/utxo_tools_controller.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-InputBoxInput box(String id, int nano, {List<String> tokens = const []}) => InputBoxInput(
+InputBoxInput box(String id, int nano, {List<String> tokens = const []}) =>
+    InputBoxInput(
       boxId: id,
       valueNanoErg: BigInt.from(nano),
       creationHeight: 1,
-      assets: [for (final t in tokens) InputAsset(tokenId: t, amount: BigInt.one)],
+      assets: [
+        for (final t in tokens) InputAsset(tokenId: t, amount: BigInt.one),
+      ],
     );
 
 void main() {
@@ -35,20 +38,23 @@ void main() {
     expect(c.filtered.map((b) => b.boxId), ['bbb2']);
   });
 
-  test('selection toggles, selects all filtered, clears, and survives reload', () {
-    final c = UtxoToolsController()..setBoxes(boxes);
-    c.toggle('aaa1');
-    expect(c.selectedIds, {'aaa1'});
-    c.toggle('aaa1');
-    expect(c.selectedIds, isEmpty);
-    c.setFilter(UtxoFilter.ergOnly);
-    c.selectAllFiltered();
-    expect(c.selectedIds, {'aaa1', 'bbb2'});
-    c.setBoxes([boxes[0]]);
-    expect(c.selectedIds, {'aaa1'});
-    c.clearSelection();
-    expect(c.selectedIds, isEmpty);
-  });
+  test(
+    'selection toggles, selects all filtered, clears, and survives reload',
+    () {
+      final c = UtxoToolsController()..setBoxes(boxes);
+      c.toggle('aaa1');
+      expect(c.selectedIds, {'aaa1'});
+      c.toggle('aaa1');
+      expect(c.selectedIds, isEmpty);
+      c.setFilter(UtxoFilter.ergOnly);
+      c.selectAllFiltered();
+      expect(c.selectedIds, {'aaa1', 'bbb2'});
+      c.setBoxes([boxes[0]]);
+      expect(c.selectedIds, {'aaa1'});
+      c.clearSelection();
+      expect(c.selectedIds, isEmpty);
+    },
+  );
 
   test('consolidation targets are the selection, else everything', () {
     final c = UtxoToolsController()..setBoxes(boxes);
@@ -67,4 +73,24 @@ void main() {
     expect(c.selectedNano, BigInt.from(5050000000));
     expect(c.totalNano, BigInt.from(7050000000));
   });
+
+  test(
+    'orders oldest boxes first, with unknown age last and deterministic ties',
+    () {
+      InputBoxInput dated(String id, int height) => InputBoxInput(
+        boxId: id,
+        valueNanoErg: BigInt.from(1000000),
+        creationHeight: height,
+        assets: [],
+      );
+      final c = UtxoToolsController()
+        ..setBoxes([
+          dated('unknown', 0),
+          dated('new', 100),
+          dated('old-b', 10),
+          dated('old-a', 10),
+        ]);
+      expect(c.boxes.map((b) => b.boxId), ['old-a', 'old-b', 'new', 'unknown']);
+    },
+  );
 }

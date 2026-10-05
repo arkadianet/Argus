@@ -13,6 +13,7 @@ import '../services/utxo_tools_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
+import 'separate_tokens_sheet.dart';
 import 'widgets/soft_card.dart';
 
 class UtxoManagementScreen extends StatefulWidget {
@@ -378,6 +379,81 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     }
   }
 
+  Future<void> _openSeparateTokensFlow({String? sourceBoxId}) async {
+    final plan = await showModalBottomSheet<SeparateTokensPlan>(
+      context: context,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      isScrollControlled: true,
+      builder: (_) => SeparateTokensSheet(
+        boxes: _boxes,
+        initialSourceId:
+            sourceBoxId ??
+            (_selectedBoxIds.length == 1 ? _selectedBoxIds.single : null),
+      ),
+    );
+    if (plan == null || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      final preview = await walletService.prepareRestructure(
+        spendAddresses: [plan.source.address!],
+        selectedBoxIds: plan.inputBoxIds,
+        outputs: plan.outputs,
+        changeAddress: plan.source.address!,
+        nodeUrl: networkController.activeUrl,
+      );
+      if (!mounted) return;
+      setState(() => _busy = false);
+      final confirmed = await showConfirmTransactionChoice(
+        context,
+        preparationId: preview.preparationId,
+        title: 'Separate ${plan.assets.length} token types',
+        recipientAddress: plan.source.address,
+        rows: [
+          ConfirmTxRow(
+            'Source box',
+            shorten(plan.source.boxId, head: 8, tail: 6),
+          ),
+          ConfirmTxRow('Inputs spent', '${preview.inputCount} boxes'),
+          ConfirmTxRow('Token boxes', '${plan.assets.length}'),
+          for (final asset in plan.assets)
+            ConfirmTxRow(
+              walletService.cachedTokenMeta(asset.tokenId)?.label ??
+                  shorten(asset.tokenId, head: 8, tail: 6),
+              '${_tokenAmount(asset)} (${asset.amount} raw units)',
+            ),
+          ConfirmTxRow('ERG in token boxes', formatErg(preview.allocatedErg)),
+          ConfirmTxRow('ERG change', formatErg(preview.changeNanoErg)),
+          ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
+          argusFeeRow(),
+        ],
+        detail:
+            'Each token type keeps its full balance in a separate box at your source address. All remaining ERG is returned to your wallet.',
+        confirmLabel: 'Sign & broadcast separation',
+      );
+      if (confirmed != ConfirmChoice.broadcast || !mounted) return;
+      setState(() => _busy = true);
+      final txId = await walletService.sendErg(
+        preparationId: preview.preparationId,
+      );
+      final warning = await txBookkeeping(() async {
+        if (!mounted) return;
+        _tools.clearSelection();
+        await Future.delayed(const Duration(seconds: 1));
+        if (mounted) await _loadBoxes(propagateError: true);
+      });
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Token separation submitted',
+      );
+    } catch (e) {
+      if (mounted) showTxFailureSheet(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _openRestructureFlow() async {
     final addrs = await _getWalletAddresses();
     if (!mounted || addrs.isEmpty) return;
@@ -470,7 +546,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('UTXO Management'),
+        title: const Text('Wallet boxes'),
         actions: [
           if (_consolidationIds != null)
             IconButton(
@@ -563,6 +639,11 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                             '${health.hint}${dustCount > 0 ? ' $dustCount dust ${dustCount == 1 ? 'box' : 'boxes'} under ${formatErg(dustThresholdNano)}.' : ''}',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
+                          const SizedBox(height: 6),
+                          Text(
+                            'Oldest boxes first. Automatic sends prefer older eligible boxes to reduce storage-rent risk; privacy rules and your manual selection still apply.',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
                           const SizedBox(height: 14),
                           const Hairline(),
                           const SizedBox(height: 12),
@@ -600,6 +681,17 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                               ),
                             ],
                           ),
+                          if (_boxes.any((b) => b.assets.length >= 2)) ...[
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: double.infinity,
+                              child: OutlinedButton.icon(
+                                icon: const Icon(Icons.account_tree_outlined, size: 16),
+                                label: const Text('Separate token types'),
+                                onPressed: _busy ? null : _openSeparateTokensFlow,
+                              ),
+                            ),
+                          ],
                           if (dustCount >= 2) ...[
                             const SizedBox(height: 8),
                             OutlinedButton.icon(
@@ -690,6 +782,9 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                                   box: box,
                                   isSelected: isSelected,
                                   onToggle: () => _tools.toggle(box.boxId),
+                                  onSeparateTokens: _busy || box.assets.length < 2
+                                      ? null
+                                      : () => _openSeparateTokensFlow(sourceBoxId: box.boxId),
                                 );
                               },
                             ),
@@ -732,11 +827,13 @@ class _UtxoCard extends StatelessWidget {
     required this.box,
     required this.isSelected,
     required this.onToggle,
+    this.onSeparateTokens,
   });
 
   final InputBoxInput box;
   final bool isSelected;
   final VoidCallback onToggle;
+  final VoidCallback? onSeparateTokens;
 
   @override
   Widget build(BuildContext context) {
@@ -838,6 +935,12 @@ class _UtxoCard extends StatelessWidget {
                   }).toList(),
                 ),
               ],
+              if (box.assets.length >= 2)
+                TextButton.icon(
+                  icon: const Icon(Icons.account_tree_outlined, size: 16),
+                  label: const Text('Separate token types'),
+                  onPressed: onSeparateTokens,
+                ),
             ],
           ),
         ),

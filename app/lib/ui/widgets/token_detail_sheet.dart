@@ -227,7 +227,7 @@ class _TokenDetailBody extends StatelessWidget {
     final caution = cautionedToken(token.id);
     final impersonates = impersonatedToken(tokenId: token.id, name: token.name);
     return SafeArea(
-      child: SingleChildScrollView(
+      child: Padding(
         padding: const EdgeInsets.fromLTRB(24, 20, 24, 28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -367,6 +367,35 @@ class _TokenDetailBody extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 20),
+            if (token.isCollectible || token.iconUrl != null) ...[
+              Text('Artwork', style: theme.textTheme.titleMedium),
+              const SizedBox(height: 10),
+              if (token.iconUrl != null)
+                RemotePreview(
+                  key: ValueKey(
+                    '${token.id}:${token.iconUrl}:${token.issuanceHash}',
+                  ),
+                  token: token,
+                )
+              else
+                Text(switch (token.mediaState) {
+                  MediaState.absent => 'No media link in issuance metadata.',
+                  MediaState.unknown =>
+                    'Load metadata below to check for artwork.',
+                  MediaState.unsupported => 'Preview not supported',
+                  MediaState.notLoaded => 'Artwork link unavailable',
+                }),
+              const SizedBox(height: 16),
+            ],
+            if (token.description != null) ...[
+              Text('Description', style: theme.textTheme.titleSmall),
+              const SizedBox(height: 6),
+              Text(
+                issuerText(token.description, limit: 4096),
+                textDirection: TextDirection.ltr,
+              ),
+              const SizedBox(height: 20),
+            ],
             Text(
               'YOU HOLD',
               style: theme.textTheme.titleSmall?.copyWith(color: muted),
@@ -380,67 +409,6 @@ class _TokenDetailBody extends StatelessWidget {
                 fontSize: 28,
               ),
             ),
-            const SizedBox(height: 18),
-            Text(token.classification, textDirection: TextDirection.ltr),
-            const SizedBox(height: 8),
-            Text(
-              token.supplyEvidence == SupplyEvidence.originalEmission
-                  ? 'Original emission: ${token.emissionAmount} (provider reported)'
-                  : 'Original emission unavailable',
-            ),
-            Text('Decimals evidence: ${token.decimalsEvidence.name}'),
-            Text('Declared artwork kind: ${token.declaredAssetKind.name}'),
-            if (token.source != null)
-              Text(
-                'Metadata source: ${token.source}',
-                textDirection: TextDirection.ltr,
-              ),
-            const SizedBox(height: 8),
-            Text(
-              token.description == null
-                  ? 'Description unavailable'
-                  : issuerText(token.description, limit: 4096),
-              textDirection: TextDirection.ltr,
-            ),
-            const SizedBox(height: 8),
-            Text(switch (token.mediaState) {
-              MediaState.absent => 'No media link in issuance metadata.',
-              MediaState.unknown => 'Media metadata unavailable',
-              MediaState.unsupported => 'Preview not supported',
-              MediaState.notLoaded => 'Remote preview not loaded',
-            }),
-            if (token.iconUrl != null)
-              RemotePreview(
-                key: ValueKey('${token.id}:${token.iconUrl}:${token.issuanceHash}'),
-                token: token,
-              ),
-            Text(
-              token.issuanceHash == null
-                  ? 'Issuance media hash missing or invalid'
-                  : 'Issuance media hash: ${token.issuanceHash}',
-              textDirection: TextDirection.ltr,
-            ),
-            if (token.iconUrl != null)
-              SelectableText(
-                issuerText(token.iconUrl, limit: 2048),
-                textDirection: TextDirection.ltr,
-              ),
-            if (token.iconUrl != null)
-              TextButton(
-                onPressed: () =>
-                    Clipboard.setData(ClipboardData(text: token.iconUrl!)),
-                child: const Text('Copy media URI as text'),
-              ),
-            if (token.rawRegisters != null)
-              ExpansionTile(
-                title: const Text('Original issuance registers (hex)'),
-                children: [
-                  SelectableText(
-                    token.rawRegisters!,
-                    textDirection: TextDirection.ltr,
-                  ),
-                ],
-              ),
             const SizedBox(height: 18),
             Text(
               'TOKEN ID',
@@ -509,6 +477,67 @@ class _TokenDetailBody extends StatelessWidget {
                 ),
               ],
             ),
+            ExpansionTile(
+              tilePadding: EdgeInsets.zero,
+              title: const Text('Metadata & media details'),
+              childrenPadding: const EdgeInsets.only(bottom: 12),
+              expandedCrossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(token.classification, textDirection: TextDirection.ltr),
+                const SizedBox(height: 8),
+                Text(
+                  token.supplyEvidence == SupplyEvidence.originalEmission
+                      ? 'Original emission: ${token.emissionAmount} (provider reported)'
+                      : 'Original emission unavailable',
+                ),
+                Text(
+                  'Decimals: ${token.decimals} · ${token.decimalsEvidence.name} evidence',
+                ),
+                Text('Declared artwork kind: ${token.declaredAssetKind.name}'),
+                if (token.source != null)
+                  Text(
+                    'Metadata source: ${token.source}',
+                    textDirection: TextDirection.ltr,
+                  ),
+                const SizedBox(height: 8),
+                Text(switch (token.mediaState) {
+                  MediaState.absent => 'No media link in issuance metadata.',
+                  MediaState.unknown => 'Media metadata unavailable',
+                  MediaState.unsupported => 'Preview not supported',
+                  MediaState.notLoaded =>
+                    'Artwork is loaded only with your consent',
+                }),
+                if (token.iconUrl != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    token.issuanceHash == null
+                        ? 'Issuance media hash missing or invalid'
+                        : 'Issuance media hash: ${token.issuanceHash}',
+                    textDirection: TextDirection.ltr,
+                  ),
+                  const SizedBox(height: 8),
+                  SelectableText(
+                    issuerText(token.iconUrl, limit: 2048),
+                    textDirection: TextDirection.ltr,
+                  ),
+                  TextButton(
+                    onPressed: () =>
+                        Clipboard.setData(ClipboardData(text: token.iconUrl!)),
+                    child: const Text('Copy media URI as text'),
+                  ),
+                ],
+                if (token.rawRegisters != null)
+                  ExpansionTile(
+                    title: const Text('Original issuance registers (hex)'),
+                    children: [
+                      SelectableText(
+                        token.rawRegisters!,
+                        textDirection: TextDirection.ltr,
+                      ),
+                    ],
+                  ),
+              ],
+            ),
             if (onSend != null) ...[
               const SizedBox(height: 16),
               FilledButton.icon(
@@ -534,6 +563,10 @@ Future<void> showTokenDetailSheet(
     context: context,
     backgroundColor: Theme.of(context).colorScheme.surface,
     isScrollControlled: true,
+    showDragHandle: true,
+    constraints: BoxConstraints(
+      maxHeight: MediaQuery.sizeOf(context).height * .92,
+    ),
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(cardRadius)),
     ),

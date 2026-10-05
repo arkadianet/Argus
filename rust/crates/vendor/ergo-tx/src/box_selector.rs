@@ -77,16 +77,39 @@ pub struct SelectedInputs {
     pub token_amount: u64,
 }
 
-/// Sorts by value descending (largest first) to minimize input count.
+/// Confirmed boxes with a lower creation height are spent first. Unknown
+/// heights come last so a missing height cannot masquerade as an old box.
+/// At the same height, prefer more value to avoid unnecessary inputs.
+pub fn compare_box_age(a: &Eip12InputBox, b: &Eip12InputBox) -> std::cmp::Ordering {
+    let height = |b: &Eip12InputBox| {
+        if b.creation_height > 0 {
+            b.creation_height
+        } else {
+            i32::MAX
+        }
+    };
+    height(a).cmp(&height(b))
+}
+
+fn compare_age_and_value(a: &Eip12InputBox, b: &Eip12InputBox) -> std::cmp::Ordering {
+    compare_box_age(a, b)
+        .then_with(|| {
+            b.value
+                .parse::<u64>()
+                .unwrap_or(0)
+                .cmp(&a.value.parse::<u64>().unwrap_or(0))
+        })
+        .then_with(|| a.box_id.cmp(&b.box_id))
+}
+
+/// Prefer older eligible boxes to refresh their storage-rent age.
 pub fn select_erg_boxes(
     utxos: &[Eip12InputBox],
     required_erg: u64,
 ) -> Result<SelectedInputs, BoxSelectorError> {
     let mut indices: Vec<usize> = (0..utxos.len()).collect();
     indices.sort_by(|&a, &b| {
-        let va = utxos[a].value.parse::<u64>().unwrap_or(0);
-        let vb = utxos[b].value.parse::<u64>().unwrap_or(0);
-        vb.cmp(&va)
+        compare_age_and_value(&utxos[a], &utxos[b])
     });
 
     let mut selected = Vec::new();
@@ -121,7 +144,7 @@ pub fn select_erg_boxes(
     })
 }
 
-/// Pass 1: select boxes with the token (largest first). Pass 2: top up ERG if needed.
+/// Pass 1: select older boxes with the token. Pass 2: top up ERG oldest first.
 pub fn select_token_boxes(
     utxos: &[Eip12InputBox],
     token_id: &str,
@@ -145,7 +168,11 @@ pub fn select_token_boxes(
             }
         })
         .collect();
-    token_indices.sort_by_key(|b| std::cmp::Reverse(b.1));
+    token_indices.sort_by(|&(a, amount_a), &(b, amount_b)| {
+        compare_box_age(&utxos[a], &utxos[b])
+            .then_with(|| amount_b.cmp(&amount_a))
+            .then_with(|| compare_age_and_value(&utxos[a], &utxos[b]))
+    });
 
     let mut selected_indices = Vec::new();
     let mut total_tokens: u64 = 0;
@@ -180,7 +207,7 @@ pub fn select_token_boxes(
             .filter(|(i, _)| !selected_indices.contains(i))
             .map(|(i, u)| (i, u.value.parse::<u64>().unwrap_or(0)))
             .collect();
-        erg_indices.sort_by_key(|b| std::cmp::Reverse(b.1));
+        erg_indices.sort_by(|&(a, _), &(b, _)| compare_age_and_value(&utxos[a], &utxos[b]));
 
         for &(idx, erg) in &erg_indices {
             if total_erg >= min_erg {
@@ -204,7 +231,7 @@ pub fn select_token_boxes(
         }
     }
 
-    selected_indices.sort();
+    selected_indices.sort_by(|&a, &b| compare_age_and_value(&utxos[a], &utxos[b]));
     let boxes: Vec<Eip12InputBox> = selected_indices.iter().map(|&i| utxos[i].clone()).collect();
 
     Ok(SelectedInputs {
@@ -227,7 +254,7 @@ pub fn select_multi_token_boxes(
     let mut selected_indices: Vec<usize> = Vec::new();
     let mut total_erg: u64 = 0;
 
-    // Sort by number of required tokens present (most useful first)
+    // Age takes priority; at the same height prefer more required tokens.
     let mut scored_indices: Vec<(usize, usize)> = utxos
         .iter()
         .enumerate()
@@ -241,7 +268,11 @@ pub fn select_multi_token_boxes(
         })
         .filter(|(_, count)| *count > 0)
         .collect();
-    scored_indices.sort_by_key(|b| std::cmp::Reverse(b.1));
+    scored_indices.sort_by(|&(a, count_a), &(b, count_b)| {
+        compare_box_age(&utxos[a], &utxos[b])
+            .then_with(|| count_b.cmp(&count_a))
+            .then_with(|| compare_age_and_value(&utxos[a], &utxos[b]))
+    });
 
     for &(idx, _) in &scored_indices {
         if remaining.is_empty() {
@@ -293,7 +324,7 @@ pub fn select_multi_token_boxes(
             .filter(|(i, _)| !selected_indices.contains(i))
             .map(|(i, u)| (i, u.value.parse::<u64>().unwrap_or(0)))
             .collect();
-        erg_indices.sort_by_key(|b| std::cmp::Reverse(b.1));
+        erg_indices.sort_by(|&(a, _), &(b, _)| compare_age_and_value(&utxos[a], &utxos[b]));
 
         for &(idx, erg) in &erg_indices {
             if total_erg >= min_erg {
@@ -317,7 +348,7 @@ pub fn select_multi_token_boxes(
         }
     }
 
-    selected_indices.sort();
+    selected_indices.sort_by(|&a, &b| compare_age_and_value(&utxos[a], &utxos[b]));
     let boxes: Vec<Eip12InputBox> = selected_indices.iter().map(|&i| utxos[i].clone()).collect();
 
     Ok(SelectedInputs {
@@ -529,6 +560,60 @@ mod tests {
         assert_eq!(result.boxes.len(), 1);
         assert_eq!(result.total_erg, 5_000_000_000);
         assert_eq!(result.boxes[0].box_id, "box1");
+    }
+
+    #[test]
+    fn older_erg_boxes_are_refreshed_before_a_large_new_box() {
+        let mut old = mock_utxo("old", 2_000_000, vec![]);
+        old.creation_height = 10;
+        let mut middle = mock_utxo("middle", 3_000_000, vec![]);
+        middle.creation_height = 20;
+        let mut new = mock_utxo("new", 100_000_000, vec![]);
+        new.creation_height = 30;
+        for inputs in [vec![new.clone(), middle.clone(), old.clone()], vec![old.clone(), new.clone(), middle.clone()]] {
+            let selected = select_erg_boxes(&inputs, 4_000_000).unwrap();
+            assert_eq!(selected.boxes.iter().map(|b| b.box_id.as_str()).collect::<Vec<_>>(), vec!["old", "middle"]);
+            assert_eq!(selected.total_erg, 5_000_000);
+        }
+    }
+
+    #[test]
+    fn token_selection_and_erg_funding_both_prefer_older_boxes() {
+        let mut old_token = mock_utxo("old-token", 1_000_000, vec![("T", 5)]);
+        old_token.creation_height = 10;
+        let mut new_token = mock_utxo("new-token", 1_000_000, vec![("T", 100)]);
+        new_token.creation_height = 50;
+        let mut old_funding = mock_utxo("old-funding", 2_000_000, vec![]);
+        old_funding.creation_height = 20;
+        let mut new_funding = mock_utxo("new-funding", 100_000_000, vec![]);
+        new_funding.creation_height = 60;
+        let selected = select_token_boxes(&[new_token, new_funding, old_funding, old_token], "T", 5, 3_000_000).unwrap();
+        assert_eq!(selected.boxes.iter().map(|b| b.box_id.as_str()).collect::<Vec<_>>(), vec!["old-token", "old-funding"]);
+        assert_eq!(selected.token_amount, 5);
+    }
+
+    #[test]
+    fn multi_token_selection_prefers_age_over_a_new_combined_box() {
+        let mut old_a = mock_utxo("old-a", 2_000_000, vec![("A", 5)]);
+        old_a.creation_height = 10;
+        let mut old_b = mock_utxo("old-b", 2_000_000, vec![("B", 6)]);
+        old_b.creation_height = 20;
+        let mut new = mock_utxo("new", 100_000_000, vec![("A", 100), ("B", 100)]);
+        new.creation_height = 30;
+        let selected = select_multi_token_boxes(&[new, old_b, old_a], &[("A", 5), ("B", 6)], 3_000_000).unwrap();
+        assert_eq!(selected.boxes.iter().map(|b| b.box_id.as_str()).collect::<Vec<_>>(), vec!["old-a", "old-b"]);
+    }
+
+    #[test]
+    fn unknown_heights_cannot_preempt_confirmed_boxes() {
+        let unknown = mock_utxo("unknown", 100_000_000, vec![]);
+        let known = mock_utxo("known", 2_000_000, vec![]);
+        for height in [0, -1] {
+            let mut unknown = unknown.clone();
+            unknown.creation_height = height;
+            let selected = select_erg_boxes(&[unknown, known.clone()], 1_000_000).unwrap();
+            assert_eq!(selected.boxes[0].box_id, "known");
+        }
     }
 
     #[test]

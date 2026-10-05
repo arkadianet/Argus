@@ -4,6 +4,8 @@ use ergo_tx::{Eip12InputBox, SelectedInputs};
 /// ERG-only boxes are always eligible. Boxes that hold tokens are only
 /// eligible if they contain the token being sent. Builders return all unsent
 /// tokens to the wallet as change. ERG-only filtering remains unchanged.
+/// Automatic selection spends older boxes first within this eligibility
+/// policy. Manual choices and the one-pocket privacy rule still take priority.
 pub fn filter_spendable(utxos: &[Eip12InputBox], send_token: Option<&str>) -> Vec<Eip12InputBox> {
     utxos
         .iter()
@@ -92,8 +94,8 @@ mod pocket_preference_tests {
         }
     }
 
-    /// The stealth box is the largest, so plain largest-first selection
-    /// would take it and link the pockets for no reason.
+    /// At equal ages the stealth box is larger, but pocket privacy still
+    /// takes priority over the automatic input ranking.
     #[test]
     fn prefers_ordinary_boxes_even_when_a_stealth_box_is_larger() {
         let utxos = vec![boxx("pub", 2_000_000_000), boxx("ste", 9_000_000_000)];
@@ -141,6 +143,22 @@ mod pocket_preference_tests {
         let (s, mixed) = select_preferring_one_pocket(&utxos, &[], 1_000_000_000, None).unwrap();
         assert_eq!(s.boxes.len(), 1);
         assert!(!mixed);
+    }
+
+    #[test]
+    fn oldest_first_stays_within_one_pocket_and_manual_selection() {
+        let mut public_old = boxx("public-old", 2_000_000);
+        public_old.creation_height = 20;
+        let mut public_new = boxx("public-new", 50_000_000);
+        public_new.creation_height = 30;
+        let mut stealth_old = boxx("stealth-old", 100_000_000);
+        stealth_old.creation_height = 10;
+        let inputs = vec![public_new, stealth_old, public_old];
+        let (selected, mixed) = select_preferring_one_pocket(&inputs, &["stealth-old".into()], 1_000_000, None).unwrap();
+        assert_eq!(selected.boxes[0].box_id, "public-old");
+        assert!(!mixed, "an older stealth box does not force pocket linking");
+        let manual = select_exact(&inputs, &["public-new".into()], 1_000_000, None).unwrap();
+        assert_eq!(manual.boxes[0].box_id, "public-new", "manual choices override age ranking");
     }
 }
 
@@ -321,7 +339,7 @@ mod exact_selection_tests {
         );
     }
 
-    /// Automatic selection takes the largest eligible box first, so it can
+    /// At equal ages automatic selection takes the largest box first, so it can
     /// spend one the user wanted left alone — the linking problem coin
     /// control exists to solve. Exact selection spends only what was
     /// chosen, even when one bigger box would mean fewer inputs.
@@ -337,7 +355,7 @@ mod exact_selection_tests {
                 .map(|b| b.box_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["private"],
-            "largest first: the box the user wanted untouched pays the whole amount"
+            "equal-age tie: the box the user wanted untouched pays the whole amount"
         );
 
         let chosen = select_exact(&utxos, &["a".into(), "c".into()], 1_200_000_000, None).unwrap();

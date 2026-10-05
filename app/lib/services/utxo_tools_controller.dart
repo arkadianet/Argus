@@ -20,7 +20,10 @@ class UtxoToolsController extends ChangeNotifier {
   String get search => _search;
 
   void setBoxes(List<InputBoxInput> boxes) {
-    _boxes = List.unmodifiable(boxes);
+    // Height zero has unknown age; keep it behind dated boxes. A stable
+    // box-ID tie break makes both the list and funding choices predictable.
+    final ordered = [...boxes]..sort(compareUtxoAge);
+    _boxes = List.unmodifiable(ordered);
     _selected.retainAll(boxes.map((b) => b.boxId));
     notifyListeners();
   }
@@ -39,20 +42,20 @@ class UtxoToolsController extends ChangeNotifier {
   }
 
   List<InputBoxInput> get filtered => _boxes.where((box) {
-        switch (filter) {
-          case UtxoFilter.all:
-            break;
-          case UtxoFilter.ergOnly:
-            if (box.assets.isNotEmpty) return false;
-          case UtxoFilter.withTokens:
-            if (box.assets.isEmpty) return false;
-          case UtxoFilter.dust:
-            if (box.valueNanoErg >= BigInt.from(dustThresholdNano)) return false;
-        }
-        if (_search.isEmpty) return true;
-        return box.boxId.toLowerCase().contains(_search) ||
-            box.assets.any((a) => a.tokenId.toLowerCase().contains(_search));
-      }).toList();
+    switch (filter) {
+      case UtxoFilter.all:
+        break;
+      case UtxoFilter.ergOnly:
+        if (box.assets.isNotEmpty) return false;
+      case UtxoFilter.withTokens:
+        if (box.assets.isEmpty) return false;
+      case UtxoFilter.dust:
+        if (box.valueNanoErg >= BigInt.from(dustThresholdNano)) return false;
+    }
+    if (_search.isEmpty) return true;
+    return box.boxId.toLowerCase().contains(_search) ||
+        box.assets.any((a) => a.tokenId.toLowerCase().contains(_search));
+  }).toList();
 
   bool isSelected(String boxId) => _selected.contains(boxId);
 
@@ -88,4 +91,11 @@ class UtxoToolsController extends ChangeNotifier {
 
   BigInt get totalNano =>
       _boxes.fold(BigInt.zero, (sum, b) => sum + b.valueNanoErg);
+}
+
+int compareUtxoAge(InputBoxInput a, InputBoxInput b) {
+  if (a.creationHeight <= 0 && b.creationHeight > 0) return 1;
+  if (b.creationHeight <= 0 && a.creationHeight > 0) return -1;
+  final byHeight = a.creationHeight.compareTo(b.creationHeight);
+  return byHeight == 0 ? a.boxId.compareTo(b.boxId) : byHeight;
 }

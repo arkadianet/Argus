@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/token_router.dart';
 import 'package:argus_wallet/ui/widgets/asset_picker_sheet.dart';
@@ -6,13 +8,16 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/theme/argus_theme.dart';
 import 'package:argus_wallet/ui/send_screen.dart';
+import 'package:argus_wallet/ui/confirm_transaction_sheet.dart';
 import 'package:argus_wallet/ui/widgets/held_token_picker.dart';
+import 'package:argus_wallet/ui/widgets/amount_entry.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SendApi extends RustLibApi {
   Map<String, Object?>? prepared;
+  String? multiPreview;
   @override
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
@@ -49,6 +54,29 @@ class SendApi extends RustLibApi {
   }
 
   @override
+  Future<String> crateApiPrepareSendMulti({
+    required BigInt handleId,
+    required String senderAddress,
+    required List<String> spendAddresses,
+    required String changeAddress,
+    required String recipientsJson,
+    String? nodeUrl,
+    PlatformInt64? feeNano,
+    List<String>? inputBoxIds,
+    String? stealthBoxesJson,
+    String? babelTokenId,
+  }) async {
+    prepared = {
+      'recipients': jsonDecode(recipientsJson),
+      'sender': senderAddress,
+      'change': changeAddress,
+      'spend': spendAddresses,
+    };
+    if (multiPreview != null) return multiPreview!;
+    throw StateError('Captured preparation; no network transaction');
+  }
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
@@ -59,7 +87,11 @@ final holdings = [
   TokenBalance(id: 'nft', name: 'Art', amount: 1, decimals: 0),
 ];
 
-Future<void> mount(WidgetTester tester, {List<TokenBalance>? tokens}) async {
+Future<void> mount(
+  WidgetTester tester, {
+  List<TokenBalance>? tokens,
+  String? recipient,
+}) async {
   SharedPreferences.setMockInitialValues({});
   tester.view.physicalSize = const Size(1000, 1600);
   tester.view.devicePixelRatio = 1;
@@ -76,7 +108,7 @@ Future<void> mount(WidgetTester tester, {List<TokenBalance>? tokens}) async {
           spendableNano: 1000000000,
           tokens: tokens ?? holdings,
         ),
-        child: const SendScreen(),
+        child: SendScreen(initialRecipient: recipient),
       ),
     ),
   );
@@ -114,6 +146,149 @@ void main() {
   final api = SendApi();
   setUpAll(() => RustLib.initMock(api: api));
   tearDownAll(RustLib.dispose);
+  setUp(() {
+    api.prepared = null;
+    api.multiPreview = null;
+  });
+
+  testWidgets(
+    'backend multi-token preview without single recipient reaches confirmation',
+    (tester) async {
+      const recipient = '9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8';
+      await mount(tester, recipient: recipient);
+      await walletService.restoreWallet('mock', walletId: 'send-test');
+      addTearDown(walletService.lock);
+      api.multiPreview = jsonEncode({
+        'preparation_id': 1,
+        'recipients': [
+          {
+            'address': recipient,
+            'amount_nano_erg': 2000000,
+            'tokens': [
+              {'token_id': 'a', 'amount': 25},
+              {'token_id': 'nft', 'amount': 1},
+            ],
+          },
+        ],
+        'amount_nano_erg': 2000000,
+        'miner_fee': 1100000,
+        'citadel_fee_nano': 1100000,
+        'change_nano_erg': 995800000,
+        'input_count': 2,
+      });
+      await open(tester);
+      await toggle(tester, 'a');
+      await toggle(tester, 'nft');
+      await done(tester);
+      await tester.enterText(find.byKey(const ValueKey('amount-a')), '0.25');
+      final review = find.widgetWithText(FilledButton, 'Review');
+      await tester.ensureVisible(review);
+      await tester.tap(review);
+      // The send button remains busy while confirmation is open.
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+      final confirmation = tester.widget<ConfirmTransactionSheet>(
+        find.byType(ConfirmTransactionSheet),
+      );
+      expect(confirmation.recipientAddress, recipient);
+      expect(confirmation.rows.first.value, '0.002 ERG + 0.25 Alpha + 1 Art');
+      expect(
+        confirmation.rows.firstWhere((r) => r.label == 'Total sent').value,
+        '0.002 ERG',
+      );
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('two held tokens reach the multi builder with exact amounts', (
+    tester,
+  ) async {
+    await mount(tester);
+    await walletService.restoreWallet('mock', walletId: 'send-test');
+    addTearDown(walletService.lock);
+    const recipient = '9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8';
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Recipient address'),
+      recipient,
+    );
+    await open(tester);
+    await toggle(tester, 'a');
+    await toggle(tester, 'nft');
+    await done(tester);
+    await tester.enterText(find.byKey(const ValueKey('amount-a')), '0.25');
+    final review = find.widgetWithText(FilledButton, 'Review');
+    await tester.ensureVisible(review);
+    await tester.tap(review);
+    await tester.pumpAndSettle();
+    expect(api.prepared, {
+      'recipients': [
+        {
+          'address': recipient,
+          'amount_nano_erg': 1000000,
+          'tokens': [
+            {'token_id': 'a', 'amount': 25},
+            {'token_id': 'nft', 'amount': 1},
+          ],
+        },
+      ],
+      'sender': 'sender',
+      'change': 'sender',
+      'spend': ['sender'],
+    });
+  });
+
+  testWidgets(
+    'additional NFT recipient needs neither token quantity nor ERG entry',
+    (tester) async {
+      await mount(tester);
+      await walletService.restoreWallet('mock', walletId: 'send-test');
+      addTearDown(walletService.lock);
+      const recipient = '9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8';
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Recipient address'),
+        recipient,
+      );
+      await tester.pumpAndSettle();
+      final mainAmount = find.descendant(
+        of: find.byType(AmountEntry).first,
+        matching: find.byType(TextFormField),
+      );
+      await tester.ensureVisible(mainAmount);
+      await tester.tap(mainAmount);
+      await tester.enterText(mainAmount, '0.1');
+      await tester.ensureVisible(find.text('Add another recipient'));
+      await tester.tap(find.text('Add another recipient'));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.widgetWithText(TextFormField, 'Recipient 2 address'),
+        recipient,
+      );
+      final dropdown = find.byType(DropdownButtonFormField<String?>).first;
+      await tester.ensureVisible(dropdown);
+      await tester.tap(dropdown);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Art').last);
+      await tester.pumpAndSettle();
+      expect(find.text('Sends 1 Art · Available 1'), findsOneWidget);
+      expect(find.widgetWithText(TextFormField, 'Art amount'), findsNothing);
+      final review = find.widgetWithText(FilledButton, 'Review');
+      await tester.ensureVisible(review);
+      await tester.tap(review);
+      await tester.pumpAndSettle();
+      expect(api.prepared, isNotNull);
+      expect((api.prepared!['recipients'] as List).last, {
+        'address': recipient,
+        'amount_nano_erg': 1000000,
+        'tokens': [
+          {'token_id': 'nft', 'amount': 1},
+        ],
+        'token_id': 'nft',
+        'token_amount': 1,
+      });
+    },
+  );
 
   testWidgets(
     'single held token reaches the unchanged single-send builder in base units',

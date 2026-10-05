@@ -367,14 +367,16 @@ class SendPreview {
   final BabelFee? babel;
 
   factory SendPreview.fromJson(Map<String, dynamic> json) {
-    final recipient = json['recipient'];
-    if (recipient is! String || recipient.isEmpty) {
-      throw const FormatException('SendPreview missing or invalid recipient');
-    }
     final recipsRaw = json['recipients'];
     List<Map<String, dynamic>>? recips;
     if (recipsRaw is List) {
       recips = recipsRaw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+    }
+    // Multi-send previews describe recipients in an array. Older cores omit
+    // the top-level single-send field, including for one multi-token recipient.
+    final recipient = json['recipient'] ?? (recips?.isNotEmpty == true ? recips!.first['address'] : null);
+    if (recipient is! String || recipient.isEmpty) {
+      throw const FormatException('SendPreview missing or invalid recipient');
     }
     return SendPreview(
       preparationId: _requireInt(json, 'preparation_id'),
@@ -2760,13 +2762,9 @@ class WalletService with WidgetsBindingObserver {
 
   /// Consolidate ERG by sending-to-self in batches of up to 200 inputs.
   ///
-  /// sigma-rust's coin selection (`select_for_send`) picks the largest boxes
-  /// first. Since it trusts the node to reject oversized txs, we cap each
-  /// batch at 200 inputs — well under Ergo's practical tx-size ceiling of
-  /// ~500 inputs / ~250 KB. The node parameters (`inputCost` = 2407,
-  /// `maxBlockCost` ≈ 8,000,091) would theoretically allow ~3300 inputs per
-  /// block, but serialization in EIP-12 JSON pushes ~500 bytes per input, so
-  /// 200 keeps each batch safe and reliably includable.
+  /// Older ERG-only boxes are refreshed first. Each batch is passed as an
+  /// exact input selection so ordinary coin selection cannot exceed the
+  /// 200-input cap or pull a token-bearing box into a consolidation.
   ///
   /// Returns the list of transaction IDs for all consolidation txs.
   /// Only consolidates ERG (no tokens moved; token-bearing boxes untouched).
@@ -2787,8 +2785,12 @@ class WalletService with WidgetsBindingObserver {
       var ergOnly = boxes.where((b) => b.assets.isEmpty).toList();
       if (ergOnly.length < 2) break;
 
-      // Sort largest first so each batch hits the most value with the fewest inputs.
-      ergOnly.sort((a, b) => b.valueNanoErg.compareTo(a.valueNanoErg));
+      ergOnly.sort((a, b) {
+        final aHeight = a.creationHeight > 0 ? a.creationHeight : 0x7fffffff;
+        final bHeight = b.creationHeight > 0 ? b.creationHeight : 0x7fffffff;
+        final age = aHeight.compareTo(bHeight);
+        return age != 0 ? age : b.valueNanoErg.compareTo(a.valueNanoErg);
+      });
       final batch = ergOnly.take(maxInputsPerTx).toList();
       if (batch.length < 2) break;
 
@@ -2813,6 +2815,7 @@ class WalletService with WidgetsBindingObserver {
           changeAddress: changeAddress,
           recipientAddress: changeAddress,
           amountNanoErg: amountToSend.toInt(),
+          inputBoxIds: batch.map((b) => b.boxId).toList(),
           nodeUrl: nodeUrl,
         );
         final txId = await sendErg(preparationId: preview.preparationId);

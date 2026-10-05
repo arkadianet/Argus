@@ -324,7 +324,18 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
           : 'Spendable balance is unknown');
       return;
     }
-    final max = spendable - minerFeeNano - argusFeeNano - minBoxNano;
+    final otherRecipients = _extraRecipients.fold<int>(0, (sum, recipient) {
+      final text = recipient.amount;
+      return sum + (recipient.tokenId != null && text.isEmpty
+          ? minBoxNano : parseErgToNano(text) ?? 0);
+    });
+    final max = maxRecipientNanoErg(
+      spendableNano: _chosenBoxIds.isEmpty ? spendable : _selection.totalNanoErg,
+      minerFeeNano: parseErgToNano(_feeCtrl.text) ?? minerFeeNano,
+      appFeeNano: argusFeeNano,
+      otherRecipientsNano: otherRecipients,
+      feePaidInToken: _feeTokenId != null,
+    );
     if (max < minBoxNano) {
       _snack('Not enough ERG for fee and change');
       return;
@@ -406,13 +417,10 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
   List<RecipientDraft> _drafts() {
     final token = _selectedToken;
     final erg = _amountCtrl.text.trim();
-    final carriesTokens = token != null || _extraTokens.any((e) => e.tokenId != null);
     return [
       RecipientDraft(
         address: _recipientCtrl.text,
-        ergText: carriesTokens && erg.isEmpty
-            ? formatErg(minBoxNano, unit: false)
-            : erg,
+        ergText: erg,
         tokenId: token?.id,
         tokenAmountText: _tokenAmtCtrl.text,
         tokens: [
@@ -472,7 +480,8 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
       stealthUnknown: walletSyncController.stealthBalanceUnknown,
     );
     final fee = parseErgToNano(_feeCtrl.text) ?? minerFeeNano;
-    if (spendable != null && totalNanoErg(recipients) + fee + argusFeeNano > spendable) {
+    if (spendable != null && totalNanoErg(recipients) +
+        (_feeTokenId == null ? fee : 0) + argusFeeNano > spendable) {
       _snack('Amount plus fee exceeds your ${formatErg(spendable, maxFrac: 4)}');
       return;
     }
@@ -738,8 +747,8 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
     // The clipboard gate compares against what the user typed; for a stealth
     // payment the prepared recipient is a freshly derived one-time address
     // that can never match, so the check would always fire.
-    if (!isMulti && stealthRecipients.isEmpty) {
-      final clear = await _clipboardMatchesIntent(context, preview.recipient);
+    if (stealthRecipients.isEmpty) {
+      final clear = await _clipboardMatchesIntent(context, _recipientCtrl.text.trim());
       if (!clear) {
         setState(() => _sending = false);
         return;
@@ -787,9 +796,12 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
     final fiat = networkController.fiatText(preview.amountNanoErg);
     final choice = await showConfirmTransactionChoice(
       context,
-      title: isMulti ? 'Confirm multi-recipient send' : 'Confirm send',
+      title: (preview.recipients?.length ?? 1) > 1 ? 'Confirm multi-recipient send' : 'Confirm send',
       rows: rows,
-      recipientAddress: isMulti ? null : preview.recipient,
+      recipientAddress: isMulti
+          ? (preview.recipients ?? const <Map<String, dynamic>>[])
+              .map((r) => r['address']?.toString() ?? '').join('\n\n')
+          : preview.recipient,
       detail: [
         if (fiat != null) fiat,
         networkController.activeUrl ?? 'Node not chosen yet',
@@ -1362,7 +1374,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                         AmountEntry(
                           controller: _amountCtrl,
                           label: 'ERG to send with it (optional)',
-                          helperText: 'Blank sends the 0.001 ERG minimum a box needs. ${_availableLine()}',
+                          helperText: 'Blank funds the minimum ERG for these tokens. Review shows the exact amount. ${_availableLine()}',
                           onMax: _applyMaxErg,
                           onChanged: (_) => setState(() {}),
                           validator: (v) {
@@ -1412,14 +1424,12 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                                       },
                                     ),
                                     const SizedBox(height: 12),
-                                    TextFormField(
+                                    AmountEntry(
                                       controller: entry.amountCtrl,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Amount (ERG)',
-                                        hintText: '0.001',
-                                      ),
-                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                      label: entryToken == null ? 'Amount (ERG)' : 'ERG to send with it (optional)',
+                                      helperText: entryToken == null ? null : 'Blank funds the minimum ERG for this token.',
                                       validator: (v) {
+                                        if (entryToken != null && (v == null || v.trim().isEmpty)) return null;
                                         final n = parseErgToNano(v ?? '');
                                         if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
                                         return null;
@@ -1437,6 +1447,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                                           ),
                                         ],
                                         onChanged: (v) {
+                                          if (entry.tokenId != v) entry.tokenAmtCtrl?.clear();
                                           entry.tokenId = v;
                                           if (v != null && v.isNotEmpty && entry.tokenAmtCtrl == null) {
                                             entry.tokenAmtCtrl = TextEditingController();
@@ -1446,7 +1457,12 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                                       ),
                                       if (entryToken != null && entry.tokenAmtCtrl != null) ...[
                                         const SizedBox(height: 12),
-                                        TextFormField(
+                                        if (entryToken.amount == 1 && entryToken.decimals == 0)
+                                          Align(
+                                            alignment: Alignment.centerLeft,
+                                            child: Text('Sends 1 ${entryToken.label} · Available 1'),
+                                          )
+                                        else TextFormField(
                                           controller: entry.tokenAmtCtrl,
                                           decoration: InputDecoration(
                                             labelText: '${entryToken.label} amount',
@@ -1642,7 +1658,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                           validator: (v) {
                             if (v == null || v.trim().isEmpty) return null;
                             final n = parseErgToNano(v);
-                            if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
+                            if (n == null || n < minerFeeNano) return 'Minimum ${formatErg(minerFeeNano)}';
                             return null;
                           },
                         ),

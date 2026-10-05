@@ -22,6 +22,9 @@ class UtxoResultApi extends RustLibApi {
   int submissions = 0;
   int? failAt;
   final preparedKinds = <String>[];
+  List<String>? restructureInputIds;
+  List<dynamic>? restructureOutputs;
+  String? restructureDestination;
 
   @override
   Future<BigInt> crateApiWalletRestore({
@@ -78,7 +81,13 @@ class UtxoResultApi extends RustLibApi {
     required String changeAddress,
     String? nodeUrl,
     PlatformInt64? feeNano,
-  }) async => preview('restructure');
+  }) async {
+    restructureInputIds = [...selectedBoxIds];
+    restructureOutputs = jsonDecode(outputsJson) as List;
+    restructureDestination = changeAddress;
+    return preview('restructure');
+  }
+
   @override
   Future<String> crateApiSendErg({
     required BigInt handleId,
@@ -111,6 +120,9 @@ void main() {
     api.submissions = 0;
     api.failAt = null;
     api.preparedKinds.clear();
+    api.restructureInputIds = null;
+    api.restructureOutputs = null;
+    api.restructureDestination = null;
     previousNode = networkController.activeUrl;
     networkController.activeUrl = 'https://node.invalid';
     await walletService.restoreWallet('mock', walletId: 'utxo-result-test');
@@ -197,6 +209,81 @@ void main() {
           await tap(tester, 'Done');
           expect(find.byType(TxResultView), findsNothing);
         }, () => boxes(2));
+      },
+    );
+  }
+
+  for (final broadcast in [false, true]) {
+    testWidgets(
+      'token separation spends only reviewed source and funding: broadcast=$broadcast',
+      (tester) async {
+        await http.runWithClient(
+          () async {
+            await open(tester);
+            await tester.tap(find.text('Separate token types').first);
+            await tester.pumpAndSettle();
+            expect(api.preparedKinds, isEmpty);
+            expect(api.submissions, 0);
+            final review = find.widgetWithText(
+              FilledButton,
+              'Review separation',
+            );
+            expect(tester.widget<FilledButton>(review).onPressed, isNull);
+            await tester.ensureVisible(find.byType(CheckboxListTile));
+            await tester.tap(find.byType(CheckboxListTile));
+            await tester.pump();
+            await tap(tester, 'Review separation');
+            expect(api.restructureInputIds, ['source', 'funding']);
+            expect(api.restructureDestination, 'wallet');
+            expect(api.restructureOutputs, [
+              {
+                'value_nano_erg': 1000000,
+                'tokens': [
+                  {'id': 'a' * 64, 'amount': 1},
+                ],
+              },
+              {
+                'value_nano_erg': 1000000,
+                'tokens': [
+                  {'id': 'b' * 64, 'amount': 200},
+                ],
+              },
+            ]);
+            expect(api.submissions, 0);
+            await tap(
+              tester,
+              broadcast ? 'Sign & broadcast separation' : 'Cancel',
+            );
+            if (broadcast) {
+              await tester.pump(const Duration(seconds: 2));
+              await tester.pumpAndSettle();
+              expect(find.text('Token separation submitted'), findsOneWidget);
+            }
+            expect(api.submissions, broadcast ? 1 : 0);
+          },
+          () => MockClient(
+            (request) async => http.Response(
+              jsonEncode([
+                {
+                  'boxId': 'source',
+                  'value': 1000000,
+                  'creationHeight': 100,
+                  'assets': [
+                    {'tokenId': 'a' * 64, 'amount': 1},
+                    {'tokenId': 'b' * 64, 'amount': 200},
+                  ],
+                },
+                {
+                  'boxId': 'funding',
+                  'value': 5000000,
+                  'creationHeight': 50,
+                  'assets': [],
+                },
+              ]),
+              200,
+            ),
+          ),
+        );
       },
     );
   }

@@ -39,6 +39,9 @@ impl ReplayNode {
                     std::thread::sleep(Duration::from_millis(1));
                     continue;
                 };
+                // Accepted sockets inherit nonblocking mode on Windows.
+                // The request reader uses a timeout and expects blocking IO.
+                stream.set_nonblocking(false).unwrap();
                 let (counts, paired, boxes, pending) = (
                     counts.clone(),
                     paired.clone(),

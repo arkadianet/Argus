@@ -153,6 +153,9 @@ void main() {
       find.textContaining('issuer would choose who learns you looked'),
       findsOneWidget,
     );
+    await tester.ensureVisible(find.text('Metadata & media details'));
+    await tester.tap(find.text('Metadata & media details'));
+    await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Copy media URI as text'));
     await tester.tap(find.text('Copy media URI as text'));
     expect(copied, issuer);
@@ -168,6 +171,44 @@ void main() {
     expect(find.text('Load preview'), findsNothing);
     expect(deny.calls, 0);
   });
+  for (final change in [
+    'URI',
+    'token',
+    'hash',
+    'invalid metadata',
+    'private holding',
+  ]) {
+    testWidgets('$change while consent is open cancels that consent', (
+      tester,
+    ) async {
+      await configure();
+      final deny = NoPreviewHttp(), previous = HttpOverrides.current;
+      HttpOverrides.global = deny;
+      addTearDown(() => HttpOverrides.global = previous);
+      await mount(tester, token());
+      await tester.tap(find.text('Load preview'));
+      await tester.pumpAndSettle();
+      final changed = TokenBalance(
+        id: change == 'token' ? 'b' * 64 : 'a' * 64,
+        amount: 1,
+        iconUrl: change == 'URI' ? 'ipfs://$cid/changed.png' : 'ipfs://$cid',
+        issuanceHash: change == 'hash' ? '00' * 32 : null,
+        stealthAmount: change == 'private holding' ? 1 : 0,
+        declaredAssetKind: DeclaredAssetKind.picture,
+        metadataState: change == 'invalid metadata'
+            ? MetadataState.invalid
+            : MetadataState.complete,
+        mediaState: MediaState.notLoaded,
+      );
+      // Rebuild the existing widget while its consent dialog is on screen.
+      await mount(tester, changed);
+      await tester.pump();
+      await tester.tap(find.widgetWithText(TextButton, 'Load preview'));
+      await tester.pumpAndSettle();
+      expect(deny.calls, 0);
+      expect(find.byType(RawImage), findsNothing);
+    });
+  }
   for (final change in ['lock', 'switch', 'background', 'kill', 'gateway']) {
     testWidgets(
       '$change while consent is open prevents request after approval',
