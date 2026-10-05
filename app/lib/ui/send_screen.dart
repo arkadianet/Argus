@@ -687,41 +687,48 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
   }
 
   /// Clipboard-hijack defense: if the OS clipboard holds a *different*
-  /// Ergo address than the one entered, make the user acknowledge it before
-  /// the confirmation dialog appears.
+  /// Ergo address than any entered recipient, make the user acknowledge it
+  /// before the confirmation dialog appears.
   ///
-  /// Skipped when the recipient came from a trusted source (contact or scan).
+  /// Skipped for a single recipient from a trusted source (contact or scan).
+  /// Additional recipients are typed, so still require the check.
   /// Residual risk for free-typed entries — malware that swaps the clipboard
   /// *before* the user pastes is indistinguishable from ordinary paste — is
   /// mitigated by the selectable full-address display in the confirm dialog
   /// and contact-book usage, not by this check.
-  Future<bool> _clipboardMatchesIntent(BuildContext ctx, String recipient) async {
-    if (_recipientTrusted) return true;
+  Future<bool> _clipboardMatchesIntent(BuildContext ctx, String recipient,
+      {Set<String> others = const {}}) async {
+    if (_recipientTrusted && others.isEmpty) return true;
+    final recipients = {recipient.trim(), ...others.map((address) => address.trim())};
     final clip = await Clipboard.getData('text/plain');
     final clipText = clip?.text?.trim() ?? '';
-    if (clipText.isEmpty || clipText == recipient) return true;
+    if (clipText.isEmpty || recipients.contains(clipText)) return true;
     if (!looksLikeErgoAddress(clipText)) return true;
     if (!mounted) return false;
     final proceed = await showDialog<bool>(
       context: ctx,
       builder: (context) => AlertDialog(
         title: const Text('Clipboard holds another address'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Something you copied earlier is an Ergo address that differs '
-              'from the recipient. Malware can swap addresses on the '
-              'clipboard. Verify every character.',
-            ),
-            const SizedBox(height: 12),
-            Text('Recipient:', style: Theme.of(context).textTheme.titleSmall),
-            SelectableText(recipient, style: monoStyle(context, size: 12)),
-            const SizedBox(height: 8),
-            Text('Clipboard:', style: Theme.of(context).textTheme.titleSmall),
-            SelectableText(clipText, style: monoStyle(context, size: 12)),
-          ],
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Something you copied earlier is an Ergo address that differs '
+                'from ${others.isEmpty ? 'the recipient' : 'every recipient'}. '
+                'Malware can swap addresses on the clipboard. Verify every character.',
+              ),
+              const SizedBox(height: 12),
+              Text(others.isEmpty ? 'Recipient:' : 'Recipients:',
+                  style: Theme.of(context).textTheme.titleSmall),
+              SelectableText(recipients.join('\n\n'),
+                  style: monoStyle(context, size: 12)),
+              const SizedBox(height: 8),
+              Text('Clipboard:', style: Theme.of(context).textTheme.titleSmall),
+              SelectableText(clipText, style: monoStyle(context, size: 12)),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -730,7 +737,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Recipient is correct'),
+            child: Text(others.isEmpty ? 'Recipient is correct' : 'Recipients are correct'),
           ),
         ],
       ),
@@ -747,12 +754,11 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
     // The clipboard gate compares against what the user typed; for a stealth
     // payment the prepared recipient is a freshly derived one-time address
     // that can never match, so the check would always fire.
-    if (stealthRecipients.isEmpty) {
-      final clear = await _clipboardMatchesIntent(context, _recipientCtrl.text.trim());
-      if (!clear) {
-        setState(() => _sending = false);
-        return;
-      }
+    final clear = await _clipboardMatchesIntent(context, _recipientCtrl.text.trim(),
+        others: _extraRecipients.map((e) => e.address).toSet());
+    if (!clear) {
+      if (mounted) setState(() => _sending = false);
+      return;
     }
     if (!mounted) return;
     final tokenId = preview.tokenId;

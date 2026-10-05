@@ -12,12 +12,15 @@ import 'package:argus_wallet/ui/confirm_transaction_sheet.dart';
 import 'package:argus_wallet/ui/widgets/held_token_picker.dart';
 import 'package:argus_wallet/ui/widgets/amount_entry.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class SendApi extends RustLibApi {
   Map<String, Object?>? prepared;
+  String? singlePreview;
   String? multiPreview;
+  int broadcasts = 0;
   @override
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
@@ -50,6 +53,7 @@ class SendApi extends RustLibApi {
       'change': changeAddress,
       'spend': spendAddresses,
     };
+    if (singlePreview != null) return singlePreview!;
     throw StateError('Captured preparation; no network transaction');
   }
 
@@ -74,6 +78,15 @@ class SendApi extends RustLibApi {
     };
     if (multiPreview != null) return multiPreview!;
     throw StateError('Captured preparation; no network transaction');
+  }
+
+  @override
+  Future<String> crateApiSendErg({
+    required BigInt handleId,
+    required BigInt preparationId,
+  }) async {
+    broadcasts++;
+    throw StateError('Captured broadcast; no network transaction');
   }
 
   @override
@@ -142,13 +155,184 @@ String amount(WidgetTester tester, String id) => tester
     .controller!
     .text;
 
+const _clipboardPrimary = '9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8';
+const _clipboardAdditional =
+    '9hY16vzHmmfyVBwKeFGHvb2bMFsG94A1u7To1QWtUokACyFVENQ';
+const _clipboardOther = '${_clipboardPrimary}b';
+
+Future<void> _reviewWithClipboard(
+  WidgetTester tester,
+  SendApi api, {
+  required String clipboard,
+  bool trustedPrimary = false,
+  bool additionalRecipient = true,
+}) async {
+  final messenger = tester.binding.defaultBinaryMessenger;
+  messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+    if (call.method == 'Clipboard.getData') return {'text': clipboard};
+    return null;
+  });
+  addTearDown(
+    () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+  );
+  await mount(
+    tester,
+    tokens: [],
+    recipient: trustedPrimary ? _clipboardPrimary : null,
+  );
+  await walletService.restoreWallet('mock', walletId: 'send-clipboard-test');
+  addTearDown(walletService.lock);
+  if (!trustedPrimary) {
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Recipient address'),
+      '  $_clipboardPrimary  ',
+    );
+    await tester.pumpAndSettle();
+  }
+  await tester.enterText(
+    find.descendant(
+      of: find.byType(AmountEntry).first,
+      matching: find.byType(TextFormField),
+    ),
+    '0.1',
+  );
+  if (additionalRecipient) {
+    await tester.ensureVisible(find.text('Add another recipient'));
+    await tester.tap(find.text('Add another recipient'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.widgetWithText(TextFormField, 'Recipient 2 address'),
+      '  $_clipboardAdditional  ',
+    );
+    await tester.enterText(
+      find.descendant(
+        of: find.byType(AmountEntry).last,
+        matching: find.byType(TextFormField),
+      ),
+      '0.1',
+    );
+  }
+  final preview = {
+    'preparation_id': 1,
+    if (additionalRecipient)
+      'recipients': [
+        {'address': _clipboardPrimary, 'amount_nano_erg': 100000000},
+        {'address': _clipboardAdditional, 'amount_nano_erg': 100000000},
+      ]
+    else
+      'recipient': _clipboardPrimary,
+    'amount_nano_erg': additionalRecipient ? 200000000 : 100000000,
+    'miner_fee': 1100000,
+    'citadel_fee_nano': 1100000,
+    'change_nano_erg': additionalRecipient ? 797800000 : 897800000,
+    'input_count': 2,
+  };
+  api.singlePreview = jsonEncode(preview);
+  api.multiPreview = jsonEncode(preview);
+  final review = find.widgetWithText(FilledButton, 'Review');
+  await tester.ensureVisible(review);
+  await tester.tap(review);
+  // The send remains busy while either the warning or confirmation is open.
+  await tester.pump();
+  await tester.pump(const Duration(seconds: 1));
+  expect(api.prepared, isNotNull);
+  expect(api.broadcasts, 0);
+  expect(tester.takeException(), isNull);
+}
+
 void main() {
   final api = SendApi();
   setUpAll(() => RustLib.initMock(api: api));
   tearDownAll(RustLib.dispose);
   setUp(() {
     api.prepared = null;
+    api.singlePreview = null;
     api.multiPreview = null;
+    api.broadcasts = 0;
+  });
+
+  for (final clipboard in [_clipboardPrimary, _clipboardAdditional]) {
+    testWidgets(
+      'multi-recipient clipboard match ${clipboard == _clipboardPrimary ? 'primary' : 'additional'} reaches confirmation',
+      (tester) async {
+        await _reviewWithClipboard(tester, api, clipboard: '  $clipboard  ');
+        expect(find.text('Clipboard holds another address'), findsNothing);
+        final confirmation = tester.widget<ConfirmTransactionSheet>(
+          find.byType(ConfirmTransactionSheet),
+        );
+        expect(
+          confirmation.recipientAddress,
+          '$_clipboardPrimary\n\n$_clipboardAdditional',
+        );
+        expect((api.prepared!['recipients'] as List).map((r) => r['address']), [
+          _clipboardPrimary,
+          _clipboardAdditional,
+        ]);
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+        expect(api.broadcasts, 0);
+      },
+    );
+  }
+
+  for (final trustedPrimary in [false, true]) {
+    testWidgets(
+      'multi-recipient clipboard mismatch warns with ${trustedPrimary ? 'trusted' : 'typed'} primary',
+      (tester) async {
+        await _reviewWithClipboard(
+          tester,
+          api,
+          clipboard: _clipboardOther,
+          trustedPrimary: trustedPrimary,
+        );
+        expect(find.text('Clipboard holds another address'), findsOneWidget);
+        expect(find.byType(ConfirmTransactionSheet), findsNothing);
+        await tester.tap(find.text('Go back'));
+        await tester.pumpAndSettle();
+        expect(find.byType(ConfirmTransactionSheet), findsNothing);
+        expect(api.broadcasts, 0);
+        expect(
+          tester
+              .widget<FilledButton>(find.widgetWithText(FilledButton, 'Review'))
+              .onPressed,
+          isNotNull,
+        );
+      },
+    );
+  }
+
+  testWidgets(
+    'single typed recipient still warns for another clipboard address',
+    (tester) async {
+      await _reviewWithClipboard(
+        tester,
+        api,
+        clipboard: _clipboardOther,
+        additionalRecipient: false,
+      );
+      expect(find.text('Clipboard holds another address'), findsOneWidget);
+      expect(find.byType(ConfirmTransactionSheet), findsNothing);
+      await tester.tap(find.text('Go back'));
+      await tester.pumpAndSettle();
+      expect(api.broadcasts, 0);
+    },
+  );
+
+  testWidgets('single trusted recipient keeps the clipboard bypass', (
+    tester,
+  ) async {
+    await _reviewWithClipboard(
+      tester,
+      api,
+      clipboard: _clipboardOther,
+      trustedPrimary: true,
+      additionalRecipient: false,
+    );
+    expect(find.text('Clipboard holds another address'), findsNothing);
+    expect(find.byType(ConfirmTransactionSheet), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(api.broadcasts, 0);
   });
 
   testWidgets(
