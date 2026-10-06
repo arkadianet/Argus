@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../theme/argus_theme.dart';
 import 'home_models.dart';
+import 'home_style.dart';
 import 'home_widgets.dart';
 
 /// Mark, name and one line for each tool behind More. The lines are short
@@ -34,20 +35,73 @@ import 'home_widgets.dart';
         ),
     };
 
-/// Opens More and returns the tool picked, or null if dismissed.
-Future<WalletTool?> showWalletToolsSheet(
-  BuildContext context, {
-  required List<WalletToolEntry> tools,
-  required String walletName,
-}) {
-  return showModalBottomSheet<WalletTool>(
+/// A flat sheet for the home screens: the same rows, rules and labels as
+/// the page beneath, on the palette's surface, under a quiet handle.
+Future<T?> showHomeSheet<T>(BuildContext context, {required Widget Function(BuildContext) builder}) {
+  return showModalBottomSheet<T>(
     context: context,
     backgroundColor: Theme.of(context).colorScheme.surface,
     // Tall at large text sizes: it may fill the screen, but not run under
     // the status bar.
     isScrollControlled: true,
     useSafeArea: true,
-    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(cardRadius))),
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(homeRadius))),
+    builder: builder,
+  );
+}
+
+/// A sheet's handle and its label line ("MORE · MAIN WALLET").
+class HomeSheetHeader extends StatelessWidget {
+  const HomeSheetHeader({super.key, required this.title, this.subject});
+
+  final String title;
+
+  /// Read after the title in the same capitals, e.g. the wallet's name.
+  final String? subject;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = HomeText.of(context);
+    return Column(
+      children: [
+        Container(
+          width: 32,
+          height: 4,
+          margin: const EdgeInsets.only(top: 10, bottom: 8),
+          decoration: BoxDecoration(color: t.muted.withValues(alpha: 0.45), borderRadius: BorderRadius.circular(2)),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: homeGutter),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 40),
+            child: Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Semantics(
+                header: true,
+                child: Text.rich(
+                  TextSpan(
+                    text: title.toUpperCase(),
+                    children: [if (subject != null) TextSpan(text: '   ·   ${subject!.toUpperCase()}')],
+                  ),
+                  style: t.label,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Opens More and returns the tool picked, or null if dismissed.
+Future<WalletTool?> showWalletToolsSheet(
+  BuildContext context, {
+  required List<WalletToolEntry> tools,
+  required String walletName,
+}) {
+  return showHomeSheet<WalletTool>(
+    context,
     builder: (ctx) => WalletToolsSheet(
       tools: tools,
       walletName: walletName,
@@ -58,7 +112,7 @@ Future<WalletTool?> showWalletToolsSheet(
 
 /// The More sheet: the wallet's own tools that don't earn a place in the
 /// action row. Protocols live in the Discover tab; this is only what acts
-/// on the wallet itself, with Lock set apart at the end.
+/// on the wallet itself, with Lock set apart under a rule.
 class WalletToolsSheet extends StatelessWidget {
   const WalletToolsSheet({super.key, required this.tools, required this.walletName, required this.onSelect});
 
@@ -68,50 +122,20 @@ class WalletToolsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = ArgusColors.of(context);
     final main = tools.where((t) => t.tool != WalletTool.lock).toList();
     final lock = tools.where((t) => t.tool == WalletTool.lock).toList();
     return SafeArea(
       top: false,
       child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+        padding: const EdgeInsets.only(bottom: 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // A handle in the card's own muted ink rather than the bright
-            // default, which outshone the sheet's contents.
-            Center(
-              child: Container(
-                width: 36,
-                height: 4,
-                margin: const EdgeInsets.only(top: 12, bottom: 14),
-                decoration: BoxDecoration(
-                  color: colors.muted.withValues(alpha: 0.5),
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              child: Wrap(
-                spacing: 10,
-                crossAxisAlignment: WrapCrossAlignment.end,
-                children: [
-                  Semantics(header: true, child: Text('More', style: Theme.of(context).textTheme.titleLarge)),
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 3),
-                    child: Text(walletName, style: TextStyle(fontSize: 13.5, color: colors.muted)),
-                  ),
-                ],
-              ),
-            ),
+            HomeSheetHeader(title: 'More', subject: walletName),
             for (final entry in main) _row(context, entry),
             if (lock.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-                child: Divider(height: 1),
-              ),
+              const Padding(padding: EdgeInsets.symmetric(vertical: 4), child: HomeRule()),
               for (final entry in lock) _row(context, entry, chevron: false),
             ],
           ],
@@ -121,57 +145,96 @@ class WalletToolsSheet extends StatelessWidget {
   }
 
   Widget _row(BuildContext context, WalletToolEntry entry, {bool chevron = true}) {
-    final colors = ArgusColors.of(context);
+    final t = HomeText.of(context);
     final look = walletToolLook(entry.tool);
     final status = entry.status;
-    void select() => onSelect(entry.tool);
-    return TappableNode(
-      label: [look.title, ?status, look.blurb].join(', '),
-      onTap: select,
-      child: InkWell(
-        key: Key('wallet-tool-${entry.tool.name}'),
-        borderRadius: BorderRadius.circular(14),
-        onTap: select,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(color: colors.inset, borderRadius: BorderRadius.circular(12)),
-                child: Icon(look.icon, size: 20, color: colors.accentText),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        Text(look.title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-                        if (status != null)
-                          HomeChip(
-                            label: status,
-                            dense: true,
-                            tone: entry.warn ? HomeChipTone.warn : HomeChipTone.accent,
-                          ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    Text(look.blurb, style: TextStyle(fontSize: 12.5, height: 1.35, color: colors.muted)),
-                  ],
+    final warn = rustFor(context);
+    return HomeRow(
+      inkKey: Key('wallet-tool-${entry.tool.name}'),
+      onTap: () => onSelect(entry.tool),
+      semanticLabel: [look.title, ?status, look.blurb].join(', '),
+      leading: HomeDisc(child: Icon(look.icon, size: 18, color: t.ink)),
+      title: Text.rich(
+        TextSpan(
+          text: look.title,
+          children: [
+            if (status != null)
+              TextSpan(
+                text: '   $status',
+                style: t.secondary.copyWith(
+                  color: entry.warn ? warn : ArgusColors.of(context).accentText,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
-              if (chevron) ...[
-                const SizedBox(width: 8),
-                Icon(Icons.chevron_right, size: 18, color: colors.muted),
-              ],
-            ],
-          ),
+          ],
+        ),
+        style: t.primary,
+      ),
+      subtitle: TextSpan(text: look.blurb),
+      trailing: chevron ? Icon(Icons.chevron_right, size: 18, color: t.muted) : null,
+    );
+  }
+}
+
+/// What the overview's "Add a wallet" row offers.
+enum AddWalletChoice { create, restore, watch }
+
+({IconData icon, String title, String blurb}) addWalletLook(AddWalletChoice choice) => switch (choice) {
+      AddWalletChoice.create => (
+          icon: Icons.add,
+          title: 'Create a new wallet',
+          blurb: 'A fresh recovery phrase, kept on this phone.',
+        ),
+      AddWalletChoice.restore => (
+          icon: Icons.settings_backup_restore,
+          title: 'Restore a wallet',
+          blurb: 'From its 12, 15 or 24-word recovery phrase.',
+        ),
+      AddWalletChoice.watch => (
+          icon: Icons.visibility_outlined,
+          title: 'Watch an address',
+          blurb: 'Balance and activity, without its keys.',
+        ),
+    };
+
+/// Opens the small Add a wallet menu and returns the choice.
+Future<AddWalletChoice?> showAddWalletSheet(BuildContext context) {
+  return showHomeSheet<AddWalletChoice>(
+    context,
+    builder: (ctx) => AddWalletSheet(onSelect: (c) => Navigator.pop(ctx, c)),
+  );
+}
+
+/// Create, restore or watch: three rows in a sheet, so the overview needs
+/// only one quiet row for all three.
+class AddWalletSheet extends StatelessWidget {
+  const AddWalletSheet({super.key, required this.onSelect});
+
+  final ValueChanged<AddWalletChoice> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = HomeText.of(context);
+    return SafeArea(
+      top: false,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const HomeSheetHeader(title: 'Add a wallet'),
+            for (final choice in AddWalletChoice.values)
+              HomeRow(
+                inkKey: Key('overview-add-${choice.name}'),
+                onTap: () => onSelect(choice),
+                semanticLabel: '${addWalletLook(choice).title}, ${addWalletLook(choice).blurb}',
+                leading: HomeDisc(child: Icon(addWalletLook(choice).icon, size: 18, color: t.ink)),
+                title: Text(addWalletLook(choice).title, style: t.primary),
+                subtitle: TextSpan(text: addWalletLook(choice).blurb),
+                trailing: Icon(Icons.chevron_right, size: 18, color: t.muted),
+              ),
+          ],
         ),
       ),
     );

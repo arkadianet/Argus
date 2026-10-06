@@ -134,7 +134,8 @@ Directory? renderDirectory() {
   return dir;
 }
 
-/// Saves the current frame, modal sheets included, as [name].png.
+/// Saves the current frame, modal sheets included, as [name].png; a name
+/// with slashes lands in subfolders.
 Future<void> saveRender(WidgetTester tester, String name) async {
   final dir = renderDirectory();
   if (dir == null) return;
@@ -143,6 +144,8 @@ Future<void> saveRender(WidgetTester tester, String name) async {
     final image = await boundary.toImage(pixelRatio: renderPixelRatio);
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
     image.dispose();
-    await File('${dir.path}/$name.png').writeAsBytes(bytes!.buffer.asUint8List());
+    final file = File('${dir.path}/$name.png');
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(bytes!.buffer.asUint8List());
   });
 }

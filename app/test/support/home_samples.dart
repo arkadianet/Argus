@@ -77,6 +77,8 @@ final _mainAssets = [
     amount: BigInt.from(_nano(107.7134)),
     decimals: 9,
     fiatValue: 50.43,
+    unitFiat: 0.4682,
+    changePercent: 2.4,
     kind: AssetKind.erg,
   ),
   AssetRowData(
@@ -86,6 +88,15 @@ final _mainAssets = [
     amount: BigInt.from(86),
     fiatValue: 4.18,
     kind: AssetKind.lpShare,
+  ),
+  AssetRowData(
+    id: 'e023c5f382b6e96fbd878f6811aac73345489032157ad5affb84aefd4956c297',
+    ticker: 'rsADA',
+    name: 'Rosen-bridged ADA',
+    amount: _units(1.5, 6),
+    decimals: 6,
+    fiatValue: 0.98,
+    verified: true,
   ),
   AssetRowData(
     id: '6de6f46e0c2b8a4f1d3e5a7b9c0d2e4f6a8b0c1d3e5f7a9b0c2d4e6f8a0b1c3d',
@@ -101,6 +112,15 @@ final _mainAssets = [
     name: 'Comet',
     amount: BigInt.from(69),
     fiatValue: 0.21,
+    verified: true,
+  ),
+  AssetRowData(
+    id: '1fd6e032e8476c4aa54c18c1a308dce83940e8f4a28f576440513ed7326ad489',
+    ticker: 'Paideia',
+    name: 'Paideia DAO token',
+    amount: _units(240, 4),
+    decimals: 4,
+    fiatValue: 0.12,
     verified: true,
   ),
   AssetRowData(
@@ -152,14 +172,13 @@ final _mainActivity = [
   ),
 ];
 
-WalletPageData sampleMainPage({bool hidden = false, ErgPriceView? price = ergPriceWithHistory}) => WalletPageData(
+WalletPageData sampleMainPage({bool hidden = false, List<ActivityRowData>? activity}) => WalletPageData(
       wallet: mainWallet,
       currency: aud,
       network: syncedAtTip,
-      price: price,
       assets: _mainAssets,
       assetCount: 51,
-      activity: _mainActivity,
+      activity: activity ?? _mainActivity,
       utxoCount: 165,
       fragmented: true,
       unpricedCount: 46,
@@ -171,8 +190,9 @@ WalletPageData sampleWatchedPage({bool hidden = false}) => WalletPageData(
       wallet: watchedWallet,
       currency: aud,
       network: syncedAtTip,
-      price: ergPriceWithoutHistory,
       assets: [
+        // On a node without price history the row has the price but no
+        // 24h change.
         AssetRowData(
           id: 'ERG',
           ticker: 'ERG',
@@ -180,6 +200,7 @@ WalletPageData sampleWatchedPage({bool hidden = false}) => WalletPageData(
           amount: BigInt.from(_nano(25421.6293)),
           decimals: 9,
           fiatValue: 11901.08,
+          unitFiat: 0.4682,
           kind: AssetKind.erg,
         ),
         AssetRowData(
@@ -188,6 +209,7 @@ WalletPageData sampleWatchedPage({bool hidden = false}) => WalletPageData(
           name: 'Rosen-bridged ADA',
           amount: _units(1204.5, 6),
           decimals: 6,
+          verified: true,
         ),
         AssetRowData(
           id: '1fd6e032e8476c4aa54c18c1a308dce83940e8f4a28f576440513ed7326ad489',
@@ -195,6 +217,7 @@ WalletPageData sampleWatchedPage({bool hidden = false}) => WalletPageData(
           name: 'Paideia DAO token',
           amount: _units(2400, 4),
           decimals: 4,
+          verified: true,
         ),
       ],
       assetCount: 4,
@@ -231,5 +254,5 @@ WalletPageData sampleWatchedPage({bool hidden = false}) => WalletPageData(
 const hiddenModeFigures = [
   '25,529', '107.71', '25,421', '11,951', '11,901', '50.43', '2.5 ERG', '3.2 ERG', '0.001',
   '18,252,893,012', '1.81', '4.2 ERG', '12,000', '1,204.5', '2,400', '4.18', '0.87', '0.21',
-  '69 COMET', '79 SigRSV', '50 tokens', '4 tokens', '3 tokens', 'Empty', 'empty', 'Assets, 51',
+  '69 COMET', '79 SigRSV', '50 tokens', '4 tokens', '3 tokens', 'Empty', 'empty', 'Assets, 51', '165',
 ];

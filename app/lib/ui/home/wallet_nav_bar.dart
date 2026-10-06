@@ -22,7 +22,8 @@ import 'home_models.dart';
 /// longer offered three times. Settings lives here and nowhere in a
 /// header. A watched wallet has no keys to use a protocol with, so it
 /// has no Discover tab. Activity carries a badge while anything is
-/// unconfirmed.
+/// unconfirmed. Colours come from the theme: the current tab in the
+/// accent, the rest quiet.
 class WalletNavBar extends StatelessWidget {
   const WalletNavBar({
     super.key,
@@ -50,34 +51,21 @@ class WalletNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = ArgusColors.of(context);
-    final theme = Theme.of(context);
     final shown = tabs;
     final index = shown.indexOf(current);
     final media = MediaQuery.of(context);
-    bool selected(Set<WidgetState> states) => states.contains(WidgetState.selected);
-    return DecoratedBox(
-      // The bar shares the page's ground; a hairline keeps the list from
-      // appearing to run under it.
-      decoration: BoxDecoration(border: Border(top: BorderSide(color: colors.cardBorder))),
-      child: MediaQuery(
-        data: media.copyWith(textScaler: media.textScaler.clamp(maxScaleFactor: maxLabelScale)),
-        // The theme leaves the selected icon to the scheme's default
-        // (ink), which disappears into the gold indicator on dark
-        // palettes: the current tab draws in the accent instead.
-        child: NavigationBarTheme(
-          data: NavigationBarTheme.of(context).copyWith(
-            iconTheme: WidgetStateProperty.resolveWith(
-              (states) => IconThemeData(size: 24, color: selected(states) ? colors.accentText : colors.muted),
-            ),
-            labelTextStyle: WidgetStateProperty.resolveWith(
-              (states) => (theme.textTheme.bodySmall ?? const TextStyle()).copyWith(
-                letterSpacing: 0.6,
-                color: selected(states) ? theme.colorScheme.onSurface : colors.muted,
-                fontWeight: selected(states) ? FontWeight.w500 : FontWeight.w400,
-              ),
-            ),
-          ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // The bar shares the page's ground; a hairline keeps the list from
+        // appearing to run under it.
+        SizedBox(
+          height: 1 / media.devicePixelRatio,
+          width: double.infinity,
+          child: ColoredBox(color: Theme.of(context).colorScheme.outline),
+        ),
+        MediaQuery(
+          data: media.copyWith(textScaler: media.textScaler.clamp(maxScaleFactor: maxLabelScale)),
           child: NavigationBar(
             selectedIndex: index < 0 ? 0 : index,
             onDestinationSelected: (i) => onSelect(shown[i]),
@@ -95,7 +83,7 @@ class WalletNavBar extends StatelessWidget {
             ],
           ),
         ),
-      ),
+      ],
     );
   }
 

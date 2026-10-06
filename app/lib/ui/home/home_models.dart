@@ -205,6 +205,8 @@ class AssetRowData {
     this.name,
     this.decimals = 0,
     this.fiatValue,
+    this.unitFiat,
+    this.changePercent,
     this.kind = AssetKind.token,
     this.verified = false,
     this.caution = false,
@@ -221,6 +223,14 @@ class AssetRowData {
   final BigInt amount;
   final int decimals;
   final double? fiatValue;
+
+  /// Price of one unit, shown in place of the name. Set for ERG, whose
+  /// row carries its price and 24h change now that the wallet page has
+  /// no price strip.
+  final double? unitFiat;
+
+  /// 24h change in percent of [unitFiat].
+  final double? changePercent;
   final AssetKind kind;
 
   /// On-chain-verified registry entry.
@@ -293,7 +303,6 @@ class WalletPageData {
     required this.wallet,
     required this.currency,
     required this.network,
-    this.price,
     this.assets = const [],
     this.assetCount = 0,
     this.activity = const [],
@@ -310,10 +319,9 @@ class WalletPageData {
   final WalletSummary wallet;
   final FiatCurrency currency;
   final NetworkStatus network;
-  final ErgPriceView? price;
 
-  /// The few holdings worth a glance, ERG first; [assetCount] is all of
-  /// them, NFTs included.
+  /// The holdings worth a glance, ERG first; [assetCount] is all of them,
+  /// NFTs included.
   final List<AssetRowData> assets;
   final int assetCount;
 
@@ -356,3 +364,14 @@ class WalletPageData {
 
 /// Tabs of the wallet page's bottom navigation.
 enum WalletTab { wallet, activity, discover, settings }
+
+/// The two visual directions under review; the one not chosen goes.
+enum HomeDirection {
+  /// One continuous page: no raised surface, hairline-ruled rows, a slim
+  /// action bar.
+  ruled,
+
+  /// One raised panel holding the balance and round actions; flat,
+  /// unruled lists below.
+  raised,
+}

@@ -2,15 +2,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../../services/token_evidence.dart';
 import '../../theme/argus_theme.dart';
+import '../token_avatar.dart';
 import 'home_models.dart';
+import 'home_style.dart';
 
-/// Pieces shared by the overview, the wallet page and the More sheet.
-
-/// Figures in lists line up digit for digit; Karla and Newsreader both
-/// carry tabular figures.
-const tabularFigures = [FontFeature.tabularFigures()];
+/// Pieces shared by the overview, the wallet page and their sheets.
 
 /// One node for a screen reader: [label] read as a whole, with the tap
 /// (and long press) on the node itself.
@@ -50,13 +47,12 @@ class TappableNode extends StatelessWidget {
   }
 }
 
-/// Serif section title with an optional count and a "View all"-style link.
+/// A section's label in tracked capitals, with an optional count and a
+/// quiet "View all" link at the far edge.
 class HomeSectionHeader extends StatelessWidget {
   const HomeSectionHeader({super.key, required this.title, this.count, this.action, this.onAction, this.actionKey});
 
   final String title;
-
-  /// Shown quietly after the title, so the link needn't repeat it.
   final String? count;
   final String? action;
   final VoidCallback? onAction;
@@ -64,216 +60,198 @@ class HomeSectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final colors = ArgusColors.of(context);
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Expanded(
-          child: Semantics(
-            header: true,
-            label: count == null ? title : '$title, $count',
-            excludeSemantics: true,
-            child: Text.rich(
-              TextSpan(
-                children: [
-                  TextSpan(text: title),
-                  if (count != null)
-                    TextSpan(
-                      text: '  $count',
-                      style: TextStyle(
-                        fontFamily: 'Karla',
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        color: colors.muted,
-                        fontFeatures: tabularFigures,
-                      ),
-                    ),
-                ],
+    final t = HomeText.of(context);
+    return Padding(
+      padding: const EdgeInsetsDirectional.only(start: homeGutter, end: homeGutter - 6),
+      // A header with a link is a full touch target tall; one without
+      // sits closer to its list.
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: action == null ? 40 : homeLineHeight),
+        child: Row(
+          children: [
+            Expanded(
+              child: Semantics(
+                header: true,
+                label: count == null ? title : '$title, $count',
+                excludeSemantics: true,
+                child: Text.rich(
+                  TextSpan(
+                    text: title.toUpperCase(),
+                    children: [if (count != null) TextSpan(text: '   $count')],
+                  ),
+                  style: t.label,
+                ),
               ),
-              // Two lines before an ellipsis: "Recent act…" says less
-              // than a title that wraps at large text sizes.
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontFamily: 'Newsreader', fontWeight: FontWeight.w600, fontSize: 20, height: 1.15),
             ),
-          ),
-        ),
-        if (action != null)
-          // The link keeps a full-size touch target while reading as text.
-          TextButton(
-            key: actionKey,
-            onPressed: onAction,
-            style: TextButton.styleFrom(
-              minimumSize: const Size(48, 48),
-              padding: const EdgeInsets.only(left: 10, right: 2),
-              textStyle: const TextStyle(fontFamily: 'Karla', fontSize: 14, fontWeight: FontWeight.w500),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(action!),
-                const SizedBox(width: 2),
-                const Icon(Icons.chevron_right, size: 18),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-}
-
-/// Small rounded tag: "+2.5 ERG pending", "Fragmented", "Watch-only".
-class HomeChip extends StatelessWidget {
-  const HomeChip({super.key, required this.label, this.icon, this.tone = HomeChipTone.accent, this.dense = false});
-
-  final String label;
-  final IconData? icon;
-  final HomeChipTone tone;
-  final bool dense;
-
-  /// The chip's fill, exposed for the contrast test.
-  static Color fillFor(HomeChipTone tone, ArgusColors colors, ColorScheme scheme) => switch (tone) {
-        HomeChipTone.accent => Color.alphaBlend(
-            colors.accent.withValues(alpha: scheme.brightness == Brightness.dark ? 0.16 : 0.2),
-            scheme.surface,
-          ),
-        // Lighter on paper: brand rust needs a near-white ground for 4.5:1.
-        HomeChipTone.warn => Color.alphaBlend(
-            rust.withValues(alpha: scheme.brightness == Brightness.dark ? 0.18 : 0.07),
-            scheme.surface,
-          ),
-        HomeChipTone.quiet => colors.inset,
-      };
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = ArgusColors.of(context);
-    final scheme = Theme.of(context).colorScheme;
-    final fg = switch (tone) {
-      HomeChipTone.accent => colors.accentText,
-      HomeChipTone.warn => rustFor(context),
-      HomeChipTone.quiet => colors.muted,
-    };
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: dense ? 7 : 10, vertical: dense ? 2 : 4),
-      decoration: BoxDecoration(color: fillFor(tone, colors, scheme), borderRadius: BorderRadius.circular(999)),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (icon != null) ...[
-            Icon(icon, size: dense ? 12 : 14, color: fg),
-            SizedBox(width: dense ? 4 : 6),
+            if (action != null)
+              TextButton(
+                key: actionKey,
+                onPressed: onAction,
+                style: TextButton.styleFrom(
+                  foregroundColor: t.ink,
+                  minimumSize: const Size(48, 48),
+                  padding: const EdgeInsetsDirectional.only(start: 10, end: 2),
+                  textStyle: t.link,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(action!),
+                    Icon(Icons.chevron_right, size: 18, color: t.muted),
+                  ],
+                ),
+              ),
           ],
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: dense ? 11.5 : 13,
-                height: 1.25,
-                fontWeight: FontWeight.w500,
-                color: fg,
-                fontFeatures: tabularFigures,
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-enum HomeChipTone { accent, warn, quiet }
-
-/// The recessed square behind a mark: the same well for a wallet and for a
-/// token, so the two lists read as one system.
-BoxDecoration _wellDecoration(ArgusColors colors, double size, {bool round = false}) => BoxDecoration(
-      color: colors.inset,
-      shape: round ? BoxShape.circle : BoxShape.rectangle,
-      borderRadius: round ? null : BorderRadius.circular(size * 0.3),
-      border: Border.all(color: colors.cardBorder),
-    );
-
-/// A wallet's mark: its initial set in the serif, or an eye for a wallet
-/// watched without keys, so the two kinds differ at a glance.
+/// A wallet's mark: its initial on the same disc a token gets, or an eye
+/// for a wallet watched without keys, so a page of marks reads as one set.
 class WalletMark extends StatelessWidget {
-  const WalletMark({super.key, required this.name, required this.kind, this.size = 40});
+  const WalletMark({super.key, required this.name, required this.kind});
 
   final String name;
   final WalletKind kind;
-  final double size;
 
   @override
   Widget build(BuildContext context) {
     final colors = ArgusColors.of(context);
-    final trimmed = name.trim();
-    final initial = trimmed.isEmpty ? '?' : String.fromCharCode(trimmed.runes.first).toUpperCase();
-    return ExcludeSemantics(
-      child: Container(
-        width: size,
-        height: size,
-        alignment: Alignment.center,
-        decoration: _wellDecoration(colors, size),
-        child: kind == WalletKind.watchOnly
-            ? Icon(Icons.visibility_outlined, size: size * 0.48, color: colors.muted)
-            : Text(
-                initial,
-                // The mark is decoration: it must not grow with the text
-                // and push the wallet's name out of its row.
-                textScaler: TextScaler.noScaling,
-                style: TextStyle(
-                  fontFamily: 'Newsreader',
-                  fontWeight: FontWeight.w600,
-                  fontSize: size * 0.48,
-                  height: 1,
-                  color: colors.accentText,
-                ),
-              ),
+    if (kind == WalletKind.seed) {
+      return ExcludeSemantics(child: TokenAvatar(label: name.trim(), radius: homeMarkSize / 2));
+    }
+    return ExcludeSemantics(child: HomeDisc(child: Icon(Icons.visibility_outlined, size: 16, color: colors.muted)));
+  }
+}
+
+/// The mark disc, for marks that are icons rather than letters.
+class HomeDisc extends StatelessWidget {
+  const HomeDisc({super.key, required this.child, this.fill});
+
+  final Widget child;
+  final Color? fill;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: homeMarkSize,
+      height: homeMarkSize,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: fill ?? Theme.of(context).colorScheme.surfaceContainerHighest,
+        border: fill == null ? Border.all(color: ArgusColors.of(context).cardBorder) : null,
       ),
+      child: child,
     );
   }
 }
 
-/// A token's mark in a round well. Like the app's TokenAvatar it shows a
-/// letter of the token *id*, never of the issuer's name, so no token can
-/// dress up as another; ERG alone gets its sigma on a gold disc. Unlike
-/// TokenAvatar the well stays visible on a card, whose surface is the same
-/// colour as that avatar's fill in the dark palettes.
-class HomeTokenMark extends StatelessWidget {
-  const HomeTokenMark({super.key, required this.tokenId, this.isErg = false, this.size = 36});
+/// The one row every list on the home screens is made of: a mark, a title
+/// over a detail line, and figures over a value on the right, ending on
+/// the gutter like every other figure on the page. A footnote can run
+/// under the text. At large text sizes the figures move under the title.
+class HomeRow extends StatelessWidget {
+  const HomeRow({
+    super.key,
+    required this.leading,
+    required this.title,
+    required this.semanticLabel,
+    this.subtitle,
+    this.figure,
+    this.subfigure,
+    this.footnote,
+    this.trailing,
+    this.onTap,
+    this.onLongPress,
+    this.inkKey,
+    this.hint,
+  });
 
-  /// Null draws a neutral "?" (hidden balances).
-  final String? tokenId;
-  final bool isErg;
-  final double size;
+  final Widget leading;
+  final Widget title;
+  final InlineSpan? subtitle;
+  final InlineSpan? figure;
+  final InlineSpan? subfigure;
+  final Widget? footnote;
+
+  /// A chevron or similar after the figures (sheets only; lists don't
+  /// draw one, so the figures keep a single right edge).
+  final Widget? trailing;
+  final String semanticLabel;
+  final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
+  final Key? inkKey;
+  final String? hint;
 
   @override
   Widget build(BuildContext context) {
-    final colors = ArgusColors.of(context);
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final text = issuerText(tokenId);
-    final letter = isErg ? 'Σ' : (text.isEmpty ? '?' : String.fromCharCode(text.runes.first).toUpperCase());
-    return ExcludeSemantics(
-      child: Container(
-        width: size,
-        height: size,
-        alignment: Alignment.center,
-        decoration: isErg
-            ? BoxDecoration(color: colors.accent.withValues(alpha: dark ? 0.25 : 0.2), shape: BoxShape.circle)
-            : _wellDecoration(colors, size, round: true),
-        child: Text(
-          letter,
-          textScaler: TextScaler.noScaling,
-          style: TextStyle(
-            fontFamily: 'Newsreader',
-            fontWeight: FontWeight.w600,
-            fontSize: size * 0.42,
-            height: 1,
-            color: isErg ? Theme.of(context).colorScheme.onSurface : colors.muted,
+    final t = HomeText.of(context);
+    final large = homeLargeText(context);
+    final align = large ? TextAlign.start : TextAlign.end;
+    final figures = figure == null && subfigure == null
+        ? null
+        : Column(
+            crossAxisAlignment: large ? CrossAxisAlignment.start : CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (figure != null)
+                Text.rich(figure!, style: t.primary, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: align),
+              if (subfigure != null)
+                Text.rich(subfigure!, style: t.secondary, maxLines: 1, overflow: TextOverflow.ellipsis, textAlign: align),
+            ],
+          );
+    final text = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        title,
+        if (subtitle != null)
+          Text.rich(subtitle!, style: t.secondary, maxLines: large ? 3 : 1, overflow: TextOverflow.ellipsis),
+        if (large && figures != null) ...[const SizedBox(height: 4), figures],
+      ],
+    );
+    final row = Container(
+      constraints: const BoxConstraints(minHeight: homeRowHeight),
+      alignment: AlignmentDirectional.centerStart,
+      padding: const EdgeInsets.symmetric(horizontal: homeGutter, vertical: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            crossAxisAlignment: large ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+            children: [
+              leading,
+              const SizedBox(width: 12),
+              Expanded(child: text),
+              if (!large && figures != null) ...[
+                const SizedBox(width: 12),
+                // Up to just under half the line: a long figure ellipsizes
+                // before it pushes the name out.
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.45),
+                  child: figures,
+                ),
+              ],
+              ?trailing,
+            ],
           ),
-        ),
+          if (footnote != null)
+            Padding(
+              padding: const EdgeInsetsDirectional.only(start: homeMarkSize + 12, top: 2),
+              child: footnote,
+            ),
+        ],
       ),
+    );
+    return TappableNode(
+      label: semanticLabel,
+      hint: hint,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: InkWell(key: inkKey, onTap: onTap, onLongPress: onLongPress, child: row),
     );
   }
 }
@@ -323,112 +301,4 @@ String balancedLabel(BuildContext context, String label, TextStyle style, double
     if (label[i] == ' ' && (best == -1 || (i - middle).abs() < (best - middle).abs())) best = i;
   }
   return '${label.substring(0, best)}\n${label.substring(best + 1)}';
-}
-
-/// Lays [children] out in [columns] equal columns, rows top to bottom,
-/// each row as tall as its tallest tile.
-class EqualColumns extends StatelessWidget {
-  const EqualColumns({super.key, required this.columns, required this.gap, required this.children});
-
-  final int columns;
-  final double gap;
-  final List<Widget> children;
-
-  @override
-  Widget build(BuildContext context) {
-    final rows = <List<Widget>>[];
-    for (var i = 0; i < children.length; i += columns) {
-      rows.add(children.sublist(i, math.min(i + columns, children.length)));
-    }
-    return Column(
-      children: [
-        for (var r = 0; r < rows.length; r++) ...[
-          if (r > 0) SizedBox(height: gap),
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (var i = 0; i < columns; i++) ...[
-                  if (i > 0) SizedBox(width: gap),
-                  Expanded(child: i < rows[r].length ? rows[r][i] : const SizedBox.shrink()),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ],
-    );
-  }
-}
-
-/// The bordered tile behind each action and each add-a-wallet choice.
-class HomeTile extends StatelessWidget {
-  const HomeTile({super.key, required this.child, required this.onTap, required this.semanticLabel, this.padding});
-
-  final Widget child;
-  final VoidCallback? onTap;
-  final String semanticLabel;
-  final EdgeInsetsGeometry? padding;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = ArgusColors.of(context);
-    return TappableNode(
-      label: semanticLabel,
-      onTap: onTap,
-      child: Material(
-        color: Theme.of(context).colorScheme.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(buttonRadius + 2),
-          side: BorderSide(color: colors.cardBorder),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 52),
-            child: Padding(
-              padding: padding ?? const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-              child: Center(child: child),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Rows separated by a hairline that starts where the text does, inside a
-/// card whose own fill would otherwise hide each row's ripple.
-class HomeList extends StatelessWidget {
-  const HomeList({super.key, required this.children, this.indent = 64});
-
-  final List<Widget> children;
-  final double indent;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = ArgusColors.of(context);
-    return Container(
-      width: double.infinity,
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(cardRadius),
-        border: Border.all(color: colors.cardBorder),
-      ),
-      child: Material(
-        type: MaterialType.transparency,
-        borderRadius: BorderRadius.circular(cardRadius),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          children: [
-            for (var i = 0; i < children.length; i++) ...[
-              if (i > 0) Divider(height: 1, indent: indent),
-              children[i],
-            ],
-          ],
-        ),
-      ),
-    );
-  }
 }
