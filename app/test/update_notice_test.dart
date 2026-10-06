@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:argus_wallet/build_info.dart';
 import 'package:argus_wallet/services/update_service.dart';
 import 'package:argus_wallet/ui/settings/update_notice.dart';
 import 'package:argus_wallet/ui/settings_screen.dart';
@@ -88,8 +89,11 @@ void main() {
   });
 
   testWidgets('the Settings hub carries it, and it appears from a saved check without any request', (tester) async {
+    // The app-wide service compares with the version this build really is, so
+    // the release on offer is always one major version ahead of it.
+    final ahead = '${AppVersion.tryParse(appVersion)!.major + 1}.0.0';
     SharedPreferences.setMockInitialValues({
-      'argus_update_latest': jsonEncode(ReleaseInfo(version: AppVersion.tryParse('1.0.0-beta.2')!, notes: 'Notes.', assets: const []).toJson()),
+      'argus_update_latest': jsonEncode(ReleaseInfo(version: AppVersion.tryParse(ahead)!, notes: 'Notes.', assets: const []).toJson()),
     });
     // The app-wide service asks Android through its channel; answer it, as a
     // phone would.
@@ -103,7 +107,7 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: SettingsScreen()));
     await tester.pumpAndSettle();
     expect(find.byType(UpdateNotice), findsOneWidget);
-    expect(find.text('Argus 1.0.0-beta.2 is available.'), findsOneWidget);
+    expect(find.text('Argus $ahead is available.'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Dismiss'));
     await tester.pumpAndSettle();
