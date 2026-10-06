@@ -324,7 +324,18 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
           : 'Spendable balance is unknown');
       return;
     }
-    final max = spendable - minerFeeNano - argusFeeNano - minBoxNano;
+    final otherRecipients = _extraRecipients.fold<int>(0, (sum, recipient) {
+      final text = recipient.amount;
+      return sum + (recipient.tokenId != null && text.isEmpty
+          ? minBoxNano : parseErgToNano(text) ?? 0);
+    });
+    final max = maxRecipientNanoErg(
+      spendableNano: _chosenBoxIds.isEmpty ? spendable : _selection.totalNanoErg,
+      minerFeeNano: parseErgToNano(_feeCtrl.text) ?? minerFeeNano,
+      appFeeNano: argusFeeNano,
+      otherRecipientsNano: otherRecipients,
+      feePaidInToken: _feeTokenId != null,
+    );
     if (max < minBoxNano) {
       _snack('Not enough ERG for fee and change');
       return;
@@ -406,13 +417,10 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
   List<RecipientDraft> _drafts() {
     final token = _selectedToken;
     final erg = _amountCtrl.text.trim();
-    final carriesTokens = token != null || _extraTokens.any((e) => e.tokenId != null);
     return [
       RecipientDraft(
         address: _recipientCtrl.text,
-        ergText: carriesTokens && erg.isEmpty
-            ? formatErg(minBoxNano, unit: false)
-            : erg,
+        ergText: erg,
         tokenId: token?.id,
         tokenAmountText: _tokenAmtCtrl.text,
         tokens: [
@@ -472,7 +480,8 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
       stealthUnknown: walletSyncController.stealthBalanceUnknown,
     );
     final fee = parseErgToNano(_feeCtrl.text) ?? minerFeeNano;
-    if (spendable != null && totalNanoErg(recipients) + fee + argusFeeNano > spendable) {
+    if (spendable != null && totalNanoErg(recipients) +
+        (_feeTokenId == null ? fee : 0) + argusFeeNano > spendable) {
       _snack('Amount plus fee exceeds your ${formatErg(spendable, maxFrac: 4)}');
       return;
     }
@@ -678,41 +687,48 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
   }
 
   /// Clipboard-hijack defense: if the OS clipboard holds a *different*
-  /// Ergo address than the one entered, make the user acknowledge it before
-  /// the confirmation dialog appears.
+  /// Ergo address than any entered recipient, make the user acknowledge it
+  /// before the confirmation dialog appears.
   ///
-  /// Skipped when the recipient came from a trusted source (contact or scan).
+  /// Skipped for a single recipient from a trusted source (contact or scan).
+  /// Additional recipients are typed, so still require the check.
   /// Residual risk for free-typed entries — malware that swaps the clipboard
   /// *before* the user pastes is indistinguishable from ordinary paste — is
   /// mitigated by the selectable full-address display in the confirm dialog
   /// and contact-book usage, not by this check.
-  Future<bool> _clipboardMatchesIntent(BuildContext ctx, String recipient) async {
-    if (_recipientTrusted) return true;
+  Future<bool> _clipboardMatchesIntent(BuildContext ctx, String recipient,
+      {Set<String> others = const {}}) async {
+    if (_recipientTrusted && others.isEmpty) return true;
+    final recipients = {recipient.trim(), ...others.map((address) => address.trim())};
     final clip = await Clipboard.getData('text/plain');
     final clipText = clip?.text?.trim() ?? '';
-    if (clipText.isEmpty || clipText == recipient) return true;
+    if (clipText.isEmpty || recipients.contains(clipText)) return true;
     if (!looksLikeErgoAddress(clipText)) return true;
     if (!mounted) return false;
     final proceed = await showDialog<bool>(
       context: ctx,
       builder: (context) => AlertDialog(
         title: const Text('Clipboard holds another address'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Something you copied earlier is an Ergo address that differs '
-              'from the recipient. Malware can swap addresses on the '
-              'clipboard. Verify every character.',
-            ),
-            const SizedBox(height: 12),
-            Text('Recipient:', style: Theme.of(context).textTheme.titleSmall),
-            SelectableText(recipient, style: monoStyle(context, size: 12)),
-            const SizedBox(height: 8),
-            Text('Clipboard:', style: Theme.of(context).textTheme.titleSmall),
-            SelectableText(clipText, style: monoStyle(context, size: 12)),
-          ],
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Something you copied earlier is an Ergo address that differs '
+                'from ${others.isEmpty ? 'the recipient' : 'every recipient'}. '
+                'Malware can swap addresses on the clipboard. Verify every character.',
+              ),
+              const SizedBox(height: 12),
+              Text(others.isEmpty ? 'Recipient:' : 'Recipients:',
+                  style: Theme.of(context).textTheme.titleSmall),
+              SelectableText(recipients.join('\n\n'),
+                  style: monoStyle(context, size: 12)),
+              const SizedBox(height: 8),
+              Text('Clipboard:', style: Theme.of(context).textTheme.titleSmall),
+              SelectableText(clipText, style: monoStyle(context, size: 12)),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -721,7 +737,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Recipient is correct'),
+            child: Text(others.isEmpty ? 'Recipient is correct' : 'Recipients are correct'),
           ),
         ],
       ),
@@ -738,12 +754,11 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
     // The clipboard gate compares against what the user typed; for a stealth
     // payment the prepared recipient is a freshly derived one-time address
     // that can never match, so the check would always fire.
-    if (!isMulti && stealthRecipients.isEmpty) {
-      final clear = await _clipboardMatchesIntent(context, preview.recipient);
-      if (!clear) {
-        setState(() => _sending = false);
-        return;
-      }
+    final clear = await _clipboardMatchesIntent(context, _recipientCtrl.text.trim(),
+        others: _extraRecipients.map((e) => e.address).toSet());
+    if (!clear) {
+      if (mounted) setState(() => _sending = false);
+      return;
     }
     if (!mounted) return;
     final tokenId = preview.tokenId;
@@ -787,9 +802,12 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
     final fiat = networkController.fiatText(preview.amountNanoErg);
     final choice = await showConfirmTransactionChoice(
       context,
-      title: isMulti ? 'Confirm multi-recipient send' : 'Confirm send',
+      title: (preview.recipients?.length ?? 1) > 1 ? 'Confirm multi-recipient send' : 'Confirm send',
       rows: rows,
-      recipientAddress: isMulti ? null : preview.recipient,
+      recipientAddress: isMulti
+          ? (preview.recipients ?? const <Map<String, dynamic>>[])
+              .map((r) => r['address']?.toString() ?? '').join('\n\n')
+          : preview.recipient,
       detail: [
         if (fiat != null) fiat,
         networkController.activeUrl ?? 'Node not chosen yet',
@@ -1362,7 +1380,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                         AmountEntry(
                           controller: _amountCtrl,
                           label: 'ERG to send with it (optional)',
-                          helperText: 'Blank sends the 0.001 ERG minimum a box needs. ${_availableLine()}',
+                          helperText: 'Blank funds the minimum ERG for these tokens. Review shows the exact amount. ${_availableLine()}',
                           onMax: _applyMaxErg,
                           onChanged: (_) => setState(() {}),
                           validator: (v) {
@@ -1412,14 +1430,12 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                                       },
                                     ),
                                     const SizedBox(height: 12),
-                                    TextFormField(
+                                    AmountEntry(
                                       controller: entry.amountCtrl,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Amount (ERG)',
-                                        hintText: '0.001',
-                                      ),
-                                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                      label: entryToken == null ? 'Amount (ERG)' : 'ERG to send with it (optional)',
+                                      helperText: entryToken == null ? null : 'Blank funds the minimum ERG for this token.',
                                       validator: (v) {
+                                        if (entryToken != null && (v == null || v.trim().isEmpty)) return null;
                                         final n = parseErgToNano(v ?? '');
                                         if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
                                         return null;
@@ -1437,6 +1453,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                                           ),
                                         ],
                                         onChanged: (v) {
+                                          if (entry.tokenId != v) entry.tokenAmtCtrl?.clear();
                                           entry.tokenId = v;
                                           if (v != null && v.isNotEmpty && entry.tokenAmtCtrl == null) {
                                             entry.tokenAmtCtrl = TextEditingController();
@@ -1446,7 +1463,12 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                                       ),
                                       if (entryToken != null && entry.tokenAmtCtrl != null) ...[
                                         const SizedBox(height: 12),
-                                        TextFormField(
+                                        if (entryToken.amount == 1 && entryToken.decimals == 0)
+                                          Align(
+                                            alignment: Alignment.centerLeft,
+                                            child: Text('Sends 1 ${entryToken.label} · Available 1'),
+                                          )
+                                        else TextFormField(
                                           controller: entry.tokenAmtCtrl,
                                           decoration: InputDecoration(
                                             labelText: '${entryToken.label} amount',
@@ -1642,7 +1664,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                           validator: (v) {
                             if (v == null || v.trim().isEmpty) return null;
                             final n = parseErgToNano(v);
-                            if (n == null || n < minBoxNano) return 'Minimum 0.001 ERG';
+                            if (n == null || n < minerFeeNano) return 'Minimum ${formatErg(minerFeeNano)}';
                             return null;
                           },
                         ),

@@ -3023,6 +3023,10 @@ struct ParsedRecipient {
     tokens: Vec<(String, u64)>,
 }
 
+#[cfg(test)]
+#[path = "send_funding_tests.rs"]
+mod send_funding_tests;
+
 /// Prepare a multi-recipient send. Each element of `recipients_json` is a JSON
 /// object: `{"address":"...","amount_nano_erg":123,"tokens":[{"token_id":"...","amount":456}]}`;
 /// a single `token_id`/`token_amount` pair is accepted too.
@@ -3105,16 +3109,36 @@ pub async fn prepare_send_multi(
         .to_json_string());
     }
 
-    // Collect all recipient trees
+    // Size-based box floors may exceed the usual 0.001 ERG, or a token
+    // bundle may need several outputs. Fund the actual layout before input
+    // selection; the confirmation summary includes this normalized amount.
     let mut recipient_specs: Vec<ergo_tx::RecipientSpec> = Vec::new();
-    for rcpt in &parsed {
+    total_send_erg = 0;
+    for rcpt in &mut parsed {
         let tree = address_to_ergo_tree(&rcpt.address)
             .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-        recipient_specs.push(ergo_tx::RecipientSpec {
+        let mut spec = ergo_tx::RecipientSpec {
             ergo_tree: tree,
             amount_nano_erg: rcpt.amount_nano_erg,
             tokens: rcpt.tokens.clone(),
-        });
+        };
+        let minimum = spec
+            .minimum_value()
+            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        let minimum = i64::try_from(minimum).map_err(|_| {
+            ArgusError::TxBuildFailed("recipient funding out of range".into()).to_json_string()
+        })?;
+        if !rcpt.tokens.is_empty() {
+            rcpt.amount_nano_erg = rcpt.amount_nano_erg.max(minimum);
+            spec.amount_nano_erg = rcpt.amount_nano_erg;
+        }
+        total_send_erg = total_send_erg
+            .checked_add(rcpt.amount_nano_erg)
+            .ok_or_else(|| {
+                ArgusError::TxBuildFailed("recipient total amount out of range".into())
+                    .to_json_string()
+            })?;
+        recipient_specs.push(spec);
     }
 
     with_handle(handle_id, "prepare_send_multi", |h| {
@@ -3171,112 +3195,98 @@ pub async fn prepare_send_multi(
         None => None,
     };
     if let Some(pick) = &babel {
-        let entry = needed_tokens.entry(pick.babel.token_id.clone()).or_insert(0);
-        *entry = entry.saturating_add(pick.babel.tokens_for(fee_for_required));
+        let entry = needed_tokens
+            .entry(pick.babel.token_id.clone())
+            .or_insert(0);
+        *entry = entry
+            .checked_add(pick.babel.tokens_for(fee_for_required))
+            .ok_or_else(|| {
+                ArgusError::TxBuildFailed("token requirement out of range".into()).to_json_string()
+            })?;
     }
 
     // Cover recipients, the wallet-paid miner fee, the app fee and minimum change.
     let required = multi_send_required_erg(total_send_erg, fee_for_required, babel.is_some())?;
     // Coin control, as in prepare_send: the chosen boxes are the whole
     // input set, never a starting point the selector may extend.
-    let mut selected = match input_box_ids.as_deref() {
-        Some(ids) => {
-            let token_ref = needed_tokens
-                .iter()
-                .next()
-                .map(|(id, amt)| (id.as_str(), *amt));
-            let exact = select_exact(&eip12, ids, required, token_ref)
-                .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
-            // Every token this send delivers must be covered by the choice.
-            for (id, amount) in &needed_tokens {
-                let have: u64 = exact
-                    .boxes
+    let select = |inputs: &[ergo_tx::Eip12InputBox],
+                  required: u64|
+     -> Result<Vec<ergo_tx::Eip12InputBox>, String> {
+        let mut selected = match input_box_ids.as_deref() {
+            Some(ids) => {
+                let token_ref = needed_tokens
                     .iter()
-                    .flat_map(|b| b.assets.iter())
-                    .filter(|a| &a.token_id == id)
-                    .map(|a| a.amount.parse::<u64>().unwrap_or(0))
-                    .sum();
-                if have < *amount {
-                    return Err(ArgusError::TxBuildFailed(format!(
-                        "the chosen boxes hold {have} of token {id}, this send needs {amount}"
-                    ))
-                    .to_json_string());
+                    .next()
+                    .map(|(id, amt)| (id.as_str(), *amt));
+                let exact = select_exact(inputs, ids, required, token_ref)
+                    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+                // Every token this send delivers must be covered by the choice.
+                for (id, amount) in &needed_tokens {
+                    let have: u64 = exact
+                        .boxes
+                        .iter()
+                        .flat_map(|b| b.assets.iter())
+                        .filter(|a| &a.token_id == id)
+                        .map(|a| a.amount.parse::<u64>().unwrap_or(0))
+                        .try_fold(0u64, u64::checked_add)
+                        .ok_or_else(|| {
+                            ArgusError::TxBuildFailed("token total out of range".into())
+                                .to_json_string()
+                        })?;
+                    if have < *amount {
+                        return Err(ArgusError::TxBuildFailed(format!(
+                            "the chosen boxes hold {have} of token {id}, this send needs {amount}"
+                        ))
+                        .to_json_string());
+                    }
                 }
+                exact.boxes
             }
-            exact.boxes
-        }
-        None => {
-            // Same rule as the single send: try ordinary boxes alone, then
-            // stealth alone, and only combine when neither can pay.
-            let is_stealth =
-                |b: &ergo_tx::Eip12InputBox| stealth_owned.iter().any(|s| s.box_id == b.box_id);
-            let ordinary = eip12
-                .iter()
-                .filter(|b| !is_stealth(b))
-                .cloned()
-                .collect::<Vec<_>>();
-            let only_stealth = eip12
-                .iter()
-                .filter(|b| is_stealth(b))
-                .cloned()
-                .collect::<Vec<_>>();
-            let attempt = |set: &[ergo_tx::Eip12InputBox]| {
-                if set.is_empty() {
-                    return None;
-                }
-                select_for_multi_send(set, required, &needed_tokens)
-                    .ok()
-                    .filter(|s| !s.is_empty())
-            };
-            match attempt(&ordinary).or_else(|| attempt(&only_stealth)) {
-                Some(s) => s,
-                None => select_for_multi_send(&eip12, required, &needed_tokens)
-                    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
-            }
-        }
-    };
+            None => select_for_multi_send(inputs, required, &needed_tokens)
+                .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?,
+        };
 
-    if selected.is_empty() {
-        return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());
-    }
-    if let Some(pick) = &babel {
-        selected.push(pick.eip12.clone());
-        boxes.push(pick.ergo_box.clone());
-    }
+        if selected.is_empty() {
+            return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());
+        }
+        if let Some(pick) = &babel {
+            selected.push(pick.eip12.clone());
+        }
+        Ok(selected)
+    };
 
     let height = client
         .current_height()
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
 
-    let built = ergo_tx::build_multi_send_tx_with_fee(
-        &selected,
-        &recipient_specs,
-        &change_tree,
-        fee_for_required,
-        height,
-    )
-    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
-    let mut unsigned_tx = built.unsigned_tx;
-    let mut change_erg = built.summary.change_erg;
-    let babel_summary = match &babel {
-        Some(pick) => {
-            let s = ergo_tx::apply_babel(&mut unsigned_tx, &pick.babel, &change_tree)
-                .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
-            change_erg = unsigned_tx
-                .outputs
-                .iter()
-                // From the end, as apply_babel does: a send to the
-                // wallet's own change address gives the recipient box the
-                // same script, and only the last one is the change.
-                .rev()
-                .find(|o| o.ergo_tree == change_tree)
-                .map(|o| o.value.parse::<i64>().unwrap_or(0))
-                .unwrap_or(0);
-            Some(s)
-        }
-        None => None,
+    let build = |inputs: &[ergo_tx::Eip12InputBox]| {
+        build_funded_multi_send(
+            &recipient_specs,
+            &change_tree,
+            fee_for_required,
+            height,
+            required,
+            input_box_ids.is_none(),
+            babel.as_ref().map(|pick| &pick.babel),
+            |budget| select(inputs, budget),
+        )
     };
+    let (selected, built, babel_summary) = if input_box_ids.is_some() {
+        build(&eip12)?
+    } else {
+        let stealth_ids = stealth_owned
+            .iter()
+            .map(|b| b.box_id.clone())
+            .collect::<Vec<_>>();
+        build_preferring_one_pocket(&eip12, &stealth_ids, build)?
+    };
+    if let Some(pick) = &babel {
+        boxes.push(pick.ergo_box.clone());
+    }
+    let miner_fee = built.summary.miner_fee;
+    let unsigned_tx = built.unsigned_tx;
+    let change_erg = built.summary.change_erg;
 
     // Get the ErgoBox representations for signing
     let ergo_boxes = selected_ergo_boxes(&boxes, &selected);
@@ -3297,7 +3307,7 @@ pub async fn prepare_send_multi(
         ergo_boxes,
         data_input_boxes: Vec::new(),
         unsigned_tx,
-        miner_fee: fee_for_required,
+        miner_fee,
         change_erg,
         recipient_erg: total_send_erg,
         node_url,
@@ -3319,10 +3329,11 @@ pub async fn prepare_send_multi(
     serde_json::to_string(&serde_json::json!({
         "preparation_id": preparation_id,
         "recipients": recipient_summary,
+        "recipient": parsed[0].address,
         "change_address": change_address,
         "total_amount_nano_erg": total_send_erg,
         "amount_nano_erg": total_send_erg,
-        "miner_fee": fee_for_required,
+        "miner_fee": miner_fee,
         "change_nano_erg": change_erg,
         "input_count": selected.len(),
         "citadel_fee_nano": built.summary.citadel_fee_nano,
@@ -3330,6 +3341,132 @@ pub async fn prepare_send_multi(
         "babel": babel_summary.as_ref().map(babel_json),
     }))
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Try the complete selection and layout in each pocket, each starting from
+/// its own base budget. A token-heavy ordinary pocket's change requirements
+/// must not rule out a cheaper stealth-only layout and link them needlessly.
+fn build_preferring_one_pocket<T>(
+    inputs: &[ergo_tx::Eip12InputBox],
+    stealth_ids: &[String],
+    mut build: impl FnMut(&[ergo_tx::Eip12InputBox]) -> Result<T, String>,
+) -> Result<T, String> {
+    if stealth_ids.is_empty() {
+        return build(inputs);
+    }
+    let is_stealth = |b: &ergo_tx::Eip12InputBox| stealth_ids.iter().any(|id| id == &b.box_id);
+    let ordinary = inputs
+        .iter()
+        .filter(|b| !is_stealth(b))
+        .cloned()
+        .collect::<Vec<_>>();
+    let stealth = inputs
+        .iter()
+        .filter(|b| is_stealth(b))
+        .cloned()
+        .collect::<Vec<_>>();
+    if ordinary.is_empty() {
+        return build(&stealth);
+    }
+    if stealth.is_empty() {
+        return build(&ordinary);
+    }
+    if let Ok(built) = build(&ordinary) {
+        return Ok(built);
+    }
+    if let Ok(built) = build(&stealth) {
+        return Ok(built);
+    }
+    build(inputs)
+}
+
+/// Select again only when the actual token-change layout needs more ERG.
+/// Coin control calls this with top-up disabled, so no unchosen input can
+/// enter a prepared transaction. Selection reapplies the pocket policy on
+/// every pass, and the final input set is exactly the set reviewed/signed.
+fn build_funded_multi_send(
+    recipients: &[ergo_tx::RecipientSpec],
+    change_tree: &str,
+    fee: i64,
+    height: i32,
+    mut required: u64,
+    allow_top_up: bool,
+    babel: Option<&ergo_tx::BabelBox>,
+    mut select: impl FnMut(u64) -> Result<Vec<ergo_tx::Eip12InputBox>, String>,
+) -> Result<
+    (
+        Vec<ergo_tx::Eip12InputBox>,
+        ergo_tx::MultiSendBuildResult,
+        Option<ergo_tx::BabelSummary>,
+    ),
+    String,
+> {
+    for pass in 1..=ergo_tx::MAX_SELECTION_PASSES {
+        let selected = select(required)?;
+        let mut built = match ergo_tx::build_multi_send_tx_with_fee(
+            &selected,
+            recipients,
+            change_tree,
+            fee,
+            height,
+        ) {
+            Ok(built) => built,
+            Err(ergo_tx::MultiSendError::TokenChangeInsufficientErg { have, min })
+                if allow_top_up && pass < ergo_tx::MAX_SELECTION_PASSES && min > have =>
+            {
+                required = add_change_shortfall(required, have, min)?;
+                continue;
+            }
+            Err(error) => return Err(ArgusError::TxBuildFailed(error.to_string()).to_json_string()),
+        };
+        let babel_summary = if let Some(babel) = babel {
+            let start = built.summary.recipient_output_count;
+            let old_change_count = built.summary.change_output_count;
+            let old_outputs = built.unsigned_tx.outputs.len();
+            match ergo_tx::babel::apply_babel_to_change_outputs(
+                &mut built.unsigned_tx,
+                babel,
+                change_tree,
+                start..start + old_change_count,
+            ) {
+                Ok(summary) => {
+                    built.summary.change_erg = built
+                        .summary
+                        .change_erg
+                        .checked_sub(babel.value - built.summary.miner_fee)
+                        .ok_or_else(|| {
+                            ArgusError::TxBuildFailed("change amount out of range".into())
+                                .to_json_string()
+                        })?;
+                    built.summary.change_output_count =
+                        built.unsigned_tx.outputs.len() - (old_outputs - old_change_count + 1);
+                    Some(summary)
+                }
+                Err(ergo_tx::BabelError::ChangeNeedsErg { have, min })
+                    if allow_top_up && pass < ergo_tx::MAX_SELECTION_PASSES && min > have =>
+                {
+                    required = add_change_shortfall(required, have, min)?;
+                    continue;
+                }
+                Err(error) => {
+                    return Err(ArgusError::TxBuildFailed(error.to_string()).to_json_string())
+                }
+            }
+        } else {
+            None
+        };
+        return Ok((selected, built, babel_summary));
+    }
+    unreachable!("the final selection pass returns a build or an error")
+}
+
+fn add_change_shortfall(required: u64, have: i64, min: i64) -> Result<u64, String> {
+    min.checked_sub(have)
+        .and_then(|v| u64::try_from(v).ok())
+        .and_then(|extra| required.checked_add(extra))
+        .ok_or_else(|| {
+            ArgusError::TxBuildFailed("change funding out of range".into()).to_json_string()
+        })
 }
 
 fn multi_send_required_erg(total_send_erg: i64, miner_fee: i64, babel: bool) -> Result<u64, String> {
@@ -3349,44 +3486,35 @@ fn select_for_multi_send(
     required_erg: u64,
     needed_tokens: &HashMap<String, u64>,
 ) -> Result<Vec<ergo_tx::Eip12InputBox>, String> {
-    let mut total_erg: u64 = 0;
-    let mut total_tokens: HashMap<String, u64> = HashMap::new();
-    let mut selected: Vec<ergo_tx::Eip12InputBox> = Vec::new();
-
-    for input in eip12.iter().rev() {
-        selected.push(input.clone());
-        let val: u64 = input.value.parse::<u64>().unwrap_or(0);
-        total_erg = total_erg.saturating_add(val);
-        for asset in &input.assets {
-            *total_tokens.entry(asset.token_id.clone()).or_insert(0) +=
-                asset.amount.parse::<u64>().unwrap_or(0);
-        }
-
-        if total_erg >= required_erg {
-            let all_ok = needed_tokens
-                .iter()
-                .all(|(id, need)| total_tokens.get(id).copied().unwrap_or(0) >= *need);
-            if all_ok {
-                break;
-            }
-        }
+    if needed_tokens.is_empty() {
+        return wallet_core::spend::select_for_send(eip12, required_erg, None)
+            .map(|s| s.boxes)
+            .map_err(|e| e.to_string());
     }
-
-    if total_erg < required_erg {
-        return Err(format!(
-            "insufficient ERG: have {total_erg}, need at least {required_erg}"
-        ));
-    }
-    for (id, need) in needed_tokens {
-        let have = total_tokens.get(id).copied().unwrap_or(0);
-        if have < *need {
-            return Err(format!(
-                "insufficient tokens {id}: have {have}, need {need}"
-            ));
+    // Avoid moving unrelated collectibles when eligible funding can cover
+    // the send. Both passes share the same oldest-first selector.
+    let safe = eip12
+        .iter()
+        .filter(|b| {
+            b.assets.is_empty()
+                || b.assets
+                    .iter()
+                    .any(|a| needed_tokens.contains_key(&a.token_id))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut tokens = needed_tokens
+        .iter()
+        .map(|(id, amount)| (id.as_str(), *amount))
+        .collect::<Vec<_>>();
+    tokens.sort_by_key(|(id, _)| *id);
+    let selected = match ergo_tx::select_multi_token_boxes(&safe, &tokens, required_erg) {
+        Err(ergo_tx::BoxSelectorError::InsufficientErg { .. }) => {
+            ergo_tx::select_multi_token_boxes(eip12, &tokens, required_erg)
         }
-    }
-
-    Ok(selected)
+        result => result,
+    };
+    selected.map(|s| s.boxes).map_err(|e| e.to_string())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5415,6 +5543,9 @@ mod tests {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                     continue;
                 };
+                // Accepted sockets inherit nonblocking mode on Windows;
+                // this test's timeout-based request reader is blocking.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(2)))
                     .unwrap();

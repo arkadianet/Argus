@@ -27,6 +27,25 @@ pub enum MultiSendError {
     #[error("Token amount must be greater than zero")]
     ZeroTokenAmount,
 
+    #[error("Insufficient tokens: have {have} of {token_id}, need {need}")]
+    InsufficientTokens {
+        token_id: String,
+        have: u64,
+        need: u64,
+    },
+
+    #[error("Amount of token {token_id} exceeds the representable range")]
+    TokenAmountOutOfRange { token_id: String },
+
+    #[error("Miner fee must be at least {min} nanoERG")]
+    FeeBelowMin { min: i64 },
+
+    #[error("Recipient tokens require at least {min} nanoERG, have {have}")]
+    RecipientTokensInsufficientErg { have: i64, min: i64 },
+
+    #[error("Recipient box cannot be built: {0}")]
+    RecipientBox(String),
+
     #[error("Insufficient ERG: have {have} nanoERG, need {need} nanoERG")]
     InsufficientErg { have: i64, need: i64 },
 
@@ -70,15 +89,49 @@ impl RecipientSpec {
     }
 
     /// This recipient's tokens summed by id, in first-seen order.
-    pub fn assets(&self) -> Vec<(String, u64)> {
+    pub fn assets(&self) -> Result<Vec<(String, u64)>, MultiSendError> {
         let mut out: Vec<(String, u64)> = Vec::new();
         for (id, amt) in &self.tokens {
+            if *amt == 0 {
+                return Err(MultiSendError::ZeroTokenAmount);
+            }
             match out.iter_mut().find(|(i, _)| i == id) {
-                Some((_, n)) => *n = n.saturating_add(*amt),
+                Some((_, n)) => {
+                    *n = n
+                        .checked_add(*amt)
+                        .ok_or_else(|| MultiSendError::TokenTotalOverflow {
+                            token_id: id.clone(),
+                        })?
+                }
                 None => out.push((id.clone(), *amt)),
             }
         }
-        out
+        for (id, amount) in &out {
+            if *amount > i64::MAX as u64 {
+                return Err(MultiSendError::TokenAmountOutOfRange {
+                    token_id: id.clone(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Total ERG required to deliver these assets in boxes within the node's
+    /// size and token limits. Preparation reserves this before selecting inputs.
+    pub fn minimum_value(&self) -> Result<u64, MultiSendError> {
+        let assets = self
+            .assets()?
+            .into_iter()
+            .map(|(id, amount)| Eip12Asset::new(id, amount as i64))
+            .collect();
+        match crate::token_outputs(0, &self.ergo_tree, assets, 0, MIN_BOX_VALUE as u64) {
+            Err(crate::ChangeOutputError::NotEnoughErg { min_value, .. }) => Ok(min_value),
+            Err(other) => Err(MultiSendError::RecipientBox(other.to_string())),
+            Ok(_) => Ok(crate::min_value_for(
+                crate::box_bytes(&self.ergo_tree, &[], &HashMap::new()),
+                MIN_BOX_VALUE as u64,
+            )),
+        }
     }
 }
 
@@ -89,6 +142,10 @@ pub struct MultiSendSummary {
     pub miner_fee: i64,
     pub input_count: usize,
     pub citadel_fee_nano: i64,
+    /// Recipient outputs may span several boxes when delivering many tokens.
+    pub recipient_output_count: usize,
+    /// Change outputs occupy this range immediately after recipient outputs.
+    pub change_output_count: usize,
 }
 
 #[derive(Debug)]
@@ -99,8 +156,8 @@ pub struct MultiSendBuildResult {
 
 /// Build an EIP-12 unsigned multi-recipient send tx from already-selected inputs.
 ///
-/// - Every recipient is emitted as an output box; token-bearing recipients carry
-///   their token assets. Each `amount_nano_erg` must be at least `MIN_BOX_VALUE`.
+/// - Recipient assets are packed into as many outputs as the node's limits
+///   require. Their total `amount_nano_erg` must fund every output's minimum.
 /// - Leftover ERG and unspent tokens go to `change_ergo_tree`.
 /// - `fee_nano` is used as the miner-fee output. Balance is conserved.
 pub fn build_multi_send_tx_with_fee(
@@ -115,6 +172,9 @@ pub fn build_multi_send_tx_with_fee(
     }
     if recipients.is_empty() {
         return Err(MultiSendError::NoRecipients);
+    }
+    if fee_nano < MIN_BOX_VALUE {
+        return Err(MultiSendError::FeeBelowMin { min: MIN_BOX_VALUE });
     }
 
     let has_sent_tokens = recipients.iter().any(|r| !r.tokens.is_empty());
@@ -135,6 +195,13 @@ pub fn build_multi_send_tx_with_fee(
         }
         if r.tokens.iter().any(|(_, amt)| *amt == 0) {
             return Err(MultiSendError::ZeroTokenAmount);
+        }
+        let min = r.minimum_value()?;
+        if (r.amount_nano_erg as u64) < min {
+            return Err(MultiSendError::RecipientTokensInsufficientErg {
+                have: r.amount_nano_erg,
+                min: min as i64,
+            });
         }
     }
 
@@ -174,12 +241,19 @@ pub fn build_multi_send_tx_with_fee(
 
     // Subtract sent tokens to compute change tokens.
     for r in recipients {
-        for (id, amt) in r.assets() {
-            if let Some(balance) = input_tokens.get_mut(&id) {
-                *balance = balance.saturating_sub(amt);
-                if *balance == 0 {
-                    input_tokens.remove(&id);
-                }
+        for (id, amt) in r.assets()? {
+            let have = input_tokens.get(&id).copied().unwrap_or(0);
+            if have < amt {
+                return Err(MultiSendError::InsufficientTokens {
+                    token_id: id,
+                    have,
+                    need: amt,
+                });
+            }
+            if have == amt {
+                input_tokens.remove(&id);
+            } else {
+                input_tokens.insert(id, have - amt);
             }
         }
     }
@@ -207,19 +281,23 @@ pub fn build_multi_send_tx_with_fee(
     let mut outputs = Vec::with_capacity(recipients.len() + 2);
     for r in recipients {
         let assets: Vec<Eip12Asset> = r
-            .assets()
+            .assets()?
             .into_iter()
             .map(|(id, amt)| Eip12Asset::new(id, amt as i64))
             .collect();
-        outputs.push(Eip12Output {
-            value: r.amount_nano_erg.to_string(),
-            ergo_tree: r.ergo_tree.clone(),
-            assets,
-            creation_height: current_height,
-            additional_registers: HashMap::new(),
-        });
+        outputs.extend(
+            crate::token_outputs(
+                r.amount_nano_erg as u64,
+                &r.ergo_tree,
+                assets,
+                current_height,
+                MIN_BOX_VALUE as u64,
+            )
+            .map_err(|e| MultiSendError::RecipientBox(e.to_string()))?,
+        );
     }
 
+    let recipient_output_count = outputs.len();
     // Change output.
     if need_change {
         let change_value = if change_erg > 0 {
@@ -227,6 +305,14 @@ pub fn build_multi_send_tx_with_fee(
         } else {
             MIN_BOX_VALUE
         };
+        if let Some((id, _)) = input_tokens
+            .iter()
+            .find(|(_, amount)| **amount > i64::MAX as u64)
+        {
+            return Err(MultiSendError::TokenAmountOutOfRange {
+                token_id: id.clone(),
+            });
+        }
         let change_assets: Vec<Eip12Asset> = input_tokens
             .iter()
             .map(|(id, amt)| Eip12Asset::new(id.clone(), *amt as i64))
@@ -252,6 +338,7 @@ pub fn build_multi_send_tx_with_fee(
         );
     }
 
+    let change_output_count = outputs.len() - recipient_output_count;
     // Cannot fail once enabled with a tree; budget was reserved above.
     let _ = crate::dev_fee::append_dev_fee_output(&mut outputs, &fee_cfg, current_height);
     outputs.push(Eip12Output::fee(effective_fee, current_height));
@@ -270,6 +357,8 @@ pub fn build_multi_send_tx_with_fee(
             miner_fee: effective_fee,
             input_count: user_inputs.len(),
             citadel_fee_nano: app_fee,
+            recipient_output_count,
+            change_output_count,
         },
     })
 }
@@ -454,5 +543,132 @@ mod tests {
             .map(|o| o.value.parse::<i64>().unwrap())
             .sum();
         assert_eq!(out_total, 5_000_000_000);
+    }
+
+    #[test]
+    fn a_large_recipient_bundle_is_split_and_funded_at_each_box_floor() {
+        let ids: Vec<String> = (0..123).map(|i| format!("{i:064x}")).collect();
+        let inputs = vec![make_box(
+            "5000000000",
+            ids.iter().map(|id| (id.as_str(), "7")).collect(),
+        )];
+        let mut recipient = RecipientSpec {
+            ergo_tree: RECIPIENT_TREE.into(),
+            amount_nano_erg: MIN_BOX_VALUE,
+            tokens: ids.iter().map(|id| (id.clone(), 7)).collect(),
+        };
+        let minimum = recipient.minimum_value().unwrap();
+        assert!(minimum > 2 * MIN_BOX_VALUE as u64);
+        let err = build_multi_send_tx_with_fee(
+            &inputs,
+            &[recipient.clone()],
+            CHANGE_TREE,
+            1_100_000,
+            50000,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            MultiSendError::RecipientTokensInsufficientErg { .. }
+        ));
+        recipient.amount_nano_erg = minimum as i64;
+        let built =
+            build_multi_send_tx_with_fee(&inputs, &[recipient], CHANGE_TREE, 1_100_000, 50000)
+                .unwrap();
+        let delivered: Vec<_> = built
+            .unsigned_tx
+            .outputs
+            .iter()
+            .filter(|output| output.ergo_tree == RECIPIENT_TREE)
+            .collect();
+        assert_eq!(delivered.len(), 2);
+        assert_eq!(delivered.iter().map(|o| o.assets.len()).sum::<usize>(), 123);
+        assert_eq!(
+            delivered
+                .iter()
+                .map(|o| o.value.parse::<u64>().unwrap())
+                .sum::<u64>(),
+            minimum
+        );
+        for output in &delivered {
+            let bytes = crate::box_bytes(
+                &output.ergo_tree,
+                &output.assets,
+                &output.additional_registers,
+            );
+            assert!(bytes <= crate::MAX_BOX_BYTES);
+            assert!(output.assets.len() <= crate::MAX_TOKENS_PER_BOX);
+            assert!(
+                output.value.parse::<u64>().unwrap()
+                    >= crate::min_value_for(bytes, MIN_BOX_VALUE as u64)
+            );
+            assert!(output.assets.iter().all(|asset| asset.amount == "7"));
+        }
+        assert_eq!(
+            built
+                .unsigned_tx
+                .outputs
+                .iter()
+                .map(|o| o.value.parse::<i64>().unwrap())
+                .sum::<i64>(),
+            5_000_000_000
+        );
+    }
+
+    #[test]
+    fn rejects_unheld_tokens_and_overspending_across_recipients() {
+        let inputs = vec![make_box("5000000000", vec![("tok_a", "10")])];
+        for recipients in [
+            vec![RecipientSpec::with_token(
+                RECIPIENT_TREE.into(),
+                MIN_BOX_VALUE,
+                Some(("missing".into(), 1)),
+            )],
+            vec![RecipientSpec::with_token(
+                RECIPIENT_TREE.into(),
+                MIN_BOX_VALUE,
+                Some(("tok_a".into(), 11)),
+            )],
+            vec![
+                RecipientSpec::with_token(
+                    RECIPIENT_TREE.into(),
+                    MIN_BOX_VALUE,
+                    Some(("tok_a".into(), 6)),
+                ),
+                RecipientSpec::with_token(
+                    RECIPIENT_TREE.into(),
+                    MIN_BOX_VALUE,
+                    Some(("tok_a".into(), 6)),
+                ),
+            ],
+        ] {
+            let err =
+                build_multi_send_tx_with_fee(&inputs, &recipients, CHANGE_TREE, 1_100_000, 50000)
+                    .unwrap_err();
+            assert!(matches!(err, MultiSendError::InsufficientTokens { .. }));
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_amount_overflow_and_signed_amount_wrap() {
+        let inputs = vec![make_box("5000000000", vec![("tok_a", "10")])];
+        for amounts in [vec![u64::MAX, 1], vec![i64::MAX as u64 + 1]] {
+            let recipient = RecipientSpec {
+                ergo_tree: RECIPIENT_TREE.into(),
+                amount_nano_erg: MIN_BOX_VALUE,
+                tokens: amounts
+                    .into_iter()
+                    .map(|amount| ("tok_a".into(), amount))
+                    .collect(),
+            };
+            let err =
+                build_multi_send_tx_with_fee(&inputs, &[recipient], CHANGE_TREE, 1_100_000, 50000)
+                    .unwrap_err();
+            assert!(matches!(
+                err,
+                MultiSendError::TokenTotalOverflow { .. }
+                    | MultiSendError::TokenAmountOutOfRange { .. }
+            ));
+        }
     }
 }

@@ -5,7 +5,9 @@ import '../../services/privacy_service.dart';
 import '../../services/preview/policy.dart';
 import '../../services/preview/preview_service.dart';
 import '../../services/wallet_service.dart';
+import '../../theme/argus_theme.dart';
 import '../settings/preview_settings_page.dart';
+import 'artwork_preview_viewer.dart';
 
 /// Created only in token details. Building this widget never loads media.
 class RemotePreview extends StatefulWidget {
@@ -20,6 +22,7 @@ class _RemotePreviewState extends State<RemotePreview>
   late final _wallet = walletService.currentWalletId.value;
   PreviewJob? _job;
   ui.Image? _image;
+  final _generation = ValueNotifier<int>(0);
   String? _message;
   bool _loading = false, _concealed = false;
   bool get _allowed =>
@@ -29,7 +32,27 @@ class _RemotePreviewState extends State<RemotePreview>
       walletService.isUnlocked &&
       _wallet == walletService.currentWalletId.value &&
       networkController.activeUrl != null &&
-      !previewSettings.never;
+      !previewSettings.never &&
+      widget.token.declaredAssetKind == DeclaredAssetKind.picture &&
+      widget.token.metadataState != MetadataState.invalid &&
+      widget.token.metadataState != MetadataState.conflict;
+
+  @override
+  void didUpdateWidget(RemotePreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Consent belongs to the exact holding and media commitment presented.
+    // A rebuild must not turn approval for one artwork into a different fetch.
+    final old = oldWidget.token, token = widget.token;
+    if (old.id != token.id ||
+        old.iconUrl != token.iconUrl ||
+        old.issuanceHash != token.issuanceHash ||
+        old.declaredAssetKind != token.declaredAssetKind ||
+        old.metadataState != token.metadataState ||
+        old.hasStealth != token.hasStealth) {
+      _clear();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -42,6 +65,7 @@ class _RemotePreviewState extends State<RemotePreview>
   }
 
   void _clear() {
+    _generation.value++;
     _job?.cancel();
     _job = null;
     _image?.dispose();
@@ -84,6 +108,7 @@ class _RemotePreviewState extends State<RemotePreview>
     privacyService.removeListener(_securityChanged);
     networkController.removeListener(_securityChanged);
     previewSettings.removeListener(_settingsChanged);
+    _generation.dispose();
     super.dispose();
   }
 
@@ -108,11 +133,12 @@ class _RemotePreviewState extends State<RemotePreview>
       true;
   Future<void> _load() async {
     if (!_allowed || _loading) return;
+    final token = widget.token;
     final gateway = previewSettings.gateway;
     if (gateway == null) return;
     final revision = previewSettings.revision;
     try {
-      ipfsPath(widget.token.iconUrl ?? '');
+      ipfsPath(token.iconUrl ?? '');
     } catch (_) {
       return;
     }
@@ -124,7 +150,7 @@ class _RemotePreviewState extends State<RemotePreview>
       final yes = await _consent(
         'Load preview through ${Uri.parse(gateway).host}?',
         'This gateway can see your IP address and which artwork was requested. '
-            '${widget.token.hasStealth ? 'Loading may link this private holding to this connection. ' : ''}'
+            '${token.hasStealth ? 'Loading may link this private holding to this connection. ' : ''}'
             'Up to 5 MiB will be downloaded. Artwork may contain unsolicited or misleading content.',
         'Load preview',
       );
@@ -132,8 +158,8 @@ class _RemotePreviewState extends State<RemotePreview>
       if (!yes) return;
       final source = await job.fetch(
         gateway,
-        widget.token.iconUrl!,
-        widget.token.issuanceHash,
+        token.iconUrl!,
+        token.issuanceHash,
       );
       var withoutIntegrity = false;
       if (!source.info.matchesHash) {
@@ -173,6 +199,29 @@ class _RemotePreviewState extends State<RemotePreview>
     }
   }
 
+  Future<void> _expand() async {
+    if (!_allowed || _image == null) return;
+    // A clone shares the already bounded pixels; zoom never reloads the URI.
+    final image = _image!.clone();
+    final label = widget.token.label;
+    final integrity = _message ?? '';
+    final revision = previewSettings.revision;
+    final generation = _generation.value;
+    await showDialog<void>(
+      context: context,
+      useSafeArea: false,
+      builder: (_) => ArtworkPreviewViewer(
+        image: image,
+        label: label,
+        integrity: integrity,
+        walletId: _wallet,
+        settingsRevision: revision,
+        generation: _generation,
+        expectedGeneration: generation,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final token = widget.token;
@@ -202,17 +251,37 @@ class _RemotePreviewState extends State<RemotePreview>
           )
         else ...[
           if (_image != null)
-            RawImage(
-              image: _image,
-              width: 320,
-              height: 320,
-              fit: BoxFit.contain,
+            ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: Container(
+                width: double.infinity,
+                height: 280,
+                color: ArgusColors.of(context).inset,
+                child: RawImage(image: _image, fit: BoxFit.contain),
+              ),
             ),
-          if (_message != null) Text(_message!),
+          if (_message != null) ...[const SizedBox(height: 8), Text(_message!)],
+          if (_image != null)
+            Wrap(
+              spacing: 8,
+              children: [
+                TextButton.icon(
+                  onPressed: _expand,
+                  icon: const Icon(Icons.fullscreen, size: 20),
+                  label: const Text('View artwork'),
+                ),
+                TextButton.icon(
+                  onPressed: () => setState(_clear),
+                  icon: const Icon(Icons.visibility_off_outlined, size: 18),
+                  label: const Text('Hide preview'),
+                ),
+              ],
+            ),
           if (_image == null)
-            TextButton(
+            OutlinedButton.icon(
               onPressed: _loading ? null : _load,
-              child: Text(_loading ? 'Loading preview…' : 'Load preview'),
+              icon: const Icon(Icons.image_outlined, size: 18),
+              label: Text(_loading ? 'Loading preview…' : 'Load preview'),
             ),
           if (_loading)
             TextButton(

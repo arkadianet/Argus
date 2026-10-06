@@ -19,7 +19,8 @@ class TokenDraft {
 }
 
 /// One recipient as typed into the form, before parsing. ERG and any
-/// number of tokens travel in the recipient's one box.
+/// number of tokens travel to the recipient; the core splits large bundles
+/// into valid boxes and funds their minimum ERG before review.
 class RecipientDraft {
   RecipientDraft({
     required this.address,
@@ -28,9 +29,10 @@ class RecipientDraft {
     String? tokenAmountText,
     List<TokenDraft> tokens = const [],
   }) : tokens = [
-          if (tokenId != null && tokenId.isNotEmpty) TokenDraft(tokenId, tokenAmountText),
-          ...tokens,
-        ];
+         if (tokenId != null && tokenId.isNotEmpty)
+           TokenDraft(tokenId, tokenAmountText),
+         ...tokens,
+       ];
 
   final String address;
   final String ergText;
@@ -47,6 +49,7 @@ List<Map<String, dynamic>> buildRecipients(
   required List<TokenBalance> tokens,
 }) {
   final out = <Map<String, dynamic>>[];
+  final allocated = <String, BigInt>{};
   for (var i = 0; i < drafts.length; i++) {
     final d = drafts[i];
     final who = drafts.length > 1 ? 'Recipient ${i + 1}: ' : '';
@@ -54,7 +57,9 @@ List<Map<String, dynamic>> buildRecipients(
     if (!looksLikeRecipient(address)) {
       throw SendFormException('${who}not an Ergo or stealth address');
     }
-    final nano = parseErgToNano(d.ergText);
+    final nano = d.tokens.isNotEmpty && d.ergText.trim().isEmpty
+        ? minBoxNano
+        : parseErgToNano(d.ergText);
     if (nano == null || nano < minBoxNano) {
       throw SendFormException(
         '${who}minimum ${formatErg(minBoxNano, unit: false)} ERG',
@@ -90,18 +95,22 @@ List<Map<String, dynamic>> buildRecipients(
       } else {
         final parsed = parseDecimalToBase(td.amountText ?? '', token.decimals);
         if (parsed == null || parsed <= 0) {
-          throw SendFormException('${who}enter a token amount for ${token.label}');
+          throw SendFormException(
+            '${who}enter a token amount for ${token.label}',
+          );
         }
         amount = parsed;
       }
-      final total = (wanted[tokenId] ?? 0) + amount;
-      if (total > token.amount) {
+      final total = BigInt.from(wanted[tokenId] ?? 0) + BigInt.from(amount);
+      final sent = (allocated[tokenId] ?? BigInt.zero) + BigInt.from(amount);
+      if (sent > BigInt.from(token.amount)) {
         throw SendFormException(
           '${who}you hold ${formatTokenAmount(token.amount, token.decimals)} '
-          '${token.label}',
+          '${token.label} in total across all recipients',
         );
       }
-      wanted[tokenId] = total;
+      wanted[tokenId] = total.toInt();
+      allocated[tokenId] = sent;
     }
     if (wanted.isNotEmpty) {
       entry['tokens'] = [
@@ -118,10 +127,28 @@ List<Map<String, dynamic>> buildRecipients(
   return out;
 }
 
+/// ERG available for the main recipient after reserving the rest of this send.
+/// A token-paid fee has no ERG cost to the wallet; its token cost is quoted by
+/// the core and shown in the confirmation sheet.
+int maxRecipientNanoErg({
+  required int spendableNano,
+  required int minerFeeNano,
+  required int appFeeNano,
+  required int otherRecipientsNano,
+  bool feePaidInToken = false,
+  int changeReserveNano = minBoxNano,
+}) =>
+    spendableNano -
+    (feePaidInToken ? 0 : minerFeeNano) -
+    appFeeNano -
+    otherRecipientsNano -
+    changeReserveNano;
+
 /// Whether any recipient carries more than one token, which only the
 /// multi-recipient builder can do.
 bool needsMultiBuilder(List<Map<String, dynamic>> recipients) =>
-    recipients.length > 1 || recipients.any((r) => ((r['tokens'] as List?)?.length ?? 0) > 1);
+    recipients.length > 1 ||
+    recipients.any((r) => ((r['tokens'] as List?)?.length ?? 0) > 1);
 
 /// Total nanoERG leaving the wallet across [recipients], before the fee.
 int totalNanoErg(List<Map<String, dynamic>> recipients) {
@@ -156,11 +183,9 @@ Future<List<Map<String, dynamic>>> resolveStealthRecipients(
         'That stealth address is not valid (checksum failed)',
       );
     }
-    out.add({
-      ...r,
-      'address': payTo,
-      'stealth_address': published,
-    }..remove('stealth'));
+    out.add(
+      {...r, 'address': payTo, 'stealth_address': published}..remove('stealth'),
+    );
   }
   return out;
 }

@@ -219,6 +219,9 @@ impl Server {
                     std::thread::sleep(Duration::from_millis(1));
                     continue;
                 };
+                // Windows accepted sockets inherit the listener's mode.
+                // The timeout-based HTTP reader below expects blocking IO.
+                socket.set_nonblocking(false).unwrap();
                 let reply = reply.clone();
                 workers.push(std::thread::spawn(move || {
                     socket
@@ -284,7 +287,13 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        self.thread.take().unwrap().join().unwrap();
+        if let Err(panic) = self.thread.take().unwrap().join() {
+            // Preserve an existing test failure instead of aborting the
+            // entire test binary with a second panic during cleanup.
+            if !std::thread::panicking() {
+                std::panic::resume_unwind(panic);
+            }
+        }
     }
 }
 
