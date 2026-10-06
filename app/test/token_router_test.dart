@@ -1,5 +1,7 @@
+import 'package:argus_wallet/services/amm_service.dart';
 import 'package:argus_wallet/services/token_router.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class FakeProvider implements RouteProvider {
   FakeProvider(this.protocol, {required this.tokens, required this.costs, this.failBuild = false});
@@ -87,5 +89,17 @@ void main() {
       () => r.build('usd', wanted: 1, held: 0, recipient: 'r', changeAddress: 'c', spendAddresses: ['s']),
       throwsA(isA<NoRouteException>().having((e) => e.message, 'message', contains('Dexy down'))),
     );
+  });
+
+  test('only ERG pools make a token buyable through Spectrum', () async {
+    SharedPreferences.setMockInitialValues({});
+    await AmmPoolCache.save(const AmmPoolSet(truncated: false, tokens: {}, pools: [
+      {'pool_type': 'N2T', 'erg_reserves': 500000000000, 'token_y': {'token_id': 'erg-pool-token', 'amount': 5}},
+      // A T2T pool box carries storage-rent ERG; that is not an ERG side.
+      {'pool_type': 'T2T', 'erg_reserves': 1000000, 'token_x': {'token_id': 'x', 'amount': 1}, 'token_y': {'token_id': 't2t-only', 'amount': 5}},
+    ]));
+    expect(await spectrumPoolTokens(), {'erg-pool-token'});
+    final ids = (await buyableTokens()).where((t) => t.protocol == 'Spectrum').map((t) => t.id).toList();
+    expect(ids, ['erg-pool-token']);
   });
 }
