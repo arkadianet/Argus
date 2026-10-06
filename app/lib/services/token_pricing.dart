@@ -50,11 +50,18 @@ List<String> coingeckoIdsFor(PriceSource source) => [
 const poolDepthFloorErg = 50.0;
 
 class TokenPrice {
-  const TokenPrice({required this.usd, required this.via, this.depthErg, this.countsInTotal = true, this.staleAge});
+  const TokenPrice({
+    required this.usd,
+    required this.via,
+    this.depthErg,
+    this.countsInTotal = true,
+    this.staleAge,
+    this.decimals,
+  });
 
   /// A price whose only source has stopped publishing: shown with its age
   /// on the row, never counted in totals.
-  const TokenPrice.stale({required this.usd, required String source, required String age})
+  const TokenPrice.stale({required this.usd, required String source, required String age, this.decimals})
       : via = '$source, $age old',
         depthErg = null,
         countsInTotal = false,
@@ -62,6 +69,14 @@ class TokenPrice {
 
   /// USD per whole token (decimals applied).
   final double usd;
+
+  /// The token's decimals [usd] is per whole token at, from the one token
+  /// lookup. A holding is valued by its base units at this scale
+  /// ([holdingUsd]), so one recorded before its token's scale was learned,
+  /// or in another wallet's older snapshot, cannot be valued at a wrong
+  /// one. Null for a price whose scale nothing reported; such a holding
+  /// falls back to its own decimals.
+  final int? decimals;
 
   /// Human label of the source, e.g. "SigmaUSD oracle", "Spectrum pool",
   /// "peg"; a stale price says its age here too.
@@ -181,7 +196,11 @@ class PricingInputs {
   /// nanoERG per SigRSV from the AgeUSD bank state.
   final int? sigRsvPriceNano;
 
-  final int Function(String tokenId) decimalsOf;
+  /// A token's decimals from the one token lookup, or null when nothing
+  /// knows its scale. A pool quote is per base unit: such a token is left
+  /// unpriced, and so out of totals, rather than priced per base unit as if
+  /// that were a whole token.
+  final int? Function(String tokenId) decimalsOf;
 
   /// A token's display name for "via" labels; null falls back to its id.
   final String? Function(String tokenId)? nameOf;
@@ -304,15 +323,21 @@ PricingResult priceTokens(PricingInputs inp) {
   final usdPerErgNow = ergUsd;
 
   final prices = <String, TokenPrice>{};
-  TokenPrice priced(_Quote q) => q.fresh
-      ? TokenPrice(usd: q.usd, via: q.via)
-      : TokenPrice.stale(usd: q.usd, source: q.via, age: ageText(q.ageBlocks ?? 0));
+  // Prices from a feed or a peg are per whole token by definition; their
+  // scale still comes from the lookup, for valuing holdings at it.
+  TokenPrice priced(String id, _Quote q) => q.fresh
+      ? TokenPrice(usd: q.usd, via: q.via, decimals: inp.decimalsOf(id))
+      : TokenPrice.stale(usd: q.usd, source: q.via, age: ageText(q.ageBlocks ?? 0), decimals: inp.decimalsOf(id));
 
-  prices[SigmaUsdTokens.sigUsd] = const TokenPrice(usd: 1, via: 'USD peg');
-  prices[DexyIds.use] = const TokenPrice(usd: 1, via: 'USD peg');
+  prices[SigmaUsdTokens.sigUsd] = TokenPrice(usd: 1, via: 'USD peg', decimals: inp.decimalsOf(SigmaUsdTokens.sigUsd));
+  prices[DexyIds.use] = TokenPrice(usd: 1, via: 'USD peg', decimals: inp.decimalsOf(DexyIds.use));
   final rsv = inp.sigRsvPriceNano;
   if (rsv != null && rsv > 0) {
-    prices[SigmaUsdTokens.sigRsv] = TokenPrice(usd: rsv / 1e9 * usdPerErgNow, via: 'AgeUSD bank');
+    prices[SigmaUsdTokens.sigRsv] = TokenPrice(
+      usd: rsv / 1e9 * usdPerErgNow,
+      via: 'AgeUSD bank',
+      decimals: inp.decimalsOf(SigmaUsdTokens.sigRsv),
+    );
   }
 
   // DexyGold is one milligram of gold: the Dexy oracle quotes nanoERG per
@@ -323,7 +348,7 @@ PricingResult priceTokens(PricingInputs inp) {
     if (inp.source == PriceSource.oracle)
       if (fromAvl('XAU_USD', scale: 1 / mgPerTroyOunce) case final q?) q,
   ]..sort((a, b) => (a.ageBlocks ?? 0).compareTo(b.ageBlocks ?? 0));
-  if (_pick(gold) case final q?) prices[DexyIds.gold] = priced(q);
+  if (_pick(gold) case final q?) prices[DexyIds.gold] = priced(DexyIds.gold, q);
 
   // Wrapped majors: the AVL oracle only while it is current; otherwise
   // their Spectrum pools below, and a stale oracle price only as a last
@@ -335,13 +360,15 @@ PricingResult priceTokens(PricingInputs inp) {
         final q = fromAvl(entry.value.feed);
         if (q == null) continue;
         if (q.fresh) {
-          prices[entry.key] = priced(q);
+          prices[entry.key] = priced(entry.key, q);
         } else {
           staleMajors[entry.key] = q;
         }
       case PriceSource.coingecko:
         final usd = inp.coingeckoUsd[entry.value.coingeckoId];
-        if (usd != null && usd > 0) prices[entry.key] = TokenPrice(usd: usd, via: 'CoinGecko');
+        if (usd != null && usd > 0) {
+          prices[entry.key] = TokenPrice(usd: usd, via: 'CoinGecko', decimals: inp.decimalsOf(entry.key));
+        }
       case PriceSource.spectrum:
         break;
     }
@@ -351,31 +378,39 @@ PricingResult priceTokens(PricingInputs inp) {
   // of any pool that happens to trade the LP token itself.
   for (final e in inp.poolPrices.lpTokens.entries) {
     if (prices.containsKey(e.key)) continue;
+    final decimals = inp.decimalsOf(e.key);
+    if (decimals == null) continue;
     prices[e.key] = TokenPrice(
-      usd: _quoteUsd(e.value, inp.decimalsOf(e.key), usdPerErgNow),
+      usd: _quoteUsd(e.value, decimals, usdPerErgNow),
       via: 'Spectrum LP share',
       depthErg: e.value.depthNano / 1e9,
       countsInTotal: e.value.trusted,
+      decimals: decimals,
     );
   }
 
   for (final e in inp.poolPrices.tokens.entries) {
     if (prices.containsKey(e.key)) continue;
+    // Pool quotes are per base unit: without the token's scale there is no
+    // price per token, only a guess.
+    final decimals = inp.decimalsOf(e.key);
+    if (decimals == null) continue;
     final q = e.value;
     final viaId = q.viaTokenId;
     final via = viaId == null
         ? 'Spectrum pool'
         : 'Spectrum pools via ${inp.nameOf?.call(viaId) ?? '${viaId.substring(0, 8)}…'}';
     prices[e.key] = TokenPrice(
-      usd: _quoteUsd(q, inp.decimalsOf(e.key), usdPerErgNow),
+      usd: _quoteUsd(q, decimals, usdPerErgNow),
       via: via,
       depthErg: q.depthNano / 1e9,
       countsInTotal: q.trusted,
+      decimals: decimals,
     );
   }
 
   for (final e in staleMajors.entries) {
-    prices.putIfAbsent(e.key, () => priced(e.value));
+    prices.putIfAbsent(e.key, () => priced(e.key, e.value));
   }
   return PricingResult(ergUsd: usdPerErgNow, ergVia: ergVia, prices: prices, ergStaleAge: ergStaleAge);
 }
@@ -388,7 +423,8 @@ class HoldingsValue {
   final double usd;
   final int priced;
 
-  /// Tokens with no price at all.
+  /// Tokens with no price at all: no source prices them, or nothing knows
+  /// their scale.
   final int unpriced;
 
   /// Tokens with a pool price that is not counted (unverified).
@@ -417,11 +453,13 @@ HoldingsValue holdingsValue({
       continue;
     }
     priced++;
-    usd += t.amount / _pow10(t.decimals) * p.usd;
+    usd += t.amount / _pow10(p.decimals ?? t.decimals) * p.usd;
   }
   return HoldingsValue(usd: usd, priced: priced, unpriced: unpriced, excluded: excluded);
 }
 
-/// USD value of one holding, or null when unpriced.
+/// USD value of one holding, or null when unpriced. [amount] is base
+/// units; they are scaled by the price's own decimals when it has them,
+/// else by the holding's [decimals].
 double? holdingUsd({required int amount, required int decimals, required TokenPrice? price}) =>
-    price == null ? null : amount / _pow10(decimals) * price.usd;
+    price == null ? null : amount / _pow10(price.decimals ?? decimals) * price.usd;

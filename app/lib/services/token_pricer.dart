@@ -11,8 +11,10 @@ import 'network_controller.dart';
 import 'oracle_feeds.dart';
 import 'oracle_pool.dart';
 import 'sigmausd_service.dart';
+import 'token_metadata.dart';
 import 'token_pricing.dart';
 import 'verified_tokens.dart';
+import 'wallet_service.dart';
 
 /// Everything the pricer needs from the outside, injectable for tests.
 class PricerDeps {
@@ -30,10 +32,16 @@ class PricerDeps {
     BoxPage? boxPage,
     Future<Map<String, dynamic>> Function(String fiat, int days)? coingeckoChart,
     DateTime Function()? clock,
+    int? Function(String tokenId)? decimalsOf,
+    String? Function(String tokenId)? nameOf,
+    Listenable? metadataChanges,
   })  : oracleReading = oracleReading ?? ((node, feed) => fetchOracleReading(node, feed)),
         boxPage = boxPage ?? fetchBoxPage,
         coingeckoChart = coingeckoChart ?? ((fiat, days) => fetchCoingeckoChart(fiat, days)),
-        clock = clock ?? DateTime.now;
+        clock = clock ?? DateTime.now,
+        decimalsOf = decimalsOf ?? ((id) => tokenDecimals(id)),
+        nameOf = nameOf ?? ((id) => tokenName(id)),
+        metadataChanges = metadataChanges ?? walletService.metadataChanges;
 
   final String? Function() nodeUrl;
   final int? Function() tipHeight;
@@ -61,11 +69,26 @@ class PricerDeps {
   /// CoinGecko's ERG market chart, for price history under that source.
   final Future<Map<String, dynamic>> Function(String fiat, int days) coingeckoChart;
   final DateTime Function() clock;
+
+  /// A token's decimals from the one token lookup (this wallet's
+  /// descriptors, the public pool-token catalog, the curated registry, the
+  /// legacy table, and this session's explicit loads), or null when none of
+  /// them knows its scale. Every price is converted at this scale.
+  final int? Function(String tokenId) decimalsOf;
+
+  /// A token's name from the same lookup, for via labels.
+  final String? Function(String tokenId) nameOf;
+
+  /// Fires when the lookup learns a name or a scale, so prices it held back
+  /// are worked out again without another read.
+  final Listenable metadataChanges;
 }
 
 /// Prices every token the wallet can see, from the source the user picked.
 class TokenPricer extends ChangeNotifier {
-  TokenPricer(this._deps);
+  TokenPricer(this._deps) {
+    _deps.metadataChanges.addListener(_reprice);
+  }
 
   static const _prefKey = 'argus_price_source';
   static const refreshTtl = Duration(minutes: 5);
@@ -94,6 +117,30 @@ class TokenPricer extends ChangeNotifier {
   /// whose history the Spectrum source charts.
   String? _sigUsdPoolId;
 
+  /// What the visible prices were last worked out from, and for which
+  /// source generation: when the token lookup learns a scale, the prices
+  /// are worked out again from these instead of waiting for the next read.
+  PricingInputs? _lastInputs;
+  int _lastInputsGen = -1;
+
+  /// A token whose scale was unknown at the last refresh was left unpriced;
+  /// once the lookup knows it, price it from the same quotes.
+  void _reprice() {
+    final inputs = _lastInputs;
+    if (inputs == null || _lastInputsGen != _gen) return;
+    final fresh = priceTokens(inputs);
+    if (fresh.ergUsd == null) return;
+    result = fresh;
+    stale = pricesAreOld || result.ergStale;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _deps.metadataChanges.removeListener(_reprice);
+    super.dispose();
+  }
+
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     source = PriceSource.fromId(prefs.getString(_prefKey));
@@ -106,6 +153,7 @@ class TokenPricer extends ChangeNotifier {
     source = s;
     result = const PricingResult(ergUsd: null, ergVia: null, prices: {});
     _fetchedAt = null;
+    _lastInputs = null;
     _gen++;
     notifyListeners();
     final prefs = await SharedPreferences.getInstance();
@@ -193,26 +241,30 @@ class TokenPricer extends ChangeNotifier {
         for (final e in gecko.entries)
           if (e.value['usd'] != null) e.key: e.value['usd']!,
       };
-      final fresh = priceTokens(
-        PricingInputs(
-          source: src,
-          oracle: oracle,
-          oracles: readings,
-          tipHeight: _deps.tipHeight(),
-          coingeckoUsd: geckoUsd,
-          poolPrices: book,
-          sigRsvPriceNano: sigRsv,
-          decimalsOf: (id) =>
-              pools?.tokens[id]?.decimals ?? knownToken(id)?.decimals ?? 0,
-          nameOf: (id) => knownToken(id)?.ticker ?? pools?.tokens[id]?.name,
-        ),
+      final inputs = PricingInputs(
+        source: src,
+        oracle: oracle,
+        oracles: readings,
+        tipHeight: _deps.tipHeight(),
+        coingeckoUsd: geckoUsd,
+        poolPrices: book,
+        sigRsvPriceNano: sigRsv,
+        // The one token lookup, read when the prices are worked out: a held
+        // token the public catalog has not reached is still scaled by this
+        // wallet's own descriptor, and one nothing knows is left unpriced
+        // rather than priced per base unit.
+        decimalsOf: _deps.decimalsOf,
+        nameOf: (id) => knownToken(id)?.ticker ?? _deps.nameOf(id) ?? pools?.tokens[id]?.name,
       );
+      final fresh = priceTokens(inputs);
       _sigUsdPoolId = book.tokens[SigmaUsdTokens.sigUsd]?.poolId ?? _sigUsdPoolId;
       // A source that momentarily answers with nothing must not blank every
       // price in the wallet. Keep the last good result and say it is old.
       if (fresh.ergUsd != null || result.ergUsd == null) {
         result = fresh;
         pricesAreOld = false;
+        _lastInputs = inputs;
+        _lastInputsGen = gen;
       } else {
         pricesAreOld = true;
       }
