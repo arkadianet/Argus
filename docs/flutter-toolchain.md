@@ -32,14 +32,43 @@ Checked the pub.dev package API and published archives on 2026-09-15:
 
 Wait for a compatible upstream release, then update the relevant transitive
 packages and verify hooks on the proposed SDK and supported platform builds.
-Do not broaden this into a `share_plus` or FRB upgrade: the
+Do not broaden this into a `share_plus` upgrade: the
 [existing dependency assessment](superpowers/specs/2026-09-02-argus-future-work.md)
 records that `share_plus` 13.3.0 fails to compile Android sources in this Gradle
-setup, and FRB requires matching codegen and native rebuilds. Those upgrades
-need separate Android/toolchain work and validation.
+setup, which needs separate Android work and validation. (FRB has since been
+upgraded on its own; see below.)
 
 Verified the CI-only change with an unmodified writable copy of Flutter 3.41.2:
 `cd app && flutter pub get --enforce-lockfile` passed, `flutter analyze` reported
 no issues, and `flutter test` passed 884 tests with one skipped. SDK, pub cache,
 temporary files and logs were kept in this worktree because the installed SDK
 and user cache are read-only in the sandbox.
+
+## October 2026 flutter_rust_bridge 2.13.0
+
+Requested together with updating every Rust crate and the Rust toolchain
+(now 1.99.0 in `rust/rust-toolchain.toml` and CI). FRB moved from 2.11.1 to
+2.13.0, the newest stable release on 2026-10-06; 2.14.0 is still in beta.
+Three pins must always name the same version:
+
+- the Rust crate: `flutter_rust_bridge = "=2.13.0"` in `rust/Cargo.toml` and
+  `rust/crates/wallet-ffi/Cargo.toml`;
+- the Dart package: `flutter_rust_bridge: 2.13.0` in `app/pubspec.yaml`
+  (resolved with `flutter pub upgrade flutter_rust_bridge`, which changed only
+  that package in `app/pubspec.lock`);
+- the codegen CI installs (`cargo install flutter_rust_bridge_codegen
+  --version 2.13.0 --locked`). cargo-expand stays at 1.0.110: FRB only needs
+  some version installed.
+
+Bindings were regenerated from the repository root with the 2.13.0 codegen.
+The API did not change, so `rustContentHash` is unchanged; the generated code
+differs in version strings, fully qualified `Ok` in the Rust wire functions,
+extra lint allowances and a `wasmBindgenName` field in the Dart loader
+config. Rust 1.99 also renames a derive helper listed in a comment in
+`app/lib/bridge/api.dart` (`assert_fields_are_eq`), so regenerating with an
+older toolchain produces a diff.
+
+The tracked `jniLibs` were built with FRB 2.11.1 and are now stale: rebuild
+them with `scripts/build_android.sh` before running the app, and let
+`scripts/release_check.sh libs` confirm them before a release. The init-time
+content hash check would not catch the mismatch on its own.

@@ -1,6 +1,6 @@
 //! Diagnostic for rank 6: the pinned API cannot refresh fresh health semantics
 //! while retaining transport. This test protects the reason for rejecting it.
-use ergo_node_interface::NodeInterface;
+use crate::node_interface::NodeInterface;
 use std::io::{Read, Write};
 
 #[tokio::test]

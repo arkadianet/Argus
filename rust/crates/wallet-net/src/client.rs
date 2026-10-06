@@ -5,7 +5,7 @@ use ergo_lib::ergo_chain_types::{Header, PreHeader};
 use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
 use ergo_lib::ergotree_ir::chain::address::{AddressEncoder, NetworkPrefix};
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
-use ergo_node_interface::NodeInterface;
+use crate::node_interface::NodeInterface;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -134,7 +134,7 @@ pub fn node_urls(preferred: Option<String>) -> Vec<String> {
 
 pub async fn probe_height(url: &str) -> Result<u64, String> {
     let info_url = join_url(url, "info");
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(Duration::from_secs(8))
         .build()
         .map_err(|e| e.to_string())?;
@@ -548,7 +548,7 @@ impl ErgoNodeClient {
 
     pub async fn parameters(&self) -> Result<Parameters, String> {
         let url = join_url(&self.url, "info");
-        let text = reqwest::Client::new()
+        let text = crate::http::client()
             .get(&url)
             .send()
             .await
@@ -1169,7 +1169,7 @@ fn token_info_urls(token_id: &str, explorer_url: Option<&str>) -> Vec<String> {
 }
 
 async fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(Duration::from_secs(8))
         .build()
         .map_err(|e| e.to_string())?;

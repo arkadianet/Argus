@@ -43,7 +43,8 @@ pub fn parse_rent_parameters(info: &serde_json::Value) -> Result<RentParameters,
 /// the same response, so both come from this one read.
 pub async fn fetch_rent_parameters(node_url: &str) -> Result<RentParameters, String> {
     let url = format!("{}/info", node_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
+    // Argus's TLS setup: a plain reqwest 0.13 builder has no crypto provider.
+    let client = crate::http::client_builder()
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;

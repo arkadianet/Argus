@@ -10,7 +10,7 @@ use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
 use ergo_tx::{build_send_tx_with_fee, DevFeeConfig};
 use ergopay_core::reduce_transaction_with_context;
 use once_cell::sync::Lazy;
-use rand::RngCore;
+use rand::{rngs::SysRng, TryRng};
 use wallet_core::seed::MnemonicPhrase;
 use wallet_core::spend::{select_exact, select_preferring_one_pocket};
 use wallet_core::wallet::WalletHandle;
@@ -90,7 +90,7 @@ fn store_preparation(prep: CachedPreparation) -> u64 {
     let mut cache = recover(PREPARATIONS.lock());
     cache.retain(|_, p| p.handle_id != prep.handle_id);
     loop {
-        let id = (rand::rngs::OsRng.next_u64() & 0x7FFF_FFFF_FFFF_FFFF).max(1);
+        let id = (SysRng.try_next_u64().expect("OS RNG") & 0x7FFF_FFFF_FFFF_FFFF).max(1);
         if let std::collections::hash_map::Entry::Vacant(e) = cache.entry(id) {
             e.insert(prep);
             return id;
@@ -183,7 +183,7 @@ fn apply_custom_fee(
 fn register_handle(handle: WalletHandle) -> u64 {
     let mut handles = recover(HANDLES.lock());
     loop {
-        let id = (rand::rngs::OsRng.next_u64() & 0x7FFF_FFFF_FFFF_FFFF).max(1);
+        let id = (SysRng.try_next_u64().expect("OS RNG") & 0x7FFF_FFFF_FFFF_FFFF).max(1);
         if let std::collections::hash_map::Entry::Vacant(e) = handles.entry(id) {
             e.insert(handle);
             return id;
@@ -738,7 +738,7 @@ pub fn generate_mnemonic(strength: u32) -> Result<String, String> {
     };
     let byte_len = (strength / 8) as usize;
     let mut entropy = vec![0u8; byte_len];
-    rand::rngs::OsRng.fill_bytes(&mut entropy);
+    SysRng.try_fill_bytes(&mut entropy).expect("OS RNG");
     let generator = MnemonicGenerator::new(Language::English, strength)
         .map_err(|e| ArgusError::InvalidMnemonic(format!("{e:?}")).to_json_string())?;
     let phrase = generator
