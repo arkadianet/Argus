@@ -65,11 +65,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 hex = "0.4"
 base16 = "0.2"
 zeroize = { version = "1.9", features = ["zeroize_derive"] }
-sha2 = "0.10"
-hmac = "0.12"
+sha2 = "0.11"
+hmac = "0.13"
 
 # ─── KDF + encryption ────────────────────────────────────────────────────
-argon2 = "0.5"
+argon2 = "0.6"
 aes-gcm = "0.10"
 rand = "0.8"
 
