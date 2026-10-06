@@ -7,6 +7,7 @@
 // ignore_for_file: argument_type_not_assignable
 
 import 'api.dart';
+import 'api/storage_rent.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
