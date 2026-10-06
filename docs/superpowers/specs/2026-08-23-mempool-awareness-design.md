@@ -69,9 +69,9 @@ Status: implemented (see *Status, 2026-10-06* below); three decisions changed
 
 ### Not done
 
-- Watched single addresses have no activity screen to show pending rows in;
-  the data path (`loadHistory([address])`, `get_balance`'s `summary`) is
-  ready.
+- Watched single addresses show their activity, pending first, from
+  Settings → Watch-only; where the home screens show their balance, the
+  pending line is not wired yet (`get_balance` returns the `summary` for it).
 - Watched accounts sum per-address splits, so a chain of spends across two of
   their addresses can count the middle box twice in the pending line (their
   history screen is valued correctly). Read once across the account to fix.
