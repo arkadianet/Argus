@@ -96,7 +96,7 @@ zerojoin = { path = "crates/vendor/protocols/zerojoin" }
 
 # ─── Misc ────────────────────────────────────────────────────────────────
 indexmap = "2"
-num-bigint = "0.4"
+num-bigint = "0.5"
 num-traits = "0.2"
 
 # Patch ergo crates to the pinned SHA (mirrors Citadel's patch approach)

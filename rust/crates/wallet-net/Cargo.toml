@@ -17,6 +17,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 # ─── Misc ────────────────────────────────────────────────────────────────
 tracing = { workspace = true }
-num-bigint = { workspace = true }
+# Not the workspace num-bigint: sigma-rust's AutolykosSolution.pow_distance is a
+# num-bigint 0.4 BigUint.
+num-bigint = "0.4"
 base16 = "0.2"
 reqwest = { workspace = true }
