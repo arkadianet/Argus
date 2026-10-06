@@ -14,6 +14,7 @@ import 'services/spend_policy.dart';
 import 'services/stealth_service.dart';
 import 'services/update_service.dart';
 import 'services/watch_only_service.dart';
+import 'services/watched_token_meta.dart';
 import 'services/wallet_service.dart';
 import 'services/wallet_sync_controller.dart';
 import 'theme/argus_theme.dart';
@@ -62,6 +63,8 @@ Future<void> main() async {
     tokenPricer.load().catchError((_) {}),
   ]);
   networkController.priceRefresher = tokenPricer.refresh;
+  // Watched addresses and accounts name their holdings as seed wallets do.
+  watchedTokenMeta.attach();
   await MixBackground.init();
   runApp(const ArgusApp());
   // Off until the user turns it on in About; then at most one request a day.

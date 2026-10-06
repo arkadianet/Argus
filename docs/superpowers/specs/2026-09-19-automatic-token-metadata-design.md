@@ -225,6 +225,31 @@ decimals: two would turn a fee-only row into "0 ERG". The line may take two
 lines, and above 1.4x text the time and status move under it (the asset row's
 amount likewise), so the names stay legible at large text sizes.
 
+### Watched wallets (2026-10-07)
+
+Watched addresses and watched extended-key accounts became first-class
+wallets (roadmap/structure, A3), but only seed wallets ran the name pass,
+so a watched wallet's page listed its holdings as ids in raw units. They
+are now resolved automatically under the same rule: only from the node that
+served the wallet's balances, never the explorer or another node, and only
+about ids that node just served (`WalletService.resolveWatchedHoldings`,
+triggered by `watched_token_meta.dart`). A plain balance read cannot say
+whether a fallback node answered, so the pass reads the wallet's balances
+through the public sync read, which names the node that did, and asks that
+node: for a watched address its one address, for an account the addresses
+its last scan found holding tokens. A watched address's balance read (the
+overview's and its page's) or an account's finished scan triggers a pass
+when it shows a token nothing can scale yet and no node has already said
+does not exist.
+
+Results are stored per watched wallet (`argus_token_descriptors_v1_watched:`
+plus `address:` or `account:` and the wallet), never in a table shared
+across wallets, and dropped when the wallet stops being watched or the cache
+is cleared. The display lookup reads them below the open seed wallet's own
+descriptors, so a watched wallet's page, activity and prices are named and
+scaled; `cachedTokenMeta`, which seed wallets build and persist their
+holdings from, never does. The public pool-token catalog stays separate.
+
 ## Still open
 
 `rememberTokenMeta` now has a caller, but the legacy `argus_token_meta_v2`

@@ -811,7 +811,7 @@ class WalletService with WidgetsBindingObserver {
     // next sync to republish it. With nothing known — after "Clear
     // collectible cache" — the holding keeps what it was published with.
     if (holding.metadataState == MetadataState.unavailable) {
-      final known = cachedTokenMeta(holding.id);
+      final known = _displayLayers(holding.id);
       if (known != null) {
         return known.withHolding(
           holding.amount,
@@ -826,8 +826,263 @@ class WalletService with WidgetsBindingObserver {
   /// top, for screens that name a token by id. Display only: a session
   /// descriptor is memory-only and must never be copied into a holding,
   /// because holdings are persisted.
+  ///
+  /// Watched wallets' own descriptors sit below this wallet's: a watched
+  /// address or account names its holdings from them on its page, in its
+  /// activity and in its prices, and [cachedTokenMeta] — what a seed wallet
+  /// builds and persists its holdings from — never reads them.
   TokenBalance? displayTokenMeta(String id) =>
-      _descriptors[_descriptorKey(id)] ?? cachedTokenMeta(id);
+      _descriptors[_descriptorKey(id)] ?? _displayLayers(id);
+
+  /// The display lookup under this session's explicit loads: this wallet's
+  /// own descriptors, then watched wallets', then the public layers and
+  /// the legacy table.
+  TokenBalance? _displayLayers(String id) =>
+      _ownTokenMeta(id) ?? _watchedTokenMeta(id) ?? cachedTokenMeta(id);
+
+  TokenBalance? _ownTokenMeta(String id) {
+    final own = _tokenMeta[id];
+    return own != null && !identical(own, _legacyTokenMeta[id]) ? own : null;
+  }
+
+  // ── Watched wallets' token descriptors ──────────────────────────────────
+
+  /// What each watched wallet's holdings were resolved to, keyed by its
+  /// watched key ([watchedAddressKey], [watchedAccountKey]). Per wallet in
+  /// memory and in that wallet's own stored table, as a seed wallet's are,
+  /// never in an app-wide one: nothing on disk lists what two wallets have
+  /// in common. Read for display only ([displayTokenMeta]).
+  final Map<String, Map<String, CachedDescriptor>> _watchedTables = {};
+
+  /// Ids a watched wallet's node answered "no such token" for, per
+  /// `key|node`, so later passes this session do not ask again.
+  final Map<String, Set<String>> _watchedMisses = {};
+  final Map<String, int> _watchedCursors = {};
+
+  /// Watched wallets with a pass running: one at a time per wallet.
+  final Set<String> _watchedPasses = {};
+
+  /// Bumped when a watched wallet stops being watched or the caches are
+  /// wiped, so a pass or a load already running cannot write back.
+  final Map<String, int> _watchedGenerations = {};
+  int _watchedWipes = 0;
+
+  /// Told of every balance [getBalance] reads, with the node it asked. The
+  /// watched wallets' resolver (`watched_token_meta.dart`) listens here,
+  /// since the overview and a watched wallet's page read balances this way.
+  void Function(String address, Map<String, dynamic> balance, String? nodeUrl)?
+  onBalanceRead;
+
+  static String watchedAddressKey(String address) => 'address:$address';
+  static String watchedAccountKey(String key) => 'account:$key';
+  static String _watchedTableId(String key) => 'watched:$key';
+
+  /// Reads [key]'s stored table into memory, once.
+  Future<void> loadWatchedTokenTable(String key) async {
+    if (_watchedTables.containsKey(key)) return;
+    final generation = _watchedGenerations[key] ?? 0;
+    final wipes = _watchedWipes;
+    final loaded = await TokenDescriptorStore.load(_watchedTableId(key));
+    if ((_watchedGenerations[key] ?? 0) != generation ||
+        wipes != _watchedWipes ||
+        _watchedTables.containsKey(key)) {
+      return;
+    }
+    _watchedTables[key] = loaded;
+    if (loaded.isNotEmpty) metadataChanges.value++;
+  }
+
+  /// Drops a watched wallet's descriptors, in memory and on disk, once it
+  /// is no longer watched.
+  Future<void> forgetWatchedTokenTable(String key) async {
+    _watchedGenerations[key] = (_watchedGenerations[key] ?? 0) + 1;
+    final had = _watchedTables.remove(key)?.isNotEmpty ?? false;
+    _watchedMisses.removeWhere((k, _) => k.startsWith('$key|'));
+    _watchedCursors.remove(key);
+    await TokenDescriptorStore.clear(_watchedTableId(key));
+    if (had) metadataChanges.value++;
+  }
+
+  /// Whether a node already answered that [id] does not exist, for the
+  /// watched wallet [key]: asking again this session would only repeat it.
+  bool watchedMissed(String key, String id) => _watchedMisses.entries.any(
+    (e) => e.key.startsWith('$key|') && e.value.contains(id),
+  );
+
+  /// What a watched wallet's own descriptors say about [id], preferring a
+  /// complete one.
+  TokenBalance? _watchedTokenMeta(String id) {
+    CachedDescriptor? partial;
+    for (final table in _watchedTables.values) {
+      final d = table[id];
+      if (d == null) continue;
+      if (!d.incomplete) return _asBalance(d);
+      partial ??= d;
+    }
+    return partial == null ? null : _asBalance(partial);
+  }
+
+  /// A scale the wallet-independent layers (the pool catalog, the curated
+  /// registry, the legacy table) already give [id], so a watched wallet
+  /// has no need to ask about it.
+  bool _publiclyScaled(String id) {
+    final m = publicTokenMeta(id) ?? _legacyTokenMeta[id];
+    return m != null && m.decimalsEvidence != DecimalsEvidence.invalid;
+  }
+
+  /// How long a watched wallet's pass waits for the single metadata job
+  /// while a seed wallet's pass or an explicit request holds it.
+  static const _watchedJobPatience = Duration(minutes: 2);
+
+  /// The single metadata job for a watched wallet's request: taken at once
+  /// when free, from the catalog the moment its lookup ends, and otherwise
+  /// waited for, up to [_watchedJobPatience], while [keepGoing] holds.
+  Future<bool> _takeJobForWatched(bool Function() keepGoing) async {
+    final deadline = DateTime.now().add(_watchedJobPatience);
+    while (keepGoing()) {
+      if (!_metadataBusy) {
+        _metadataBusy = true;
+        return true;
+      }
+      if (_catalogJob != null) {
+        if (await _takeJobFromCatalog()) return true;
+        continue;
+      }
+      if (DateTime.now().isAfter(deadline)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return false;
+  }
+
+  /// Names what a watched wallet holds, under the rule a seed wallet's name
+  /// pass follows (alpha.59): only from the node that served the wallet's
+  /// balances, never the explorer or another node, and only about ids that
+  /// node just served, so asking tells it nothing new.
+  ///
+  /// A plain balance read cannot say whether a fallback node answered, so
+  /// the balances of [addresses] are read here through the public sync
+  /// read, which names the node that did ([loadPublicSyncInputs]), one
+  /// address at a time. Ids the public layers already scale are skipped.
+  /// What the node answers goes to [key]'s own table. At most
+  /// [maxTokenMetaPerSync] requests a pass, in the single metadata job,
+  /// while the app is in front; the screens repaint as names arrive.
+  Future<void> resolveWatchedHoldings(
+    String key,
+    List<String> addresses, {
+    String? nodeUrl,
+  }) async {
+    final targets = {
+      for (final a in addresses)
+        if (a.isNotEmpty) a,
+    }.toList();
+    if (targets.isEmpty || !_inForeground || !_watchedPasses.add(key)) return;
+    final generation = _watchedGenerations[key] ?? 0;
+    final wipes = _watchedWipes;
+    bool current() =>
+        _inForeground &&
+        wipes == _watchedWipes &&
+        (_watchedGenerations[key] ?? 0) == generation;
+    var learned = false;
+    try {
+      await loadWatchedTokenTable(key);
+      if (!current()) return;
+      final Map<String, dynamic> read;
+      try {
+        read = await loadPublicSyncInputs(targets, nodeUrl: nodeUrl);
+      } catch (_) {
+        return;
+      }
+      final servedBy = read['served_by'];
+      if (servedBy is! String || servedBy.isEmpty || !current()) return;
+      final served = <String>{
+        for (final balance in ((read['balances'] as Map?) ?? const {}).values)
+          if (balance is Map)
+            for (final t in (balance['tokens'] as List? ?? const []))
+              if (t is Map && t['id'] is String) t['id'] as String,
+      };
+      final misses = _watchedMisses.putIfAbsent('$key|$servedBy', () => {});
+      final own = _watchedTables[key] ?? const <String, CachedDescriptor>{};
+      final wanted = [
+        for (final id in served)
+          if (id.length == 64 &&
+              !misses.contains(id) &&
+              (own[id]?.incomplete ?? true) &&
+              !_publiclyScaled(id))
+            id,
+      ]..sort();
+      if (wanted.isEmpty) return;
+      // Backgrounding cancels a request in flight, as it does the wallet's.
+      _observeLifecycle();
+      final cursor = _watchedCursors[key] ?? 0;
+      final start = cursor % wanted.length;
+      final ordered = [...wanted.skip(start), ...wanted.take(start)];
+      var attempted = 0;
+      var consecutiveRetryable = 0;
+      var consecutiveNotFound = 0;
+      try {
+        for (final id in ordered) {
+          if (attempted >= maxTokenMetaPerSync || !current()) break;
+          if (!await _takeJobForWatched(current)) break;
+          if (!current()) {
+            _metadataBusy = false;
+            break;
+          }
+          attempted++;
+          try {
+            final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
+              tokenId: id,
+              providerUrl: servedBy,
+              providerIsNode: true,
+            );
+            if (!current()) break;
+            final m = jsonDecode(raw) as Map<String, dynamic>;
+            if (m['id'] != id) continue;
+            consecutiveRetryable = 0;
+            consecutiveNotFound = 0;
+            final table = _watchedTables.putIfAbsent(key, () => {});
+            table.remove(id);
+            while (table.length >= TokenDescriptorStore.maxEntries) {
+              table.remove(table.keys.first);
+            }
+            table[id] = CachedDescriptor.fromInspection(m, source: servedBy);
+            learned = true;
+            // Names show as they arrive, not after the whole pass.
+            metadataChanges.value++;
+          } catch (e) {
+            if (!current()) break;
+            final text = e.toString().toLowerCase();
+            if (e is MetadataBusyException || text.contains('already running')) {
+              break;
+            }
+            if (text.contains('cancelled') || text.contains('canceled')) break;
+            // As in the wallet's pass: only a definite answer is remembered.
+            if (!_looksDurableNegative(e)) {
+              if (++consecutiveRetryable >= maxConsecutiveRetryable) break;
+              continue;
+            }
+            consecutiveRetryable = 0;
+            misses.add(id);
+            if (_looksUnsupported(e)) break;
+            if (_looksNotFound(e)) {
+              if (++consecutiveNotFound >= notFoundRunBeforeUnsupported) break;
+            } else {
+              consecutiveNotFound = 0;
+            }
+          } finally {
+            _metadataBusy = false;
+          }
+        }
+      } finally {
+        _watchedCursors[key] = cursor + (attempted == 0 ? 1 : attempted);
+      }
+    } finally {
+      _watchedPasses.remove(key);
+      final table = _watchedTables[key];
+      if (learned && table != null && current()) {
+        await TokenDescriptorStore.save(_watchedTableId(key), Map.of(table));
+      }
+    }
+  }
 
   void clearSessionMetadata() {
     if (_metadataBusy) {
@@ -864,6 +1119,10 @@ class WalletService with WidgetsBindingObserver {
       _legacyTokenMeta.clear();
       _descriptorCache.clear();
       _metadataMisses.clear();
+      _watchedWipes++;
+      _watchedTables.clear();
+      _watchedMisses.clear();
+      _watchedCursors.clear();
       // A queued write would otherwise recreate what this just cleared.
       _pendingFlush.clear();
       _tokenMetaDirty = false;
@@ -2703,7 +2962,9 @@ class WalletService with WidgetsBindingObserver {
       address: address,
       nodeUrl: nodeUrl,
     );
-    return jsonDecode(raw) as Map<String, dynamic>;
+    final balance = jsonDecode(raw) as Map<String, dynamic>;
+    onBalanceRead?.call(address, balance, nodeUrl);
+    return balance;
   }
 
   Future<List<TokenBalance>> tokensFor(
