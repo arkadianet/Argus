@@ -1,8 +1,10 @@
 import 'package:argus_wallet/services/pending_balance.dart';
 import 'package:argus_wallet/services/public_wallet_sync.dart';
+import 'package:argus_wallet/services/wallet_database_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:argus_wallet/services/watch_account_service.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'batch_a_sync_test.dart' show GatedGateway;
 import 'batch_c_sync_test.dart' show MemoryPublic;
@@ -110,5 +112,34 @@ void main() {
       isNull,
       reason: 'a partial sum would understate it',
     );
+  });
+
+  test('the overview can read any wallet\'s last split back', () async {
+    SharedPreferences.setMockInitialValues({});
+    const split = PendingBalance(
+      confirmedNano: 3 * erg,
+      pendingInNano: erg,
+      transactions: 1,
+    );
+    // A locked wallet's public refresh stores the whole snapshot map.
+    await WalletDatabaseService.savePublicSnapshot('locked', {
+      'wallet_id': 'locked',
+      'balance_nano_erg': 4 * erg,
+      'pending': split.toJson(),
+    }, () => true);
+    expect((await lastKnownPending('locked'))!.toJson(), split.toJson());
+    // The unlocked wallet's own snapshot goes through named fields.
+    await WalletDatabaseService.saveCachedState(
+      walletId: 'active',
+      primaryAddress: 'a',
+      usedAddresses: const [],
+      balanceNano: 4 * erg,
+      pending: split.toJson(),
+      tokens: const [],
+      transactions: const [],
+      utxoCount: 1,
+    );
+    expect((await lastKnownPending('active'))!.netNano, 4 * erg);
+    expect(await lastKnownPending('never-synced'), isNull);
   });
 }
