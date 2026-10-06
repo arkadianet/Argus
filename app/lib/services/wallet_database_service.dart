@@ -137,6 +137,7 @@ class WalletDatabaseService {
     int stealthNano = 0,
     DateTime? stealthScannedAt,
     List<Map<String, dynamic>> addressHoldings = const [],
+    Map<String, dynamic>? pending,
   }) async {
     if (walletId.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
@@ -155,6 +156,9 @@ class WalletDatabaseService {
       'stealth_nano_erg': stealthNano,
       'stealth_scanned_at': stealthScannedAt?.millisecondsSinceEpoch,
       'balance_nano_erg': balanceNano,
+      // Confirmed and pending figures behind balance_nano_erg, as the sync
+      // valued them (see PendingBalance). Public chain data, like the rest.
+      'pending': pending,
       'tokens': tokens,
       'transactions': transactions,
       'utxo_count': utxoCount,

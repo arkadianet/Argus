@@ -326,21 +326,20 @@ async fn prepare_source(
         _ => return Err("Supply both a token ID and a positive integer quantity".into()),
     }
     let client = node_client(Some(node.clone())).await?;
-    let mut boxes = Vec::new();
-    let mut seen = HashSet::new();
-    for a in &watch.addresses {
-        let (bs, ins) = client.get_effective_unspent(a).await?;
-        if bs.len() != ins.len() {
-            return Err("Incomplete node input data".into());
-        }
-        let expected = address_to_ergo_tree(a)?;
-        for (b, input) in bs.into_iter().zip(ins) {
-            if hex::encode(b.ergo_tree.sigma_serialize_bytes().map_err(fail)?) != expected {
-                return Err("Node returned a foreign input".into());
-            }
-            if seen.insert(input.box_id.clone()) {
-                boxes.push(b);
-            }
+    // Same spent-box rule and unconfirmed-spending policy as a seed wallet's
+    // own sends: the request must not be signed on boxes already spent.
+    let spendable = super::mempool::gather_watched(&client, &watch.addresses).await?;
+    if spendable.boxes.len() != spendable.inputs.len() {
+        return Err("Incomplete node input data".into());
+    }
+    let expected = watch
+        .addresses
+        .iter()
+        .map(|a| address_to_ergo_tree(a))
+        .collect::<Result<HashSet<_>, _>>()?;
+    for b in &spendable.boxes {
+        if !expected.contains(&hex::encode(b.ergo_tree.sigma_serialize_bytes().map_err(fail)?)) {
+            return Err("Node returned a foreign input".into());
         }
     }
     let height = client.current_height().await?;
@@ -352,10 +351,11 @@ async fn prepare_source(
         amount,
         tokens,
         node,
-        boxes,
+        spendable.boxes,
         height,
         &context,
     )
+    .map_err(|e| super::mempool::explain_held(&spendable.held_back, e))
 }
 
 #[allow(clippy::too_many_arguments)]

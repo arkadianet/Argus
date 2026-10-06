@@ -101,6 +101,23 @@ class HomeApi extends RustLibApi {
         'served_by': null,
       });
 
+  /// The public refresh of locked wallets reads all of a wallet's addresses
+  /// in one call that walks them in turn; answered, and recorded, per
+  /// address as [crateApiGetBalance] is.
+  @override
+  Future<String> crateApiMempoolGetPublicSyncInputs({
+    required List<String> addresses,
+    String? nodeUrl,
+  }) async {
+    final balances = <String, dynamic>{};
+    for (final address in addresses) {
+      balances[address] = jsonDecode(
+        await crateApiGetBalance(address: address, nodeUrl: nodeUrl),
+      );
+    }
+    return jsonEncode({'balances': balances, 'pending': []});
+  }
+
   @override
   Future<String> crateApiGetTransactionHistory({
     required String address,

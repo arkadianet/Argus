@@ -30,6 +30,22 @@ class PublicApi extends RustLibApi {
     });
   }
 
+  /// The live gateway reads a locked wallet's balances in one call that
+  /// walks its addresses in turn; recorded per address as before.
+  @override
+  Future<String> crateApiMempoolGetPublicSyncInputs({
+    required List<String> addresses,
+    String? nodeUrl,
+  }) async {
+    final balances = <String, dynamic>{};
+    for (final address in addresses) {
+      balances[address] = jsonDecode(
+        await crateApiGetBalance(address: address, nodeUrl: nodeUrl),
+      );
+    }
+    return jsonEncode({'balances': balances});
+  }
+
   @override
   Future<String> crateApiGetTransactionHistory({
     required String address,

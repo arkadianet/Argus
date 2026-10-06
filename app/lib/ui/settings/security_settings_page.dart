@@ -6,6 +6,7 @@ import '../../format.dart';
 import '../../services/privacy_service.dart';
 import '../../services/secure_storage.dart';
 import '../../services/session_lock.dart';
+import '../../services/spend_policy.dart';
 import '../../services/battery_service.dart';
 import '../../services/mix_service.dart';
 import '../widgets/battery_note.dart';
@@ -450,6 +451,34 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         const SettingsNote(
           'Seed phrase screens always block capture, whatever this setting says.',
         ),
+        ListenableBuilder(
+          listenable: spendPolicy,
+          builder: (context, _) => SettingsGroup(
+            title: 'Spending',
+            scope: 'App-wide',
+            children: [
+              SettingsRow(
+                icon: Icons.hourglass_bottom_rounded,
+                title: 'Spend unconfirmed funds',
+                subtitle: spendPolicy.spendUnconfirmed
+                    ? 'On: received funds and change can be spent at once'
+                    : 'Off: received funds and change wait for 1 confirmation',
+                trailing: Switch(
+                  key: const Key('spend-unconfirmed-switch'),
+                  value: spendPolicy.spendUnconfirmed,
+                  onChanged: (v) async {
+                    try {
+                      await spendPolicy.setSpendUnconfirmed(v);
+                    } catch (_) {
+                      _snack('Could not save the spending setting');
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SettingsNote(spendUnconfirmedNote),
         ListenableBuilder(
           listenable: stealthService,
           builder: (context, _) => SettingsGroup(
