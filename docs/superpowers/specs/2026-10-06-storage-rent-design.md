@@ -39,7 +39,7 @@ A single consolidation transaction, proposed only when it helps:
 - **Which boxes.** Fragmented: up to 100 (the existing per-transaction cap), flagged first, then dust, then oldest. Tidy: only the flagged boxes. Either way the address's largest ERG-only box joins, so rescued boxes land in one that can pay its rent.
 - **Before signing** the review shows boxes merged, resulting boxes (the consolidation builder's own token layout), rent clocks restarted, miner and Argus fees, value after fees, and the new box's rent and due date.
 
-Entry point for the home indicator: `UtxoManagementScreen(openCleanup: true)`, routed as `UtxoManagementScreen.cleanupRoute` (`/utxos/cleanup`). It opens the review as soon as boxes and rent have loaded, or says there is nothing to clean up.
+Entry point for the home indicator: `UtxoManagementScreen(openCleanup: true)`, routed as `UtxoManagementScreen.cleanupRoute` (`/utxos/cleanup`). It opens the review as soon as boxes and rent have loaded, or says there is nothing to clean up; a fragmented wallet whose boxes sit one per address is told that merging them would link the addresses, and that Consolidate does it anyway.
 
 ## Limits
 
