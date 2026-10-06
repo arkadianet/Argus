@@ -50,7 +50,7 @@ class Stub extends UpdateService {
 ReleaseInfo release({String notes = 'What is new.', List<ReleaseAsset>? assets}) => ReleaseInfo(
       version: AppVersion.tryParse('1.0.0-beta.2')!,
       notes: notes,
-      publishedAt: DateTime.utc(2026, 10, 20),
+      publishedAt: DateTime.utc(2026, 10, 20, 12),
       assets: assets ??
           [
             ReleaseAsset(name: 'argus-1.0.0-beta.2-arm64-v8a.apk', size: 50254123, url: Uri.parse(assetUrl('argus-1.0.0-beta.2-arm64-v8a.apk'))),
@@ -173,7 +173,10 @@ void main() {
       stub.present(release: release());
       await openAbout(tester, stub);
       expect(find.text('Update available'), findsOneWidget);
-      expect(find.text('Argus 1.0.0-beta.2 · 20 Oct 2026'), findsOneWidget);
+      // The day it was published where the reader is, not where GitHub is.
+      final local = DateTime.utc(2026, 10, 20, 12).toLocal();
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      expect(find.text('Argus 1.0.0-beta.2 · ${local.day} ${months[local.month - 1]} ${local.year}'), findsOneWidget);
       expect(find.byKey(const Key('update-download')), findsOneWidget);
       expect(find.text('Download and verify'), findsOneWidget);
       expect(find.textContaining('argus-1.0.0-beta.2-arm64-v8a.apk · 47.9 MB'), findsOneWidget);
@@ -252,7 +255,10 @@ void main() {
       stub.present(release: release(), stage: UpdateStage.verified, signer: 'e5' * 32);
       await openAbout(tester, stub);
       expect(find.byKey(const Key('update-verified')), findsOneWidget);
-      expect(find.textContaining('Signed by the same key as this app'), findsOneWidget);
+      expect(find.textContaining('The signing certificate matches this app'), findsOneWidget);
+      // What it claims is what was checked: the certificate, not the signature.
+      expect(find.text('Android checks the signature itself when it installs.'), findsOneWidget);
+      expect(find.textContaining('Signed by'), findsNothing);
       expect(find.byKey(const Key('update-download')), findsNothing);
       await tester.tap(find.byKey(const Key('update-install')));
       expect(stub.installs, 1);
@@ -317,7 +323,7 @@ void main() {
 
       expect(svc.stage, UpdateStage.verified);
       expect(find.byKey(const Key('update-install')), findsOneWidget);
-      expect(find.textContaining('Signed by the same key as this app'), findsOneWidget);
+      expect(find.textContaining('The signing certificate matches this app'), findsOneWidget);
       expect(find.byKey(const Key('update-message')), findsNothing);
 
       await tester.runAsync(svc.install);

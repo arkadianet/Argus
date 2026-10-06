@@ -57,7 +57,7 @@ class _UpdateCardState extends State<UpdateCard> {
                       const SizedBox(height: 2),
                       Text(
                         'Argus ${release.version}'
-                        '${published == null ? '' : ' · ${_date(published)}'}',
+                        '${published == null ? '' : ' · ${_date(published.toLocal())}'}',
                         style: TextStyle(fontSize: 12.5, color: colors.muted),
                       ),
                     ],
@@ -154,7 +154,7 @@ class _UpdateCardState extends State<UpdateCard> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Signed by the same key as this app'
+                    'The signing certificate matches this app'
                     '${signer == null ? '' : ' (SHA-256 ${formatFingerprint(signer).substring(0, 11)}…)'}.',
                     key: const Key('update-verified'),
                     style: const TextStyle(fontSize: 13),
@@ -162,6 +162,10 @@ class _UpdateCardState extends State<UpdateCard> {
                 ),
               ],
             ),
+            const SizedBox(height: 4),
+            // What was and was not checked: the certificate the file names, and
+            // GitHub's checksum. The signature itself is Android's to verify.
+            Text('Android checks the signature itself when it installs.', style: small),
             if (_u.stageMessage != null) ...[
               const SizedBox(height: 8),
               Text(_u.stageMessage!, style: small),

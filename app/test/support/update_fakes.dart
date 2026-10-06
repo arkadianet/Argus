@@ -49,35 +49,30 @@ class FakePlatform implements UpdatePlatform {
   }
 }
 
-/// A streamed response that also reports where redirects ended, as the real
-/// client's does.
-class UrlResponse extends http.StreamedResponse implements http.BaseResponseWithUrl {
-  UrlResponse(super.stream, super.statusCode, {required this.url, super.contentLength});
-
-  @override
-  final Uri url;
-}
-
 /// What the fake serves for one address.
 class Served {
-  Served(this.body, {this.status = 200, this.finalUrl, this.contentLength});
+  Served(this.body, {this.status = 200, this.headers = const {}, this.contentLength});
 
   /// Called per request, so a test can hand out a stream it controls.
   final Stream<List<int>> Function() body;
   final int status;
-
-  /// Where the "redirects" ended; the requested address when null.
-  final Uri? finalUrl;
+  final Map<String, String> headers;
   final int? contentLength;
 
-  static Served bytes(List<int> data, {int chunk = 97, int status = 200, Uri? finalUrl, int? contentLength}) => Served(
+  static Served bytes(List<int> data, {int chunk = 97, int status = 200, int? contentLength}) => Served(
         () => Stream.fromIterable([
           for (var i = 0; i < data.length; i += chunk) data.sublist(i, i + chunk > data.length ? data.length : i + chunk),
         ]),
         status: status,
-        finalUrl: finalUrl,
         contentLength: contentLength,
       );
+
+  /// A redirect to [location], which may be relative.
+  static Served redirect(String location, {int status = 302}) =>
+      Served(() => Stream.value(utf8.encode('<a href="$location">moved</a>')), status: status, headers: {'location': location});
+
+  /// A redirect with no Location header.
+  static Served redirectToNowhere({int status = 302}) => Served(() => const Stream.empty(), status: status);
 }
 
 /// Stands in for api.github.com and the download host, and records what was
@@ -106,6 +101,9 @@ class FakeGitHub {
 
   Iterable<http.BaseRequest> get apiRequests => requests.where((r) => r.url == latestReleaseUri);
   Iterable<http.BaseRequest> get fileRequests => requests.where((r) => r.url != latestReleaseUri);
+
+  /// Addresses asked for, in order.
+  List<String> get asked => [for (final r in requests) r.url.toString()];
 }
 
 class _Client extends http.BaseClient {
@@ -120,19 +118,16 @@ class _Client extends http.BaseClient {
     gh.requests.add(request);
     final failure = gh.failure;
     if (failure != null) throw failure;
+    final served = gh.files[request.url.toString()];
+    if (served != null) {
+      return http.StreamedResponse(served.body(), served.status, headers: served.headers, contentLength: served.contentLength);
+    }
     if (request.url == latestReleaseUri) {
       await gh.releaseGate?.future;
       final body = gh.rawReleaseBody ?? utf8.encode(jsonEncode(gh.releaseBody));
-      return UrlResponse(Stream.value(body), gh.releaseStatus, url: request.url, contentLength: body.length);
+      return http.StreamedResponse(Stream.value(body), gh.releaseStatus, contentLength: body.length);
     }
-    final served = gh.files[request.url.toString()];
-    if (served == null) return UrlResponse(const Stream.empty(), 404, url: request.url);
-    return UrlResponse(
-      served.body(),
-      served.status,
-      url: served.finalUrl ?? request.url,
-      contentLength: served.contentLength,
-    );
+    return http.StreamedResponse(const Stream.empty(), 404);
   }
 
   @override

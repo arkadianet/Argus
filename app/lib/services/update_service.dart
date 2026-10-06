@@ -157,12 +157,15 @@ class AppVersion implements Comparable<AppVersion> {
 /// github.com, or the GitHub content hosts it redirects downloads to. HTTPS
 /// only, no credentials, no odd port. The signature check is what protects
 /// the install; this keeps the app from being sent to fetch from elsewhere.
-bool isTrustedReleaseUrl(Uri url) {
-  if (url.scheme != 'https' || url.userInfo.isNotEmpty) return false;
-  if (url.hasPort && url.port != 443) return false;
-  final host = url.host;
-  return host == 'github.com' || host.endsWith('.githubusercontent.com');
-}
+bool isTrustedReleaseUrl(Uri url) =>
+    _isHttpsOn(url, (host) => host == 'github.com' || host.endsWith('.githubusercontent.com'));
+
+/// Where a redirect from the release API may lead: GitHub's API itself, as it
+/// does when a repository is renamed.
+bool _isTrustedApiUrl(Uri url) => _isHttpsOn(url, (host) => host == 'api.github.com');
+
+bool _isHttpsOn(Uri url, bool Function(String host) hostOk) =>
+    url.scheme == 'https' && url.userInfo.isEmpty && (!url.hasPort || url.port == 443) && hostOk(url.host);
 
 /// Release notes as the plain text they are shown as. GitHub serves
 /// markdown, and Argus shows it as written: no formatting, no links. This
@@ -282,7 +285,11 @@ class ReleaseInfo {
 /// The APK for this phone: the build made for its CPU when the release has
 /// one, otherwise the universal APK. Split builds carry a higher versionCode
 /// than the universal one, so a phone that installed a split must keep
-/// getting splits; Android refuses to go back down.
+/// getting splits; Android refuses to go back down. A release that lacks the
+/// split for this phone falls back to universal anyway: right for a phone
+/// that installed the universal APK, refused by the installer as a downgrade
+/// for one that installed a split. Argus publishes all three together, so
+/// that should not arise.
 ReleaseAsset? pickAsset(List<ReleaseAsset> assets, List<String> supportedAbis) {
   ReleaseAsset? named(String variant) {
     for (final a in assets) {
@@ -327,17 +334,59 @@ UpdateException _networkFailure(Object e) => e is TimeoutException
     ? const UpdateException('GitHub did not answer in time.')
     : const UpdateException('Could not reach GitHub. Check your connection.');
 
+const _maxRedirects = 5;
+
+/// A GET that follows redirects itself. The HTTP client's own following sends
+/// the next request before telling anyone where it went; doing it here means
+/// nothing is ever sent to an address [trusted] has not accepted. [start] is
+/// ours and is not checked. Only a User-Agent goes on any hop.
+Future<http.StreamedResponse> _get(
+  http.Client client,
+  Uri start, {
+  required bool Function(Uri url) trusted,
+  required Duration timeout,
+}) async {
+  var url = start;
+  for (var hop = 0; hop <= _maxRedirects; hop++) {
+    final request = http.Request('GET', url)
+      ..followRedirects = false
+      ..headers['user-agent'] = updateUserAgent;
+    final response = await client.send(request).timeout(timeout);
+    final status = response.statusCode;
+    if (status < 300 || status > 399) return response;
+    final location = response.headers['location'];
+    await _discardBody(response);
+    if (location == null) throw UpdateException('GitHub answered with an error ($status).');
+    final Uri next;
+    try {
+      next = url.resolve(location);
+    } on FormatException {
+      throw const UpdateException('GitHub sent a redirect that was not understood.');
+    }
+    if (!trusted(next)) throw const UpdateException('The request was redirected away from GitHub, so it was stopped.');
+    url = next;
+  }
+  throw const UpdateException('GitHub redirected the request too many times.');
+}
+
+/// Lets go of a response nobody will read, so its connection is not held.
+Future<void> _discardBody(http.StreamedResponse response) async {
+  try {
+    await response.stream.listen((_) {}).cancel();
+  } catch (_) {}
+}
+
 /// The latest release. The caller owns [client] and closes it.
 Future<ReleaseInfo> fetchLatestRelease(http.Client client, {Uri? endpoint}) async {
-  final request = http.Request('GET', endpoint ?? latestReleaseUri)..headers['user-agent'] = updateUserAgent;
   final Uint8List body;
   try {
-    final response = await client.send(request).timeout(_apiTimeout);
-    if (response.statusCode == 403 || response.statusCode == 429) {
-      throw const UpdateException('GitHub is limiting requests from this network. Try again later.');
-    }
-    if (response.statusCode == 404) throw const UpdateException('GitHub has no release to offer.');
+    final response = await _get(client, endpoint ?? latestReleaseUri, trusted: _isTrustedApiUrl, timeout: _apiTimeout);
     if (response.statusCode != 200) {
+      await _discardBody(response);
+      if (response.statusCode == 403 || response.statusCode == 429) {
+        throw const UpdateException('GitHub is limiting requests from this network. Try again later.');
+      }
+      if (response.statusCode == 404) throw const UpdateException('GitHub has no release to offer.');
       throw UpdateException('GitHub answered with an error (${response.statusCode}).');
     }
     body = await _readCapped(response.stream, maxReleaseJsonBytes).timeout(_apiTimeout);
@@ -372,9 +421,9 @@ class DownloadedApk {
 
 /// Streams [asset] into [into], hashing as it goes. Stops, and leaves no file
 /// behind, when the server sends more than the size GitHub lists (or
-/// [maxBytes]), sends less, stalls, redirects off GitHub, or [isCancelled]
-/// turns true. The caller owns [client]; closing it is how a cancel reaches
-/// a request that is waiting on the network.
+/// [maxBytes]), sends less, stalls, redirects off GitHub (that request is
+/// never sent), or [isCancelled] turns true. The caller owns [client]; closing
+/// it is how a cancel reaches a request that is waiting on the network.
 Future<DownloadedApk> downloadApk({
   required http.Client client,
   required ReleaseAsset asset,
@@ -388,21 +437,18 @@ Future<DownloadedApk> downloadApk({
   if (asset.size > maxBytes) throw const UpdateException('The download is larger than Argus will accept.');
   final limit = asset.size;
 
-  final request = http.Request('GET', asset.url)..headers['user-agent'] = updateUserAgent;
   final http.StreamedResponse response;
   try {
-    response = await client.send(request).timeout(_connectTimeout);
+    response = await _get(client, asset.url, trusted: isTrustedReleaseUrl, timeout: _connectTimeout);
+  } on UpdateException {
+    rethrow;
   } catch (e) {
     if (isCancelled()) throw const _Cancelled();
     throw _networkFailure(e);
   }
   if (response.statusCode != 200) {
+    await _discardBody(response);
     throw UpdateException('GitHub answered with an error (${response.statusCode}).');
-  }
-  // Where the redirects ended up. IOClient reports it; a client that does not
-  // is no worse off than before this check.
-  if (response case http.BaseResponseWithUrl(:final url) when !isTrustedReleaseUrl(url)) {
-    throw const UpdateException('The download was redirected away from GitHub.');
   }
 
   // The size is judged on what arrives, not on a Content-Length header:
@@ -499,9 +545,11 @@ class ApkVerification {
 
 /// Checks a downloaded APK. [expectedSha256] is GitHub's checksum for the
 /// file (null when it lists none) and [fileSha256] what arrived. A mismatch
-/// on either is a rejection. The APK's declared signer must be one of
+/// on either is a rejection. The APK's signers must be exactly
 /// [appCertificates], this app's own signing certificates as Android reports
-/// them.
+/// them. That is the signer the APK *declares*: its signature is not checked
+/// here, Android's installer does that, and with GitHub's checksum the bytes
+/// are what GitHub published.
 ///
 /// The comparison is with the key the running app has now. A release signed
 /// with a rotated key (a v3 proof-of-rotation chain from the current one)
@@ -526,11 +574,15 @@ Future<ApkVerification> verifyApk({
   } catch (_) {
     return const ApkVerification(ApkVerdict.unreadable);
   }
-  final signer = certificateSha256(signers.first);
-  final own = {for (final c in appCertificates) certificateSha256(c)};
+  final theirs = {for (final c in signers.certificates) certificateSha256(c)};
+  final ours = {for (final c in appCertificates) certificateSha256(c)};
+  // The same set of signers, as Android requires of an update: one of the
+  // app's keys among several, or an extra signer beside the app's, is not
+  // "the same key as this app".
+  final same = theirs.length == ours.length && theirs.containsAll(ours);
   return ApkVerification(
-    own.contains(signer) ? ApkVerdict.verified : ApkVerdict.wrongSigner,
-    signerSha256: signer,
+    same ? ApkVerdict.verified : ApkVerdict.wrongSigner,
+    signerSha256: certificateSha256(signers.first),
   );
 }
 
@@ -624,9 +676,13 @@ class UpdateService extends ChangeNotifier {
   File? _verifiedFile;
   int _verifiedBytes = 0;
   bool _installing = false;
+  bool _fetching = false;
   final _progress = Stopwatch();
 
-  bool get busy => stage == UpdateStage.downloading || stage == UpdateStage.verifying;
+  /// A download is being set up, fetched or checked. True from the tap that
+  /// started it, not from when the stage changes, so a second tap while the
+  /// first is still being set up finds the door shut.
+  bool get busy => _fetching || stage == UpdateStage.downloading || stage == UpdateStage.verifying;
 
   /// The settings banner shows while there is an update the user has not
   /// waved away. About shows it regardless.
@@ -705,8 +761,18 @@ class UpdateService extends ChangeNotifier {
       return false;
     }
     enabled = value;
+    // Off means off: what an earlier check found goes with it, so nothing
+    // keeps nudging about a release the user chose not to hear of. A download
+    // already under way is left to finish. "Check now" finds it again.
+    if (!value && !busy) await _forgetOffer();
     notifyListeners();
     return true;
+  }
+
+  Future<void> _forgetOffer() async {
+    available = null;
+    await _store((p) => p.remove(_latestKey));
+    await _resetDownload();
   }
 
   /// The start-up check: does nothing unless the setting is on and the last
@@ -791,11 +857,21 @@ class UpdateService extends ChangeNotifier {
   /// checksum and against this app's own signing key. Only a file that passes
   /// becomes [UpdateStage.verified]; any other is deleted.
   Future<void> downloadAndVerify() async {
+    if (busy) return;
+    _fetching = true;
+    try {
+      await _downloadAndVerify();
+    } finally {
+      _fetching = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _downloadAndVerify() async {
     // The phone's ABIs decide which file this is.
     await ensureLoaded();
     final release = available;
     final asset = assetForDevice;
-    if (busy) return;
     if (release == null || asset == null) {
       _setStage(UpdateStage.failed, 'This release has no APK for your phone. The releases page has the files.');
       return;

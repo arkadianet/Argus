@@ -134,6 +134,69 @@ void main() {
     });
   });
 
+  group('switching the check off', () {
+    test('forgets what it found, so nothing goes on nudging', () async {
+      h.publish('v1.0.0-beta.2');
+      final svc = h.service();
+      await svc.setEnabled(true);
+      await svc.checkNow();
+      await svc.downloadAndVerify();
+      expect(svc.available, isNotNull);
+      expect(svc.stage, UpdateStage.verified);
+
+      expect(await svc.setEnabled(false), isTrue);
+      expect(svc.available, isNull);
+      expect(svc.noticeVisible, isFalse);
+      expect(svc.stage, UpdateStage.idle);
+      expect(h.leftovers, isEmpty, reason: 'the checked file goes with the offer');
+      expect((await SharedPreferences.getInstance()).getString('argus_update_latest'), isNull);
+
+      final later = h.service();
+      await later.ensureLoaded();
+      expect(later.available, isNull);
+      expect(later.enabled, isFalse);
+
+      // The user can still ask.
+      await later.checkNow();
+      expect(later.available?.version.toString(), '1.0.0-beta.2');
+    });
+
+    test('switching it on forgets nothing', () async {
+      h.publish('v1.0.0-beta.2');
+      final svc = h.service();
+      await svc.checkNow();
+      expect(await svc.setEnabled(true), isTrue);
+      expect(svc.available, isNotNull);
+    });
+
+    test('a download under way is left to finish', () async {
+      final gate = StreamController<List<int>>();
+      final svc = await h.found();
+      await svc.setEnabled(true);
+      h.gh.files[assetUrl(arm64)] = Served(() => gate.stream);
+      final done = svc.downloadAndVerify();
+      await _until(() => svc.stage == UpdateStage.downloading);
+      await svc.setEnabled(false);
+      expect(svc.available, isNotNull);
+      expect(svc.stage, UpdateStage.downloading);
+      gate.add(goodApk);
+      await gate.close();
+      await done;
+      expect(svc.stage, UpdateStage.verified);
+    });
+
+    test('a failed write changes nothing, including what was found', () async {
+      h.publish('v1.0.0-beta.2');
+      SharedPreferences.setMockInitialValues({'argus_update_check': true});
+      final svc = h.service();
+      await svc.checkNow();
+      SharedPreferences.setMockInitialValues({});
+      SharedPreferencesStorePlatform.instance = FailingPreferences({'flutter.argus_update_check': true});
+      expect(await svc.setEnabled(false), isFalse);
+      expect(svc.available, isNotNull);
+    });
+  });
+
   group('the start-up check', () {
     setUp(() => SharedPreferences.setMockInitialValues({'argus_update_check': true}));
 
@@ -461,11 +524,29 @@ void main() {
       expect(svc.stage, UpdateStage.rejected);
     });
 
-    test('a key found among several of this app\'s is enough', () async {
-      final svc = await h.found();
+    test('an app signed by several keys matches an APK signed by the same set, in any order', () async {
+      final both = apk(block: schemeBlock([signer([certA]), signer([certB])]));
+      final svc = await h.found(files: {arm64: both, universal: both});
       h.platform.certificates = [certB, certA];
       await svc.downloadAndVerify();
       expect(svc.stage, UpdateStage.verified);
+    });
+
+    test('one of this app\'s keys among several is not the same key', () async {
+      final svc = await h.found();
+      h.platform.certificates = [certB, certA];
+      await svc.downloadAndVerify();
+      expect(svc.stage, UpdateStage.rejected);
+      expect(svc.stageMessage, contains('not signed by the same key as this app'));
+      expect(h.leftovers, isEmpty);
+    });
+
+    test('this app\'s key with another signer beside it is not the same key', () async {
+      final extra = apk(block: schemeBlock([signer([certA]), signer([certB])]));
+      final svc = await h.found(files: {arm64: extra, universal: extra});
+      await svc.downloadAndVerify();
+      expect(svc.stage, UpdateStage.rejected);
+      expect(h.leftovers, isEmpty);
     });
 
     test('the build for this CPU is the one fetched', () async {
@@ -569,22 +650,107 @@ void main() {
       expect(h.leftovers, isEmpty);
     });
 
-    test('a redirect away from GitHub is refused', () async {
-      final svc = await h.found();
-      h.gh.files[assetUrl(arm64)] = Served.bytes(goodApk, finalUrl: Uri.parse('https://cdn.evil.example/a.apk'));
-      await svc.downloadAndVerify();
-      expect(svc.stage, UpdateStage.failed);
-      expect(svc.stageMessage, contains('redirected away from GitHub'));
-      expect(h.leftovers, isEmpty);
+    group('redirects', () {
+      const cdn = 'https://release-assets.githubusercontent.com/github-production-release-asset/1/argus.apk?sig=abc';
 
-      h.gh.files[assetUrl(arm64)] = Served.bytes(goodApk, finalUrl: Uri.parse('http://objects.githubusercontent.com/a.apk'));
-      await svc.downloadAndVerify();
-      expect(svc.stage, UpdateStage.failed, reason: 'plain http, even to a GitHub host');
+      test('the hand-off to the CDN is followed, one hop at a time', () async {
+        final svc = await h.found();
+        h.gh.files[assetUrl(arm64)] = Served.redirect(cdn);
+        h.gh.files[cdn] = Served.bytes(goodApk);
+        await svc.downloadAndVerify();
+        expect(svc.stage, UpdateStage.verified, reason: svc.stageMessage);
+        expect(h.gh.asked.where((a) => a == assetUrl(arm64) || a == cdn), [assetUrl(arm64), cdn]);
+        // Every hop is ours to follow, and carries the one header.
+        expect(h.gh.fileRequests.every((r) => r.followRedirects == false), isTrue);
+        expect(h.gh.fileRequests.every((r) => r.headers.length == 1 && r.headers['user-agent'] == 'Argus'), isTrue);
+      });
 
-      h.gh.files[assetUrl(arm64)] =
-          Served.bytes(goodApk, finalUrl: Uri.parse('https://release-assets.githubusercontent.com/github-production-release-asset/1/a'));
-      await svc.downloadAndVerify();
-      expect(svc.stage, UpdateStage.verified, reason: 'the CDN GitHub really hands downloads to');
+      test('a relative Location is resolved against the address that sent it', () async {
+        final svc = await h.found();
+        h.gh.files[assetUrl(arm64)] = Served.redirect('/arkadianet/Argus/releases/moved/argus.apk', status: 301);
+        h.gh.files['https://github.com/arkadianet/Argus/releases/moved/argus.apk'] = Served.bytes(goodApk);
+        await svc.downloadAndVerify();
+        expect(svc.stage, UpdateStage.verified, reason: svc.stageMessage);
+      });
+
+      test('every redirect status that may be used is followed', () async {
+        for (final status in [301, 302, 303, 307, 308]) {
+          final svc = await h.found();
+          h.gh.files[assetUrl(arm64)] = Served.redirect(cdn, status: status);
+          h.gh.files[cdn] = Served.bytes(goodApk);
+          await svc.downloadAndVerify();
+          expect(svc.stage, UpdateStage.verified, reason: '$status');
+        }
+      });
+
+      test('a redirect to another host is stopped before anything is sent there', () async {
+        final svc = await h.found();
+        h.gh.files[assetUrl(arm64)] = Served.redirect('https://cdn.evil.example/a.apk');
+        h.gh.files['https://cdn.evil.example/a.apk'] = Served.bytes(goodApk);
+        await svc.downloadAndVerify();
+        expect(svc.stage, UpdateStage.failed);
+        expect(svc.stageMessage, contains('redirected away from GitHub'));
+        expect(h.gh.asked, isNot(contains('https://cdn.evil.example/a.apk')), reason: 'not even a request');
+        expect(h.leftovers, isEmpty);
+      });
+
+      test('nor to plain http, a host that only looks like GitHub\'s, a credential or an odd port', () async {
+        for (final target in [
+          'http://objects.githubusercontent.com/a.apk',
+          'https://github.com.evil.example/a.apk',
+          'https://evilgithubusercontent.com/a.apk',
+          'https://user:pw@github.com/a.apk',
+          'https://github.com:8443/a.apk',
+          'ftp://github.com/a.apk',
+        ]) {
+          final svc = await h.found();
+          h.gh.files[assetUrl(arm64)] = Served.redirect(target);
+          h.gh.files[target] = Served.bytes(goodApk);
+          await svc.downloadAndVerify();
+          expect(svc.stage, UpdateStage.failed, reason: target);
+          expect(h.gh.asked, isNot(contains(target)), reason: '$target was contacted');
+        }
+      });
+
+      test('a chain that goes on too long is cut off', () async {
+        final svc = await h.found();
+        for (var i = 0; i < 8; i++) {
+          h.gh.files[i == 0 ? assetUrl(arm64) : 'https://github.com/hop/$i'] = Served.redirect('https://github.com/hop/${i + 1}');
+        }
+        await svc.downloadAndVerify();
+        expect(svc.stage, UpdateStage.failed);
+        expect(svc.stageMessage, contains('too many times'));
+        expect(h.gh.fileRequests.length, lessThanOrEqualTo(6));
+      });
+
+      test('a redirect that says nowhere to go is an error, not a hang', () async {
+        final svc = await h.found();
+        h.gh.files[assetUrl(arm64)] = Served.redirectToNowhere();
+        await svc.downloadAndVerify();
+        expect(svc.stage, UpdateStage.failed);
+        expect(svc.stageMessage, contains('302'));
+      });
+
+      test('the release check follows the API\'s own redirect, and no other', () async {
+        h.publish('v1.0.0-beta.2');
+        final moved = Uri.https('api.github.com', '/repositories/42/releases/latest').toString();
+        h.gh.files[latestReleaseUri.toString()] = Served.redirect(moved, status: 301);
+        h.gh.files[moved] = Served(() => Stream.value(utf8.encode(jsonEncode(h.gh.releaseBody))));
+        final svc = h.service();
+        await svc.checkNow();
+        expect(svc.checkError, isNull, reason: svc.checkError);
+        expect(svc.available?.version.toString(), '1.0.0-beta.2');
+        expect(h.gh.requests.every((r) => r.headers.length == 1 && r.headers['user-agent'] == 'Argus'), isTrue);
+
+        h.gh.files[latestReleaseUri.toString()] = Served.redirect('https://evil.example/latest');
+        await svc.checkNow();
+        expect(svc.checkError, contains('redirected away from GitHub'));
+        expect(h.gh.asked, isNot(contains('https://evil.example/latest')));
+        // GitHub's download hosts are not where the API lives.
+        h.gh.files[latestReleaseUri.toString()] = Served.redirect('https://github.com/arkadianet/Argus/releases/latest');
+        await svc.checkNow();
+        expect(svc.checkError, contains('redirected away from GitHub'));
+      });
     });
 
     test('a connection that fails mid-way is a failed download', () async {
@@ -621,6 +787,19 @@ void main() {
       expect(h.leftovers, isEmpty);
       expect(h.gh.clientsClosed, greaterThan(closedBefore));
       expect(svc.verifiedSigner, isNull);
+    });
+
+    test('two taps at once make one download', () async {
+      final svc = await h.found();
+      final a = svc.downloadAndVerify();
+      final b = svc.downloadAndVerify();
+      final c = svc.downloadAndVerify();
+      expect(svc.busy, isTrue, reason: 'from the first tap, before any await has finished');
+      await Future.wait([a, b, c]);
+      expect(h.gh.fileRequests, hasLength(1));
+      expect(svc.stage, UpdateStage.verified);
+      expect(svc.busy, isFalse);
+      expect(h.leftovers, ['argus-update.apk']);
     });
 
     test('cancelling when nothing is downloading does nothing', () async {
