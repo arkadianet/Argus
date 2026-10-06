@@ -14,6 +14,7 @@ import 'settings/network_settings_page.dart';
 import 'settings/preview_settings_page.dart';
 import 'settings/security_settings_page.dart';
 import 'settings/settings_shared.dart';
+import 'settings/update_notice.dart';
 import 'settings/wallet_settings_page.dart';
 import 'settings/wallets_page.dart';
 import 'settings/watch_only_page.dart';
@@ -85,6 +86,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               return ListView(
                 padding: EdgeInsets.fromLTRB(16, 8, 16, 32 + MediaQuery.paddingOf(context).bottom),
                 children: [
+                  const UpdateNotice(),
                   _walletHeader(context, name, wallets.length, current),
                   const SizedBox(height: 24),
                   SettingsGroup(
