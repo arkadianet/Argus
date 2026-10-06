@@ -12,6 +12,7 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 wallet-core = { path = "../wallet-core" }
 wallet-net = { path = "../wallet-net" }
+wallet-amm = { path = "../wallet-amm" }
 ergo-lib = { workspace = true, features = ["mnemonic_gen"] }
 ergo-tx = { workspace = true, features = ["ergo-lib"] }
 ergopay-core = { workspace = true }

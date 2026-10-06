@@ -19,6 +19,11 @@ use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
 
 use crate::error::ArgusError;
 
+/// On-chain token and LP-token prices from Spectrum pools (`wallet-amm`).
+pub mod pricing;
+/// Circular arbitrage across Spectrum pools, on the chained-legs design.
+pub mod arbitrage;
+
 /// Argus app fee: paid on every transaction the wallet builds (sends, UTXO
 /// tools, swaps, mints). ErgoPay transactions are built by the dApp and are
 /// not touched. Disclosed on every confirm sheet and in Settings → About.

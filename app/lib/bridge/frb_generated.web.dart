@@ -7,6 +7,8 @@
 // ignore_for_file: argument_type_not_assignable
 
 import 'api.dart';
+import 'api/arbitrage.dart';
+import 'api/pricing.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
