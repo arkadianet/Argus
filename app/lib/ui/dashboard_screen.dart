@@ -57,6 +57,7 @@ import 'discover_screen.dart';
 import 'widgets/discover_sheet.dart';
 import 'widgets/action_row.dart';
 import 'widgets/mix_strip.dart';
+import 'widgets/pending_balance_line.dart';
 import 'widgets/empty_state.dart';
 import 'widgets/soft_card.dart';
 import 'widgets/token_detail_sheet.dart';
@@ -1780,6 +1781,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                       const SizedBox(height: 2),
                       Text(breakdown, style: TextStyle(fontSize: 13, color: muted)),
                     ],
+                    PendingBalanceLine(pending: _sync.pending, hidden: _balanceHidden),
                   ],
                 ),
               ),

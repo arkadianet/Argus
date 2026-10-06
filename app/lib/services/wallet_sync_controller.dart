@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import 'network_controller.dart';
+import 'pending_balance.dart';
 import 'privacy_service.dart';
 import 'mix_activity.dart';
 import 'mix_service.dart';
@@ -91,7 +92,17 @@ abstract interface class WalletSyncBatchGateway {
   WalletSyncRead startRead(List<String> addresses);
 }
 
-class _LiveSyncRead implements WalletSyncRead {
+/// A read that also values the mempool across all the wallet's addresses at
+/// once. Per-address balances summed count a payment between two of the
+/// wallet's addresses, or a chain of spends across them, more than once;
+/// this does not.
+abstract interface class WalletSyncPendingRead {
+  /// Null when a confirmed listing failed: a missing listing hides spent
+  /// inputs, so nothing pending can be valued.
+  Future<PendingBalance?> pending();
+}
+
+class _LiveSyncRead implements WalletSyncRead, WalletSyncPendingRead {
   _LiveSyncRead(List<String> addresses) {
     final inputs = walletService.loadSyncInputs(
       addresses,
@@ -132,6 +143,10 @@ class _LiveSyncRead implements WalletSyncRead {
     if (count == null) throw StateError('UTXO listing incomplete');
     return count;
   }
+
+  @override
+  Future<PendingBalance?> pending() async =>
+      PendingBalance.fromJson((await _inputs)['summary']);
 
   @override
   Future<String?> servedBy() async {
@@ -234,6 +249,7 @@ class LiveWalletSyncGateway
                 (snapshot['stealth_scanned_at'] as num).toInt(),
               ),
         balanceNano: snapshot['balance_nano_erg'] as int?,
+        pending: (snapshot['pending'] as Map?)?.cast<String, dynamic>(),
         tokens: (snapshot['tokens'] as List).cast<Map<String, dynamic>>(),
         transactions: (snapshot['transactions'] as List)
             .cast<Map<String, dynamic>>(),
@@ -346,6 +362,7 @@ class WalletSyncController extends ChangeNotifier {
   void _applyPublic(Map<String, dynamic> snapshot) {
     publicSnapshotOnly = true;
     balanceNano = snapshot['balance_nano_erg'] as int;
+    _nodePending = PendingBalance.fromJson(snapshot['pending']);
     recentTxs = _mapList(snapshot['transactions']);
     tokens = orderTokensForDisplay([
       for (final t in snapshot['tokens'] as List)
@@ -365,8 +382,31 @@ class WalletSyncController extends ChangeNotifier {
   String? receiveAddress;
   String? changeAddress;
   String? senderAddress;
+
+  /// The balance once everything pending confirms: confirmed boxes, less
+  /// what pending transactions spend, plus what they pay in (incoming
+  /// payments and change alike). [pending] splits it.
   int? balanceNano;
   List<TokenBalance> tokens = const [];
+
+  /// The node's wallet-wide pending summary from the last sync that could
+  /// value it.
+  PendingBalance? _nodePending;
+
+  /// How [balanceNano] splits into confirmed and pending, with this app's
+  /// broadcasts the node has not listed yet folded in. Null when the last
+  /// sync could not value the mempool (a listing failed) or nothing has
+  /// synced yet. See [pendingBalanceText] for the line screens show.
+  PendingBalance? get pending {
+    final node = _nodePending;
+    if (node == null) return null;
+    _dropExpiredBroadcasts();
+    var delta = 0;
+    for (final b in _broadcasts.values) {
+      delta += b.valueNano ?? 0;
+    }
+    return node.withUnseenBroadcasts(delta, _broadcasts.length);
+  }
   List<Map<String, dynamic>> recentTxs = const [];
   List<Map<String, dynamic>> usedAddresses = const [];
 
@@ -612,6 +652,7 @@ class WalletSyncController extends ChangeNotifier {
     changeAddress = null;
     senderAddress = null;
     balanceNano = null;
+    _nodePending = null;
     tokens = const [];
     recentTxs = const [];
     usedAddresses = const [];
@@ -704,6 +745,7 @@ class WalletSyncController extends ChangeNotifier {
       }
       usedAddresses = _mapList(cached['used_addresses']);
       balanceNano = (cached['balance_nano_erg'] as num?)?.toInt();
+      _nodePending = PendingBalance.fromJson(cached['pending']);
       recentTxs = _mapList(cached['transactions']);
       tokens = orderTokensForDisplay([
         for (final t in (cached['tokens'] as List? ?? const []))
@@ -833,6 +875,11 @@ class WalletSyncController extends ChangeNotifier {
         ? (gateway as WalletSyncBatchGateway).startRead(addresses)
         : null;
     final balancesFuture = _fetchBalances(addresses, read);
+    final pendingFuture = read is WalletSyncPendingRead
+        ? (read as WalletSyncPendingRead).pending().catchError(
+            (Object _) => null,
+          )
+        : Future<PendingBalance?>.value();
     final historyFuture = _fetchHistory(addresses, read);
     final countFuture = (read?.count() ?? _gw.countUnspentBoxes(addresses))
         .catchError((_) => utxoCount);
@@ -842,11 +889,20 @@ class WalletSyncController extends ChangeNotifier {
     if (scanStealth) _quietPollsSinceStealth = 0;
 
     final balances = await balancesFuture;
+    final summary = await pendingFuture;
     if (!_current(generation, walletId)) return;
     final failed = balances.failed;
+    // The wallet-wide valuation wins over the per-address sum whenever the
+    // node could make it; it is null exactly when a listing failed.
+    final nodeErg = summary?.netNano ?? balances.erg;
     if (failed < addresses.length) {
-      balanceNano = _withBroadcastDeltas(balances.erg);
-      tokens = orderTokensForDisplay(balances.tokens);
+      _nodePending = summary;
+      balanceNano = _withBroadcastDeltas(nodeErg);
+      tokens = orderTokensForDisplay(
+        summary == null
+            ? balances.tokens
+            : _summaryAmounts(balances.tokens, summary),
+      );
       notifyListeners();
     }
 
@@ -867,8 +923,9 @@ class WalletSyncController extends ChangeNotifier {
       recentTxs = _withBroadcasts(txs).take(5).toList();
       // The node now vouches for what it shows; a broadcast it lists no
       // longer needs its delta carried.
-      if (failed < addresses.length)
-        balanceNano = _withBroadcastDeltas(balances.erg);
+      if (failed < addresses.length) {
+        balanceNano = _withBroadcastDeltas(nodeErg);
+      }
     }
     utxoCount = boxes;
 
@@ -989,6 +1046,8 @@ class WalletSyncController extends ChangeNotifier {
         // both the figure and how old it is.
         'stealth_scanned_at': stealthScannedAt?.millisecondsSinceEpoch,
         'balance_nano_erg': balanceNano,
+        // The split behind balance_nano_erg, so the two always agree.
+        'pending': pending?.toJson(),
         'tokens': [
           for (final t in tokens)
             {
@@ -1099,6 +1158,18 @@ class WalletSyncController extends ChangeNotifier {
     }
     return _BalanceResult(erg, merged.values.toList(), failed);
   }
+
+  /// Holdings with the wallet-wide amounts: the per-address answers carry
+  /// names and scales, the summary amounts that count a transfer between
+  /// two of the wallet's addresses once.
+  static List<TokenBalance> _summaryAmounts(
+    List<TokenBalance> tokens,
+    PendingBalance summary,
+  ) => [
+    for (final t in tokens)
+      if ((summary.token(t.id)?.amount ?? t.amount) > 0)
+        t.withHolding(summary.token(t.id)?.amount ?? t.amount),
+  ];
 
   /// Folds a stealth scan into [stealthNano] and [stealthTokens].
   ///
@@ -1232,6 +1303,7 @@ class _WalletView {
         changeAddress: c.changeAddress,
         senderAddress: c.senderAddress,
         balanceNano: c.balanceNano,
+        nodePending: c._nodePending,
         tokens: c.tokens,
         recentTxs: c.recentTxs,
         usedAddresses: c.usedAddresses,
@@ -1257,6 +1329,7 @@ class _WalletView {
     String? changeAddress,
     String? senderAddress,
     int? balanceNano,
+    PendingBalance? nodePending,
     List<TokenBalance> tokens,
     List<Map<String, dynamic>> recentTxs,
     List<Map<String, dynamic>> usedAddresses,
@@ -1283,6 +1356,7 @@ class _WalletView {
     c.changeAddress = data.changeAddress;
     c.senderAddress = data.senderAddress;
     c.balanceNano = data.balanceNano;
+    c._nodePending = data.nodePending;
     c.tokens = data.tokens;
     c.recentTxs = data.recentTxs;
     c.usedAddresses = data.usedAddresses;

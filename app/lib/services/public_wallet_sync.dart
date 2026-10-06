@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 
 import 'network_controller.dart';
+import 'pending_balance.dart';
 import 'wallet_database_service.dart';
 import 'wallet_service.dart';
 import 'wallet_sync_controller.dart';
@@ -23,15 +24,31 @@ abstract class PublicWalletGateway {
     Map<String, dynamic> data,
     bool Function() valid,
   );
+
+  /// Every address's balance in one read, one address at a time, shaped
+  /// like the sync inputs: `balances` by address, plus `pending` activity
+  /// rows and the wallet-wide pending `summary` when the gateway can value
+  /// the mempool across the addresses. This fallback has neither.
+  Future<Map<String, dynamic>> inputs(List<String> addresses) async => {
+    'balances': {
+      for (final address in addresses) address: await balance(address),
+    },
+  };
 }
 
-class LivePublicWalletGateway implements PublicWalletGateway {
+class LivePublicWalletGateway extends PublicWalletGateway {
   @override
   Future<Map<String, dynamic>?> load(String id) =>
       WalletDatabaseService.loadCachedState(expectedWalletId: id);
   @override
   Future<Map<String, dynamic>> balance(String address) =>
       walletService.getBalance(address, nodeUrl: networkController.activeUrl);
+
+  /// One sequential read for the whole wallet: balances, pending rows and
+  /// the pending summary, valued across all the known addresses at once.
+  @override
+  Future<Map<String, dynamic>> inputs(List<String> addresses) => walletService
+      .loadPublicSyncInputs(addresses, nodeUrl: networkController.activeUrl);
   @override
   Future<List<dynamic>> history(String address) async =>
       jsonDecode(
@@ -124,15 +141,32 @@ class PublicWalletSync extends ChangeNotifier {
           var nano = 0;
           final amounts = <String, int>{};
           final transactions = <String, Map<String, dynamic>>{};
+          if (!valid()) return;
+          final read = await gateway.inputs(addresses.toList());
+          final balances = read['balances'] as Map? ?? const {};
           for (final address in addresses) {
-            if (!valid()) return;
-            final balance = await gateway.balance(address);
+            final balance = balances[address];
+            // Any missing address keeps the prior snapshot, as a failed
+            // balance call always has.
+            if (balance is! Map) throw StateError('Balance unavailable');
             nano += (balance['balance_nano_erg'] as num).toInt();
             for (final token in balance['tokens'] as List? ?? const []) {
               final id = token['id'] as String;
               amounts[id] =
                   (amounts[id] ?? 0) + (token['amount'] as num).toInt();
             }
+          }
+          // Valued across all the addresses at once when the node could:
+          // a payment between two of them is not counted twice.
+          final pending = PendingBalance.fromJson(read['summary']);
+          if (pending != null) {
+            nano = pending.netNano;
+            for (final flow in pending.tokens) {
+              amounts[flow.id] = flow.amount;
+            }
+            amounts.removeWhere((_, amount) => amount <= 0);
+          }
+          for (final address in addresses) {
             if (!valid()) return;
             for (final tx in await gateway.history(address)) {
               final row = Map<String, dynamic>.from(tx as Map);
@@ -156,16 +190,23 @@ class PublicWalletSync extends ChangeNotifier {
                 'decimals': knownTokens[holding.key]?['decimals'] ?? 0,
               },
           ];
-          final rows = transactions.values.toList()
+          final confirmed = transactions.values.toList()
             ..sort(
               (a, b) => ((b['timestamp'] as num?) ?? 0).compareTo(
                 (a['timestamp'] as num?) ?? 0,
               ),
             );
+          // Pending rows ride ahead of confirmed history, as in the live
+          // wallet; one that has since confirmed shows once, confirmed.
+          final rows = mergePending(
+            read['pending'] as List? ?? const [],
+            confirmed,
+          );
           final snapshot = <String, dynamic>{
             ...old,
             'wallet_id': entry.key,
             'balance_nano_erg': nano,
+            'pending': pending?.toJson(),
             'tokens': tokens,
             'transactions': rows.take(5).toList(),
             'public_only': true,

@@ -10,6 +10,7 @@ import '../theme/argus_theme.dart';
 import 'send_screen.dart';
 import 'token_avatar.dart';
 import 'widgets/asset_tile.dart';
+import 'widgets/pending_balance_line.dart';
 import 'widgets/token_detail_sheet.dart';
 
 /// A text-first, lazy view of holdings. Opening it never hydrates metadata.
@@ -181,6 +182,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
                     Text(
                       'Holdings last synced ${formatSyncAge(live.lastSyncedAt)}',
                     ),
+                  PendingBalanceLine(pending: live.pending, hidden: hidden),
                 ],
               ),
             ),

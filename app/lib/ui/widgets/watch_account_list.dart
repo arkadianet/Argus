@@ -4,6 +4,7 @@ import '../../services/wallet_service.dart';
 import '../../format.dart';
 import '../transactions_screen.dart';
 import '../cold_signing_screen.dart';
+import 'pending_balance_line.dart';
 
 Future<void> addWatchAccount(BuildContext context) => showDialog<void>(
   context: context,
@@ -123,6 +124,10 @@ class WatchAccountList extends StatelessWidget {
                   if (account.snapshot case final snapshot?) ...[
                     Text(
                       hideBalances ? '•••••• ERG' : formatErg(snapshot.balance),
+                    ),
+                    PendingBalanceLine(
+                      pending: snapshot.pending,
+                      hidden: hideBalances,
                     ),
                     Wrap(
                       spacing: 8,
