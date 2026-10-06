@@ -9,6 +9,7 @@ import '../services/amm_service.dart';
 import '../services/arbitrage_service.dart';
 import '../services/pending_balance.dart';
 import '../services/spend_policy.dart';
+import '../services/token_metadata.dart';
 import '../services/verified_tokens.dart';
 import '../services/wallet_service.dart';
 import '../services/wallet_sync_controller.dart';
@@ -124,8 +125,14 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // A name or scale the lookup learns repaints the routes at once.
+    walletService.metadataChanges.addListener(_onNames);
     _names = widget.names;
     _load();
+  }
+
+  void _onNames() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _load() async {
@@ -153,6 +160,7 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    walletService.metadataChanges.removeListener(_onNames);
     _scanner.dispose();
     super.dispose();
   }
@@ -163,18 +171,27 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
         availableNano: _availableNano,
       );
 
+  // Names and scales come from the one token lookup every screen uses
+  // (token_metadata.dart), after the curated ticker and before the pool
+  // set's own public map.
   String _symbol(String? id) {
     if (id == null) return 'ERG';
-    return knownToken(id)?.ticker ?? _names?.tokens[id]?.name ?? '${id.substring(0, 8)}…';
+    return knownToken(id)?.ticker ?? tokenName(id) ?? _names?.tokens[id]?.name ?? shortTokenId(id);
   }
 
-  int _decimals(String? id) {
+  /// Null when nothing knows the token's scale: its amounts are raw units.
+  int? _decimals(String? id) {
     if (id == null) return 9;
-    return knownToken(id)?.decimals ?? _names?.tokens[id]?.decimals ?? 0;
+    return knownToken(id)?.decimals ?? tokenDecimals(id) ?? _names?.tokens[id]?.decimals;
   }
 
-  String _amount(int amount, String? id) =>
-      '${id == null ? formatErg(amount, maxFrac: 4, unit: false) : formatTokenAmountGrouped(amount, _decimals(id))} ${_symbol(id)}';
+  String _amount(int amount, String? id) {
+    if (id == null) return '${formatErg(amount, maxFrac: 4, unit: false)} ERG';
+    final decimals = _decimals(id);
+    return decimals == null
+        ? '${rawUnitsText(BigInt.from(amount))} of ${_symbol(id)}'
+        : '${formatTokenAmountGrouped(amount, decimals)} ${_symbol(id)}';
+  }
 
   String _route(ArbOpportunity o) =>
       [_symbol(o.legs.first.fromTokenId), for (final l in o.legs) _symbol(l.toTokenId)].join(' → ');

@@ -33,6 +33,20 @@ class ScreenApi extends FakeApi {
   }
 }
 
+/// A token no layer names or scales.
+final _unknownTok = '5e' * 32;
+
+/// The same routes through [_unknownTok].
+class _UnknownTokenApi extends ScreenApi {
+  @override
+  Future<String> scan({String? nodeUrl, required String optionsJson}) async =>
+      (await super.scan(nodeUrl: nodeUrl, optionsJson: optionsJson)).replaceAll(tok, _unknownTok);
+
+  @override
+  Future<String> prepare({required BigInt handleId, required String requestJson, String? nodeUrl}) async =>
+      (await super.prepare(handleId: handleId, requestJson: requestJson, nodeUrl: nodeUrl)).replaceAll(tok, _unknownTok);
+}
+
 /// A stranded chain whose buying leg waits in the mempool until
 /// [confirmed], while the wallet waits for confirmations.
 class _ConfirmingApi extends ScreenApi {
@@ -293,6 +307,33 @@ void main() {
     expect(arbAvailableNano(routeSpendable: 50, pending: split, allowUnconfirmed: true), 50);
     expect(arbAvailableNano(routeSpendable: 120, pending: null, allowUnconfirmed: false), 120);
     expect(arbAvailableNano(routeSpendable: null, pending: split, allowUnconfirmed: false), isNull);
+  });
+
+  testWidgets('a token nothing has named or scaled is shown in raw units', (tester) async {
+    // Neither the lookup, the curated list nor the pool set knows the
+    // route's token: its amounts are base units and must not pass for
+    // whole tokens.
+    final api = _UnknownTokenApi();
+    tester.view.physicalSize = const Size(390, 844) * 3;
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: argusTheme(watchful: true),
+        builder: (context, child) => WalletArgsScope(args: _args, child: child!),
+        home: ArbitrageScreen(
+          service: ArbitrageService(api: api, nodeUrl: () => 'http://node', handle: () => BigInt.one),
+          names: const AmmPoolSet(truncated: false, pools: [], tokens: {}),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final short = '${_unknownTok.substring(0, 8)}…';
+    expect(find.text('ERG → $short → ERG'), findsNWidgets(2));
+    await tester.tap(find.byKey(Key('arb-opp-${'a' * 64}>${'c' * 64}')));
+    await tester.pumpAndSettle();
+    expect(find.text('46.3 ERG → 4,629,000,000 raw units of $short'), findsOneWidget);
+    expect(find.textContaining('4,629 $short'), findsNothing);
   });
 
   testWidgets('says plainly when there is no gap', (tester) async {
