@@ -1,8 +1,8 @@
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
+    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use rand::RngCore;
+use rand::{rngs::SysRng, TryRng};
 use zeroize::Zeroize;
 
 use crate::CoreError;
@@ -31,13 +31,13 @@ impl Drop for EncryptedSeed {
 impl EncryptedSeed {
     pub fn encrypt(seed_bytes: &[u8]) -> Result<Self, CoreError> {
         let mut key = [0u8; KEY_LEN];
-        OsRng.fill_bytes(&mut key);
+        SysRng.try_fill_bytes(&mut key).map_err(|e| CoreError::Encryption(e.to_string()))?;
         let cipher =
             Aes256Gcm::new_from_slice(&key).map_err(|e| CoreError::Encryption(e.to_string()))?;
         let mut nonce = [0u8; NONCE_LEN];
-        OsRng.fill_bytes(&mut nonce);
+        SysRng.try_fill_bytes(&mut nonce).map_err(|e| CoreError::Encryption(e.to_string()))?;
         let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce), seed_bytes)
+            .encrypt(&Nonce::from(nonce), seed_bytes)
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
         Ok(EncryptedSeed {
             nonce,
@@ -50,7 +50,7 @@ impl EncryptedSeed {
         let cipher = Aes256Gcm::new_from_slice(&self.key)
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
         cipher
-            .decrypt(Nonce::from_slice(&self.nonce), self.ciphertext.as_ref())
+            .decrypt(&Nonce::from(self.nonce), self.ciphertext.as_ref())
             .map_err(|e| CoreError::Encryption(format!("Decryption failed: {e:?}")))
     }
 
