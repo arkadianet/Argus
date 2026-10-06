@@ -19,6 +19,12 @@ Status: implemented on the branch (F1, F1 history, F2 with execution)
   or ERG/SigUSD pool boxes from the node, CoinGecko's market chart under
   the CoinGecko source. One service API, kept in memory, no extra polling,
   an explicit "unavailable" with a reason. Not wired into the home screen.
+- **F1, stale oracle fix** (added 2026-10-07). The AVL multi-oracle stopped
+  22 days ago. Under the Oracle source take ERG/USD from the SigmaUSD
+  ERG/USD pool, use the AVL oracle only for what that pool lacks and only
+  while current, prefer the Dexy gold oracle for gold when fresher, say
+  plainly when a feed has no current source, and read the Oracle source's
+  history from the SigmaUSD pool.
 - **F2.** Arbitrage, opt-in from Discover, scanning only while open. For
   each opportunity: route, amount in, expected net ERG profit after pool
   fees, miner fees and minimum box values, above a user-set minimum. The
@@ -140,6 +146,47 @@ fee 997 for a box without R4; the arbitrage path reads boxes itself and
 refuses those. None exist on mainnet today (all 549 parseable pool boxes
 carry R4); the depth floor bounds the effect.
 
+### The Oracle source and stale oracles (follow-up, 2026-10-07)
+
+The "Oracle pool" source used to take ERG/USD, gold and the wrapped majors
+from the AVL multi-oracle (pool NFT `f7f008ad…`). That pool was last
+refreshed at height 1 872 818 and its 13 operator boxes are from
+1 872 522–1 872 820, about 22 days before the tip (checked on two nodes),
+so every price it gave was weeks old, flagged stale but still used.
+
+The source is now named **Oracle pools** and composed per feed. Each
+single-rate pool keeps one box holding its NFT; R4 is the rate as a `Long`.
+`services/oracle_feeds.dart` reads the newest box from the user's node
+(`/blockchain/box/unspent/byTokenId/<nft>`).
+
+| Feed | Sources, in order | Unit of R4 | Current while |
+|---|---|---|---|
+| ERG/USD | SigmaUSD ERG/USD pool `011d3364…`, then Dexy USD pool `6a2b821b…`, then the AVL `ERG_USD` feed | nanoERG per dollar | box ≤ 60 blocks old (AVL: its own rule, 60 blocks / 4 epochs) |
+| Gold (DexyGold = 1 mg) | Dexy gold pool `3c45f29a…` and the AVL `XAU_USD` feed: the fresher current one | nanoERG per kg (÷ 1 000 000 per mg); AVL USD per troy ounce (÷ 31 103.4768 per mg) | Dexy gold box ≤ 90 blocks old |
+| Wrapped majors | AVL feeds while current, else their Spectrum pools | USD | as above |
+
+Units were checked rather than assumed. The vendored `sigmausd` crate reads
+the SigmaUSD pool's R4 as `nanoerg_per_usd` and its calculator, like the
+AgeUSD bank, divides it by 100 for the two-decimal cent. The Dexy USD pool,
+an independent oracle-core v2 pool, quoted 3 123 845 338 against
+SigmaUSD's 3 123 969 090 at the same height (0.004% apart). The SigmaUSD
+box is the original oracle pool's layout, not oracle-core v2's: it carries
+only the NFT, R5 is the epoch's end height rather than an epoch counter,
+and R6 is a 32-byte hash. Only R4 is read, and it means the same thing in
+both layouts. The Dexy gold unit comes from the vendored `dexy` crate's
+`oracle_divisor` (kg → mg).
+
+Freshness thresholds are a few of each pool's epochs, measured on the node:
+the SigmaUSD pool box turns over every two to eight blocks, Dexy USD's
+about every seven, Dexy gold's about every thirty. Ages count from the tip,
+or from the newest box seen when the tip is not known yet.
+
+When a feed has no current source, the youngest stale one is used, with its
+age in the label ("SigmaUSD oracle, 3 h old"), and it never counts towards
+a total; the token sheet says "not counted in totals (stale)". The whole
+pricer is flagged stale only when the ERG rate itself has no current
+source, so a stopped AVL feed no longer marks a current ERG price stale.
+
 ## F1: ERG price history
 
 `TokenPricer.ergPriceHistory(PriceWindow window)` → `ErgPriceHistory`:
@@ -151,7 +198,7 @@ carry R4); the depth floor bounds the effect.
 
 | Source | Data | Notes |
 |---|---|---|
-| Oracle pool | operator data-point boxes (`/blockchain/box/byTokenId/<oracle token>`), per-epoch median of ERG_USD, the aggregation the live price uses | `stale` when the newest epoch is older than the oracle's stale limit (the AVL oracle stopped posting ~22 days ago at the time of writing) |
+| Oracle pools | the SigmaUSD ERG/USD pool's past boxes (`/blockchain/box/byTokenId/011d3364…`), R4 of each at its height: the rate this source prices ERG at | `stale` when the newest box is older than the pool's 60-block threshold |
 | Spectrum pools | the deepest ERG/SigUSD pool's past boxes (the pool the price book used) | |
 | CoinGecko | `coins/ergo/market_chart` in the display currency | the host that source already uses; nothing new for the others |
 
@@ -265,7 +312,13 @@ the app-fee output), `citadel-core` (fee and box constants).
   stranded box at a fresh quote and conserves everything; a box without
   R4 is not a pool.
 - Dart: pricing policy and LP shares, the pricer's Rust book and its
-  failure, price history per source (real pool and oracle fixtures,
-  sampling bounds, caching, degradation), the arbitrage service and
-  scanner lifecycle, and the screen (warnings, review, watch-only,
-  stranded recovery to the confirm sheet, background pause, 2× text).
+  failure, price history per source (real pool fixtures, sampling bounds,
+  caching, degradation), the arbitrage service and scanner lifecycle, and
+  the screen (warnings, review, watch-only, stranded recovery to the
+  confirm sheet, background pause, 2× text).
+- Oracle follow-up: freshness selection (a current SigmaUSD pool beats a
+  stopped AVL feed and does not flag ERG stale; all stale shows the
+  youngest with its age; Dexy USD as fallback; majors fall back to pools;
+  gold takes the fresher of Dexy and AVL), units decoded from recorded real
+  SigmaUSD, Dexy USD and Dexy gold pool boxes, and history from recorded
+  SigmaUSD pool boxes.
