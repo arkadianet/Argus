@@ -60,26 +60,52 @@ All vendored from `github.com/arkadianet/citadel` commit `f533f15`.
 
 ## Crates.io dependencies
 
-| Crate | Version | Purpose |
-|-------|---------|---------|
-| `tokio` | 1.40 (rt-multi-thread, macros, sync) | Async runtime |
-| `serde` / `serde_json` | 1.0 | Serialization |
-| `thiserror` | 1 | Error handling |
-| `anyhow` | 1 | Error handling |
-| `tracing` | 0.1 | Logging |
-| `tracing-subscriber` | 0.3 | Logging |
-| `hex` | 0.4 | Hex encoding |
-| `base16` | 0.2 | Base16 encoding |
-| `zeroize` | 1.8 (zeroize_derive) | Secret zeroing |
-| `sha2` | 0.10 | SHA-256 (BIP-39 checksum) |
-| `hmac` | 0.12 | HMAC for BIP-32 |
-| `aes-gcm` | 0.10 | Seed blob sealing (AES-256-GCM, random wrap key) |
-| `rand` | 0.8 | Random nonces and salts |
-| `reqwest` | 0.12 (rustls-tls, json) | HTTP client for node queries |
-| `flutter_rust_bridge` | 2.x | Dart-Rust FFI bridge |
-| `once_cell` | 1 | Lazy statics |
-| `indexmap` | 2 | Orrdered map |
-| `num-bigint` / `num-traits` | 0.4 / 0.2 | Big integer math |
+Locked versions as of 2026-10-06, each the newest stable release unless noted.
+The toolchain is Rust 1.99.0 (`rust/rust-toolchain.toml`).
+
+| Crate | Requirement | Locked | Purpose |
+|-------|-------------|--------|---------|
+| `tokio` | 1.53 (rt-multi-thread, macros, sync) | 1.53.2 | Async runtime |
+| `futures` | 0.3 | 0.3.34 | Async utilities |
+| `serde` / `serde_json` | 1.0 | 1.0.229 / 1.0.151 | Serialization |
+| `thiserror` | 2 | 2.0.21 | Error handling |
+| `anyhow` | 1 | 1.0.104 | Error handling |
+| `tracing` | 0.1 | 0.1.44 | Logging |
+| `tracing-subscriber` | 0.3 | not used by any crate | Logging |
+| `hex` | 0.4 | 0.4.3 | Hex encoding |
+| `base16` | 0.2 | 0.2.1 | Base16 encoding |
+| `base64` | 0.23 (wallet-core) | 0.23.1 | Cold-signing transport |
+| `bs58` | 0.5 (rosen, stealth) | 0.5.1 | Base58 addresses |
+| `zeroize` | 1.9 (zeroize_derive) | 1.9.0 | Secret zeroing |
+| `sha2` | 0.11 | 0.11.0 | SHA-256 (BIP-39 checksum, stealth, Rosen) |
+| `hmac` | 0.13 | not used by any crate | HMAC |
+| `argon2` | 0.6 | 0.6.0 | PIN key derivation (Argon2id) |
+| `aes-gcm` | 0.11 | 0.11.1 | Seed blob sealing (AES-256-GCM, random wrap key) |
+| `rand` | 0.10 | 0.10.3 | Keys, nonces, salts, handle ids (`SysRng`) |
+| `reqwest` | 0.13 (rustls-no-provider, json) | 0.13.5 | HTTP client for node queries |
+| `rustls` / `webpki-roots` | 0.23 (ring, std, tls12) / 1 | 0.23.45 / 1.0.9 | TLS config for reqwest, see below |
+| `flutter_rust_bridge` | =2.13.0 | 2.13.0 | Dart-Rust FFI bridge (see `flutter-toolchain.md`) |
+| `once_cell` | 1 | 1.21.4 | Lazy statics |
+| `indexmap` | 2 | 2.14.2 | Ordered map |
+| `num-bigint` / `num-traits` | 0.5 / 0.2 | 0.5.1 / 0.2.19 | Big integer math (amm) |
+
+Versions held back on purpose, because the value crosses into sigma-rust's API:
+
+- `stealth` depends on `rand = "0.8"` (0.8.8): it passes `OsRng` to
+  `random_scalar_in_group_range`, which takes a rand_core 0.6 RNG.
+- `wallet-core` and `wallet-net` depend on `num-bigint = "0.4"` (0.4.8): they
+  build `AutolykosSolution`, whose `pow_distance` is a num-bigint 0.4 `BigUint`.
+
+reqwest 0.13 no longer offers rustls with bundled roots, and its remaining
+rustls features use the platform verifier, which needs JNI setup on Android.
+`wallet_net::http` therefore hands every client a rustls config with the ring
+provider and webpki-roots, the configuration reqwest 0.12's `rustls-tls` built.
+Create clients with `wallet_net::http::client_builder()` or `client()`, not
+`reqwest::Client::builder()`/`new()`, which panic without a crypto provider.
+
+`ergo-node-interface` (Git) still requires `reqwest` 0.12 (locked 0.12.28,
+the last 0.12 release) and `thiserror` 1 (1.0.69), so those versions remain in
+the build until the fork is updated.
 
 ## Former patch: core2
 
