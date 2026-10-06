@@ -25,13 +25,11 @@ void main() {
       final dark = palette.isDark;
       final page = palette.background;
       final surface = palette.surface;
-      // The raised panel shades from its surface to its foot; the ruled
-      // page's glow is brightest behind the balance.
+      // The raised panel shades from its surface to its foot.
       final grounds = {
         'page': page,
         'sheet and panel top': surface,
         'panel foot': raisedPanelFoot(theme),
-        'glow': homeGlowPeak(theme, colors),
       };
       final incoming = dark ? mossBright : moss;
       final warn = dark ? rustBright : rust;

@@ -364,14 +364,3 @@ class WalletPageData {
 
 /// Tabs of the wallet page's bottom navigation.
 enum WalletTab { wallet, activity, discover, settings }
-
-/// The two visual directions under review; the one not chosen goes.
-enum HomeDirection {
-  /// One continuous page: no raised surface, hairline-ruled rows, a slim
-  /// action bar.
-  ruled,
-
-  /// One raised panel holding the balance and round actions; flat,
-  /// unruled lists below.
-  raised,
-}

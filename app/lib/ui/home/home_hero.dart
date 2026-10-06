@@ -10,9 +10,9 @@ import 'home_models.dart';
 import 'home_style.dart';
 import 'home_widgets.dart';
 
-/// The balance, set as type rather than boxed: a label, the numeral, its
-/// value, and one line for what is pending and what is stealth. Both
-/// directions use it; the raised one puts it on a panel.
+/// The balance on its raised panel, set as type rather than boxed: a label,
+/// the numeral, its value, and one line for what is pending and what is
+/// stealth.
 class HomeBalance extends StatelessWidget {
   const HomeBalance({
     super.key,
@@ -26,8 +26,11 @@ class HomeBalance extends StatelessWidget {
     this.pending,
     this.stealthNano = 0,
     this.hidden = false,
-    this.labelEndInset = 0,
   });
+
+  /// Room kept clear at the end of the label line for the hide-balances
+  /// eye the panel pins in its corner.
+  static const _cornerReserve = 40.0;
 
   /// "Total balance" or "Balance".
   final String label;
@@ -46,9 +49,6 @@ class HomeBalance extends StatelessWidget {
   final PendingFunds? pending;
   final int stealthNano;
   final bool hidden;
-
-  /// Room kept clear at the end of the label line for a corner control.
-  final double labelEndInset;
 
   bool get _showPending => pending != null && !pending!.isEmpty;
 
@@ -73,7 +73,7 @@ class HomeBalance extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
-          padding: EdgeInsetsDirectional.only(end: labelEndInset),
+          padding: const EdgeInsetsDirectional.only(end: _cornerReserve),
           child: Row(
             children: [
               Expanded(
@@ -446,7 +446,7 @@ class SparklinePainter extends CustomPainter {
   bool shouldRepaint(SparklinePainter old) => old.color != color || !identical(old.points, points);
 }
 
-/// The raised direction's one elevated surface: the balance's plinth.
+/// The page's one elevated surface: the balance's plinth.
 ///
 /// Its edges sit 12 in from the screen and its content 12 in again, so the
 /// figures on it start on the same gutter as every row below. Depth comes
@@ -513,42 +513,8 @@ Color raisedPanelFoot(ThemeData theme) => Color.alphaBlend(
       theme.colorScheme.surface,
     );
 
-/// The glow's brightest point, where the balance is set: on a dark page a
-/// breath of the accent, on a light one the paper brightened toward the
-/// surface. Either way text there keeps its contrast; tinting light paper
-/// would have darkened it under the green and red figures.
-Color homeGlowPeak(ThemeData theme, ArgusColors colors) => theme.brightness == Brightness.dark
-    ? Color.alphaBlend(colors.accent.withValues(alpha: 0.08), theme.scaffoldBackgroundColor)
-    : Color.alphaBlend(theme.colorScheme.surface.withValues(alpha: 0.9), theme.scaffoldBackgroundColor);
-
-/// The ruled direction's only depth: a soft light at the top of the page,
-/// behind the balance, fading into the ground.
-class HomeGlow extends StatelessWidget {
-  const HomeGlow({super.key, required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final peak = homeGlowPeak(theme, ArgusColors.of(context));
-    return ColoredBox(
-      color: theme.scaffoldBackgroundColor,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: const Alignment(-0.7, -1.05),
-            radius: 1.25,
-            colors: [peak, peak.withValues(alpha: 0)],
-          ),
-        ),
-        child: child,
-      ),
-    );
-  }
-}
-
-/// The hide-balances eye, for an app bar or a panel corner.
+/// The hide-balances eye the panel pins in its corner, beside the figure
+/// it hides.
 class HideBalancesButton extends StatelessWidget {
   const HideBalancesButton({super.key, required this.hidden, required this.onPressed});
 

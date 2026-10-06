@@ -20,7 +20,6 @@ class OverviewScreen extends StatelessWidget {
   const OverviewScreen({
     super.key,
     required this.data,
-    this.direction = HomeDirection.ruled,
     this.onOpenWallet,
     this.onWalletOptions,
     this.onCreate,
@@ -33,7 +32,6 @@ class OverviewScreen extends StatelessWidget {
   });
 
   final OverviewData data;
-  final HomeDirection direction;
   final ValueChanged<String>? onOpenWallet;
 
   /// Long press: rename or remove without opening the wallet.
@@ -48,9 +46,7 @@ class OverviewScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ruled = direction == HomeDirection.ruled;
-    final scaffold = Scaffold(
-      backgroundColor: ruled ? Colors.transparent : null,
+    return Scaffold(
       appBar: AppBar(
         titleSpacing: homeGutter,
         title: Semantics(
@@ -67,8 +63,6 @@ class OverviewScreen extends StatelessWidget {
           ),
         ),
         actions: [
-          // Ruled keeps the eye in the bar; raised pins it to its panel.
-          if (ruled && data.wallets.isNotEmpty) HideBalancesButton(hidden: data.hidden, onPressed: onToggleHidden),
           IconButton(
             key: const Key('overview-settings'),
             icon: const Icon(Icons.settings_outlined),
@@ -80,7 +74,6 @@ class OverviewScreen extends StatelessWidget {
       ),
       body: OverviewView(
         data: data,
-        direction: direction,
         onOpenWallet: onOpenWallet,
         onWalletOptions: onWalletOptions,
         onCreate: onCreate,
@@ -91,16 +84,16 @@ class OverviewScreen extends StatelessWidget {
         onLearnMore: onLearnMore,
       ),
     );
-    return ruled ? HomeGlow(child: scaffold) : scaffold;
   }
 }
 
-/// The overview's scrolling body, for hosting under another app bar.
+/// The overview's scrolling body, for hosting under another app bar: the
+/// total on the raised panel with the ERG price under a hairline, the
+/// network line, then the wallets as a flat list ending in Add a wallet.
 class OverviewView extends StatelessWidget {
   const OverviewView({
     super.key,
     required this.data,
-    this.direction = HomeDirection.ruled,
     this.onOpenWallet,
     this.onWalletOptions,
     this.onCreate,
@@ -112,7 +105,6 @@ class OverviewView extends StatelessWidget {
   });
 
   final OverviewData data;
-  final HomeDirection direction;
   final ValueChanged<String>? onOpenWallet;
   final ValueChanged<String>? onWalletOptions;
   final VoidCallback? onCreate;
@@ -142,70 +134,47 @@ class OverviewView extends StatelessWidget {
     if (data.wallets.isEmpty) {
       return _Welcome(onCreate: onCreate, onRestore: onRestore, onWatch: onWatch, onLearnMore: onLearnMore);
     }
-    final ruled = direction == HomeDirection.ruled;
-    final balance = HomeBalance(
-      label: 'Total balance',
-      nanoErg: data.totalNano,
-      currency: data.currency,
-      fiatValue: data.totalFiat,
-      unpricedCount: data.unpricedCount,
-      pending: data.pending,
-      hidden: data.hidden,
-      labelEndInset: ruled ? 0 : 40,
-    );
-    final price = data.price == null ? null : ErgPriceStrip(price: data.price!, currency: data.currency);
-    final wallets = [
-      for (final w in data.wallets)
-        OverviewWalletRow(
-          wallet: w,
-          currency: data.currency,
-          hidden: data.hidden,
-          onTap: onOpenWallet == null ? null : () => onOpenWallet!(w.id),
-          onLongPress: onWalletOptions == null ? null : () => onWalletOptions!(w.id),
-        ),
-      AddWalletRow(onTap: () => _add(context)),
-    ];
+    final price = data.price;
     return ListView(
       key: const Key('overview-list'),
       padding: EdgeInsets.only(top: 4, bottom: 24 + bottom),
       children: [
-        if (ruled) ...[
-          Padding(padding: const EdgeInsets.fromLTRB(homeGutter, 8, homeGutter, 16), child: balance),
-          if (price != null) ...[
-            const HomeRule(),
-            Padding(padding: const EdgeInsets.symmetric(horizontal: homeGutter, vertical: 12), child: price),
-          ],
-          const HomeRule(),
-          homeNetworkRow(context, data.network, onTap: onNetwork),
-          const HomeRule(),
-          const SizedBox(height: 8),
-        ] else ...[
-          RaisedPanel(
-            corner: HideBalancesButton(hidden: data.hidden, onPressed: onToggleHidden),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                balance,
-                if (price != null) ...[
-                  const SizedBox(height: 14),
-                  const HomeRule(indent: 0, endIndent: 0),
-                  const SizedBox(height: 12),
-                  price,
-                ],
+        RaisedPanel(
+          corner: HideBalancesButton(hidden: data.hidden, onPressed: onToggleHidden),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              HomeBalance(
+                label: 'Total balance',
+                nanoErg: data.totalNano,
+                currency: data.currency,
+                fiatValue: data.totalFiat,
+                unpricedCount: data.unpricedCount,
+                pending: data.pending,
+                hidden: data.hidden,
+              ),
+              if (price != null) ...[
+                const SizedBox(height: 14),
+                const HomeRule(indent: 0, endIndent: 0),
+                const SizedBox(height: 12),
+                ErgPriceStrip(price: price, currency: data.currency),
               ],
-            ),
+            ],
           ),
-          const SizedBox(height: 4),
-          homeNetworkRow(context, data.network, onTap: onNetwork),
-          const SizedBox(height: 4),
-        ],
+        ),
+        const SizedBox(height: 4),
+        homeNetworkRow(context, data.network, onTap: onNetwork),
+        const SizedBox(height: 4),
         HomeSectionHeader(title: 'Wallets', count: '${data.wallets.length}'),
-        if (ruled) const HomeRule(),
-        for (var i = 0; i < wallets.length; i++) ...[
-          if (ruled && i > 0) const HomeRule(indent: homeTextStart),
-          wallets[i],
-        ],
-        if (ruled) const HomeRule(),
+        for (final w in data.wallets)
+          OverviewWalletRow(
+            wallet: w,
+            currency: data.currency,
+            hidden: data.hidden,
+            onTap: onOpenWallet == null ? null : () => onOpenWallet!(w.id),
+            onLongPress: onWalletOptions == null ? null : () => onWalletOptions!(w.id),
+          ),
+        AddWalletRow(onTap: () => _add(context)),
         const SizedBox(height: 20),
         PrototypeNote(onLearnMore: onLearnMore),
       ],

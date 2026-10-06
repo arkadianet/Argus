@@ -27,9 +27,6 @@ const homeMarkSize = 32.0;
 /// Icons inside the content; the app bar and tab bar keep their 24.
 const homeIconSize = 20.0;
 
-/// Where a row's text starts, for hairlines that begin under it.
-const homeTextStart = homeGutter + homeMarkSize + 12;
-
 /// Figures line up digit for digit; Karla and Newsreader both carry
 /// tabular figures.
 const tabularFigures = [FontFeature.tabularFigures()];
@@ -100,8 +97,8 @@ class HomeText {
 /// Whether text is large enough that two-column rows stack their figures.
 bool homeLargeText(BuildContext context) => MediaQuery.textScalerOf(context).scale(14) / 14 > 1.35;
 
-/// A rule one device pixel thick, inset to the gutters (or to a row's text
-/// start), in the palette's outline colour.
+/// A rule one device pixel thick, in the palette's outline colour, inset to
+/// the page's gutters or (indents of 0) to the edges of the panel it sits in.
 class HomeRule extends StatelessWidget {
   const HomeRule({super.key, this.indent = homeGutter, this.endIndent = homeGutter});
 
