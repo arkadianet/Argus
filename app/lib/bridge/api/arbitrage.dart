@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `busy_pool_boxes`, `current_costs`, `default_max_legs`, `default_max_results`, `discover`, `fresh_route`, `generic`, `holding_json`, `is_chained_race`, `leg_status`, `node_err`, `parse`, `review_json`, `store_chain`, `submit_leg`, `unknown_chain`
+// These functions are ignored because they are not marked as `pub`: `busy_pool_boxes`, `check_and_sign`, `current_costs`, `default_max_legs`, `default_max_results`, `discover`, `fresh_route`, `generic`, `holding_json`, `is_chained_race`, `leg_status`, `node_err`, `parse`, `review_json`, `store_chain`, `submit_leg`, `unknown_chain`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ChainRecord`, `LegSpec`, `PrepareRequest`, `ScanOptions`
 
 /// Every arbitrage cycle the pools offer right now, best first.

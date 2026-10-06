@@ -205,6 +205,8 @@ struct ChainRecord {
     change_tree: String,
     spend_addresses: Vec<String>,
     legs: Vec<BuiltLeg>,
+    /// Being signed right now: a second tap must not sign it again.
+    executing: bool,
     executed: bool,
     /// Ids of the legs the node accepted, in leg order.
     accepted: Vec<String>,
@@ -368,6 +370,7 @@ pub async fn arbitrage_prepare(
         change_tree,
         spend_addresses: req.spend_addresses,
         legs: legs.clone(),
+        executing: false,
         executed: false,
         accepted: Vec::new(),
         failed_leg: None,
@@ -441,19 +444,22 @@ fn holding_json(rec: &ChainRecord, failed_leg: usize) -> serde_json::Value {
 #[flutter_rust_bridge::frb]
 pub async fn arbitrage_execute(handle_id: u64, chain_id: u64) -> Result<String, String> {
     let (legs, node_url, box_ids, pool_ids) = {
-        let chains = recover(CHAINS.lock());
-        let rec = chains.get(&chain_id).ok_or_else(unknown_chain)?;
+        let mut chains = recover(CHAINS.lock());
+        let rec = chains.get_mut(&chain_id).ok_or_else(unknown_chain)?;
         if rec.handle_id != handle_id {
             return Err(generic("chain belongs to another wallet"));
         }
-        if rec.executed {
-            return Err(generic("ALREADY_BROADCAST: this chain was already signed"));
+        if rec.executed || rec.executing {
+            return Err(generic(
+                "ALREADY_BROADCAST: this chain is already being signed",
+            ));
         }
         if rec.prepared_at.elapsed() > REVIEW_TTL {
             return Err(generic(
                 "REVIEW_EXPIRED: prices are stale; review the trade again",
             ));
         }
+        rec.executing = true;
         (
             rec.legs.clone(),
             rec.node_url.clone(),
@@ -470,49 +476,26 @@ pub async fn arbitrage_execute(handle_id: u64, chain_id: u64) -> Result<String, 
         )
     };
 
-    // The freshness gate, right before signing.
-    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
-    let mut moved = false;
-    for (pool_id, box_id) in pool_ids.iter().zip(&box_ids) {
-        match crate::api_amm_impl::fetch_pool(&client, pool_id).await {
-            Ok((_, b)) if &id_of(&b) == box_id => {}
-            _ => moved = true,
+    let signed = match check_and_sign(handle_id, &legs, &node_url, &pool_ids, &box_ids).await {
+        Ok(Some(signed)) => signed,
+        Ok(None) => {
+            recover(CHAINS.lock()).remove(&chain_id);
+            return Ok(serde_json::json!({"status": "moved"}).to_string());
         }
-    }
-    if !moved {
-        moved = busy_pool_boxes(&client)
-            .await
-            .is_some_and(|busy| box_ids.iter().any(|b| busy.contains(b)));
-    }
-    if moved {
-        recover(CHAINS.lock()).remove(&chain_id);
-        return Ok(serde_json::json!({"status": "moved"}).to_string());
-    }
-
-    let wallet_client = super::node_client(node_url.clone()).await?;
-    let mut signed = Vec::with_capacity(legs.len());
-    for leg in &legs {
-        let prep = CachedPreparation {
-            handle_id,
-            ergo_boxes: leg.inputs.clone(),
-            stealth_trees: Vec::new(),
-            mix_proofs: Vec::new(),
-            data_input_boxes: Vec::new(),
-            unsigned_tx: leg.unsigned.clone(),
-            miner_fee: leg.miner_fee as i64,
-            change_erg: 0,
-            recipient_erg: 0,
-            node_url: node_url.clone(),
-        };
-        signed.push(
-            super::sign_prepared_tx(handle_id, &prep, &wallet_client, "arbitrage_execute").await?,
-        );
-    }
+        Err(e) => {
+            // Nothing went out: the user may try again.
+            if let Some(rec) = recover(CHAINS.lock()).get_mut(&chain_id) {
+                rec.executing = false;
+            }
+            return Err(e);
+        }
+    };
     // From here the chain is out of the user's hands: never sign it twice.
     if let Some(rec) = recover(CHAINS.lock()).get_mut(&chain_id) {
         rec.executed = true;
     }
 
+    let wallet_client = super::node_client(node_url.clone()).await?;
     let mut accepted = Vec::new();
     let mut failure: Option<(usize, String)> = None;
     for (i, tx) in signed.iter().enumerate() {
@@ -554,6 +537,51 @@ pub async fn arbitrage_execute(handle_id: u64, chain_id: u64) -> Result<String, 
         }
     };
     Ok(out.to_string())
+}
+
+/// The freshness gate and the signatures: every pool box must still be the
+/// one reviewed and not busy in the mempool, or `Ok(None)` (nothing is
+/// signed); otherwise every leg is signed before any is broadcast.
+async fn check_and_sign(
+    handle_id: u64,
+    legs: &[BuiltLeg],
+    node_url: &Option<String>,
+    pool_ids: &[String],
+    box_ids: &[String],
+) -> Result<Option<Vec<serde_json::Value>>, String> {
+    let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
+    for (pool_id, box_id) in pool_ids.iter().zip(box_ids) {
+        match crate::api_amm_impl::fetch_pool(&client, pool_id).await {
+            Ok((_, b)) if &id_of(&b) == box_id => {}
+            _ => return Ok(None),
+        }
+    }
+    if busy_pool_boxes(&client)
+        .await
+        .is_some_and(|busy| box_ids.iter().any(|b| busy.contains(b)))
+    {
+        return Ok(None);
+    }
+    let wallet_client = super::node_client(node_url.clone()).await?;
+    let mut signed = Vec::with_capacity(legs.len());
+    for leg in legs {
+        let prep = CachedPreparation {
+            handle_id,
+            ergo_boxes: leg.inputs.clone(),
+            stealth_trees: Vec::new(),
+            mix_proofs: Vec::new(),
+            data_input_boxes: Vec::new(),
+            unsigned_tx: leg.unsigned.clone(),
+            miner_fee: leg.miner_fee as i64,
+            change_erg: 0,
+            recipient_erg: 0,
+            node_url: node_url.clone(),
+        };
+        signed.push(
+            super::sign_prepared_tx(handle_id, &prep, &wallet_client, "arbitrage_execute").await?,
+        );
+    }
+    Ok(Some(signed))
 }
 
 /// Whether the node has `tx_id` in its mempool or in a block. `Err` when
@@ -765,6 +793,7 @@ mod tests {
             change_tree: String::new(),
             spend_addresses: vec![],
             legs: vec![],
+            executing: false,
             executed: false,
             accepted: vec![],
             failed_leg: None,
