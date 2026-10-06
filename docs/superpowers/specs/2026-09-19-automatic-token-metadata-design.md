@@ -228,3 +228,10 @@ The Rust `amm_pools` call still builds a token map of its own — an echo of
 what it is seeded with, padded with placeholders. Dart no longer seeds it
 and discards the map; removing it needs a native rebuild and can ride along
 with the next FFI change.
+
+Pricing (`token_pricer.dart`) scales pool reserves by `AmmPoolSet.tokens`,
+falling back to the curated registry. It used to receive the placeholders'
+zero for every unseeded token, which priced a token with decimals per base
+unit; it now receives real decimals or none. A held token the catalog has
+not reached yet still falls through to the registry or zero; reading the
+one lookup (`tokenDecimals`) there at display time would close that gap.
