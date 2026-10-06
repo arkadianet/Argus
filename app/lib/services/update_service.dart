@@ -736,15 +736,16 @@ class UpdateService extends ChangeNotifier {
     final at = _now();
     lastChecked = at;
     await _store((p) => p.setInt(_lastCheckKey, at.millisecondsSinceEpoch));
-    final client = _newClient();
+    http.Client? client;
     try {
+      client = _newClient();
       await _adopt(await fetchLatestRelease(client, endpoint: _endpoint));
     } on UpdateException catch (e) {
       checkError = e.message;
     } catch (_) {
       checkError = 'The update check failed.';
     } finally {
-      client.close();
+      client?.close();
       checking = false;
       notifyListeners();
     }
@@ -808,9 +809,10 @@ class UpdateService extends ChangeNotifier {
       ..start();
     _setStage(UpdateStage.downloading, null);
 
-    final client = _client = _newClient();
+    http.Client? client;
     File? part;
     try {
+      client = _client = _newClient();
       final dir = await _platform.downloadDirectory();
       if (dir == null) throw const UpdateException('This device cannot keep a download.');
       await dir.create(recursive: true);
@@ -853,7 +855,7 @@ class UpdateService extends ChangeNotifier {
       await _delete(part);
       _setStage(UpdateStage.failed, 'The download failed.');
     } finally {
-      client.close();
+      client?.close();
       _client = null;
     }
   }

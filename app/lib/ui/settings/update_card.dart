@@ -110,6 +110,7 @@ class _UpdateCardState extends State<UpdateCard> {
           children: [
             LinearProgressIndicator(
               key: const Key('update-progress'),
+              semanticsLabel: 'Download progress',
               value: total == null || total == 0 ? null : (_u.downloadedBytes / total).clamp(0.0, 1.0),
             ),
             const SizedBox(height: 8),
@@ -136,7 +137,7 @@ class _UpdateCardState extends State<UpdateCard> {
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const LinearProgressIndicator(key: Key('update-progress')),
+            const LinearProgressIndicator(key: Key('update-progress'), semanticsLabel: 'Checking the download'),
             const SizedBox(height: 8),
             Text('Checking the download against this app\'s signing key…', style: small),
           ],
