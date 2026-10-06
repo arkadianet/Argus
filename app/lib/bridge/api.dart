@@ -315,7 +315,9 @@ Future<String> getPendingTransactions({
 );
 
 /// Request-scoped inputs: no TTL cache, so an explicit refresh always reads the node.
-/// UTXO and mempool inputs are independent and shared by all three consumers.
+/// UTXO and mempool inputs are independent and shared by every consumer:
+/// balances, pending rows, the UTXO count and the wallet-wide pending
+/// summary, valued once across all the addresses.
 Future<String> getSyncInputs({
   required List<String> addresses,
   String? nodeUrl,

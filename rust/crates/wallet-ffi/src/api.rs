@@ -19,6 +19,10 @@ use wallet_net::client::{address_to_ergo_tree, ErgoNodeClient};
 
 use crate::error::ArgusError;
 
+/// Pending transactions: the unconfirmed-spending policy, where every wallet
+/// spend gathers its inputs, and the pending summary the sync shows.
+pub mod mempool;
+
 /// Argus app fee: paid on every transaction the wallet builds (sends, UTXO
 /// tools, swaps, mints). ErgoPay transactions are built by the dApp and are
 /// not touched. Disclosed on every confirm sheet and in Settings → About.
@@ -110,6 +114,7 @@ fn take_preparation(handle_id: u64, preparation_id: u64) -> Result<CachedPrepara
 
 fn drop_preparations_for(handle_id: u64) {
     recover(PREPARATIONS.lock()).retain(|_, p| p.handle_id != handle_id);
+    mempool::forget_held_back(handle_id);
 }
 
 /// Adjust miner fee in an already-built EIP-12 unsigned tx.
@@ -407,7 +412,8 @@ pub async fn describe_reduced_transaction(
     // Input boxes are best effort: a node without the box (spent, pruned,
     // unreachable) still leaves the outputs and fee readable.
     let mut input_boxes = Vec::new();
-    if let Ok(client) = node_client(node_url).await {
+    let client = node_client(node_url).await;
+    if let Ok(client) = &client {
         for input in reduced.unsigned_tx.inputs.iter() {
             let id: String = input.box_id.clone().into();
             input_boxes.push(client.get_blockchain_box_by_id(&id).await.ok());
@@ -415,6 +421,22 @@ pub async fn describe_reduced_transaction(
     } else {
         input_boxes.resize(reduced.unsigned_tx.inputs.len(), None);
     }
+    // The dApp chose the inputs. A request that spends a box a pending
+    // transaction already spends, or the wallet's unconfirmed funds while
+    // it waits for confirmations, is refused before it can be signed.
+    let ids: Vec<String> = reduced
+        .unsigned_tx
+        .inputs
+        .iter()
+        .map(|i| i.box_id.clone().into())
+        .collect();
+    let trees = ids
+        .iter()
+        .zip(&input_boxes)
+        .filter_map(|(id, b)| Some((id.clone(), b.as_ref()?["ergoTree"].as_str()?.to_string())))
+        .collect();
+    let client = client?;
+    mempool::check_external_inputs(handle_id, &client, &ids, &trees).await?;
     let summary = with_handle(handle_id, "describe_reduced_transaction", |handle| {
         Ok(crate::api_ergopay_impl::summarize_reduced(
             &reduced,
@@ -790,73 +812,27 @@ pub async fn get_balance(address: String, node_url: Option<String>) -> Result<St
     Ok(balance_from_inputs(&address, &boxes, &txs).to_string())
 }
 
+/// One address's balance with its pending movements: `balance_nano_erg` and
+/// `tokens` are the figures once everything pending confirms, and `summary`
+/// splits them into confirmed, pending in and pending out. A mempool that
+/// could not be read arrives here as no transactions, which leaves the
+/// confirmed figures — never a failure.
 fn balance_from_inputs(
     address: &str,
     boxes: &[ErgoBox],
     txs: &[serde_json::Value],
 ) -> serde_json::Value {
-    let nano: u64 = boxes
+    let trees: HashSet<String> = address_to_ergo_tree(address).into_iter().collect();
+    let summary = wallet_net::mempool::pending_summary(boxes, txs, &trees);
+    let tokens: Vec<(String, u64)> = summary
+        .tokens
         .iter()
-        .fold(0u64, |acc, b| acc.saturating_add(*b.value.as_u64()));
-    let mut tokens: Vec<(String, u64)> = {
-        let mut by_id: HashMap<String, u64> = HashMap::new();
-        for b in boxes {
-            if let Some(held) = b.tokens.as_ref() {
-                for t in held.iter() {
-                    let id: String = t.token_id.into();
-                    let entry = by_id.entry(id).or_insert(0);
-                    *entry = entry.saturating_add(*t.amount.as_u64());
-                }
-            }
-        }
-        by_id.into_iter().collect()
-    };
-
-    // Mempool delta: unconfirmed sends drop the balance before they confirm.
-    // Any mempool failure degrades to the confirmed figure — never fail here.
-    let mut delta: i64 = 0;
-    if let Ok(tree) = address_to_ergo_tree(address) {
-        if !txs.is_empty() {
-            let mut confirmed_values: std::collections::HashMap<String, i64> =
-                std::collections::HashMap::new();
-            let mut confirmed_tokens: std::collections::HashMap<String, Vec<(String, i64)>> =
-                std::collections::HashMap::new();
-            for b in boxes {
-                confirmed_values.insert(b.box_id().to_string(), b.value.as_i64());
-                if let Some(held) = b.tokens.as_ref() {
-                    let held: Vec<(String, i64)> = held
-                        .iter()
-                        .map(|t| (t.token_id.into(), *t.amount.as_u64() as i64))
-                        .collect();
-                    if !held.is_empty() {
-                        confirmed_tokens.insert(b.box_id().to_string(), held);
-                    }
-                }
-            }
-            delta = wallet_net::mempool::balance_delta(txs, &tree, &confirmed_values);
-            // Pending token spends reduce the reported amounts under
-            // the same ownership and spent-set rules as the ERG delta.
-            let token_delta = wallet_net::mempool::token_deltas(txs, &tree, &confirmed_tokens);
-            if !token_delta.is_empty() {
-                let mut by_id: std::collections::HashMap<String, u64> =
-                    tokens.into_iter().collect();
-                for (id, d) in token_delta {
-                    let confirmed = *by_id.get(&id).unwrap_or(&0);
-                    let updated = (confirmed as i64 + d).max(0) as u64;
-                    // Positive deltas introduce tokens the address
-                    // holds only in the mempool (pending arrivals).
-                    if updated > 0 || by_id.contains_key(&id) {
-                        by_id.insert(id, updated);
-                    }
-                }
-                tokens = by_id.into_iter().collect();
-            }
-        }
-    }
-
+        .map(|t| (t.token_id.clone(), t.amount()))
+        .collect();
     serde_json::json!({
-        "balance_nano_erg": (nano as i64 + delta).max(0),
+        "balance_nano_erg": summary.balance_nano_erg(),
         "tokens": tokens_json(&tokens),
+        "summary": summary.to_json(),
     })
 }
 
@@ -1061,68 +1037,21 @@ fn pending_from_inputs(
 }
 
 /// Request-scoped inputs: no TTL cache, so an explicit refresh always reads the node.
-/// UTXO and mempool inputs are independent and shared by all three consumers.
+/// UTXO and mempool inputs are independent and shared by every consumer:
+/// balances, pending rows, the UTXO count and the wallet-wide pending
+/// summary, valued once across all the addresses.
 #[flutter_rust_bridge::frb]
 pub async fn get_sync_inputs(
     addresses: Vec<String>,
     node_url: Option<String>,
 ) -> Result<String, String> {
     let client = node_client(node_url).await?;
-    let addresses: HashSet<_> = addresses.into_iter().filter(|a| !a.is_empty()).collect();
-    let reads = futures::future::join_all(addresses.iter().map(|address| {
-        let client = &client;
-        async move {
-            let mempool = async {
-                match address_to_ergo_tree(address) {
-                    Ok(tree) => client.mempool_txs_for(&tree).await.unwrap_or_default(),
-                    Err(_) => Vec::new(),
-                }
-            };
-            let (boxes, txs) = tokio::join!(client.get_unspent(address), mempool);
-            (address, boxes, txs)
-        }
-    }))
-    .await;
-    let mut balances = serde_json::Map::new();
-    let mut trees = HashSet::new();
-    let mut values = HashMap::new();
-    let mut unique = HashMap::new();
-    let mut count_complete = true;
-    for (address, boxes, txs) in reads {
-        if let Ok(tree) = address_to_ergo_tree(address) {
-            trees.insert(tree);
-        }
-        match boxes {
-            Ok((boxes, _)) => {
-                balances.insert(address.clone(), balance_from_inputs(address, &boxes, &txs));
-                for b in boxes {
-                    values.insert(b.box_id().to_string(), b.value.as_i64());
-                }
-            }
-            Err(_) => {
-                count_complete = false;
-            }
-        }
-        for tx in txs {
-            if let Some(id) = tx["id"].as_str() {
-                unique.insert(id.to_string(), tx);
-            }
-        }
-    }
-    let txs: Vec<_> = unique.into_values().collect();
-    Ok(serde_json::json!({
-        "balances": balances,
-        // A missing listing can hide a spent input from any transaction.
-        // Null means unavailable; an empty array would claim no pending activity.
-        "pending": if count_complete { Some(pending_from_inputs(&txs, &trees, &values)) } else { None },
-        "utxo_count": if count_complete { Some(values.len()) } else { None },
-        // The node that actually answered. `connect` falls back past the
-        // preferred URL, so this is not necessarily the one the app asked
-        // for, and it is the only endpoint that has already been shown these
-        // addresses and the token ids in their boxes.
-        "served_by": client.url(),
-    })
-    .to_string())
+    let mut seen = HashSet::new();
+    let addresses: Vec<_> = addresses
+        .into_iter()
+        .filter(|a| !a.is_empty() && seen.insert(a.clone()))
+        .collect();
+    Ok(mempool::sync_inputs_together(&client, &addresses).await)
 }
 
 const MAX_DISCOVERY: u32 = 512;
@@ -1651,6 +1580,8 @@ async fn gather_unspent(
 }
 
 /// Every unspent box, reserved ones included: for the mix entry itself.
+/// Mempool-aware and under the user's unconfirmed-spending policy; see
+/// [`mempool::gather_spendable`].
 async fn gather_unspent_all(
     handle_id: u64,
     client: &ErgoNodeClient,
@@ -1662,47 +1593,34 @@ async fn gather_unspent_all(
     ),
     String,
 > {
-    gather_unspent_ordered(
-        handle_id,
-        addresses,
-        GATHER_ADDRESS_CONCURRENCY,
-        |addr| async move {
-            client
-                .get_effective_unspent(addr)
-                .await
-                .map_err(|e| ArgusError::NodeError(e).to_json_string())
-        },
-    )
-    .await
+    let spendable = mempool::gather_spendable(handle_id, client, addresses).await?;
+    Ok((spendable.boxes, spendable.inputs))
 }
 
 // Four address sequences overlap latency without unbounded load on a user's node.
 // Each sequence still runs all confirmed pages before its mempool lookup.
 const GATHER_ADDRESS_CONCURRENCY: usize = 4;
 
-type GatheredBoxes = (
-    Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
-    Vec<ergo_tx::Eip12InputBox>,
-);
-
-async fn gather_unspent_ordered<'a, F, Fut>(
+/// Run `fetch` for each of the wallet's `addresses`, at most `concurrency`
+/// at a time, and return the results in address order. Empty addresses are
+/// skipped; an address the wallet does not own stops admission and fails
+/// the gather in its place, never fetched.
+async fn gather_unspent_ordered<'a, T, F, Fut>(
     handle_id: u64,
     addresses: &'a [String],
     concurrency: usize,
     fetch: F,
-) -> Result<GatheredBoxes, String>
+) -> Result<Vec<T>, String>
 where
     F: Fn(&'a str) -> Fut,
-    Fut: std::future::Future<Output = Result<GatheredBoxes, String>>,
+    Fut: std::future::Future<Output = Result<T, String>>,
 {
     use futures::{stream::FuturesOrdered, StreamExt};
 
     let mut pending = FuturesOrdered::new();
     let mut next_address = 0;
     let mut stopped = false;
-    let mut boxes = Vec::new();
-    let mut eip12 = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
     loop {
         // Admission is synchronous and ordered, before constructing each fetch.
         // Stop at a foreign address, delivering its error in input order so an
@@ -1734,15 +1652,9 @@ where
         let Some(result) = pending.next().await else {
             break;
         };
-        let (b, e) = result?;
-        for (bx, input) in b.into_iter().zip(e.into_iter()) {
-            if seen.insert(input.box_id.clone()) {
-                boxes.push(bx);
-                eip12.push(input);
-            }
-        }
+        out.push(result?);
     }
-    Ok((boxes, eip12))
+    Ok(out)
 }
 
 fn input_boxes_json(boxes: &[ergo_tx::Eip12InputBox]) -> Vec<serde_json::Value> {
@@ -1875,7 +1787,8 @@ async fn prepare_management<S>(
     let (boxes, inputs) = apply_mixed_rule(handle_id, boxes, inputs, Some(selected_box_ids))?;
     let inputs = filter_selected_inputs(inputs, selected_box_ids)?;
     if inputs.is_empty() {
-        return Err(ArgusError::NoUtxos(no_inputs_message).to_json_string());
+        let error = ArgusError::NoUtxos(no_inputs_message).to_json_string();
+        return Err(mempool::explain_shortfall(handle_id, error));
     }
     let height = client
         .current_height()
@@ -1883,7 +1796,8 @@ async fn prepare_management<S>(
         .map_err(|e| ArgusError::NodeError(e).to_json_string())? as i32;
     let change_tree = address_to_ergo_tree(change_address)
         .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
-    let mut built = build(&inputs, &change_tree, height)?;
+    let mut built = build(&inputs, &change_tree, height)
+        .map_err(|e| mempool::explain_shortfall(handle_id, e))?;
 
     if let Some(custom_fee) = fee_nano {
         if custom_fee < TX_FEE_NANO {
@@ -2193,7 +2107,8 @@ pub async fn prepare_send(
         stealth_boxes_json,
         babel_token_id,
     )
-    .await?;
+    .await
+    .map_err(|e| mempool::explain_shortfall(handle_id, e))?;
     let recipient_erg = built.summary.recipient_erg;
     let miner_fee = built.summary.miner_fee;
     let change_erg = built.summary.change_erg;
@@ -2289,9 +2204,9 @@ pub async fn prepare_mint(
     // The token box, the change box, both fees.
     let required = (2 * MIN_BOX_VALUE_NANO + miner_fee + fee_cfg.budget()) as u64;
     let selected = wallet_core::spend::select_for_send(&utxos, required, None)
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        .map_err(|e| mempool::shortfall_error(handle_id, e))?;
     let built = ergo_tx::build_mint_tx(&selected.boxes, &spec, &user_tree, height as i32)
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        .map_err(|e| mempool::shortfall_error(handle_id, e))?;
     let ergo_boxes = selected
         .boxes
         .iter()
@@ -2386,11 +2301,11 @@ pub async fn prepare_burn(
             (need - have) as u64,
             None,
         )
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        .map_err(|e| mempool::shortfall_error(handle_id, e))?;
         chosen.extend(more.boxes);
     }
     let built = ergo_tx::build_multi_burn_tx(&chosen, &items, &user_tree, height as i32)
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        .map_err(|e| mempool::shortfall_error(handle_id, e))?;
     let ergo_boxes = chosen
         .iter()
         .map(crate::api_mix_impl::to_ergo_box)
@@ -2545,14 +2460,14 @@ pub async fn rosen_prepare_lock(
     for extra in [0i64, MIN_BOX_VALUE_NANO] {
         let required = (lock_value + miner_fee + app_fee.map(|(_, n)| n).unwrap_or(0) + extra) as u64;
         let selected = wallet_core::spend::select_for_send(&utxos, required, token)
-            .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+            .map_err(|e| mempool::shortfall_error(handle_id, e))?;
         match rosen::build_lock_tx(&selected.boxes, &spec, &lock_tree, &change_tree, app_fee, miner_fee, height as i32) {
             Ok(r) => {
                 built = Some((r, selected.boxes));
                 break;
             }
             Err(rosen::LockError::InsufficientErg { .. }) if extra == 0 => continue,
-            Err(e) => return Err(ArgusError::TxBuildFailed(e.to_string()).to_json_string()),
+            Err(e) => return Err(mempool::shortfall_error(handle_id, e)),
         }
     }
     let (result, used) = built.ok_or_else(|| {
@@ -2888,6 +2803,7 @@ async fn sign_prepared_tx(
 pub async fn send_erg(handle_id: u64, preparation_id: u64) -> Result<String, String> {
     let prep = take_preparation(handle_id, preparation_id)?;
     let client = node_client(prep.node_url.clone()).await?;
+    mempool::check_stealth_inputs(&client, &prep.ergo_boxes, &prep.stealth_trees).await?;
     let tx_json = sign_prepared_tx(handle_id, &prep, &client, "send_erg").await?;
     if crate::api_stake_recovery_impl::is_direct(&prep.unsigned_tx) {
         client.check_transaction(&tx_json).await.map_err(|e| {
@@ -3171,7 +3087,8 @@ pub async fn prepare_send_multi(
     }
     let (mut boxes, eip12) = apply_mixed_rule(handle_id, boxes, eip12, input_box_ids.as_deref())?;
     if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(spend.join(",")).to_json_string());
+        let error = ArgusError::NoUtxos(spend.join(",")).to_json_string();
+        return Err(mempool::explain_shortfall(handle_id, error));
     }
 
     // Collect tokens we need to cover
@@ -3273,14 +3190,15 @@ pub async fn prepare_send_multi(
         )
     };
     let (selected, built, babel_summary) = if input_box_ids.is_some() {
-        build(&eip12)?
+        build(&eip12)
     } else {
         let stealth_ids = stealth_owned
             .iter()
             .map(|b| b.box_id.clone())
             .collect::<Vec<_>>();
-        build_preferring_one_pocket(&eip12, &stealth_ids, build)?
-    };
+        build_preferring_one_pocket(&eip12, &stealth_ids, build)
+    }
+    .map_err(|e| mempool::explain_shortfall(handle_id, e))?;
     if let Some(pick) = &babel {
         boxes.push(pick.ergo_box.clone());
     }
@@ -3696,7 +3614,8 @@ pub async fn dexy_build_mint(
     let (all_boxes, eip12) =
         gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
     if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+        let error = ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string();
+        return Err(mempool::explain_shortfall(handle_id, error));
     }
     let height = client
         .current_height()
@@ -3717,7 +3636,7 @@ pub async fn dexy_build_mint(
     };
 
     let built = dexy::tx_builder::build_mint_dexy_tx(&request, &ctx, &state)
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        .map_err(|e| mempool::shortfall_error(handle_id, e))?;
 
     // Inputs: [free_mint, bank, buyback] + user inputs (in order). Data inputs: oracle + lp.
     let selected_ids = built
@@ -3832,7 +3751,8 @@ pub async fn dexy_build_swap(
     let (all_boxes, eip12) =
         gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
     if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+        let error = ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string();
+        return Err(mempool::explain_shortfall(handle_id, error));
     }
     let height = client
         .current_height()
@@ -3854,7 +3774,7 @@ pub async fn dexy_build_swap(
     };
 
     let built = dexy::tx_builder::build_swap_dexy_tx(&request, &ctx, &state)
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        .map_err(|e| mempool::shortfall_error(handle_id, e))?;
 
     let selected_ids = built
         .unsigned_tx
@@ -3948,7 +3868,8 @@ pub async fn dexy_build_lp_deposit(
     let (all_boxes, eip12) =
         gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
     if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+        let error = ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string();
+        return Err(mempool::explain_shortfall(handle_id, error));
     }
     let height = client
         .current_height()
@@ -3974,7 +3895,7 @@ pub async fn dexy_build_lp_deposit(
         &ids.lp_token_id,
         dexy_variant.initial_lp(),
     )
-    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    .map_err(|e| mempool::shortfall_error(handle_id, e))?;
 
     let selected_ids = built
         .unsigned_tx
@@ -4055,7 +3976,8 @@ pub async fn dexy_build_lp_redeem(
     let (all_boxes, eip) =
         gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
     if eip.is_empty() {
-        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+        let error = ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string();
+        return Err(mempool::explain_shortfall(handle_id, error));
     }
     let height = client
         .current_height()
@@ -4080,7 +4002,7 @@ pub async fn dexy_build_lp_redeem(
         &ids.lp_token_id,
         dexy_variant.initial_lp(),
     )
-    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    .map_err(|e| mempool::shortfall_error(handle_id, e))?;
 
     let selected_ids: Vec<String> = built
         .unsigned_tx
@@ -4205,7 +4127,8 @@ pub async fn sigmausd_build(
     let (all_boxes, eip12) =
         gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
     if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+        let error = ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string();
+        return Err(mempool::explain_shortfall(handle_id, error));
     }
     let height = client
         .current_height()
@@ -4305,7 +4228,7 @@ pub async fn sigmausd_build(
             &state,
         ),
     }
-    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    .map_err(|e| mempool::shortfall_error(handle_id, e))?;
 
     // Inputs: [bank] + user inputs (in order). Data inputs: oracle.
     let selected_ids = built
@@ -4428,7 +4351,8 @@ async fn liquidity_context(
     let pool_box = ergo_tx::Eip12InputBox::from_ergo_box(&pool_ergo_box, creation.0, creation.1);
     let (all_boxes, eip12) = gather_wallet_boxes(handle_id, spend_addresses, node_url).await?;
     if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+        let error = ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string();
+        return Err(mempool::explain_shortfall(handle_id, error));
     }
     let height = client
         .current_height()
@@ -4508,7 +4432,7 @@ pub async fn amm_build_lp_deposit(
     let (pool, pool_ergo_box, pool_box, all_boxes, eip12, height) =
         liquidity_context(handle_id, &pool_id, &spend_addresses, node_url.clone()).await?;
     let built = amm::build_lp_deposit_eip12(&pool_box, &pool, x_amount as u64, y_amount as u64, &eip12, &recipient_tree, height)
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        .map_err(|e| mempool::shortfall_error(handle_id, e))?;
     let s = &built.summary;
     let summary = serde_json::json!({
         "pool_id": pool_id,
@@ -4545,7 +4469,7 @@ pub async fn amm_build_lp_redeem(
     let (pool, pool_ergo_box, pool_box, all_boxes, eip12, height) =
         liquidity_context(handle_id, &pool_id, &spend_addresses, node_url.clone()).await?;
     let built = amm::build_lp_redeem_eip12(&pool_box, &pool, lp_amount as u64, &eip12, &recipient_tree, height)
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        .map_err(|e| mempool::shortfall_error(handle_id, e))?;
     let s = &built.summary;
     let summary = serde_json::json!({
         "pool_id": pool_id,
@@ -4609,14 +4533,15 @@ pub async fn amm_build_pool_bootstrap(
     let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
     let (all_boxes, eip12) = gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
     if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+        let error = ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string();
+        return Err(mempool::explain_shortfall(handle_id, error));
     }
     let height = client
         .current_height()
         .await
         .map_err(|e| ArgusError::NodeError(e.to_string()).to_json_string())? as i32;
     let built = amm::build_pool_bootstrap_eip12(&params, &eip12, &user_tree, height)
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        .map_err(|e| mempool::shortfall_error(handle_id, e))?;
     let ids: Vec<String> = built.unsigned_tx.inputs.iter().map(|i| i.box_id.clone()).collect();
     let ergo_boxes = ordered_user_boxes(&ids, &all_boxes)?;
     let bootstrap_box_id = ergo_tx::chain::derive_output_boxes(&built.unsigned_tx)
@@ -4841,7 +4766,8 @@ pub async fn amm_build_swap(
     let (all_boxes, eip12) =
         gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
     if eip12.is_empty() {
-        return Err(ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string());
+        let error = ArgusError::NoUtxos(spend_addresses.join(",")).to_json_string();
+        return Err(mempool::explain_shortfall(handle_id, error));
     }
     let height = client
         .current_height()
@@ -4862,7 +4788,7 @@ pub async fn amm_build_swap(
         None,
         held_tokens as u64,
     )
-    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    .map_err(|e| mempool::shortfall_error(handle_id, e))?;
 
     // Argus levies no dev fee. Fail loudly rather than silently paying Citadel.
     let output_trees: Vec<String> = built
@@ -6385,7 +6311,10 @@ pub async fn duckpools_prepare_order(
         app_fee,
         miner_fee,
         height,
-        |e| protocol_selection_error(e, &all_utxos, &utxos, &mixed, &reserved, token.as_ref().map(|(id, _)| id.as_str())),
+        |e| {
+            let error = protocol_selection_error(e, &all_utxos, &utxos, &mixed, &reserved, token.as_ref().map(|(id, _)| id.as_str()));
+            mempool::explain_shortfall(handle_id, error)
+        },
     )?;
     let ergo_boxes = used
         .iter()
@@ -6572,7 +6501,7 @@ pub async fn duckpools_prepare_adjust(
             (erg_needed + miner_fee + extra) as u64,
             token.as_ref().map(|(id, n)| (id.as_str(), *n as u64)),
         )
-        .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+        .map_err(|e| mempool::shortfall_error(handle_id, e))?;
         match duckpools::build_adjust_tx(
             &quote,
             &collateral,
@@ -6728,7 +6657,7 @@ pub async fn sigmafi_prepare_open(
         height,
         miner_fee,
     })
-    .map_err(|e| ArgusError::TxBuildFailed(e.to_string()).to_json_string())?;
+    .map_err(|e| mempool::shortfall_error(handle_id, e))?;
     let used: Vec<ergo_tx::Eip12InputBox> = unsigned_tx.inputs.clone();
     let ergo_boxes = used
         .iter()
@@ -6825,7 +6754,9 @@ pub async fn sigmafi_prepare_spend(
     }
     let (boxes, utxos) = gather_unspent(handle_id, &client, &spend_from).await?;
     let (_, utxos) = apply_mixed_rule(handle_id, boxes, utxos, None)?;
-    let unsigned_tx = spend.build(&protocol_box, &user_tree, &ui_fee_tree, &utxos, height, miner_fee)?;
+    let unsigned_tx = spend
+        .build(&protocol_box, &user_tree, &ui_fee_tree, &utxos, height, miner_fee)
+        .map_err(|e| mempool::explain_shortfall(handle_id, e))?;
     let ergo_boxes = unsigned_tx
         .inputs
         .iter()
@@ -6916,6 +6847,16 @@ pub async fn dapp_prepare_sign(
         )
         .to_json_string());
     }
+    // The page chose these inputs, so the wallet's pending-spend rule and
+    // its unconfirmed-spending policy are checked here instead.
+    let client = node_client(node_url.clone()).await?;
+    let ids: Vec<String> = unsigned_tx.inputs.iter().map(|b| b.box_id.clone()).collect();
+    let trees = unsigned_tx
+        .inputs
+        .iter()
+        .map(|b| (b.box_id.clone(), b.ergo_tree.clone()))
+        .collect();
+    mempool::check_external_inputs(handle_id, &client, &ids, &trees).await?;
     let miner_fee = crate::api_dapp_impl::miner_fee_of(&unsigned_tx);
     let change_erg = summary["change_nano_erg"].as_i64().unwrap_or(0);
     let sent = summary["sent_nano_erg"].as_i64().unwrap_or(0);
@@ -6948,18 +6889,15 @@ pub async fn dapp_utxos(
     node_url: Option<String>,
 ) -> Result<String, String> {
     let client = node_client(node_url).await?;
-    let (_, eip12) = gather_unspent(handle_id, &client, &addresses).await?;
-    // Which of them are in a block: the gathered set also holds this
-    // wallet's mempool outputs, and a page must not take those as settled.
-    let mut confirmed = std::collections::HashSet::new();
-    for addr in &addresses {
-        if let Ok(boxes) = client.get_unspent(addr).await {
-            confirmed.extend(boxes.1.into_iter().map(|b| b.box_id));
-        }
-    }
+    let spendable = mempool::gather_spendable(handle_id, &client, &addresses).await?;
+    // Which of them are in a block: with unconfirmed spending allowed the
+    // gathered set also holds this wallet's mempool outputs, and a page must
+    // not take those as settled.
+    let unconfirmed = spendable.unconfirmed;
+    let (_, eip12) = without_reserved(handle_id, spendable.boxes, spendable.inputs);
     let list: Vec<serde_json::Value> = eip12
         .iter()
-        .map(|b| crate::api_dapp_impl::utxo_json(b, confirmed.contains(&b.box_id)))
+        .map(|b| crate::api_dapp_impl::utxo_json(b, !unconfirmed.contains(&b.box_id)))
         .collect();
     Ok(serde_json::Value::Array(list).to_string())
 }
@@ -7057,7 +6995,8 @@ pub async fn stake_recovery_prepare_direct(
         &recipient,
         height,
         miner_fee,
-    )?;
+    )
+    .map_err(|e| mempool::explain_shortfall(handle_id, e))?;
     revalidate_stake_recovery(&unsigned_tx, &client).await?;
     let context = client
         .get_state_context()
@@ -7190,7 +7129,8 @@ pub async fn stake_recovery_prepare_proxy(
             &recipient,
             height,
             &context,
-        )?;
+        )
+        .map_err(|e| mempool::explain_shortfall(handle_id, e))?;
         let id = ergo_tx::chain::to_unsigned_transaction(&tx)
             .map_err(fail)?
             .id()

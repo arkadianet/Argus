@@ -1,0 +1,258 @@
+//! The mempool reads against a local stand-in node: status handling, paging,
+//! and the box-by-box checks. A failed read must never look like an empty
+//! mempool, because "nothing pending" means "every confirmed box is free".
+
+use super::*;
+use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Answers every request with `reply(method_and_path)` until dropped.
+struct Node {
+    port: String,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    seen: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Node {
+    fn start(reply: impl Fn(&str) -> (u16, String) + Send + Sync + 'static) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port().to_string();
+        let stop = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (stopped, log) = (stop.clone(), seen.clone());
+        let thread = std::thread::spawn(move || {
+            while !stopped.load(Ordering::SeqCst) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buf = [0; 4096];
+                loop {
+                    let n = stream.read(&mut buf).unwrap();
+                    assert!(n > 0);
+                    request.extend_from_slice(&buf[..n]);
+                    if let Some(end) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&request[..end]).to_string();
+                        let length: usize = head
+                            .lines()
+                            .find_map(|l| {
+                                l.to_ascii_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .map(|v| v.parse().unwrap())
+                            })
+                            .unwrap_or(0);
+                        if request.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let line = String::from_utf8_lossy(&request)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_string();
+                let target = line.rsplit_once(' ').map(|(l, _)| l).unwrap_or(&line).to_string();
+                log.lock().unwrap().push(target.clone());
+                let (status, body) = reply(&target);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        Self {
+            port,
+            stop,
+            thread: Some(thread),
+            seen,
+        }
+    }
+
+    fn client(&self) -> ErgoNodeClient {
+        let inner = NodeInterface::new_without_probe("", "127.0.0.1", &self.port).unwrap();
+        ErgoNodeClient {
+            inner: Arc::new(inner),
+            url: String::new(),
+        }
+    }
+
+    fn requests(&self) -> Vec<String> {
+        self.seen.lock().unwrap().clone()
+    }
+}
+
+impl Drop for Node {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+const TREE: &str = "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+
+fn page(from: usize, n: usize) -> String {
+    serde_json::to_string(
+        &(from..from + n)
+            .map(|i| serde_json::json!({"id": format!("{i:064x}"), "inputs": [], "outputs": []}))
+            .collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
+fn offset_of(target: &str) -> usize {
+    target
+        .split("offset=")
+        .nth(1)
+        .and_then(|s| s.split('&').next())
+        .and_then(|s| s.parse().ok())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_error_status_is_a_failed_read_not_an_empty_mempool() {
+    // A JSON error body parses fine; only the status says it failed.
+    let node = Node::start(|_| (500, r#"{"error":500,"reason":"oops"}"#.into()));
+    let client = node.client();
+    assert!(client.mempool_txs_for(TREE).await.is_err());
+    assert!(client.mempool_txs_complete(TREE).await.is_err());
+}
+
+#[tokio::test]
+async fn pages_are_read_until_a_short_one() {
+    let node = Node::start(|target| match offset_of(target) {
+        0 => (200, page(0, 100)),
+        100 => (200, page(100, 3)),
+        _ => (500, String::new()),
+    });
+    let client = node.client();
+    assert_eq!(client.mempool_txs_complete(TREE).await.unwrap().len(), 103);
+    assert_eq!(
+        node.requests()
+            .iter()
+            .map(|r| offset_of(r))
+            .collect::<Vec<_>>(),
+        [0, 100]
+    );
+}
+
+#[tokio::test]
+async fn a_list_past_the_cap_shows_but_cannot_be_spent_from() {
+    let node = Node::start(|target| (200, page(offset_of(target), 100)));
+    let client = node.client();
+    assert_eq!(client.mempool_txs_for(TREE).await.unwrap().len(), MEMPOOL_MAX_TXS);
+    let error = client.mempool_txs_complete(TREE).await.unwrap_err();
+    assert!(error.contains("cannot all be checked"), "{error}");
+}
+
+#[tokio::test]
+async fn a_pending_spend_is_read_by_box_id() {
+    let node = Node::start(|target| {
+        if target.ends_with("/spent") {
+            (200, r#"{"boxId":"spent"}"#.into())
+        } else if target.ends_with("/free") {
+            (404, r#"{"error":404,"reason":"not-found"}"#.into())
+        } else {
+            (503, String::new())
+        }
+    });
+    let client = node.client();
+    assert!(client.mempool_spends("spent").await.unwrap());
+    assert!(!client.mempool_spends("free").await.unwrap());
+    assert!(client.mempool_spends("broken").await.is_err());
+    assert!(node
+        .requests()
+        .iter()
+        .all(|r| r.starts_with("GET /transactions/unconfirmed/inputs/byBoxId/")));
+}
+
+#[tokio::test]
+async fn box_status_tells_pending_confirmed_and_gone_apart() {
+    let node = Node::start(|target| {
+        let (kind, id) = target.rsplit_once('/').unwrap();
+        let found = match (kind, id) {
+            (k, "pending-spent") if k.ends_with("inputs/byBoxId") => true,
+            (k, "settled") if k.ends_with("/utxo/byId") => true,
+            (k, "fresh") if k.ends_with("outputs/byBoxId") => true,
+            _ => false,
+        };
+        if found {
+            (200, format!(r#"{{"boxId":"{id}","ergoTree":"{TREE}"}}"#))
+        } else {
+            (404, r#"{"error":404}"#.into())
+        }
+    });
+    let client = node.client();
+    assert_eq!(client.box_status("pending-spent").await.unwrap(), BoxStatus::SpentInMempool);
+    assert_eq!(client.box_status("settled").await.unwrap(), BoxStatus::Confirmed);
+    match client.box_status("fresh").await.unwrap() {
+        BoxStatus::Unconfirmed(b) => assert_eq!(b["ergoTree"], TREE),
+        other => panic!("expected an unconfirmed box, got {other:?}"),
+    }
+    assert_eq!(client.box_status("gone").await.unwrap(), BoxStatus::Unknown);
+}
+
+#[tokio::test]
+async fn a_spending_read_fails_when_the_mempool_cannot_be_read() {
+    let address = "9hY16vzHmmfyVBwKeFGHvb2bMFsG94A1u7To1QWtUokACyFVENQ";
+    let node = Node::start(|target| {
+        if target.contains("unspent/byAddress") {
+            (200, "[]".into())
+        } else {
+            (502, "bad gateway".into())
+        }
+    });
+    let error = node.client().read_for_spending(address).await.unwrap_err();
+    assert!(error.contains("Could not check pending transactions"), "{error}");
+}
+
+#[tokio::test]
+async fn only_unconfirmed_boxes_nothing_pending_spends_stay_offered() {
+    let node = Node::start(|target| {
+        if target.ends_with("/free") {
+            (404, String::new())
+        } else if target.ends_with("/spent") {
+            (200, "{}".into())
+        } else {
+            (500, String::new())
+        }
+    });
+    let fixture = |index: u16| -> ErgoBox {
+        serde_json::from_value(serde_json::json!({
+            "transactionId": "91".repeat(32), "index": index, "value": 1000000,
+            "ergoTree": TREE, "creationHeight": 1, "assets": [], "additionalRegisters": {}
+        }))
+        .unwrap()
+    };
+    let mut spendable = crate::mempool::Spendable::default();
+    let mut ids = Vec::new();
+    for (i, name) in ["confirmed", "free", "spent", "unreadable"].iter().enumerate() {
+        let b = fixture(i as u16);
+        let mut input = ergo_tx::Eip12InputBox::from_ergo_box(&b, b.transaction_id.to_string(), b.index);
+        input.box_id = name.to_string();
+        if *name != "confirmed" {
+            spendable.unconfirmed.insert(name.to_string());
+        }
+        ids.push(name.to_string());
+        spendable.boxes.push(b);
+        spendable.inputs.push(input);
+    }
+    node.client().drop_spent_unconfirmed(&mut spendable).await;
+    assert_eq!(
+        spendable.inputs.iter().map(|i| i.box_id.as_str()).collect::<Vec<_>>(),
+        ["confirmed", "free"]
+    );
+    assert_eq!(spendable.boxes.len(), 2);
+    assert_eq!(spendable.unconfirmed, ["free".to_string()].into());
+    // Confirmed boxes are not looked up one by one.
+    assert!(!node.requests().iter().any(|r| r.ends_with("/confirmed")));
+}
