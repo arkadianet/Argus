@@ -63,6 +63,9 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
   AmmPoolSet? _names;
   bool _ready = false;
 
+  /// A review or a chain is on screen: scans wait until it closes.
+  bool _busy = false;
+
   WalletRouteArgs get _args => WalletRouteArgs.of(context);
 
   List<String> get _spendAddresses {
@@ -98,7 +101,7 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // Never scan behind the user's back: only while this screen is in front.
     if (state == AppLifecycleState.resumed) {
-      if (_ready) _scanner.start();
+      if (_ready && !_busy) _scanner.start();
     } else {
       _scanner.pause();
     }
@@ -349,6 +352,16 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
     // No scans while the user reads and signs: the chain re-reads its own
     // pools, and the node has enough to do.
     _scanner.pause();
+    _busy = true;
+    try {
+      await _reviewOnce(o);
+    } finally {
+      _busy = false;
+      if (mounted) _scanner.start();
+    }
+  }
+
+  Future<void> _reviewOnce(ArbOpportunity o) async {
     final outcome = await showModalBottomSheet<(int, ArbExecution)>(
       context: context,
       isScrollControlled: true,
@@ -370,29 +383,23 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
         amount: _amount,
       ),
     );
-    if (!mounted) return;
-    if (outcome == null) {
-      _scanner.start();
-      return;
-    }
+    if (!mounted || outcome == null) return;
     final (chainId, result) = outcome;
     switch (result.status) {
       case ArbExecutionStatus.moved:
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('A pool moved before signing; nothing was signed. Here are the fresh numbers.')),
         );
-        await _review(o);
+        await _reviewOnce(o);
       case ArbExecutionStatus.rejected:
         await showErrorSheet(
           context,
           title: 'Nothing changed',
           message: 'The first leg was rejected, so no transaction went out.\n\n${result.error ?? ''}',
         );
-        if (mounted) _scanner.start();
       case ArbExecutionStatus.submitted:
       case ArbExecutionStatus.stranded:
         await _track(chainId, o, result);
-        if (mounted) _scanner.start();
     }
   }
 
@@ -434,8 +441,12 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
         confirmLabel: 'Sign & broadcast sale',
       );
       if (!ok) return;
-      final txId = await walletService.sendErg(preparationId: u.preparationId);
-      showTxResultSheet(receiptContext, txId: txId, headline: 'Sale submitted');
+      try {
+        final txId = await walletService.sendErg(preparationId: u.preparationId);
+        showTxResultSheet(receiptContext, txId: txId, headline: 'Sale submitted');
+      } catch (e) {
+        if (mounted) showTxFailureSheet(context, e);
+      }
     } catch (e) {
       if (!mounted) return;
       showErrorSheet(context, title: 'Could not prepare the sale', message: arbErrorText(e));

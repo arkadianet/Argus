@@ -220,6 +220,21 @@ void main() {
     expect(api.scans, 3);
   });
 
+  testWidgets('no scan runs while a review is open, even after the app comes back', (tester) async {
+    final api = ScreenApi();
+    await _pump(tester, api);
+    await tester.tap(find.byKey(Key('arb-opp-${'a' * 64}>${'c' * 64}')));
+    await tester.pumpAndSettle();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    api.tip++;
+    await tester.pump(arbScanInterval * 3);
+    expect(api.scans, 1);
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    expect(api.scans, 2, reason: 'scanning resumes when the review closes');
+  });
+
   testWidgets('the minimum profit can be changed and is used by the next scan', (tester) async {
     final api = ScreenApi();
     await _pump(tester, api);
