@@ -9,9 +9,12 @@ import 'package:argus_wallet/services/token_catalog.dart';
 import 'package:argus_wallet/services/token_descriptor_store.dart';
 import 'package:argus_wallet/services/token_metadata.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
+import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'wallet_sync_controller_test.dart' show FakeGateway;
 
 const _node = 'https://node.example';
 String _id(String seed) => seed * (64 ~/ seed.length);
@@ -201,6 +204,42 @@ void main() {
     expect(holdings.single.amount, 500);
     expect(api.asked, isEmpty, reason: 'and cost no request');
     await second.lock('relaunch');
+  });
+
+  test('the first refresh after an unlock publishes names, not ids', () async {
+    // beta.1: the table loaded inside the name pass, which waits for the
+    // history leg; the first balance republished every holding as an id.
+    final first = WalletService();
+    await first.restoreWallet('mock', walletId: 'w1');
+    await resolveForWallet(first, 'w1');
+    await first.lock('w1');
+
+    final second = WalletService();
+    await second.restoreWallet('mock', walletId: 'w1');
+    final gateway = _RealHydration(second)
+      ..balances = {
+        'addr0': {
+          'balance_nano_erg': 1000,
+          'tokens': [
+            {'id': _held, 'amount': 500},
+          ],
+        },
+      }
+      // The slow leg, held open: no name pass can have run.
+      ..historyGate = Completer<void>();
+    final controller = WalletSyncController(gateway);
+    addTearDown(controller.dispose);
+    await controller.hydrateAfterUnlock();
+    final refresh = controller.refresh(discover: false);
+    await _until(() => controller.tokens.isNotEmpty);
+
+    expect(controller.tokens.single.name, 'Name ab');
+    expect(controller.tokens.single.decimals, 2);
+    expect(gateway.resolved, isEmpty, reason: 'before any name pass');
+
+    gateway.historyGate!.complete();
+    await refresh;
+    await second.lock('w1');
   });
 
   test('a holding published without a record is filled from the lookup',
@@ -405,4 +444,15 @@ void main() {
       );
     });
   });
+}
+
+/// The controller over the real service's hydration, so the test exercises
+/// the same table load a relaunch does.
+class _RealHydration extends FakeGateway {
+  _RealHydration(this.service);
+  final WalletService service;
+
+  @override
+  Future<List<TokenBalance>> hydrateTokens(dynamic raw) =>
+      service.hydrateTokens(raw);
 }
