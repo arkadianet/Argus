@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import 'address_holdings.dart';
 import 'network_controller.dart';
 import 'privacy_service.dart';
 import 'mix_activity.dart';
@@ -242,6 +243,9 @@ class LiveWalletSyncGateway
         syncPhase: snapshot['sync_phase'] as String?,
         lastSuccessfulSyncAt: (snapshot['last_successful_sync_at'] as num?)
             ?.toInt(),
+        addressHoldings:
+            (snapshot['address_holdings'] as List? ?? const [])
+                .cast<Map<String, dynamic>>(),
       );
 
   @override
@@ -358,6 +362,7 @@ class WalletSyncController extends ChangeNotifier {
           emissionAmount: t['emissionAmount'],
         ),
     ]);
+    addressHoldings = AddressHolding.listFrom(snapshot['address_holdings']);
     phase = SyncPhase.idle;
   }
 
@@ -373,6 +378,12 @@ class WalletSyncController extends ChangeNotifier {
   /// Derived addresses from index 0 to the usage frontier, set by
   /// discovery. Always included in balance queries.
   List<String> frontierAddresses = const [];
+
+  /// What each address held in the last balance read in which every
+  /// address answered, so the home screen can say how much of the total
+  /// sits away from the address the wallet is shown as. A partial read
+  /// leaves the previous split: it would misplace funds between addresses.
+  List<AddressHolding> addressHoldings = const [];
   int utxoCount = 0;
   DateTime? lastSyncedAt;
 
@@ -616,6 +627,7 @@ class WalletSyncController extends ChangeNotifier {
     recentTxs = const [];
     usedAddresses = const [];
     frontierAddresses = const [];
+    addressHoldings = const [];
     utxoCount = 0;
     pinIssue = null;
     lastSyncedAt = null;
@@ -703,6 +715,7 @@ class WalletSyncController extends ChangeNotifier {
         discoveredAt = null;
       }
       usedAddresses = _mapList(cached['used_addresses']);
+      addressHoldings = AddressHolding.listFrom(cached['address_holdings']);
       balanceNano = (cached['balance_nano_erg'] as num?)?.toInt();
       recentTxs = _mapList(cached['transactions']);
       tokens = orderTokensForDisplay([
@@ -718,6 +731,16 @@ class WalletSyncController extends ChangeNotifier {
             ),
       ]);
       utxoCount = (cached['utxo_count'] as num?)?.toInt() ?? 0;
+    }
+    // A pinned wallet is still the wallet at index 0. With nothing recorded
+    // yet (first unlock on this device, or a cache from before snapshots
+    // were per wallet) its only known address would be the pinned one, so
+    // the first pass — and every pass, should discovery fail — would leave
+    // out what index 0 holds.
+    if (pinned != 0 && frontierAddresses.isEmpty && usedAddresses.isEmpty) {
+      final zero = await _gw.tryDeriveAddress(0);
+      if (!_current(generation, walletId)) return false;
+      if (zero != null && zero != receive) frontierAddresses = [zero];
     }
     senderAddress ??= _bestSender(receiveAddress ?? receive);
     notifyListeners();
@@ -848,6 +871,18 @@ class WalletSyncController extends ChangeNotifier {
       balanceNano = _withBroadcastDeltas(balances.erg);
       tokens = orderTokensForDisplay(balances.tokens);
       notifyListeners();
+    }
+    if (failed == 0) {
+      addressHoldings = [
+        for (final h in balances.perAddress)
+          h.withIndex(
+            recordedAddressIndex(
+              h.address,
+              frontier: frontierAddresses,
+              used: usedAddresses,
+            ),
+          ),
+      ];
     }
 
     final results = await Future.wait<Object?>([
@@ -1002,6 +1037,7 @@ class WalletSyncController extends ChangeNotifier {
         ],
         'transactions': recentTxs,
         'utxo_count': utxoCount,
+        'address_holdings': [for (final h in addressHoldings) h.toJson()],
       });
     }
   }
@@ -1097,7 +1133,11 @@ class WalletSyncController extends ChangeNotifier {
         merged[t.id] = t.withHolding((prev?.amount ?? 0) + t.amount);
       }
     }
-    return _BalanceResult(erg, merged.values.toList(), failed);
+    final perAddress = [
+      for (var i = 0; i < maps.length; i++)
+        if (maps[i] case final map?) AddressHolding.fromBalance(addresses[i], map),
+    ];
+    return _BalanceResult(erg, merged.values.toList(), failed, perAddress);
   }
 
   /// Folds a stealth scan into [stealthNano] and [stealthTokens].
@@ -1211,10 +1251,13 @@ class _Broadcast {
 }
 
 class _BalanceResult {
-  const _BalanceResult(this.erg, this.tokens, this.failed);
+  const _BalanceResult(this.erg, this.tokens, this.failed, this.perAddress);
   final int erg;
   final List<TokenBalance> tokens;
   final int failed;
+
+  /// One entry per address that answered, in query order.
+  final List<AddressHolding> perAddress;
 }
 
 /// The app's one sync controller: the home screen drives it and the
@@ -1236,6 +1279,7 @@ class _WalletView {
         recentTxs: c.recentTxs,
         usedAddresses: c.usedAddresses,
         frontierAddresses: c.frontierAddresses,
+        addressHoldings: c.addressHoldings,
         utxoCount: c.utxoCount,
         lastSyncedAt: c.lastSyncedAt,
         stealthNano: c.stealthNano,
@@ -1261,6 +1305,7 @@ class _WalletView {
     List<Map<String, dynamic>> recentTxs,
     List<Map<String, dynamic>> usedAddresses,
     List<String> frontierAddresses,
+    List<AddressHolding> addressHoldings,
     int utxoCount,
     DateTime? lastSyncedAt,
     int stealthNano,
@@ -1287,6 +1332,7 @@ class _WalletView {
     c.recentTxs = data.recentTxs;
     c.usedAddresses = data.usedAddresses;
     c.frontierAddresses = data.frontierAddresses;
+    c.addressHoldings = data.addressHoldings;
     c.utxoCount = data.utxoCount;
     c.lastSyncedAt = data.lastSyncedAt;
     c.stealthNano = data.stealthNano;

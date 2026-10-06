@@ -94,6 +94,16 @@ incomplete scan, never success. Refresh is single-flight per account and runs
 on import, overview refresh and Receive. No background monitoring guarantee is
 made. Snapshots are in memory; key and highest-used index are persisted.
 
+Update 2026-10: the overview is now the launch screen, so its launch pass
+scans the accounts that have no snapshot yet (they are not persisted); a pull
+to refresh scans every account, as the overview always did. Opening an
+account never scans it. An account opens the standard wallet page (balance,
+assets, activity, Receive, "Send with offline signer"), which keeps the
+limitations text and the first address for checking against the source
+wallet; Receive stays disabled without a complete scan. An optional label is
+persisted with the key, never in the address book: an extended key is not a
+payment address and must not be offered as a recipient.
+
 ## Privacy, scope and cold signing
 
 The paste dialog explains that anyone holding the key can link all public

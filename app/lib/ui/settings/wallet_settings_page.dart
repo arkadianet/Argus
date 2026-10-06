@@ -4,13 +4,29 @@ import '../../format.dart';
 import '../../services/privacy_service.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
+import '../wallet_dialogs.dart';
 import 'settings_shared.dart';
 
-/// Settings scoped to one wallet: primary address, change policy, tools.
+/// Settings scoped to one wallet: its name, primary address, change policy,
+/// backup, and removing it from this device.
 class WalletSettingsPage extends StatefulWidget {
-  const WalletSettingsPage({super.key, this.walletId, required this.walletName});
+  const WalletSettingsPage({
+    super.key,
+    this.walletId,
+    required this.walletName,
+    this.onChanged,
+    this.onRemoved,
+  });
   final String? walletId;
   final String walletName;
+
+  /// The name or the pinned address changed.
+  final VoidCallback? onChanged;
+
+  /// The wallet was removed from this device; carries its id. Called even
+  /// when this page is already gone: removing the unlocked wallet locks it,
+  /// and the lock pops every route above the home screen.
+  final ValueChanged<String>? onRemoved;
 
   @override
   State<WalletSettingsPage> createState() => _WalletSettingsPageState();
@@ -18,6 +34,7 @@ class WalletSettingsPage extends StatefulWidget {
 
 class _WalletSettingsPageState extends State<WalletSettingsPage> {
   late Future<int> _pinnedIndexFuture;
+  late String _name = widget.walletName;
 
   String? get _walletId => widget.walletId ?? walletService.activeWalletId;
 
@@ -39,6 +56,63 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  Future<WalletInfo?> _info() async {
+    final id = _walletId;
+    if (id == null) return null;
+    for (final w in await walletService.listWallets()) {
+      if (w.walletId == id) return w;
+    }
+    return null;
+  }
+
+  Future<void> _rename() async {
+    try {
+      final w = await _info();
+      if (w == null || !mounted) return;
+      if (await renameWalletDialog(context, w)) {
+        final renamed = await _info();
+        if (mounted && renamed != null) setState(() => _name = renamed.name);
+        widget.onChanged?.call();
+      }
+    } catch (_) {
+      _snack('Could not rename wallet');
+    }
+  }
+
+  Future<void> _remove() async {
+    final id = _walletId;
+    if (id == null) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Remove $_name?'),
+        content: const Text(
+          'This removes the wallet from this device. Argus does not keep a '
+          'copy of the recovery phrase; the paper you wrote when creating '
+          'this wallet is the only way back in.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: rust, foregroundColor: bone),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final onRemoved = widget.onRemoved;
+    try {
+      await walletService.deleteWallet(id);
+    } catch (_) {
+      _snack('Could not remove wallet');
+      return;
+    }
+    onRemoved?.call(id);
+    if (mounted) Navigator.pop(context);
+  }
+
   Future<void> _pinAddressIndex() async {
     final indexCtrl = TextEditingController();
     final ok = await showDialog<bool>(
@@ -49,7 +123,8 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text('Derive the address at this index and use it as the primary '
-                'address for send and receive. Index 0 resets to the default.'),
+                'address for send and receive. Index 0 resets to the default. '
+                'The balance still counts every address of the wallet.'),
             const SizedBox(height: 12),
             TextField(
               controller: indexCtrl,
@@ -91,6 +166,7 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
     }
     await walletService.setPinnedAddressIndex(wid, index, address: addr);
     _refresh();
+    widget.onChanged?.call();
     _snack('Pinned index $index · ${shorten(addr, head: 10, tail: 8)}');
   }
 
@@ -100,8 +176,20 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
     return ListenableBuilder(
       listenable: privacyService,
       builder: (context, _) => SettingsPage(
-        title: widget.walletName,
+        title: _name,
         children: [
+          SettingsGroup(
+            title: 'Wallet',
+            scope: 'This wallet',
+            children: [
+              SettingsRow(
+                icon: Icons.edit_outlined,
+                title: 'Name',
+                subtitle: _name,
+                onTap: _rename,
+              ),
+            ],
+          ),
           SettingsGroup(
             title: 'Addresses',
             scope: 'This wallet',
@@ -130,6 +218,7 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
                               if (wid == null) return;
                               await walletService.setPinnedAddressIndex(wid, 0);
                               _refresh();
+                              widget.onChanged?.call();
                             },
                           )
                         : null,
@@ -167,6 +256,20 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
               'Argus does not keep a copy of the recovery phrase. The paper you wrote at create or restore is the only way back in.',
               style: Theme.of(context).textTheme.bodyMedium,
             ),
+          ),
+          const SizedBox(height: 24),
+          SettingsGroup(
+            title: 'Remove',
+            scope: 'This wallet',
+            children: [
+              SettingsRow(
+                icon: Icons.delete_outline,
+                title: 'Remove wallet',
+                subtitle: 'From this device only. Keep the recovery phrase.',
+                danger: true,
+                onTap: _remove,
+              ),
+            ],
           ),
         ],
       ),

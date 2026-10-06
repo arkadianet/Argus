@@ -14,6 +14,8 @@ void main() {
     expect(portfolioSubtitle(wallets: 3, watched: 1, unknown: 0), '3 wallets · 1 watched');
     expect(portfolioSubtitle(wallets: 1, watched: 0, unknown: 0), '1 wallet');
     expect(portfolioSubtitle(wallets: 2, watched: 0, unknown: 1), '2 wallets · 1 not loaded');
+    expect(portfolioSubtitle(wallets: 0, watched: 2, unknown: 0), '2 watched');
+    expect(portfolioSubtitle(wallets: 0, watched: 0, unknown: 0), '0 wallets');
   });
 }
 

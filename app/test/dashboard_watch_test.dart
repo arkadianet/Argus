@@ -1,231 +1,209 @@
 import 'dart:convert';
 
 import 'package:argus_wallet/bridge/frb_generated.dart';
-import 'package:argus_wallet/services/network_controller.dart';
 import 'package:argus_wallet/services/watch_account_service.dart';
 import 'package:argus_wallet/services/watch_only_service.dart';
 import 'package:argus_wallet/ui/cold_signing_screen.dart';
-import 'package:argus_wallet/ui/dashboard_screen.dart';
+import 'package:argus_wallet/ui/home/watched_wallet.dart';
 import 'package:argus_wallet/ui/receive_screen.dart';
 import 'package:argus_wallet/ui/send_screen.dart';
+import 'package:argus_wallet/ui/transactions_screen.dart';
+import 'package:argus_wallet/ui/widgets/activity_tile.dart';
+import 'package:argus_wallet/ui/widgets/asset_tile.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/home_harness.dart';
+
 const watched = '9hY16vzHmmfyVBwKeFGHvb2bMFsG94A1u7To1QWtUokACyFVENQ';
 
-class DashboardApi extends RustLibApi {
-  int scans = 0;
-  @override
-  Future<void> crateApiInitApp() async {}
-  @override
-  Future<List<String>> crateApiDeriveWatchAddresses({
-    required String input,
-    required int start,
-    required int count,
-  }) async {
-    scans++;
-    return List.generate(
-      count,
-      (i) => i == 0 ? watched : 'address-${start + i}',
-    );
-  }
-
-  @override
-  Future<String> crateApiGetBalance({
-    required String address,
-    String? nodeUrl,
-  }) async => '{"balance_nano_erg":0,"tokens":[]}';
-  @override
-  Future<String> crateApiGetTransactionHistory({
-    required String address,
-    String? nodeUrl,
-    required BigInt limit,
-    required BigInt offset,
-  }) async => '[]';
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
-
+// A3: watched addresses and accounts open the standard wallet page, with
+// Send swapped for the offline signer and nothing that needs a key.
 void main() {
-  final api = DashboardApi();
+  final api = HomeApi()..watchDerived = (i) => i == 0 ? watched : 'address-$i';
   late WatchAccount account;
-  const channel = MethodChannel('com.argus.wallet/secure_storage');
   setUpAll(() => RustLib.initMock(api: api));
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     await watchOnlyService.load();
-    // Suppress the unrelated connectivity probe, without altering account reads.
-    networkController.probing = true;
-    api.scans = 0;
+    api.watchScans = 0;
     account = WatchAccount('0488b21e-account')
       ..snapshot = WatchAccountSnapshot([watched], watched, 0, {}, [], -1);
     watchAccountService.accounts
       ..clear()
       ..add(account);
   });
-  tearDown(() {
-    watchAccountService.accounts.clear();
-    networkController.probing = false;
-  });
+  tearDown(() => watchAccountService.accounts.clear());
 
-  Future<void> openDashboard(WidgetTester tester) async {
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-      channel,
-      (call) async => call.method == 'listWalletIds' ? ['spendable'] : null,
-    );
-    addTearDown(
-      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        channel,
-        null,
-      ),
-    );
-    tester.view.physicalSize = const Size(360, 800);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: DashboardScreen(initializeWalletService: () async {}),
-        routes: {'/receive': (_) => const ReceiveScreen()},
-      ),
-    );
-    await tester.pumpAndSettle();
-  }
-
-  Future<void> selectAccount(WidgetTester tester) async {
-    final row = find.byKey(ValueKey('watch-account-${account.key}'));
+  /// Opens the account from the overview; returns the scans made by then.
+  Future<int> openAccount(WidgetTester tester) async {
+    FakeKeystore(wallets: const []).install(tester);
+    await pumpHome(tester);
+    final before = api.watchScans;
+    final row = find.byKey(ValueKey('overview-row-watchedAccount-${account.key}'));
     await tester.ensureVisible(row);
-    await tester.pumpAndSettle();
-    expect(find.text('Wallet'), findsWidgets);
+    // Marked as watched, not as a wallet that could be unlocked.
     expect(
-      find.descendant(
-        of: row,
-        matching: find.byIcon(Icons.visibility_outlined),
-      ),
+      find.descendant(of: row, matching: find.byIcon(Icons.visibility_outlined)),
       findsOneWidget,
     );
-    expect(
-      find.descendant(
-        of: row,
-        matching: find.textContaining('Cannot sign locally'),
-      ),
-      findsOneWidget,
-    );
+    expect(find.descendant(of: row, matching: find.textContaining('Locked')), findsNothing);
     await tester.tap(row);
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(row, 200);
-    await tester.pumpAndSettle();
-    expect(tester.widget<ListTile>(row).selected, isTrue);
-    await tester.scrollUntilVisible(find.text(watchAccountLimitations), -200);
-    await tester.pumpAndSettle();
-    expect(find.text(watchAccountLimitations), findsOneWidget);
-    expect(
-      api.scans,
-      0,
-      reason: 'Selecting a cached account must not refresh it',
-    );
+    expect(find.byType(WatchedWalletPage), findsOneWidget);
+    expect(api.watchScans, before, reason: 'Opening an account must not rescan it');
+    return before;
   }
 
-  testWidgets(
-    'main selector distinguishes account and reaches address-only Receive while locked',
-    (tester) async {
-      await openDashboard(tester);
-      await selectAccount(tester);
-      await tester.ensureVisible(find.text('Receive'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Receive'));
-      await tester.pumpAndSettle();
-      expect(
-        api.scans,
-        1,
-        reason: 'Receive retains its existing fresh-address scan',
-      );
-      expect(find.byType(ReceiveScreen), findsOneWidget);
-      expect(
-        tester.widget<QrImageView>(find.byType(QrImageView)).semanticsLabel,
-        watched,
-      );
-      expect(find.byKey(const Key('stealth-qr')), findsNothing);
-      expect(find.text('USED ADDRESSES'), findsNothing);
-      expect(
-        find.textContaining('Cannot see stealth identities'),
-        findsOneWidget,
-      );
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
-
-  testWidgets('selected account Send opens the existing offline signer flow', (
+  testWidgets('an account opens the standard page and its Receive scans first', (
     tester,
   ) async {
-    await openDashboard(tester);
-    await selectAccount(tester);
-    await tester.ensureVisible(find.text('Send with offline signer'));
+    final scans = await openAccount(tester);
+    expect(scans, 0, reason: 'A scanned account is not rescanned at launch');
+    // The standard page: bottom navigation, assets and activity sections,
+    // with no tab that needs a key.
+    for (final label in ['Wallet', 'Activity', 'Settings']) {
+      expect(find.widgetWithText(NavigationDestination, label), findsOneWidget);
+    }
+    expect(find.widgetWithText(NavigationDestination, 'Swap'), findsNothing);
+    expect(find.text(watchAccountLimitations), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Recent activity'), 300);
+    expect(find.text('Assets'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('watch-action-receive')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Send with offline signer'));
+    expect(api.watchScans, scans + 1, reason: 'Receive keeps its fresh-address scan');
+    expect(find.byType(ReceiveScreen), findsOneWidget);
+    expect(
+      tester.widget<QrImageView>(find.byType(QrImageView)).semanticsLabel,
+      watched,
+    );
+    expect(find.byKey(const Key('stealth-qr')), findsNothing);
+    expect(find.text('USED ADDRESSES'), findsNothing);
+    expect(find.textContaining('Cannot see stealth identities'), findsOneWidget);
+    await disposeHome(tester);
+  });
+
+  testWidgets('an account sends through the existing offline signer flow', (
+    tester,
+  ) async {
+    final scans = await openAccount(tester);
+    expect(find.text('Send with offline signer'), findsOneWidget);
+    expect(find.text('Send'), findsNothing);
+    await tester.tap(find.byKey(const Key('watch-action-send')));
     await tester.pumpAndSettle();
     expect(find.byType(ColdWatchSendScreen), findsOneWidget);
     expect(
-      tester
-          .widget<ColdWatchSendScreen>(find.byType(ColdWatchSendScreen))
-          .account,
+      tester.widget<ColdWatchSendScreen>(find.byType(ColdWatchSendScreen)).account,
       same(account),
     );
     expect(find.byType(SendScreen), findsNothing);
-    expect(api.scans, 0);
-    await tester.pumpWidget(const SizedBox());
+    expect(api.watchScans, scans);
+    await disposeHome(tester);
   });
 
-  testWidgets(
-    'uncached account remains selectable with explicit unavailable balance',
-    (tester) async {
-      account.snapshot = null;
-      await openDashboard(tester);
-      await selectAccount(tester);
-      expect(find.text('Balance unavailable'), findsOneWidget);
-      expect(find.text('Refresh account'), findsOneWidget);
-      expect(find.text('Receive'), findsNothing);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+  testWidgets('an account whose scan failed stays openable, with Receive disabled', (
+    tester,
+  ) async {
+    // No snapshot: the launch pass scans it, and this scan fails.
+    account.snapshot = null;
+    api.watchDerived = (i) => throw StateError('node down');
+    addTearDown(() => api.watchDerived = (i) => i == 0 ? watched : 'address-$i');
+    await openAccount(tester);
+    expect(account.snapshot, isNull);
+    expect(find.textContaining('Account refresh unavailable'), findsWidgets);
+    final receive = tester.widget<FilledButton>(
+      find.byKey(const Key('watch-action-receive')),
+    );
+    expect(receive.onPressed, isNull);
+    await disposeHome(tester);
+  });
 
-  testWidgets(
-    'single watched address reaches offline Send and Receive while locked',
-    (tester) async {
-      SharedPreferences.setMockInitialValues({
-        'argus_watch_only_addresses': jsonEncode([watched]),
-      });
-      await watchOnlyService.load();
-      await openDashboard(tester);
-      final row = find.byKey(const ValueKey('watch-address-$watched'));
-      await tester.ensureVisible(row);
-      await tester.pumpAndSettle();
-      await tester.tap(row);
-      await tester.pumpAndSettle();
-      expect(find.text('Watch-only address'), findsOneWidget);
-      expect(find.text('Send with offline signer'), findsOneWidget);
-      expect(find.textContaining('change returns to this same address'), findsOneWidget);
-      await tester.ensureVisible(find.text('Send with offline signer'));
-      await tester.tap(find.text('Send with offline signer'));
-      await tester.pumpAndSettle();
-      expect(tester.widget<ColdWatchSendScreen>(find.byType(ColdWatchSendScreen)).address, watched);
-      expect(find.textContaining('Change, including remaining tokens'), findsOneWidget);
-      expect(find.text('Prepare cold request'), findsOneWidget);
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      await tester.ensureVisible(find.text('Receive'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Receive'));
-      await tester.pumpAndSettle();
-      expect(
-        tester.widget<QrImageView>(find.byType(QrImageView)).semanticsLabel,
-        watched,
-      );
-      expect(api.scans, 0);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+  testWidgets("a watched address shows its own assets and activity, not a signing wallet's", (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'argus_watch_only_addresses': jsonEncode([watched]),
+    });
+    await watchOnlyService.load();
+    api.balances[watched] = {
+      'balance_nano_erg': 1000000000,
+      'tokens': [
+        {'id': 'watched-token', 'amount': 5},
+      ],
+    };
+    api.histories[watched] = [
+      {'tx_id': 'watched-tx', 'height': 10, 'timestamp': 1759700000000, 'value_nano_erg': 1000000000},
+    ];
+    addTearDown(() {
+      api.balances.remove(watched);
+      api.histories.remove(watched);
+    });
+    FakeKeystore(wallets: const []).install(tester);
+    // Wide enough for the Activity header in the square test font.
+    await pumpHome(tester, size: const Size(430, 900));
+    final row = find.byKey(const ValueKey('overview-row-watchedAddress-$watched'));
+    await tester.ensureVisible(row);
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(find.byType(AssetTile), findsNWidgets(2), reason: 'ERG and the one token');
+    await tester.scrollUntilVisible(find.byType(ActivityTile), 300);
+    expect(find.byType(ActivityTile), findsOneWidget);
+    // The Activity tab reads this address's own history.
+    await tester.tap(find.widgetWithText(NavigationDestination, 'Activity'));
+    await tester.pumpAndSettle();
+    expect(find.byType(TransactionsScreen), findsOneWidget);
+    expect(
+      tester.widget<TransactionsScreen>(find.byType(TransactionsScreen)).args!.historyAddresses,
+      [watched],
+    );
+    expect(find.byType(ActivityTile), findsOneWidget);
+    await disposeHome(tester);
+  });
+
+  testWidgets('a watched address reaches offline Send and Receive while locked', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({
+      'argus_watch_only_addresses': jsonEncode([watched]),
+    });
+    await watchOnlyService.load();
+    api.balances[watched] = {
+      'balance_nano_erg': 25421629296273,
+      'tokens': [],
+    };
+    addTearDown(() => api.balances.remove(watched));
+    FakeKeystore(wallets: const []).install(tester);
+    await pumpHome(tester);
+    final row = find.byKey(const ValueKey('overview-row-watchedAddress-$watched'));
+    await tester.ensureVisible(row);
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    // A formatted figure in the balance card, not "25421.629296273 ERG".
+    expect(
+      tester.widget<Text>(find.byKey(const Key('wallet-balance'))).data,
+      '25421.6292',
+    );
+    expect(find.text('Send with offline signer'), findsOneWidget);
+    expect(find.textContaining('change returns to this same address'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('watch-action-send')));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<ColdWatchSendScreen>(find.byType(ColdWatchSendScreen)).address,
+      watched,
+    );
+    expect(find.textContaining('Change, including remaining tokens'), findsOneWidget);
+    expect(find.text('Prepare cold request'), findsOneWidget);
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('watch-action-receive')));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<QrImageView>(find.byType(QrImageView)).semanticsLabel,
+      watched,
+    );
+    expect(api.watchScans, 0);
+    await disposeHome(tester);
+  });
 }

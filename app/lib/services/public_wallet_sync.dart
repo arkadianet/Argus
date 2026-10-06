@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import 'address_holdings.dart';
 import 'network_controller.dart';
 import 'wallet_database_service.dart';
 import 'wallet_service.dart';
@@ -69,21 +70,39 @@ class PublicWalletSync extends ChangeNotifier {
     foreground = value;
   }
 
+  /// Forgets the last attempt, so the next check is due. The scheduler is a
+  /// process-wide singleton; tests that each launch the home screen need it.
+  @visibleForTesting
+  void resetSchedule() => _lastAttempt = null;
+
   bool isDue([DateTime? now]) =>
       !_busy &&
       foreground &&
       (_lastAttempt == null ||
           (now ?? DateTime.now()).difference(_lastAttempt!) >= interval);
 
+  /// [recordedAddresses] are addresses the wallet list itself keeps for a
+  /// wallet (index 0, and the pinned address), queried even when no
+  /// snapshot recorded them: without them a pinned wallet that has no
+  /// snapshot yet is read at its pinned address alone, and what index 0
+  /// holds goes missing from its total.
+  ///
+  /// [whileLocked] lets the pass run with every wallet locked. The launch
+  /// overview shows each wallet's balance before anything is unlocked, and
+  /// these reads need no key: they ask the user's node about addresses it
+  /// was already shown. Unlocking, switching, locking or deleting still
+  /// revokes the pass through the controller's public generation.
   Future<void> tick({
     required Map<String, String?> wallets,
     required WalletSyncController controller,
     required String? activeId,
     required bool Function() unlocked,
+    Map<String, Iterable<String>> recordedAddresses = const {},
+    bool whileLocked = false,
     DateTime? now,
   }) async {
     final at = now ?? DateTime.now();
-    if (!unlocked() || !isDue(at)) return;
+    if ((!whileLocked && !unlocked()) || !isDue(at)) return;
     _lastAttempt = at;
     _busy = true;
     final generation = controller.publicGeneration;
@@ -91,8 +110,9 @@ class PublicWalletSync extends ChangeNotifier {
     bool valid() =>
         foreground &&
         lifecycle == _lifecycle &&
-        unlocked() &&
+        (whileLocked || unlocked()) &&
         controller.publicGeneration == generation;
+    var finished = false;
     try {
       for (final entry in wallets.entries) {
         if (!valid()) return;
@@ -119,15 +139,34 @@ class PublicWalletSync extends ChangeNotifier {
             if (old['primary_address'] is String)
               old['primary_address'] as String,
             if (entry.value != null) entry.value!,
+            ...?recordedAddresses[entry.key],
           }..remove('');
           if (addresses.isEmpty) continue;
           var nano = 0;
           final amounts = <String, int>{};
           final transactions = <String, Map<String, dynamic>>{};
+          final holdings = <AddressHolding>[];
+          final frontier = ((old['frontier_addresses'] as List?) ?? const [])
+              .cast<String>();
+          final used = [
+            for (final row in (old['used_addresses'] as List? ?? const []))
+              if (row is Map) row.cast<String, dynamic>(),
+          ];
           for (final address in addresses) {
             if (!valid()) return;
             final balance = await gateway.balance(address);
             nano += (balance['balance_nano_erg'] as num).toInt();
+            holdings.add(
+              AddressHolding.fromBalance(
+                address,
+                balance,
+                index: recordedAddressIndex(
+                  address,
+                  frontier: frontier,
+                  used: used,
+                ),
+              ),
+            );
             for (final token in balance['tokens'] as List? ?? const []) {
               final id = token['id'] as String;
               amounts[id] =
@@ -168,6 +207,7 @@ class PublicWalletSync extends ChangeNotifier {
             'balance_nano_erg': nano,
             'tokens': tokens,
             'transactions': rows.take(5).toList(),
+            'address_holdings': [for (final h in holdings) h.toJson()],
             'public_only': true,
             'public_refreshed_at': at.millisecondsSinceEpoch,
             'last_sync_timestamp': at.millisecondsSinceEpoch,
@@ -181,8 +221,16 @@ class PublicWalletSync extends ChangeNotifier {
           // Any missing address/history keeps the prior snapshot and its age.
         }
       }
+      finished = true;
     } finally {
       _busy = false;
+      // Revoked part way (an unlock, switch, lock, delete, or a biometric
+      // sheet taking the foreground) rather than failed: run again at the
+      // next check instead of leaving the remaining wallets for five
+      // minutes. Opening a wallet moments after launch is the common case
+      // now that the app opens on the overview. Wallets this pass already
+      // refreshed are fresh, so the rerun skips them.
+      if (!finished) _lastAttempt = null;
       notifyListeners();
     }
   }
