@@ -914,7 +914,7 @@ class SwapAssetPickerSheetState extends State<SwapAssetPickerSheet> {
       if (id == null) return formatTokenAmount(units.toInt(), 9);
       final decimals = tokenDecimals(id, held: held[id]);
       return decimals == null
-          ? '${formatUnits(units, 0)} $rawUnitsLabel'
+          ? rawUnitsText(units)
           : formatTokenAmount(units.toInt(), decimals);
     }
 

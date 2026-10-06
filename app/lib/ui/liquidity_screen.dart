@@ -117,19 +117,13 @@ class LiquidityPool {
 
   /// [units] of one side: "1,234.5 SigUSD", or "1,234,500 raw units of
   /// 03faf2cb…" when nothing knows the token's decimals.
-  String amount(BigInt units, String? tokenId) {
-    final d = scale(tokenId);
-    return d == null
-        ? '${formatUnits(units, 0)} $rawUnitsLabel of ${name(tokenId)}'
-        : '${formatUnits(units, d)} ${name(tokenId)}';
-  }
+  String amount(BigInt units, String? tokenId) =>
+      unitsWithLabel(units, scale(tokenId), name(tokenId));
 
   /// [units] without the name, for text that already says which side.
   String number(BigInt units, String? tokenId) {
     final d = scale(tokenId);
-    return d == null
-        ? '${formatUnits(units, 0)} $rawUnitsLabel'
-        : formatUnits(units, d);
+    return d == null ? rawUnitsText(units) : formatUnits(units, d);
   }
 
   /// What an amount field for one side is called.
@@ -703,9 +697,8 @@ class _CreateTabState extends State<_CreateTab>
   String _name(String? id) => id == null ? 'ERG' : tokenLabel(id, held: _heldToken(id));
 
   /// An amount of one side, labelled raw units when the scale is unknown.
-  String _amount(int units, String? id) => _scale(id) == null
-      ? '${formatUnits(BigInt.from(units), 0)} $rawUnitsLabel of ${_name(id)}'
-      : '${formatUnits(BigInt.from(units), _decimals(id))} ${_name(id)}';
+  String _amount(int units, String? id) =>
+      unitsWithLabel(BigInt.from(units), _scale(id), _name(id));
 
   String _fieldLabel(String? id) => _scale(id) == null
       ? '${_name(id)} to put in ($rawUnitsLabel)'

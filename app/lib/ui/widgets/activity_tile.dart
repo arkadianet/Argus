@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../../format.dart';
 import '../../services/activity_classifier.dart';
+import '../../services/token_metadata.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 
 /// One transaction row shared by the home card and the Activity tab.
+///
+/// Tokens are named and scaled by the one token lookup, the same as the
+/// asset list, and the row repaints when that lookup learns something.
 class ActivityTile extends StatelessWidget {
   const ActivityTile({
     super.key,
@@ -23,7 +27,12 @@ class ActivityTile extends StatelessWidget {
   final bool showTxId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ValueListenableBuilder<int>(
+    valueListenable: walletService.metadataChanges,
+    builder: (context, _, _) => _row(context),
+  );
+
+  Widget _row(BuildContext context) {
     final muted = ArgusColors.of(context).muted;
     final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
     final kind = classifyActivity(tx);
@@ -51,8 +60,8 @@ class ActivityTile extends StatelessWidget {
     final line = activityLine(
       tx,
       hidden: hidden,
-      name: (id) => walletService.cachedTokenMeta(id)?.name,
-      decimals: (id) => walletService.cachedTokenMeta(id)?.decimals ?? 0,
+      name: (id) => tokenName(id),
+      decimals: (id) => tokenDecimals(id),
     );
     // A stealth receipt has no counterparty to name: the payer built a
     // one-time script, and nothing on chain says who they were.
@@ -94,10 +103,12 @@ class ActivityTile extends StatelessWidget {
                     ],
                   ),
                   const SizedBox(height: 2),
+                  // Two lines: named tokens and the ERG leg are what the row
+                  // is for, and one line cut them off at phone width.
                   Text(
                     [line, if (who != null) who].join(' '),
                     style: TextStyle(fontSize: 12.5, color: muted),
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
                   if (showTxId && txId.isNotEmpty) ...[
