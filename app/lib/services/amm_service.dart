@@ -59,9 +59,7 @@ class AmmPoolSet {
 
   /// Every token a pool in this set trades (ERG excluded).
   Set<String> get tokenIds => {
-    for (final pool in pools)
-      for (final (id, _) in poolSides(pool))
-        if (id != null) id,
+    for (final pool in pools) ...poolTokenIds(pool),
   };
 
   Map<String, dynamic> toJson() => {
@@ -147,8 +145,8 @@ Map<String, AmmTokenMeta> publicPoolTokenMeta(
 ) {
   final out = <String, AmmTokenMeta>{};
   for (final pool in pools) {
-    for (final (id, _) in poolSides(pool)) {
-      if (id == null || out.containsKey(id)) continue;
+    for (final id in poolTokenIds(pool)) {
+      if (out.containsKey(id)) continue;
       final known = walletService.publicTokenMeta(id);
       if (known == null || known.decimalsEvidence == DecimalsEvidence.invalid) {
         continue;
@@ -170,12 +168,19 @@ List<String> poolTokenIdsByDepth(List<Map<String, dynamic>> pools) {
   final out = <String>[];
   final seen = <String>{};
   for (final pool in ordered) {
-    for (final (id, _) in poolSides(pool)) {
-      if (id != null && seen.add(id)) out.add(id);
+    for (final id in poolTokenIds(pool)) {
+      if (seen.add(id)) out.add(id);
     }
   }
   return out;
 }
+
+/// The tokens one pool trades (ERG excluded), X before Y. Reads only the
+/// ids: naming a token must not depend on how its reserves were encoded.
+List<String> poolTokenIds(Map<String, dynamic> pool) => [
+  for (final side in [pool['token_x'], pool['token_y']])
+    if (side is Map && side['token_id'] is String) side['token_id'] as String,
+];
 
 class AmmQuote {
   final String poolId;

@@ -86,7 +86,7 @@ String? tokenSummary(
 
 /// Second line of an activity row: what moved, e.g. `1 SigUSD + 0.7496
 /// ERG`, omitting a zero ERG leg. A swap shows both legs, what went out and
-/// what came back: `0.75 ERG → 69 COMET`.
+/// what came back: `0.75 ERG for 69 COMET`.
 String activityLine(
   Map<String, dynamic> tx, {
   required String? Function(String id) name,
@@ -108,7 +108,7 @@ String activityLine(
       if (nano > 0) erg(nano),
     ];
     if (out.isNotEmpty && back.isNotEmpty) {
-      return '${out.join(' + ')} → ${back.join(' + ')}';
+      return '${out.join(' + ')} for ${back.join(' + ')}';
     }
   }
   final tokens = nano < 0 || (nano == 0 && sent.isNotEmpty) ? sent : received;

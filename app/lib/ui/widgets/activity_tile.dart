@@ -77,6 +77,23 @@ class ActivityTile extends StatelessWidget {
             ? (kind == ActivityKind.swap ? null : 'contract ${shorten(counterparty, head: 6, tail: 4)}')
             : '${outgoing ? 'to' : 'from'} ${shorten(counterparty, head: 6, tail: 4)}');
 
+    final when = Text(
+      formatActivityTime(ts),
+      style: TextStyle(fontSize: 12, color: muted),
+    );
+    final status = Text(
+      confirmed ? 'Confirmed' : 'Pending',
+      style: TextStyle(
+        fontSize: 12,
+        color: confirmed ? moss : ArgusColors.of(context).accentText,
+        fontWeight: FontWeight.w500,
+      ),
+    );
+    // At large text sizes a side column for the time takes half the row and
+    // leaves the names a few letters; it moves under the line instead, as
+    // the Assets filters do.
+    final stacked = MediaQuery.textScalerOf(context).scale(14) / 14 > 1.4;
+
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(cardRadius),
@@ -96,9 +113,13 @@ class ActivityTile extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Text(
-                        activityTitle(kind),
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                      Flexible(
+                        child: Text(
+                          activityTitle(kind),
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ],
                   ),
@@ -118,24 +139,18 @@ class ActivityTile extends StatelessWidget {
                       style: monoStyle(context, size: 11).copyWith(color: muted),
                     ),
                   ],
+                  if (stacked) ...[
+                    const SizedBox(height: 3),
+                    Wrap(spacing: 10, children: [when, status]),
+                  ],
                 ],
               ),
             ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(formatActivityTime(ts), style: TextStyle(fontSize: 12, color: muted)),
-                const SizedBox(height: 3),
-                Text(
-                  confirmed ? 'Confirmed' : 'Pending',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: confirmed ? moss : ArgusColors.of(context).accentText,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
+            if (!stacked)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [when, const SizedBox(height: 3), status],
+              ),
           ],
         ),
       ),

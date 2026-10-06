@@ -326,10 +326,10 @@ class PublicTokenCatalog {
     await prefs.remove(legacyAmmKey);
   }
 
-  /// Puts entries straight into memory, as a finished pass would.
+  /// Puts entries straight into memory, as a finished pass would. A later
+  /// load fills gaps around them and never overwrites them.
   @visibleForTesting
   void debugSeed(Iterable<CachedDescriptor> entries) {
-    _loading ??= Future<void>.value();
     for (final d in entries) {
       _remember(d);
     }

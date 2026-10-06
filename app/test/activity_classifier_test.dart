@@ -127,7 +127,7 @@ void main() {
         'tokens_received': [t(comet, 69)],
       };
       expect(classifyActivity(tx), ActivityKind.swap);
-      expect(activityLine(tx, name: name, decimals: decimals), '0.75 ERG → 69 COMET');
+      expect(activityLine(tx, name: name, decimals: decimals), '0.75 ERG for 69 COMET');
     });
 
     test('hidden balances hide names too', () {

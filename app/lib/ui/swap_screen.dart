@@ -692,17 +692,21 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
     final to = _unit(_toToken);
     final exact = _fmtAmount(BigInt.from(r.exactInput), _decimals(_fromToken));
     final left = _fmtAmount(BigInt.from(r.leftover), _decimals(_fromToken));
-    return Row(
+    // Stacked, not side by side: the button carries an exact amount, and
+    // beside it the explanation was squeezed to a word per line at large
+    // text sizes.
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Expanded(
-          child: Text(
-            '${_fmtAmount(BigInt.from(r.output), _decimals(_toToken))} $to is the most this buys; '
-            '$exact $from buys the same and $left $from would otherwise stay in the pool.',
-            style: TextStyle(fontSize: 12.5, color: rustFor(context)),
-          ),
+        Text(
+          '${_fmtAmount(BigInt.from(r.output), _decimals(_toToken))} $to is the most this buys; '
+          '$exact $from buys the same and $left $from would otherwise stay in the pool.',
+          style: TextStyle(fontSize: 12.5, color: rustFor(context)),
         ),
-        TextButton(onPressed: _useExactInput, child: Text('Pay $exact')),
+        Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: TextButton(onPressed: _useExactInput, child: Text('Pay $exact')),
+        ),
       ],
     );
   }
