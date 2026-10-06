@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/home_finders.dart';
 import 'wallet_sync_controller_test.dart' show FakeGateway;
 
 class GatedGateway extends FakeGateway {
@@ -356,7 +357,7 @@ void main() {
     );
     final status = find.byKey(const Key('wallet-status'));
     expect(find.descendant(of: status, matching: find.textContaining('Syncing…')), findsOneWidget);
-    expect(find.descendant(of: status, matching: find.textContaining('5m ago')), findsOneWidget);
+    expect(find.descendant(of: status, matching: textPlainContaining('5m ago')), findsOneWidget);
     expect(find.textContaining('Synced'), findsNothing);
   });
 

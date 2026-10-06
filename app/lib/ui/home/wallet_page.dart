@@ -226,13 +226,16 @@ class WalletPageView extends StatelessWidget {
     // much the wallet has been used.
     final utxoText = utxos == null || hidden ? 'UTXOs' : '${groupThousands('$utxos')}${nbsp}UTXOs';
     final lines = <Widget>[];
+    // Each part of a status line wraps as a whole: "Updated just" over
+    // "now" reads as two statements.
+    String whole(String part) => part.replaceAll(' ', nbsp);
     if (data.status case final status?) {
       final (word, dot, problem) = syncLook(context, status);
       final parts = [
         if (status.blockHeight != null) 'Block$nbsp${formatWithCommas(status.blockHeight!)}',
         // While fragmented the count leads its own line below.
         if (utxos != null && !hidden && !data.fragmented) utxoText,
-        if (status.age != null) status.age!,
+        if (status.age != null) whole(status.age!),
       ];
       lines.add(HomeLineRow(
         inkKey: const Key('wallet-status'),
@@ -256,7 +259,10 @@ class WalletPageView extends StatelessWidget {
         text: TextSpan(
           children: [
             for (final (i, s) in watched.status.indexed)
-              TextSpan(text: i == 0 ? s : '   ·   $s', style: i == 0 ? TextStyle(color: t.ink, fontWeight: FontWeight.w500) : null),
+              TextSpan(
+                text: i == 0 ? s : '   ·   ${whole(s)}',
+                style: i == 0 ? TextStyle(color: t.ink, fontWeight: FontWeight.w500) : null,
+              ),
           ],
         ),
       ));
