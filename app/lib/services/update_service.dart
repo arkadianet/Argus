@@ -336,10 +336,15 @@ UpdateException _networkFailure(Object e) => e is TimeoutException
 
 const _maxRedirects = 5;
 
+/// The statuses that send a client elsewhere. Others in the 3xx range (300,
+/// 304, 305) do not mean "go to Location" and are answered like any error.
+const _redirectStatuses = {301, 302, 303, 307, 308};
+
 /// A GET that follows redirects itself. The HTTP client's own following sends
 /// the next request before telling anyone where it went; doing it here means
 /// nothing is ever sent to an address [trusted] has not accepted. [start] is
-/// ours and is not checked. Only a User-Agent goes on any hop.
+/// ours and is not checked. Only a User-Agent goes on any hop. [timeout] is
+/// for all of it, from the first request to the last response's headers.
 Future<http.StreamedResponse> _get(
   http.Client client,
   Uri start, {
@@ -347,13 +352,16 @@ Future<http.StreamedResponse> _get(
   required Duration timeout,
 }) async {
   var url = start;
+  final clock = Stopwatch()..start();
   for (var hop = 0; hop <= _maxRedirects; hop++) {
+    final left = timeout - clock.elapsed;
+    if (left <= Duration.zero) throw TimeoutException('The redirects took too long.');
     final request = http.Request('GET', url)
       ..followRedirects = false
       ..headers['user-agent'] = updateUserAgent;
-    final response = await client.send(request).timeout(timeout);
+    final response = await client.send(request).timeout(left);
     final status = response.statusCode;
-    if (status < 300 || status > 399) return response;
+    if (!_redirectStatuses.contains(status)) return response;
     final location = response.headers['location'];
     await _discardBody(response);
     if (location == null) throw UpdateException('GitHub answered with an error ($status).');
@@ -372,7 +380,7 @@ Future<http.StreamedResponse> _get(
 /// Lets go of a response nobody will read, so its connection is not held.
 Future<void> _discardBody(http.StreamedResponse response) async {
   try {
-    await response.stream.listen((_) {}).cancel();
+    await response.stream.listen((_) {}).cancel().timeout(const Duration(seconds: 2));
   } catch (_) {}
 }
 
@@ -431,6 +439,7 @@ Future<DownloadedApk> downloadApk({
   required bool Function() isCancelled,
   void Function(int received)? onProgress,
   int maxBytes = maxApkBytes,
+  Duration connectTimeout = _connectTimeout,
   Duration stallTimeout = _stallTimeout,
 }) async {
   if (!isTrustedReleaseUrl(asset.url)) throw const UpdateException('The download address is not on GitHub.');
@@ -439,11 +448,10 @@ Future<DownloadedApk> downloadApk({
 
   final http.StreamedResponse response;
   try {
-    response = await _get(client, asset.url, trusted: isTrustedReleaseUrl, timeout: _connectTimeout);
-  } on UpdateException {
-    rethrow;
+    response = await _get(client, asset.url, trusted: isTrustedReleaseUrl, timeout: connectTimeout);
   } catch (e) {
     if (isCancelled()) throw const _Cancelled();
+    if (e is UpdateException) rethrow;
     throw _networkFailure(e);
   }
   if (response.statusCode != 200) {
@@ -763,8 +771,9 @@ class UpdateService extends ChangeNotifier {
     enabled = value;
     // Off means off: what an earlier check found goes with it, so nothing
     // keeps nudging about a release the user chose not to hear of. A download
-    // already under way is left to finish. "Check now" finds it again.
-    if (!value && !busy) await _forgetOffer();
+    // under way, or a file being handed to the installer, is left alone.
+    // "Check now" finds the release again.
+    if (!value && !busy && !_installing) await _forgetOffer();
     notifyListeners();
     return true;
   }

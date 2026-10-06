@@ -185,6 +185,22 @@ void main() {
       expect(svc.stage, UpdateStage.verified);
     });
 
+    test('a file being handed to the installer is left alone', () async {
+      final svc = await h.found();
+      await svc.setEnabled(true);
+      await svc.downloadAndVerify();
+      h.platform.installGate = Completer<void>();
+      final installing = svc.install();
+      await _until(() => h.platform.installed.isNotEmpty);
+
+      await svc.setEnabled(false);
+      expect(File('${h.downloads.path}/argus-update.apk').existsSync(), isTrue, reason: 'the installer is about to read it');
+      expect(svc.available, isNotNull);
+
+      h.platform.installGate!.complete();
+      await installing;
+    });
+
     test('a failed write changes nothing, including what was found', () async {
       h.publish('v1.0.0-beta.2');
       SharedPreferences.setMockInitialValues({'argus_update_check': true});
@@ -721,6 +737,54 @@ void main() {
         expect(svc.stage, UpdateStage.failed);
         expect(svc.stageMessage, contains('too many times'));
         expect(h.gh.fileRequests.length, lessThanOrEqualTo(6));
+      });
+
+      test('a 3xx that is not a redirect is not followed, Location or not', () async {
+        for (final status in [300, 304, 305]) {
+          final svc = await h.found();
+          h.gh.files[assetUrl(arm64)] = Served.redirect(cdn, status: status);
+          h.gh.files[cdn] = Served.bytes(goodApk);
+          await svc.downloadAndVerify();
+          expect(svc.stage, UpdateStage.failed, reason: '$status');
+          expect(svc.stageMessage, contains('$status'));
+          expect(h.gh.asked, isNot(contains(cdn)), reason: '$status was followed');
+        }
+      });
+
+      test('a cancel that lands between hops still reads as a cancel', () async {
+        final svc = await h.found();
+        h.gh.files[assetUrl(arm64)] = Served.redirect('https://cdn.evil.example/a.apk');
+        h.gh.onRequest = (request) {
+          if (request.url.toString() == assetUrl(arm64)) svc.cancelDownload();
+        };
+        await svc.downloadAndVerify();
+        expect(svc.stage, UpdateStage.idle);
+        expect(svc.stageMessage, 'Download cancelled.');
+        expect(h.leftovers, isEmpty);
+      });
+
+      test('the whole chain shares one deadline, not one per hop', () async {
+        const slow = Duration(milliseconds: 70);
+        h.gh.files[assetUrl(universal)] = Served.redirect('https://github.com/hop/1', delay: slow);
+        for (var i = 1; i < 5; i++) {
+          h.gh.files['https://github.com/hop/$i'] = Served.redirect('https://github.com/hop/${i + 1}', delay: slow);
+        }
+        h.gh.files['https://github.com/hop/5'] = Served.bytes(goodApk, status: 200);
+        final asset = ReleaseAsset(name: universal, size: goodApk.length, url: Uri.parse(assetUrl(universal)));
+        final watch = Stopwatch()..start();
+        await expectLater(
+          downloadApk(
+            client: h.gh.create(),
+            asset: asset,
+            into: File('${h.root.path}/slow.part'),
+            isCancelled: () => false,
+            connectTimeout: const Duration(milliseconds: 200),
+          ),
+          throwsA(isA<UpdateException>().having((e) => e.message, 'message', contains('in time'))),
+        );
+        // Five hops of 70 ms would take 350 ms; one 200 ms deadline stops it sooner.
+        expect(watch.elapsedMilliseconds, lessThan(330));
+        expect(File('${h.root.path}/slow.part').existsSync(), isFalse);
       });
 
       test('a redirect that says nowhere to go is an error, not a hang', () async {

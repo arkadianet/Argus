@@ -21,6 +21,9 @@ class FakePlatform implements UpdatePlatform {
   List<String> abis = const ['arm64-v8a', 'armeabi-v7a', 'armeabi'];
   bool allowInstall = true;
   bool installerOpens = true;
+
+  /// Holds the hand-off to the installer until completed.
+  Completer<void>? installGate;
   final installed = <String>[];
   int settingsOpened = 0;
 
@@ -45,13 +48,17 @@ class FakePlatform implements UpdatePlatform {
   @override
   Future<bool> installApk(String path) async {
     installed.add(path);
+    await installGate?.future;
     return installerOpens;
   }
 }
 
 /// What the fake serves for one address.
 class Served {
-  Served(this.body, {this.status = 200, this.headers = const {}, this.contentLength});
+  Served(this.body, {this.status = 200, this.headers = const {}, this.contentLength, this.delay = Duration.zero});
+
+  /// How long the answer takes to begin.
+  final Duration delay;
 
   /// Called per request, so a test can hand out a stream it controls.
   final Stream<List<int>> Function() body;
@@ -68,8 +75,12 @@ class Served {
       );
 
   /// A redirect to [location], which may be relative.
-  static Served redirect(String location, {int status = 302}) =>
-      Served(() => Stream.value(utf8.encode('<a href="$location">moved</a>')), status: status, headers: {'location': location});
+  static Served redirect(String location, {int status = 302, Duration delay = Duration.zero}) => Served(
+        () => Stream.value(utf8.encode('<a href="$location">moved</a>')),
+        status: status,
+        headers: {'location': location},
+        delay: delay,
+      );
 
   /// A redirect with no Location header.
   static Served redirectToNowhere({int status = 302}) => Served(() => const Stream.empty(), status: status);
@@ -94,6 +105,9 @@ class FakeGitHub {
   int clientsCreated = 0;
   int clientsClosed = 0;
 
+  /// Called as each request arrives, before it is answered.
+  void Function(http.BaseRequest request)? onRequest;
+
   http.Client create() {
     clientsCreated++;
     return _Client(this);
@@ -116,10 +130,12 @@ class _Client extends http.BaseClient {
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
     if (closed) throw http.ClientException('closed', request.url);
     gh.requests.add(request);
+    gh.onRequest?.call(request);
     final failure = gh.failure;
     if (failure != null) throw failure;
     final served = gh.files[request.url.toString()];
     if (served != null) {
+      if (served.delay > Duration.zero) await Future<void>.delayed(served.delay);
       return http.StreamedResponse(served.body(), served.status, headers: served.headers, contentLength: served.contentLength);
     }
     if (request.url == latestReleaseUri) {
