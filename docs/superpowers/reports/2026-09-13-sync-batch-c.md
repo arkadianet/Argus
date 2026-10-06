@@ -99,3 +99,12 @@ Result: 730 passed, one existing opt-in test skipped. JSON reporter success: `tr
 The test suite's app-render test logs a notification-plugin initialization warning. The existing real-mainnet stake-recovery test is opt-in and skipped without its executable/evidence environment variables. Neither was changed.
 
 Existing public balance reads can degrade mempool errors to confirmed-only data, and the native UTXO listing caps at 10,000 boxes/address; Batch C does not claim stronger completeness than that API. Existing overview/portfolio stealth-total conventions differ from the active wallet's full total; they were not broadened here. No unrelated finding was fixed and no implementation blocker remains.
+
+## Update 2026-10: the launch overview reads locked wallets
+
+The policy above ("only during an unlocked session") is superseded. The app now opens on an overview of every wallet with its balance and no unlock (`ui/wallets_overview_screen.dart`, `ui/home/overview_model.dart`), so the overview runs this same scheduler with `whileLocked: true`. Unchanged: the five-minute floor, foreground only, one wallet and one address at a time, known addresses only, no derivation, discovery or stealth scan, and revocation by any session boundary (unlock, switch, lock, delete) through the controller's public generation, plus lifecycle changes. What changed:
+
+- A pass may start with every wallet locked. The reads ask the user's own node about addresses it was already shown when the wallet was last synced; no new third party is involved. Watched addresses were already read before any unlock.
+- A pass revoked part way (as opposed to one whose requests failed) clears the floor, so it runs again at the next check. Opening a wallet seconds after launch revokes the launch pass, and otherwise the remaining wallets would wait five minutes. Wallets the revoked pass already refreshed are fresh and skipped.
+- The addresses the wallet list itself records (index 0 and the pinned address) are always queried. Before, a pinned wallet with no snapshot (first launch after an upgrade from a pre-v3 cache, or after its cache was cleared) was read at its pinned address only, and what index 0 held was missing from its total.
+- Each snapshot also stores what every queried address held (`address_holdings`), with its derivation index where discovery recorded it, so a locked wallet's row can say how much sits away from the address it is shown as.

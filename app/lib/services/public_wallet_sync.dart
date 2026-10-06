@@ -70,6 +70,11 @@ class PublicWalletSync extends ChangeNotifier {
     foreground = value;
   }
 
+  /// Forgets the last attempt, so the next check is due. The scheduler is a
+  /// process-wide singleton; tests that each launch the home screen need it.
+  @visibleForTesting
+  void resetSchedule() => _lastAttempt = null;
+
   bool isDue([DateTime? now]) =>
       !_busy &&
       foreground &&
@@ -81,16 +86,23 @@ class PublicWalletSync extends ChangeNotifier {
   /// snapshot recorded them: without them a pinned wallet that has no
   /// snapshot yet is read at its pinned address alone, and what index 0
   /// holds goes missing from its total.
+  ///
+  /// [whileLocked] lets the pass run with every wallet locked. The launch
+  /// overview shows each wallet's balance before anything is unlocked, and
+  /// these reads need no key: they ask the user's node about addresses it
+  /// was already shown. Unlocking, switching, locking or deleting still
+  /// revokes the pass through the controller's public generation.
   Future<void> tick({
     required Map<String, String?> wallets,
     required WalletSyncController controller,
     required String? activeId,
     required bool Function() unlocked,
     Map<String, Iterable<String>> recordedAddresses = const {},
+    bool whileLocked = false,
     DateTime? now,
   }) async {
     final at = now ?? DateTime.now();
-    if (!unlocked() || !isDue(at)) return;
+    if ((!whileLocked && !unlocked()) || !isDue(at)) return;
     _lastAttempt = at;
     _busy = true;
     final generation = controller.publicGeneration;
@@ -98,8 +110,9 @@ class PublicWalletSync extends ChangeNotifier {
     bool valid() =>
         foreground &&
         lifecycle == _lifecycle &&
-        unlocked() &&
+        (whileLocked || unlocked()) &&
         controller.publicGeneration == generation;
+    var finished = false;
     try {
       for (final entry in wallets.entries) {
         if (!valid()) return;
@@ -208,8 +221,16 @@ class PublicWalletSync extends ChangeNotifier {
           // Any missing address/history keeps the prior snapshot and its age.
         }
       }
+      finished = true;
     } finally {
       _busy = false;
+      // Revoked part way (an unlock, switch, lock, delete, or a biometric
+      // sheet taking the foreground) rather than failed: run again at the
+      // next check instead of leaving the remaining wallets for five
+      // minutes. Opening a wallet moments after launch is the common case
+      // now that the app opens on the overview. Wallets this pass already
+      // refreshed are fresh, so the rerun skips them.
+      if (!finished) _lastAttempt = null;
       notifyListeners();
     }
   }
