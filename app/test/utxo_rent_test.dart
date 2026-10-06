@@ -3,7 +3,7 @@ import 'package:argus_wallet/services/utxo_plans.dart';
 import 'package:argus_wallet/services/utxo_tools_controller.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/theme/argus_theme.dart';
-import 'package:argus_wallet/ui/utxo_management_screen.dart';
+import 'package:argus_wallet/ui/widgets/utxo_rent_widgets.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

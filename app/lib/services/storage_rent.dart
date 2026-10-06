@@ -1,8 +1,3 @@
-import 'dart:convert';
-
-import '../bridge/api/storage_rent.dart' as ffi;
-import '../format.dart';
-
 /// Storage rent, as the wallet core reports it.
 ///
 /// Ergo lets a miner charge a box that has not moved for four years
@@ -12,6 +7,12 @@ import '../format.dart';
 /// be taken whole, tokens included. The rules and every figure come from the
 /// Rust core (`wallet_core::rent`) and the user's own node; nothing here
 /// computes a fee.
+library;
+
+import 'dart:convert';
+
+import '../bridge/api/storage_rent.dart' as ffi;
+import '../format.dart';
 
 /// Blocks a box may sit untouched before rent can be charged: four years of
 /// 2-minute blocks. Fixed by the protocol.
