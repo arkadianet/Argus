@@ -3,11 +3,31 @@ import 'package:flutter/material.dart';
 
 import '../../format.dart';
 import '../../services/address_label_service.dart';
+import '../../services/wallet_service.dart';
 import '../../services/watch_only_service.dart';
 import '../../theme/argus_theme.dart';
+import '../transactions_screen.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/soft_card.dart';
 import 'settings_shared.dart';
+
+/// A watched address's activity, pending transactions first, read without
+/// any wallet key: the same screen a watched account's History opens.
+Future<void> openWatchedActivity(BuildContext context, String address) =>
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => TransactionsScreen(
+          args: WalletRouteArgs(
+            watchOnly: true,
+            senderAddress: address,
+            receiveAddress: address,
+            changeAddress: address,
+            historyAddresses: [address],
+          ),
+        ),
+      ),
+    );
 
 class WatchOnlyPage extends StatelessWidget {
   const WatchOnlyPage({super.key});
@@ -105,6 +125,11 @@ class WatchOnlyPage extends StatelessWidget {
                                       style: monoStyle(context, size: 11.5).copyWith(color: colors.muted)),
                                 ],
                               ),
+                            ),
+                            IconButton(
+                              tooltip: 'Activity',
+                              icon: const Icon(Icons.receipt_long_outlined, size: 18),
+                              onPressed: () => openWatchedActivity(context, a),
                             ),
                             IconButton(
                               tooltip: 'Stop watching',
