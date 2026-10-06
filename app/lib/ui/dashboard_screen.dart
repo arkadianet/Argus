@@ -42,6 +42,7 @@ import 'transaction_detail_screen.dart';
 import 'transactions_screen.dart';
 import 'wallets_overview_screen.dart';
 import 'widgets/discover_sheet.dart';
+import 'widgets/entry_dialogs.dart';
 import 'widgets/error_sheet.dart';
 import 'widgets/token_detail_sheet.dart';
 import 'widgets/wallet_view_boundary.dart';
@@ -825,30 +826,22 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Future<String?> _askNewPin() async {
-    final pin = TextEditingController();
-    final confirm = TextEditingController();
-    final ok = await showDialog<bool>(
+    final entry = await showDialog<PinEntry>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Set a PIN'),
-        content: PinFields(pin: pin, confirm: confirm),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Later')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
-        ],
+      builder: (_) => const PinEntryDialog(
+        title: 'Set a PIN',
+        askConfirm: true,
+        cancelLabel: 'Later',
+        confirmLabel: 'Save',
       ),
     );
-    final value = pin.text;
-    final confirmValue = confirm.text;
-    pin.dispose();
-    confirm.dispose();
-    if (ok != true) return null;
-    final err = pinError(value, confirmValue);
+    if (entry == null) return null;
+    final err = pinError(entry.pin, entry.confirm);
     if (err != null) {
       _snack(err);
       return null;
     }
-    return value;
+    return entry.pin;
   }
 
   Future<void> _lock() async {
@@ -864,37 +857,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Future<void> _labelAddress(String address) async {
-    final existing = addressLabelService.labelFor(address) ?? '';
-    final ctrl = TextEditingController(text: existing);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Address label'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SelectableText(
-              shorten(address, head: 10, tail: 8),
-              style: monoStyle(ctx, size: 11),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: ctrl,
-              decoration: const InputDecoration(labelText: 'Label (optional)'),
-              autofocus: true,
-              textCapitalization: TextCapitalization.words,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
-        ],
-      ),
+    final label = await showAddressLabelDialog(
+      context,
+      address: address,
+      existing: addressLabelService.labelFor(address) ?? '',
     );
-    final label = ctrl.text;
-    ctrl.dispose();
-    if (ok != true) return;
+    if (label == null) return;
     await addressLabelService.setLabel(address, label);
     if (mounted) setState(() {});
   }

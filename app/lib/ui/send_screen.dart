@@ -32,6 +32,7 @@ import 'send_recipients.dart';
 import 'widgets/held_token_picker.dart';
 import 'widgets/amount_entry.dart';
 import 'widgets/asset_picker_sheet.dart';
+import 'widgets/entry_dialogs.dart';
 import 'widgets/rent_hint.dart';
 
 /// One buy-and-send route line, e.g. `≈ 3.7196 ERG · Dexy FreeMint  ·  cheapest`.
@@ -400,33 +401,17 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
   Future<void> _saveRecipientToContacts() async {
     final addr = _recipientCtrl.text.trim();
     if (!looksLikeRecipient(addr)) return;
-    final nameCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
+    final name = (await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Save to contacts'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Name'),
-              textCapitalization: TextCapitalization.words,
-              autofocus: true,
-            ),
-            const SizedBox(height: 8),
-            Text(shorten(addr, head: 10, tail: 10), style: monoStyle(ctx, size: 11)),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
-        ],
+      builder: (ctx) => TextEntryDialog(
+        title: 'Save to contacts',
+        label: 'Name',
+        textCapitalization: TextCapitalization.words,
+        footer: Text(shorten(addr, head: 10, tail: 10), style: monoStyle(ctx, size: 11)),
       ),
-    );
-    final name = nameCtrl.text.trim();
-    nameCtrl.dispose();
-    if (ok != true || name.isEmpty) return;
+    ))
+        ?.trim();
+    if (name == null || name.isEmpty) return;
     await contactsService.add(name, addr);
     _snack('Contact saved');
   }

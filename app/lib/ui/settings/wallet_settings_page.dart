@@ -6,6 +6,7 @@ import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 import '../wallet_dialogs.dart';
 import 'settings_shared.dart';
+import '../widgets/entry_dialogs.dart';
 
 /// Settings scoped to one wallet: its name, primary address, change policy,
 /// backup, and removing it from this device.
@@ -114,39 +115,23 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
   }
 
   Future<void> _pinAddressIndex() async {
-    final indexCtrl = TextEditingController();
-    final ok = await showDialog<bool>(
+    final entered = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Pin address index'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Text('Derive the address at this index and use it as the primary '
-                'address for send and receive. Index 0 resets to the default. '
-                'The balance still counts every address of the wallet.'),
-            const SizedBox(height: 12),
-            TextField(
-              controller: indexCtrl,
-              decoration: InputDecoration(
-                labelText: 'Index',
-                hintText: '0',
-                helperText: '0–${WalletService.maxAddressIndex}',
-              ),
-              keyboardType: TextInputType.number,
-              autofocus: true,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Pin')),
-        ],
+      builder: (_) => TextEntryDialog(
+        title: 'Pin address index',
+        intro: const Text('Derive the address at this index and use it as the primary '
+            'address for send and receive. Index 0 resets to the default. '
+            'The balance still counts every address of the wallet.'),
+        introGap: 12,
+        label: 'Index',
+        hint: '0',
+        helper: '0–${WalletService.maxAddressIndex}',
+        keyboardType: TextInputType.number,
+        confirmLabel: 'Pin',
       ),
     );
-    final text = indexCtrl.text.trim();
-    indexCtrl.dispose();
-    if (ok != true) return;
+    if (entered == null) return;
+    final text = entered.trim();
     final index = int.tryParse(text);
     if (index == null || index < 0) {
       _snack('Invalid index');

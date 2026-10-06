@@ -18,7 +18,10 @@ class PinFields extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Sized to the fields: inside a dialog a full-height column stretched
+    // the dialog to the whole screen around two text fields.
     return Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         _box(pin, label, helper: '6–32 characters. Number pad first.', onSubmitted: onSubmitted),
         if (confirm != null) ...[
