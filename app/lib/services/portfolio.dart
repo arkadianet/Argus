@@ -21,16 +21,6 @@ PortfolioTotal portfolioTotal(Iterable<int?> balances) {
   return PortfolioTotal(totalNano: total, known: known, unknown: unknown);
 }
 
-String portfolioSubtitle({required int wallets, required int watched, required int unknown}) {
-  final parts = <String>[
-    // "0 wallets" says nothing a watch-only overview needs to hear.
-    if (wallets > 0 || watched == 0) '$wallets ${wallets == 1 ? 'wallet' : 'wallets'}',
-  ];
-  if (watched > 0) parts.add('$watched watched');
-  if (unknown > 0) parts.add('$unknown not loaded');
-  return parts.join(' · ');
-}
-
 /// Addresses to query for a wallet that is not the active one.
 ///
 /// Viewing a balance needs no authorisation: the addresses are public and
