@@ -99,7 +99,13 @@ Status: implemented (see *Status, 2026-10-06* below); three decisions changed
   unconfirmed stealth receipts are never offered under either setting.
 - No transaction in the app is built and broadcast as a chain on its own
   outputs through the gathering; the AMM pool bootstrap → create and the mix
-  funding → entry each wait for their first step to confirm, as before.
+  funding → entry each wait for their first step to confirm, as before. The
+  arbitrage chain (roadmap/pricing) is built on its own outputs outside the
+  gathering: its first leg is funded through `gather_spendable`, its later
+  legs spend the previous leg's payout whatever the setting, and the sale
+  back of a stranded token gathers that token's box like any spend, so it
+  waits for its confirmation while the wallet does (see the pricing and
+  arbitrage design, *Pending transactions*).
 
 ## Goal
 

@@ -4,6 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:argus_wallet/services/amm_service.dart';
 import 'package:argus_wallet/services/arbitrage_service.dart';
+import 'package:argus_wallet/services/pending_balance.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/theme/argus_theme.dart';
 import 'package:argus_wallet/ui/arbitrage_screen.dart';
@@ -30,6 +31,29 @@ class ScreenApi extends FakeApi {
     }
     return jsonEncode(scanJson(opportunities: empty ? [] : [opportunityJson(), second], height: tip));
   }
+}
+
+/// A stranded chain whose buying leg waits in the mempool until
+/// [confirmed], while the wallet waits for confirmations.
+class _ConfirmingApi extends ScreenApi {
+  bool confirmed = false;
+
+  @override
+  Future<String> status(BigInt chainId) async => jsonEncode({
+        'state': 'stranded',
+        'failed_leg': 1,
+        'legs': [
+          {'tx_id': 't1', 'status': confirmed ? 'confirmed' : 'pending'},
+          {'tx_id': null, 'status': 'not_submitted'},
+        ],
+        'holding': {
+          'token_id': tok,
+          'amount': 4629000000,
+          'box_id': 'e' * 64,
+          'after_leg': 1,
+          'sellable_after_confirmation': !confirmed,
+        },
+      });
 }
 
 const _names = AmmPoolSet(truncated: false, pools: [], tokens: {tok: AmmTokenMeta(name: 'SPF', decimals: 6)});
@@ -195,6 +219,80 @@ void main() {
     expect(find.text('46.01 ERG'), findsOneWidget);
     expect(find.text('Sign & broadcast sale'), findsOneWidget);
     await _render(tester, 'arbitrage_unwind_confirm');
+  });
+
+  testWidgets('a stranded token still confirming waits for its confirmation, then sells', (tester) async {
+    // Settings → Security waits for confirmations and the leg that bought
+    // the token is not in a block yet: the sale back, which gathers the
+    // token's box like any spend, has to wait.
+    final api = _ConfirmingApi()
+      ..executeAnswer = jsonEncode({
+        'status': 'stranded',
+        'tx_ids': ['t1'],
+        'wallet_deltas': [-46302200000],
+        'failed_leg': 1,
+        'error': 'Double spending attempt',
+        'holding': {
+          'token_id': tok,
+          'amount': 4629000000,
+          'box_id': 'e' * 64,
+          'after_leg': 1,
+          'sellable_after_confirmation': true,
+        },
+      });
+    await _pump(tester, api);
+    await tester.tap(find.byKey(Key('arb-opp-${'a' * 64}>${'c' * 64}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('arb-sign')));
+    await tester.pumpAndSettle();
+    expect(find.text('A leg did not land'), findsOneWidget);
+    expect(tester.widget<Text>(find.byKey(const Key('arb-unwind-note'))).data, arbStrandedConfirmingText);
+    expect(find.textContaining('becomes sellable after one confirmation'), findsOneWidget);
+    expect(tester.widget<FilledButton>(find.byKey(const Key('arb-unwind'))).onPressed, isNull);
+    await _render(tester, 'arbitrage_stranded_confirming');
+
+    // The leg lands in a block: the next status poll offers the sale.
+    api.confirmed = true;
+    await tester.pump(arbStatusInterval);
+    await tester.pumpAndSettle();
+    expect(tester.widget<FilledButton>(find.byKey(const Key('arb-unwind'))).onPressed, isNotNull);
+    expect(find.textContaining('fresh quote before anything is signed'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('arb-unwind')));
+    await tester.pumpAndSettle();
+    expect(find.text('Sign & broadcast sale'), findsOneWidget);
+  });
+
+  test('error codes from the mempool rules read as plain words', () {
+    expect(
+      arbErrorText('{"code":"GENERIC","message":"STRANDED_CONFIRMING: the token this trade left behind is still confirming."}'),
+      arbStrandedConfirmingText,
+    );
+    expect(
+      arbErrorText('{"code":"GENERIC","message":"NOTHING_STRANDED: the box this trade left the token in is gone"}'),
+      contains('no longer among the wallet\'s spendable boxes'),
+    );
+    final confirming = arbErrorText(
+      '{"code":"TX_BUILD_FAILED","message":"30 ERG is still confirming. This wallet spends only confirmed funds, so '
+      'it waits for one confirmation; to spend unconfirmed funds, turn on Spend unconfirmed funds in Settings → '
+      'Security. (NOT_ENOUGH_ERG: this trade needs 46400000000 nanoERG and the wallet can use 40000000000)"}',
+    );
+    expect(confirming, startsWith('30 ERG is still confirming. This wallet spends only confirmed funds'));
+    expect(confirming, isNot(contains('NOT_ENOUGH_ERG')));
+    expect(
+      arbErrorText('{"code":"TX_BUILD_FAILED","message":"NOT_ENOUGH_ERG: this trade needs 9 nanoERG and the wallet can use 1"}'),
+      startsWith('This wallet does not hold enough ERG for the whole chain'),
+    );
+  });
+
+  test('a chain is sized to what the spending policy can use now', () {
+    const split = PendingBalance(confirmedNano: 100, pendingInNano: 30, pendingOutNano: 10, transactions: 2);
+    // Waiting for confirmations, the 30 still arriving is left out.
+    expect(arbAvailableNano(routeSpendable: 120, pending: split, allowUnconfirmed: false), 90);
+    expect(arbAvailableNano(routeSpendable: 120, pending: split, allowUnconfirmed: true), 120);
+    // Never above the route's figure, and the route's figure without a split.
+    expect(arbAvailableNano(routeSpendable: 50, pending: split, allowUnconfirmed: true), 50);
+    expect(arbAvailableNano(routeSpendable: 120, pending: null, allowUnconfirmed: false), 120);
+    expect(arbAvailableNano(routeSpendable: null, pending: split, allowUnconfirmed: false), isNull);
   });
 
   testWidgets('says plainly when there is no gap', (tester) async {

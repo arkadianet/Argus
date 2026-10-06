@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `busy_pool_boxes`, `check_and_sign`, `current_costs`, `default_max_legs`, `default_max_results`, `discover`, `fresh_route`, `generic`, `holding_json`, `is_chained_race`, `leg_status`, `node_err`, `parse`, `review_json`, `store_chain`, `submit_leg`, `unknown_chain`
+// These functions are ignored because they are not marked as `pub`: `busy_pool_boxes`, `chain_funding`, `check_and_sign`, `current_costs`, `default_max_legs`, `default_max_results`, `discover`, `fresh_route`, `generic`, `holding_json`, `is_chained_race`, `leg_status`, `node_err`, `parse`, `review_json`, `store_chain`, `submit_leg`, `unknown_chain`, `unwind_inputs`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ChainRecord`, `LegSpec`, `PrepareRequest`, `ScanOptions`
 
 /// Every arbitrage cycle the pools offer right now, best first.
@@ -64,8 +64,13 @@ Future<String> arbitrageStatus({required BigInt chainId}) =>
 
 /// The stranded token's sale back to ERG, as an ordinary preparation for
 /// the confirm sheet and `send_erg`. Quoted against every pool as it is
-/// right now; spends exactly the box the broken chain left the token in,
-/// with fees from wallet boxes the chain did not spend.
+/// right now; spends exactly the box the broken chain left the token in.
+///
+/// That box and the fee boxes come through the ordinary gathering
+/// ([`unwind_inputs`]), like any spend's inputs: if the token was sold or
+/// spent meanwhile the sale is not built, and while the leg that bought it
+/// is unconfirmed and the wallet waits for confirmations the answer is
+/// STRANDED_CONFIRMING.
 Future<String> arbitragePrepareUnwind({
   required BigInt handleId,
   required BigInt chainId,

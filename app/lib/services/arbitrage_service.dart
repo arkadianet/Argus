@@ -220,7 +220,13 @@ class ArbChainReview {
 
 /// The token a broken chain left in the wallet instead of ERG.
 class ArbHolding {
-  const ArbHolding({required this.tokenId, required this.amount, required this.boxId, required this.afterLeg});
+  const ArbHolding({
+    required this.tokenId,
+    required this.amount,
+    required this.boxId,
+    required this.afterLeg,
+    this.sellableAfterConfirmation = false,
+  });
 
   final String tokenId;
   final int amount;
@@ -229,6 +235,11 @@ class ArbHolding {
   /// The index of the leg that did not land; the leg before it bought this.
   final int afterLeg;
 
+  /// The leg that bought it is not in a block yet and Settings → Security
+  /// spends only confirmed funds: the sale back gathers the token's box
+  /// like any spend, so it has to wait for that confirmation.
+  final bool sellableAfterConfirmation;
+
   static ArbHolding? fromJson(Object? v) {
     if (v is! Map) return null;
     return ArbHolding(
@@ -236,6 +247,7 @@ class ArbHolding {
       amount: _int(v['amount']),
       boxId: v['box_id'] as String?,
       afterLeg: _int(v['after_leg']),
+      sellableAfterConfirmation: v['sellable_after_confirmation'] == true,
     );
   }
 }

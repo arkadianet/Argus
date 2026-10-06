@@ -34,16 +34,16 @@ impl Drop for Policy {
 // ─── A stand-in node ─────────────────────────────────────────────────────
 
 #[derive(Clone, Default)]
-struct Chain {
+pub(crate) struct Chain {
     /// Confirmed unspent boxes by address.
-    unspent: HashMap<String, Vec<ErgoBox>>,
+    pub(crate) unspent: HashMap<String, Vec<ErgoBox>>,
     /// What `/transactions/unconfirmed/byErgoTree` lists, per script.
-    listed: HashMap<String, Vec<serde_json::Value>>,
+    pub(crate) listed: HashMap<String, Vec<serde_json::Value>>,
     /// Box ids some mempool transaction spends.
-    spent_in_mempool: HashSet<String>,
+    pub(crate) spent_in_mempool: HashSet<String>,
     /// Outputs of mempool transactions, by id.
-    pending_outputs: HashMap<String, serde_json::Value>,
-    mempool_down: bool,
+    pub(crate) pending_outputs: HashMap<String, serde_json::Value>,
+    pub(crate) mempool_down: bool,
 }
 
 impl Chain {
@@ -57,7 +57,7 @@ impl Chain {
 
     /// Add a pending transaction and list it the way a node would: under
     /// the script of every confirmed input box and of every output.
-    fn pend(&mut self, tx: &serde_json::Value) {
+    pub(crate) fn pend(&mut self, tx: &serde_json::Value) {
         let confirmed: HashMap<String, String> = self
             .unspent
             .values()
@@ -125,8 +125,8 @@ impl Chain {
     }
 }
 
-struct Node {
-    url: String,
+pub(crate) struct Node {
+    pub(crate) url: String,
     stop: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
     peak: Arc<AtomicUsize>,
@@ -134,7 +134,7 @@ struct Node {
 }
 
 impl Node {
-    fn start(chain: Chain) -> Self {
+    pub(crate) fn start(chain: Chain) -> Self {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -218,7 +218,7 @@ impl Node {
         }
     }
 
-    async fn client(&self) -> ErgoNodeClient {
+    pub(crate) async fn client(&self) -> ErgoNodeClient {
         node_client(Some(self.url.clone())).await.unwrap()
     }
 
@@ -238,17 +238,17 @@ impl Drop for Node {
 
 // ─── Fixtures ────────────────────────────────────────────────────────────
 
-const ERG: u64 = 1_000_000_000;
+pub(crate) const ERG: u64 = 1_000_000_000;
 
-fn tree_of(b: &ErgoBox) -> String {
+pub(crate) fn tree_of(b: &ErgoBox) -> String {
     hex::encode(b.ergo_tree.sigma_serialize_bytes().unwrap())
 }
 
-fn tx_id(n: u8) -> String {
+pub(crate) fn tx_id(n: u8) -> String {
     format!("{n:02x}").repeat(32)
 }
 
-fn boxed(tree: &str, tx: &str, index: u16, value: u64) -> ErgoBox {
+pub(crate) fn boxed(tree: &str, tx: &str, index: u16, value: u64) -> ErgoBox {
     serde_json::from_value(serde_json::json!({
         "transactionId": tx, "index": index, "value": value, "ergoTree": tree,
         "creationHeight": 1_000, "assets": [], "additionalRegisters": {}
@@ -256,7 +256,7 @@ fn boxed(tree: &str, tx: &str, index: u16, value: u64) -> ErgoBox {
     .unwrap()
 }
 
-fn pending_tx(id: &str, spends: &[&ErgoBox], outputs: &[&ErgoBox]) -> serde_json::Value {
+pub(crate) fn pending_tx(id: &str, spends: &[&ErgoBox], outputs: &[&ErgoBox]) -> serde_json::Value {
     serde_json::json!({
         "id": id,
         "inputs": spends.iter().map(|b| serde_json::json!({"boxId": b.box_id().to_string()})).collect::<Vec<_>>(),

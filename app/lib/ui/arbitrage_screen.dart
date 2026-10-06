@@ -7,8 +7,11 @@ import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/amm_service.dart';
 import '../services/arbitrage_service.dart';
+import '../services/pending_balance.dart';
+import '../services/spend_policy.dart';
 import '../services/verified_tokens.dart';
 import '../services/wallet_service.dart';
+import '../services/wallet_sync_controller.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
 import 'widgets/empty_state.dart';
@@ -33,6 +36,27 @@ class ArbitrageScreen extends StatefulWidget {
 }
 
 /// What the user reads instead of an error code.
+/// The ERG a chain may be sized to: what the wallet's spends can use right
+/// now. The chain is funded through the gathering every spend uses, which
+/// leaves out funds still confirming while Settings → Security waits for
+/// confirmations, so sizing to the whole balance would offer trades that
+/// prepare then refuses. Without a pending split (nothing synced yet, or a
+/// watched wallet the sync does not follow) the route's figure stands.
+int? arbAvailableNano({
+  required int? routeSpendable,
+  required PendingBalance? pending,
+  required bool allowUnconfirmed,
+}) {
+  if (routeSpendable == null || pending == null) return routeSpendable;
+  final now = pending.spendableNano(allowUnconfirmed: allowUnconfirmed);
+  return now < routeSpendable ? now : routeSpendable;
+}
+
+/// Why the token a broken chain left behind cannot be sold back yet.
+const arbStrandedConfirmingText =
+    'The trade that bought it is not in a block yet, and this wallet spends only confirmed funds '
+    '(Settings → Security), so it becomes sellable after one confirmation, usually within a few minutes.';
+
 String arbErrorText(Object e) {
   final ex = e is ArgusException ? e : (e is String ? ArgusException.fromJson(e) : null);
   final msg = ex?.message ?? e.toString();
@@ -43,6 +67,18 @@ String arbErrorText(Object e) {
     return 'Someone is already trading a pool on this route; their transaction is in the mempool. Try again after the next block.';
   }
   if (msg.contains('POOL_MOVED')) return 'A pool on this route has changed since the scan. Scan again.';
+  if (msg.contains('STRANDED_CONFIRMING')) return arbStrandedConfirmingText;
+  if (msg.contains('NOTHING_STRANDED')) {
+    return 'The token this trade left behind is no longer among the wallet\'s spendable boxes: it was sold or '
+        'spent already, or your node has not seen its transaction yet. Refresh and try again.';
+  }
+  // The mempool rules' explanation: some of the ERG is still confirming
+  // and Settings → Security spends only confirmed funds.
+  final confirming = RegExp(r'^(.*? still confirming\.)').firstMatch(msg);
+  if (confirming != null) {
+    return '${confirming.group(1)} This wallet spends only confirmed funds, so the trade fits once it confirms, '
+        'usually within a few minutes. To use it now, turn on Spend unconfirmed funds in Settings → Security.';
+  }
   if (msg.contains('NOT_ENOUGH_ERG')) {
     return 'This wallet does not hold enough ERG for the whole chain: every leg pays its own fees on top of the amount traded.';
   }
@@ -67,6 +103,13 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
   bool _busy = false;
 
   WalletRouteArgs get _args => WalletRouteArgs.of(context);
+
+  /// See [arbAvailableNano]. The sync follows the unlocked wallet only.
+  int? get _availableNano => arbAvailableNano(
+        routeSpendable: _args.spendableNano,
+        pending: _args.watchOnly ? null : walletSyncController.pending,
+        allowUnconfirmed: spendPolicy.spendUnconfirmed,
+      );
 
   List<String> get _spendAddresses {
     final args = _args;
@@ -117,7 +160,7 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
   Future<ArbScanResult> _scan() => _service.scan(
         minProfitNano: _minProfitNano,
         includeUntrusted: _includeUntrusted,
-        availableNano: _args.spendableNano,
+        availableNano: _availableNano,
       );
 
   String _symbol(String? id) {
@@ -371,7 +414,7 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
         prepare: () => _service.prepare(
           o,
           minProfitNano: _minProfitNano,
-          availableNano: _args.spendableNano,
+          availableNano: _availableNano,
           spendAddresses: _spendAddresses,
           changeAddress: _changeAddress,
         ),
@@ -917,7 +960,10 @@ class _ChainSheetState extends State<_ChainSheet> {
               const SizedBox(height: 16),
               FilledButton(
                 key: const Key('arb-unwind'),
-                onPressed: _unwinding
+                // Waiting for confirmations, the sale cannot gather the
+                // token's box until the leg that bought it is in a block;
+                // the poll below re-enables it then.
+                onPressed: _unwinding || holding.sellableAfterConfirmation
                     ? null
                     : () async {
                         setState(() => _unwinding = true);
@@ -928,7 +974,10 @@ class _ChainSheetState extends State<_ChainSheet> {
               ),
               const SizedBox(height: 6),
               Text(
-                'You will see the fresh quote before anything is signed.',
+                holding.sellableAfterConfirmation
+                    ? arbStrandedConfirmingText
+                    : 'You will see the fresh quote before anything is signed.',
+                key: const Key('arb-unwind-note'),
                 style: TextStyle(color: colors.muted, fontSize: 12.5),
               ),
             ] else

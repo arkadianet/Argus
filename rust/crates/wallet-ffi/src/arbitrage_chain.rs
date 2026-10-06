@@ -177,8 +177,10 @@ fn fund_first_leg(wallet: &[ErgoBox], capital: u64) -> Result<Vec<ErgoBox>, Stri
         chosen.push(b.clone());
     }
     if total < capital {
+        // "needs … can use …" is the shape the mempool rules read to say
+        // when funds still confirming would have covered the shortfall.
         return Err(build_err(format!(
-            "NOT_ENOUGH_ERG: this trade needs {capital} nanoERG in the wallet, {total} is available"
+            "NOT_ENOUGH_ERG: this trade needs {capital} nanoERG and the wallet can use {total}"
         )));
     }
     Ok(chosen)
@@ -427,7 +429,7 @@ pub(crate) fn build_exit(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::str::FromStr;
 
@@ -449,7 +451,7 @@ mod tests {
 
     use crate::api::{ARGUS_FEE_ADDRESS, ARGUS_FEE_NANO};
 
-    const USER_TREE: &str =
+    pub(crate) const USER_TREE: &str =
         "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
     const ERG: u64 = 1_000_000_000;
 
@@ -536,7 +538,7 @@ mod tests {
         }
     }
 
-    fn argus_fee() -> DevFeeConfig {
+    pub(crate) fn argus_fee() -> DevFeeConfig {
         DevFeeConfig::custom(
             wallet_net::client::address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap(),
             ARGUS_FEE_NANO,
@@ -544,14 +546,14 @@ mod tests {
     }
 
     /// Two pools pricing token 0x33 at 100 and 120 nanoERG per unit.
-    fn skewed() -> Vec<FreshPool> {
+    pub(crate) fn skewed() -> Vec<FreshPool> {
         vec![
             pool_box(0x10, 1_000 * ERG, 0x33, 10_000_000_000),
             pool_box(0x20, 1_200 * ERG, 0x33, 10_000_000_000),
         ]
     }
 
-    fn best_opportunity(pools: &[FreshPool], available: u64) -> Opportunity {
+    pub(crate) fn best_opportunity(pools: &[FreshPool], available: u64) -> Opportunity {
         let ps: Vec<Pool> = pools.iter().map(|p| p.pool.clone()).collect();
         let book = price_book(
             &ps,
@@ -578,7 +580,7 @@ mod tests {
         s.opportunities.into_iter().next().expect("an opportunity")
     }
 
-    fn in_route_order(pools: &[FreshPool], opp: &Opportunity) -> Vec<FreshPool> {
+    pub(crate) fn in_route_order(pools: &[FreshPool], opp: &Opportunity) -> Vec<FreshPool> {
         opp.legs
             .iter()
             .map(|l| {

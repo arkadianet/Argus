@@ -282,6 +282,72 @@ async fn fresh_route(
     Ok(out)
 }
 
+/// The wallet boxes a chain may be funded from, gathered as every wallet
+/// spend gathers its inputs (`gather_wallet_boxes`, through
+/// [`super::mempool::gather_spendable`]): a box a pending transaction
+/// already spends is never offered, boxes still confirming only while
+/// Settings allows spending unconfirmed funds, and mix reservations and
+/// mixed boxes follow the usual rules.
+///
+/// Only the first leg draws on these. Every later leg spends what the leg
+/// before it pays out, an output no node has seen yet: that is the chain's
+/// own chaining, built and signed together, and it is not subject to the
+/// setting, which is about other transactions' unconfirmed outputs.
+pub(crate) async fn chain_funding(
+    handle_id: u64,
+    spend_addresses: &[String],
+    node_url: Option<String>,
+) -> Result<Vec<ErgoBox>, String> {
+    let (boxes, _) = super::gather_wallet_boxes(handle_id, spend_addresses, node_url).await?;
+    Ok(boxes)
+}
+
+/// The box a broken chain left its token in, and the wallet boxes that may
+/// pay the sale's fee, gathered like every spend's inputs: nothing a pending
+/// transaction already spends, boxes still confirming only while Settings
+/// allows it, mix reservations and mixed boxes left alone.
+///
+/// The stranded box is an output of the chain's last accepted leg. While
+/// that leg is unconfirmed and the wallet waits for confirmations, the
+/// gathering holds the box back; that is answered as STRANDED_CONFIRMING,
+/// so the screen can say the token becomes sellable after one confirmation
+/// instead of reporting a shortfall. A box the gathering does not know at
+/// all (sold or spent already, or its leg dropped) is NOTHING_STRANDED.
+pub(crate) async fn unwind_inputs(
+    handle_id: u64,
+    client: &wallet_net::client::ErgoNodeClient,
+    spend_addresses: &[String],
+    stranded_id: &str,
+) -> Result<(ErgoBox, Vec<ErgoBox>), String> {
+    let spendable =
+        super::mempool::gather_spendable(handle_id, client, spend_addresses).await?;
+    if spendable.held_back.iter().any(|b| b.box_id == stranded_id) {
+        return Err(generic(
+            "STRANDED_CONFIRMING: the token this trade left behind is still confirming. \
+             This wallet spends only confirmed funds, so it becomes sellable after one \
+             confirmation; to sell it now, turn on Spend unconfirmed funds in Settings → Security.",
+        ));
+    }
+    let (boxes, eip12) = super::without_reserved(handle_id, spendable.boxes, spendable.inputs);
+    let (boxes, _) = super::apply_mixed_rule(handle_id, boxes, eip12, None)?;
+    let stranded = boxes
+        .iter()
+        .find(|b| id_of(b) == stranded_id)
+        .cloned()
+        .ok_or_else(|| {
+            generic(
+                "NOTHING_STRANDED: the box this trade left the token in is not among this \
+                 wallet's spendable boxes: it was sold or spent already, or your node has not \
+                 seen its transaction yet",
+            )
+        })?;
+    let fee_boxes = boxes
+        .into_iter()
+        .filter(|b| b.tokens.is_none() && id_of(b) != stranded_id)
+        .collect();
+    Ok((stranded, fee_boxes))
+}
+
 fn review_json(chain_id: u64, opp: &Opportunity, legs: &[BuiltLeg]) -> serde_json::Value {
     let mut v = serde_json::to_value(opp).unwrap_or_default();
     v["chain_id"] = serde_json::json!(chain_id);
@@ -349,8 +415,7 @@ pub async fn arbitrage_prepare(
             _ => generic(format!("POOL_MOVED: {e}")),
         })?;
 
-    let (wallet_boxes, _) =
-        super::gather_wallet_boxes(handle_id, &req.spend_addresses, node_url.clone()).await?;
+    let wallet_boxes = chain_funding(handle_id, &req.spend_addresses, node_url.clone()).await?;
     let height = client.current_height().await.map_err(node_err)? as i32;
     let chain = build_chain(
         &route,
@@ -359,7 +424,9 @@ pub async fn arbitrage_prepare(
         &change_tree,
         height,
         req.min_profit_nano as i64,
-    )?;
+    )
+    // Short because waiting for confirmations held funds back: say so.
+    .map_err(|e| super::mempool::explain_shortfall(handle_id, e))?;
 
     let (legs, wallet_delta_nano) = (chain.legs, chain.wallet_delta_nano);
     let chain_id = store_chain(ChainRecord {
@@ -420,7 +487,17 @@ async fn submit_leg(
 }
 
 /// The stranded token as the screen shows it: what, how much, and the box.
-fn holding_json(rec: &ChainRecord, failed_leg: usize) -> serde_json::Value {
+///
+/// `sellable_after_confirmation` is true while the leg that bought it
+/// (`producer_confirmed` false) is unconfirmed and the wallet waits for
+/// confirmations: the sale back spends the box through the ordinary
+/// gathering, which holds such a box back, so the screen says it becomes
+/// sellable after one confirmation instead of offering a sale that fails.
+fn holding_json(
+    rec: &ChainRecord,
+    failed_leg: usize,
+    producer_confirmed: bool,
+) -> serde_json::Value {
     let Some((token_id, amount)) = stranded_holding(&rec.opportunity.legs, failed_leg) else {
         return serde_json::Value::Null;
     };
@@ -428,7 +505,13 @@ fn holding_json(rec: &ChainRecord, failed_leg: usize) -> serde_json::Value {
         .wallet_outputs(&rec.change_tree)
         .find(|b| holds(b, &token_id))
         .map(id_of);
-    serde_json::json!({"token_id": token_id, "amount": amount, "box_id": box_id, "after_leg": failed_leg})
+    serde_json::json!({
+        "token_id": token_id,
+        "amount": amount,
+        "box_id": box_id,
+        "after_leg": failed_leg,
+        "sellable_after_confirmation": !producer_confirmed && !super::mempool::spend_unconfirmed(),
+    })
 }
 
 /// Sign every leg of a reviewed chain and broadcast them back to back.
@@ -532,7 +615,9 @@ pub async fn arbitrage_execute(handle_id: u64, chain_id: u64) -> Result<String, 
                 "wallet_deltas": deltas,
                 "failed_leg": k,
                 "error": e,
-                "holding": holding_json(rec, k),
+                // Just broadcast: the leg that bought the token is not in a
+                // block yet.
+                "holding": holding_json(rec, k, false),
             })
         }
     };
@@ -643,18 +728,27 @@ pub async fn arbitrage_status(chain_id: u64) -> Result<String, String> {
         .collect::<Vec<_>>());
     if let ChainState::Stranded { failed_leg } = state {
         rec.failed_leg = Some(failed_leg);
-        out["holding"] = holding_json(rec, failed_leg);
+        let producer_confirmed = failed_leg
+            .checked_sub(1)
+            .and_then(|i| statuses.get(i))
+            .is_some_and(|s| *s == LegStatus::Confirmed);
+        out["holding"] = holding_json(rec, failed_leg, producer_confirmed);
     }
     Ok(out.to_string())
 }
 
 /// The stranded token's sale back to ERG, as an ordinary preparation for
 /// the confirm sheet and `send_erg`. Quoted against every pool as it is
-/// right now; spends exactly the box the broken chain left the token in,
-/// with fees from wallet boxes the chain did not spend.
+/// right now; spends exactly the box the broken chain left the token in.
+///
+/// That box and the fee boxes come through the ordinary gathering
+/// ([`unwind_inputs`]), like any spend's inputs: if the token was sold or
+/// spent meanwhile the sale is not built, and while the leg that bought it
+/// is unconfirmed and the wallet waits for confirmations the answer is
+/// STRANDED_CONFIRMING.
 #[flutter_rust_bridge::frb]
 pub async fn arbitrage_prepare_unwind(handle_id: u64, chain_id: u64) -> Result<String, String> {
-    let (stranded, token_id, amount, change_tree, spend_addresses, node_url, spent, carried) = {
+    let (stranded_id, token_id, amount, change_tree, spend_addresses, node_url) = {
         let chains = recover(CHAINS.lock());
         let rec = chains.get(&chain_id).ok_or_else(unknown_chain)?;
         if rec.handle_id != handle_id {
@@ -666,34 +760,24 @@ pub async fn arbitrage_prepare_unwind(handle_id: u64, chain_id: u64) -> Result<S
             .ok_or_else(|| generic("NOTHING_STRANDED: no leg of this chain left a token behind"))?;
         let (token_id, amount) = stranded_holding(&rec.opportunity.legs, k)
             .ok_or_else(|| generic("NOTHING_STRANDED"))?;
-        let last_good = &rec.legs[k - 1];
-        let stranded = last_good
+        let stranded_id = rec.legs[k - 1]
             .wallet_outputs(&rec.change_tree)
             .find(|b| holds(b, &token_id))
-            .cloned()
+            .map(id_of)
             .ok_or_else(|| generic("NOTHING_STRANDED: the stranded box was not found"))?;
-        // Boxes the accepted legs spent are gone even if a confirmed-only
-        // view still lists them; their other outputs may pay the fee.
-        let spent: HashSet<String> = rec.legs[..k]
-            .iter()
-            .flat_map(|l| l.inputs.iter().skip(1).map(id_of))
-            .collect();
-        let carried: Vec<ErgoBox> = last_good
-            .wallet_outputs(&rec.change_tree)
-            .filter(|b| b.box_id() != stranded.box_id())
-            .cloned()
-            .collect();
         (
-            stranded,
+            stranded_id,
             token_id,
             amount,
             rec.change_tree.clone(),
             rec.spend_addresses.clone(),
             rec.node_url.clone(),
-            spent,
-            carried,
         )
     };
+
+    let wallet_client = super::node_client(node_url.clone()).await?;
+    let (stranded, fee_boxes) =
+        unwind_inputs(handle_id, &wallet_client, &spend_addresses, &stranded_id).await?;
 
     let client = crate::api_dexy_impl::dexy_client(node_url.clone()).await?;
     let (pools, _) = discover(&client).await?;
@@ -708,14 +792,6 @@ pub async fn arbitrage_prepare_unwind(handle_id: u64, chain_id: u64) -> Result<S
         ergo_box,
     };
 
-    let (wallet_boxes, _) =
-        super::gather_wallet_boxes(handle_id, &spend_addresses, node_url.clone()).await?;
-    let mut fee_boxes: Vec<ErgoBox> = carried;
-    fee_boxes.extend(
-        wallet_boxes
-            .into_iter()
-            .filter(|b| b.tokens.is_none() && !spent.contains(&id_of(b))),
-    );
     let height = client.current_height().await.map_err(node_err)? as i32;
     let sale = build_exit(
         &fresh,
@@ -754,6 +830,10 @@ pub async fn arbitrage_prepare_unwind(handle_id: u64, chain_id: u64) -> Result<S
     })
     .to_string())
 }
+
+#[cfg(test)]
+#[path = "arbitrage_mempool_tests.rs"]
+mod mempool_tests;
 
 #[cfg(test)]
 mod tests {

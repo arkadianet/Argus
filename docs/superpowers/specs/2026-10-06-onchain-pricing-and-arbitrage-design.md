@@ -257,6 +257,32 @@ on the standard confirm sheet.
 Chains live in memory only; after an app restart a stranded token is sold
 from the Swap screen like any other holding.
 
+**Pending transactions** (with the mempool rules, roadmap/mempool). The
+arbitrage chain is the one transaction chain the app builds on its own
+outputs, so it meets the spending policy (Settings → Security → Spend
+unconfirmed funds) in three places:
+
+- Leg 1 is funded through the gathering every spend uses
+  (`chain_funding` → `gather_wallet_boxes` → `mempool::gather_spendable`):
+  never a box a pending transaction already spends, and boxes still
+  confirming only while the setting allows. A chain that confirmed funds
+  cannot pay while some are confirming is refused as "… ERG is still
+  confirming", not as a plain shortfall, and the screen sizes scans to what
+  the policy can spend now (`arbAvailableNano`).
+- Every later leg spends the previous leg's payout, an output no node has
+  seen when the chain is built and signed. That is the chain's own
+  chaining, not another transaction's unconfirmed output, so the setting
+  does not apply to it: legs are built from the leg before them and signed
+  together, and nothing between prepare and broadcast consults the policy.
+- The sale back of a stranded token gathers its box the ordinary way
+  (`unwind_inputs`): if the token was sold or spent meanwhile nothing is
+  built (NOTHING_STRANDED), and while the leg that bought it is unconfirmed
+  and the wallet waits for confirmations the answer is STRANDED_CONFIRMING.
+  The status's `holding` carries `sellable_after_confirmation` for that
+  case, so the screen says the token becomes sellable after one
+  confirmation and offers the sale once the next poll sees the leg in a
+  block.
+
 ## Privacy and safety decisions
 
 - Pricing and arbitrage read only the user's node. CoinGecko is contacted
