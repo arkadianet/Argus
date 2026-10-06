@@ -114,9 +114,11 @@ const parchmentPalette = PaletteSpec(
   accent: Color(0xFF5E8A6A), onAccent: Color(0xFFF6FBF6), accentText: Color(0xFF3F6B4C),
 );
 
+// Muted is #687080 rather than #6B7380: on Frost's page and recessed wells
+// the lighter grey read 4.38:1, short of WCAG AA; this reads 4.56:1.
 const frostPalette = PaletteSpec(
   id: 'frost', name: 'Frost', hint: 'Cool white, slate-blue accent', brightness: Brightness.light,
-  background: Color(0xFFF3F5F8), surface: Color(0xFFFFFFFF), surfaceHigh: Color(0xFFE8ECF2), ink: Color(0xFF1B1F26), muted: Color(0xFF6B7380),
+  background: Color(0xFFF3F5F8), surface: Color(0xFFFFFFFF), surfaceHigh: Color(0xFFE8ECF2), ink: Color(0xFF1B1F26), muted: Color(0xFF687080),
   outline: Color(0xFFCFD6E0), cardBorder: Color(0xFFE2E7EE), chip: Color(0xFFEDF0F5),
   accent: Color(0xFF4A6FA5), onAccent: Color(0xFFF7F9FD), accentText: Color(0xFF3C5D8C),
 );
@@ -367,8 +369,22 @@ ThemeData argusThemeFor(PaletteSpec p) {
       indicatorColor: p.accent.withValues(alpha: 0.18),
       elevation: 0,
       height: 68,
-      labelTextStyle: WidgetStatePropertyAll(
-        text.bodySmall?.copyWith(letterSpacing: 0.6),
+      // Left to the scheme, the selected icon took onSecondaryContainer,
+      // which falls back to the ink-on-accent colour: dark ink on the gold
+      // indicator in every dark palette. The current tab draws in the
+      // accent and the others step back, so only one tab speaks.
+      iconTheme: WidgetStateProperty.resolveWith(
+        (states) => IconThemeData(
+          size: 24,
+          color: states.contains(WidgetState.selected) ? p.accentText : p.muted,
+        ),
+      ),
+      labelTextStyle: WidgetStateProperty.resolveWith(
+        (states) => text.bodySmall?.copyWith(
+          letterSpacing: 0.6,
+          color: states.contains(WidgetState.selected) ? p.ink : p.muted,
+          fontWeight: states.contains(WidgetState.selected) ? FontWeight.w500 : FontWeight.w400,
+        ),
       ),
     ),
     snackBarTheme: SnackBarThemeData(
