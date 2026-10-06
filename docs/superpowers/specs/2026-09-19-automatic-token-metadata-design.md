@@ -192,8 +192,9 @@ every token id in it. So:
 - **Sharing the job.** Lookups go through `WalletService.inspectForCatalog`,
   in the single native metadata job. The catalog yields: it starts nothing
   while a wallet pass or an explicit request waits, and those wait out its
-  one request in flight instead of failing as busy. It runs only unlocked
-  and in the foreground.
+  one request in flight instead of failing as busy; a request cancelled
+  while it waits is never sent. It runs only unlocked and in the
+  foreground, and backgrounding cancels a lookup in flight.
 - **Clearing.** "Clear collectible cache" clears it with everything else.
 
 Resolution from the serving node and only that node, sanitised issuer text,
@@ -207,6 +208,13 @@ not knowledge. Wherever an amount is shown, a known scale is applied; an
 unknown one is said out loud — "5,000 raw units", "349,670,571,986 raw units
 of 6de6f46e…" — and amount fields say they take raw units. A known zero
 (COMET) is a scale: any name, evidence or descriptor counts as knowing it.
+
+A scale can be learned while a figure sits in an amount field. The figure
+is then rewritten to keep the base units it stood for ("150" raw units
+becomes "1.5"), and Swap quotes again; it never builds from a quote the
+fields have moved away from. Text that is saved, such as pool-creation
+progress, takes names from the persistent layers only, never from an
+explicit memory-only load.
 
 ### Activity
 
