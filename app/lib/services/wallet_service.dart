@@ -875,8 +875,12 @@ class WalletService with WidgetsBindingObserver {
     bool providerIsNode = false,
   }) async {
     // A public-catalog lookup gives way to a person's request: wait out the
-    // one it has in flight, then check everything below as of now.
-    if (_catalogJob != null) await _waitForCatalogJob();
+    // one it has in flight and take the job before the catalog can start
+    // another. Everything below is then checked as of now. Handing the job
+    // back here leaves no gap: from this line to `_metadataBusy = true` the
+    // code runs without suspending, so nothing else can take it.
+    final fromCatalog = _catalogJob != null && await _takeJobFromCatalog();
+    if (fromCatalog) _metadataBusy = false;
     if (!isUnlocked ||
         privacyService.hideBalances ||
         networkController.activeUrl == null) {
@@ -997,18 +1001,23 @@ class WalletService with WidgetsBindingObserver {
     }
   }
 
-  /// Waits out a catalog lookup that holds the job. True when the job is
-  /// free afterwards.
-  Future<bool> _waitForCatalogJob() async {
+  /// Waits out the catalog lookup that holds the metadata job and takes the
+  /// job in the same step, while still counted as waiting, so the catalog
+  /// cannot slip another request in between. False when the job is not the
+  /// catalog's, or another request took it first: the caller then yields as
+  /// it always has. On true the caller holds the job and must release it.
+  Future<bool> _takeJobFromCatalog() async {
     final job = _catalogJob;
-    if (job == null) return !_metadataBusy;
+    if (job == null) return false;
     _catalogWaiters++;
     try {
       await job;
+      if (_metadataBusy) return false;
+      _metadataBusy = true;
+      return true;
     } finally {
       _catalogWaiters--;
     }
-    return !_metadataBusy;
   }
 
   Future<void> init() async {
@@ -1618,16 +1627,20 @@ class WalletService with WidgetsBindingObserver {
       for (final id in ordered) {
         if (!owns() || _metadataUnsupported) return resolvedNow;
         if (attempted >= maxTokenMetaPerSync) return resolvedNow;
-        if (_metadataBusy) {
+        if (!_metadataBusy) {
+          _metadataBusy = true;
+        } else {
           // An explicit request owns the job. Yield rather than compete. A
-          // catalog lookup is one request that starts no other while this
-          // waits, so it is waited out instead.
-          if (_catalogJob == null || !await _waitForCatalogJob()) {
+          // catalog lookup is one bounded request: wait it out and take the
+          // job before the catalog can start another.
+          if (_catalogJob == null || !await _takeJobFromCatalog()) {
             return resolvedNow;
           }
-          if (!owns() || _metadataUnsupported) return resolvedNow;
+          if (!owns() || _metadataUnsupported) {
+            _metadataBusy = false;
+            return resolvedNow;
+          }
         }
-        _metadataBusy = true;
         attempted++;
         try {
           final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(

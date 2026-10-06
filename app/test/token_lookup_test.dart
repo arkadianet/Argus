@@ -28,6 +28,12 @@ class LookupApi extends RustLibApi {
   Completer<void>? gate;
   int gateOnCall = 1;
 
+  /// The native side runs one metadata job at a time; a second request
+  /// while one is in flight fails as "already running". Tracked so a test
+  /// can assert the app never asks for two at once.
+  int inFlight = 0;
+  int maxInFlight = 0;
+
   @override
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
@@ -47,10 +53,16 @@ class LookupApi extends RustLibApi {
     required bool providerIsNode,
   }) async {
     asked.add((id: tokenId, provider: providerUrl, node: providerIsNode));
-    final waiting = asked.length == gateOnCall ? gate : null;
-    if (waiting != null) {
-      gate = null;
-      await waiting.future;
+    inFlight++;
+    if (inFlight > maxInFlight) maxInFlight = inFlight;
+    try {
+      final waiting = asked.length == gateOnCall ? gate : null;
+      if (waiting != null) {
+        gate = null;
+        await waiting.future;
+      }
+    } finally {
+      inFlight--;
     }
     return jsonEncode({
       'id': tokenId,
@@ -122,6 +134,8 @@ void main() {
     api.asked.clear();
     api.gate = null;
     api.gateOnCall = 1;
+    api.inFlight = 0;
+    api.maxInFlight = 0;
     networkController.activeUrl = _node;
   });
 
@@ -287,6 +301,24 @@ void main() {
         reason: 'the wallet is served next, and the catalog gives way');
     expect(walletService.cachedTokenMeta(_held)?.name, 'Name ab',
         reason: 'the pass must not end early because the catalog was busy');
+    expect(api.maxInFlight, 1, reason: 'one metadata job at a time, always');
+
+    // Given way, not stopped for good: the next pool load carries on.
+    await publicTokenCatalog.resolve([_deep, _shallow], servedBy: _node);
+    expect(api.asked.last.id, _shallow);
+  });
+
+  test('a catalog pass and a wallet pass started together never overlap',
+      () async {
+    await walletService.restoreWallet('mock', walletId: 'together');
+    final both = await Future.wait([
+      publicTokenCatalog.resolve([_deep, _shallow], servedBy: _node),
+      resolveForWallet(walletService, 'together'),
+    ]);
+    expect(both, hasLength(2));
+    expect(api.maxInFlight, 1);
+    expect(walletService.cachedTokenMeta(_held)?.name, 'Name ab',
+        reason: 'the wallet resolves whichever pass reaches the job first');
   });
 
   test('an explicit request waits out a catalog lookup', () async {
@@ -307,6 +339,7 @@ void main() {
     await catalogPass;
     expect(loaded.name, 'Name ab',
         reason: 'a background lookup must not make a tap fail as busy');
+    expect(api.maxInFlight, 1);
   });
 
   group('display helpers', () {
