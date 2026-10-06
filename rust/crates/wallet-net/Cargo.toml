@@ -8,7 +8,6 @@ description = "Ergo explorer/node HTTP client for Argus wallet"
 
 [dependencies]
 citadel-core = { workspace = true }
-ergo-node-interface = { workspace = true }
 ergo-lib = { workspace = true }
 ergo-tx = { workspace = true, features = ["ergo-lib"] }
 tokio = { workspace = true }

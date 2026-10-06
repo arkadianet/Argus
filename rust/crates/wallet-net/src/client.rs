@@ -5,7 +5,7 @@ use ergo_lib::ergo_chain_types::{Header, PreHeader};
 use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
 use ergo_lib::ergotree_ir::chain::address::{AddressEncoder, NetworkPrefix};
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
-use ergo_node_interface::NodeInterface;
+use crate::node_interface::NodeInterface;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;

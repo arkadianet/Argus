@@ -10,7 +10,5 @@ mod transport_reuse_tests;
 mod test_server;
 #[cfg(test)]
 mod node_interface_tests;
-#[cfg(test)]
-mod node_interface_parity_tests;
 
 pub mod token_descriptor;

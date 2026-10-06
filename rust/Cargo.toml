@@ -31,7 +31,7 @@ repository = "https://github.com/arkadianet/argus"
 # A develop commit, not a crates.io release: the newest release (0.28.0, 2024)
 # lacks APIs Argus uses, and its ergo-chain-types requires url ~2.2, which
 # cannot resolve alongside reqwest. eccb8eac is the newest develop commit
-# still versioned 0.28.x, which ergo-node-interface requires; see
+# still versioned 0.28.x, which ergo-node-interface required; see
 # docs/dependency-list.md before moving it.
 ergo-lib = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
 ergo-chain-types = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
@@ -41,9 +41,6 @@ sigma-ser = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8ea
 ergo-merkle-tree = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
 ergo-nipopow = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
 ergo-rest = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
-
-# ─── Node interface (via ergo-node-interface-rust) ───────────────────────
-ergo-node-interface = { git = "https://github.com/arkadianet/ergo-node-interface-rust", rev = "0264f6ffcb954da135960460d942f4c804ed65c9" }
 
 # ─── Async ───────────────────────────────────────────────────────────────
 futures = "0.3"
