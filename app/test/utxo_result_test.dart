@@ -103,6 +103,52 @@ class UtxoResultApi extends RustLibApi {
     });
   }
 
+  /// The box listing now comes from the Rust core, which leaves out boxes a
+  /// pending transaction spends. These tests stand the node up with mock
+  /// HTTP listings; this serves the listing from them, page by page, the
+  /// way the old Dart reader did.
+  @override
+  Future<String> crateApiMempoolListSpendableBoxes({
+    required BigInt handleId,
+    required List<String> addresses,
+    String? nodeUrl,
+    required bool confirmedOnly,
+  }) async {
+    final client = http.Client();
+    final out = <Map<String, dynamic>>[];
+    final seen = <String>{};
+    for (final address in addresses) {
+      for (var offset = 0; ; offset += 100) {
+        final response = await client.post(
+          Uri.parse(
+            '$nodeUrl/blockchain/box/unspent/byAddress?offset=$offset&limit=100',
+          ),
+          body: jsonEncode(address),
+        );
+        if (response.statusCode != 200) {
+          throw Exception('Node returned ${response.statusCode}');
+        }
+        final items = jsonDecode(response.body) as List;
+        for (final b in items) {
+          if (!seen.add(b['boxId'] as String)) continue;
+          out.add({
+            'box_id': b['boxId'],
+            'value_nano_erg': '${b['value']}',
+            'creation_height': b['creationHeight'],
+            'assets': [
+              for (final a in b['assets'] as List)
+                {'token_id': a['tokenId'], 'amount': '${a['amount']}'},
+            ],
+            'address': address,
+            'confirmed': true,
+          });
+        }
+        if (items.length < 100) break;
+      }
+    }
+    return jsonEncode(out);
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -16,6 +15,7 @@ import 'token_descriptor_store.dart';
 import 'token_evidence.dart';
 export 'token_evidence.dart';
 import 'mix_service.dart';
+import 'spend_policy.dart';
 import 'stealth_service.dart';
 import 'wallet_sync_controller.dart';
 import 'secure_storage.dart';
@@ -533,12 +533,18 @@ class InputBoxInput {
   final List<InputAsset> assets;
   final String? address;
 
+  /// False for a box a transaction still in the mempool created: an
+  /// incoming payment or change not confirmed yet. Listed only while
+  /// unconfirmed funds may be spent.
+  final bool confirmed;
+
   InputBoxInput({
     required this.boxId,
     required this.valueNanoErg,
     required this.creationHeight,
     required this.assets,
     this.address,
+    this.confirmed = true,
   });
 
   factory InputBoxInput.fromJson(Map<String, dynamic> json) {
@@ -605,6 +611,7 @@ class InputBoxInput {
       creationHeight: height,
       assets: assets,
       address: address ?? (json['address'] as String?),
+      confirmed: json['confirmed'] != false,
     );
   }
 }
@@ -928,6 +935,9 @@ class WalletService with WidgetsBindingObserver {
     // Belt and braces with the frb(init) attribute: the app fee config must
     // be installed before any transaction is built.
     await RustLib.instance.api.crateApiInitApp();
+    // Likewise the unconfirmed-spending setting, which every spend's input
+    // gathering in Rust follows.
+    await spendPolicy.apply();
     _initialized = true;
     await _migrateLegacyIfNeeded();
   }
@@ -2690,74 +2700,49 @@ class WalletService with WidgetsBindingObserver {
     );
   }
 
-  /// Fetch all unspent boxes (UTXOs) for the given addresses by calling the
-  /// node's REST API directly. Returns parsed [InputBoxInput] objects.
+  /// The wallet's spendable boxes on [addresses], for coin control and the
+  /// UTXO tools, as the Rust core gathers them for a spend: boxes a pending
+  /// transaction already spends are never listed, and unconfirmed ones —
+  /// incoming payments and change, marked [InputBoxInput.confirmed] false —
+  /// only while Settings allows spending them. [confirmedOnly] asks for
+  /// confirmed boxes whatever the setting (the mix funding finder waits for
+  /// its box to confirm). Mix reservations and mixed boxes are still listed;
+  /// the spend applies those rules.
   ///
   /// Caps at [maxUnspentBoxesTotal] across all addresses; a node error is
   /// raised, never silently treated as an empty wallet.
   Future<List<InputBoxInput>> listUnspentBoxes(
     List<String> addresses, {
     required String? nodeUrl,
-    int limit = 100,
+    bool confirmedOnly = false,
   }) async {
-    if (nodeUrl == null || nodeUrl.isEmpty) return [];
-    final normalizedUrl = nodeUrl.endsWith('/')
-        ? nodeUrl.substring(0, nodeUrl.length - 1)
-        : nodeUrl;
-    final client = http.Client();
-    try {
-      final all = <InputBoxInput>[];
-      final seen = <String>{};
-      for (final addr in addresses) {
-        if (addr.isEmpty) continue;
-        if (all.length >= maxUnspentBoxesTotal) break;
-        var offset = 0;
-        while (all.length < maxUnspentBoxesTotal) {
-          final endpoint =
-              '$normalizedUrl/blockchain/box/unspent/byAddress'
-              '?offset=$offset&limit=$limit';
-          final response = await client
-              .post(
-                Uri.parse(endpoint),
-                headers: {'Content-Type': 'application/json'},
-                body: jsonEncode(addr),
-              )
-              .timeout(const Duration(seconds: 15));
-          if (response.statusCode != 200) {
-            throw Exception(
-              'Node returned ${response.statusCode} for unspent boxes',
-            );
-          }
-          final body = response.body;
-          if (body.isEmpty) break;
-          final value = jsonDecode(body);
-          final items = (value is List)
-              ? value
-              : (value is Map ? (value['items'] as List? ?? []) : []);
-          if (items.isEmpty) break;
-          for (final item in items) {
-            if (item is! Map) continue;
-            try {
-              final b = InputBoxInput.fromErgoBox(
-                item as Map<String, dynamic>,
-                address: addr,
-              );
-              if (seen.add(b.boxId)) {
-                all.add(b);
-                if (all.length >= maxUnspentBoxesTotal) break;
-              }
-            } catch (_) {
-              // skip malformed entries
-            }
-          }
-          if (items.length < limit || all.length >= maxUnspentBoxesTotal) break;
-          offset += limit;
-        }
-      }
-      return all;
-    } finally {
-      client.close();
-    }
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiMempoolListSpendableBoxes(
+      handleId: _handleId!,
+      addresses: [
+        for (final a in addresses)
+          if (a.isNotEmpty) a,
+      ],
+      nodeUrl: nodeUrl == null || nodeUrl.isEmpty ? null : nodeUrl,
+      confirmedOnly: confirmedOnly,
+    );
+    final boxes = _parseInputBoxes(jsonDecode(raw));
+    return boxes.length > maxUnspentBoxesTotal
+        ? boxes.sublist(0, maxUnspentBoxesTotal)
+        : boxes;
+  }
+
+  /// Balances, pending activity and the wallet-wide pending summary for a
+  /// wallet that is not unlocked, read one address at a time.
+  Future<Map<String, dynamic>> loadPublicSyncInputs(
+    List<String> addresses, {
+    String? nodeUrl,
+  }) async {
+    final raw = await RustLib.instance.api.crateApiMempoolGetPublicSyncInputs(
+      addresses: addresses,
+      nodeUrl: nodeUrl,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
   }
 
   /// Consolidate ERG by sending-to-self in batches of up to 200 inputs.

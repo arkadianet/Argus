@@ -10,6 +10,7 @@ import 'services/network_controller.dart';
 import 'services/privacy_service.dart';
 import 'services/token_pricer.dart';
 import 'services/session_lock.dart';
+import 'services/spend_policy.dart';
 import 'services/stealth_service.dart';
 import 'services/watch_only_service.dart';
 import 'services/wallet_service.dart';
@@ -54,6 +55,7 @@ Future<void> main() async {
     watchOnlyService.load().catchError((_) {}),
     watchAccountService.load().catchError((_) {}),
     privacyService.load().catchError((_) {}),
+    spendPolicy.load().catchError((_) {}),
     previewSettings.load().catchError((_) {}),
     stealthService.load().catchError((_) {}),
     tokenPricer.load().catchError((_) {}),
