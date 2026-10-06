@@ -15,7 +15,9 @@ bs58 = "0.5"
 hex = { workspace = true }
 sha2 = { workspace = true }
 sigma-ser = { workspace = true }
-rand = { workspace = true }
+# Not the workspace rand: sigma-rust's random_scalar_in_group_range takes a
+# rand_core 0.6 RNG, which rand 0.8 provides.
+rand = "0.8"
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

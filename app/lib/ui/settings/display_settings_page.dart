@@ -153,9 +153,7 @@ class DisplaySettingsPage extends StatelessWidget {
               SettingsRow(
                 icon: Icons.price_change_outlined,
                 title: 'Price source',
-                subtitle: tokenPricer.result.ergVia == null
-                    ? tokenPricer.source.label
-                    : '${tokenPricer.source.label} · ERG via ${tokenPricer.result.ergVia}${tokenPricer.stale ? ' · stale' : ''}',
+                subtitle: tokenPricer.sourceLine,
                 trailing: const Icon(Icons.chevron_right, size: 20),
                 onTap: () => _pickPriceSource(context),
               ),

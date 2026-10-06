@@ -1,0 +1,27 @@
+{
+ "items": [
+  {
+   "boxId": "d6419cdb13cc3ba38bb61df40db1e18a94b8dcf756bb0d734c46c9335aaadbe7",
+   "transactionId": "5813dcad4a55cafa335185cc51f6b93d1af5cea7b73d42223b8866fdd831ce4c",
+   "index": 0,
+   "value": 10000000,
+   "assets": [
+    {
+     "tokenId": "6a2b821b5727e85beb5e78b4efb9f0250d59cd48481d2ded2c23e91ba1d07c66",
+     "amount": 1
+    },
+    {
+     "tokenId": "ae399fcb751e8e247d0da8179a2bcca2aa5119fff9c85721ffab9cdc9a3cb2dd",
+     "amount": 249124218
+    }
+   ],
+   "creationHeight": 1888751,
+   "inclusionHeight": 1888753,
+   "additionalRegisters": {
+    "R4": "05b4e390a317",
+    "R5": "049ae403"
+   },
+   "spentTransactionId": null
+  }
+ ]
+}

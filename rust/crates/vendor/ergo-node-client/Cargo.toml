@@ -8,7 +8,7 @@ description = "Ergo node client wrapper with capability detection (vendored from
 
 [dependencies]
 citadel-core = { workspace = true }
-ergo-node-interface = { workspace = true }
+wallet-net = { path = "../../wallet-net" }
 ergo-lib = { workspace = true }
 ergo-tx = { workspace = true, features = ["ergo-lib"] }
 tokio = { workspace = true }

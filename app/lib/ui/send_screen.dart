@@ -20,6 +20,7 @@ import '../services/mix_service.dart';
 import '../services/network_controller.dart';
 import '../services/pockets.dart';
 import '../services/stealth_service.dart';
+import '../services/storage_rent.dart';
 import '../services/wallet_sync_controller.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
@@ -31,6 +32,7 @@ import 'send_recipients.dart';
 import 'widgets/held_token_picker.dart';
 import 'widgets/amount_entry.dart';
 import 'widgets/asset_picker_sheet.dart';
+import 'widgets/rent_hint.dart';
 
 /// One buy-and-send route line, e.g. `≈ 3.7196 ERG · Dexy FreeMint  ·  cheapest`.
 String routeQuoteLabel(RouteQuote quote, {required bool cheapest}) {
@@ -201,6 +203,15 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
   final List<_RecipientEntry> _extraRecipients = [];
   bool get _multiRecipient => _extraRecipients.isNotEmpty;
 
+  /// Tip and fee factor for storage-rent hints; null until read (or when
+  /// neither the node nor the dashboard knows a height).
+  RentParameters? _rentParameters;
+
+  /// Rent estimates by input. Every keystroke rebuilds the form, and a
+  /// stealth recipient costs a key derivation per estimate, so each input
+  /// is asked of the core once.
+  final _rentEstimates = <String, OutputRentEstimate?>{};
+
 
 
   @override
@@ -217,6 +228,14 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
     }
     final a = widget.initialAmountErg;
     if (a != null && a.isNotEmpty) _amountCtrl.text = a;
+    storageRent
+        .parametersOrFallback(
+          nodeUrl: networkController.activeUrl,
+          knownHeight: networkController.height,
+        )
+        .then((p) {
+          if (mounted && p != null) setState(() => _rentParameters = p);
+        });
   }
 
   @override
@@ -861,6 +880,70 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
     return '$tokenId: $amount';
   }
 
+  /// Raw amount of [token] typed in [text], or the whole holding while the
+  /// field is blank or unreadable: the widest amount sizes the box safely.
+  int _rawTokenAmount(TokenBalance token, String text) {
+    if (token.amount == 1 && token.decimals == 0) return 1;
+    final parsed = parseDecimalToBase(text, token.decimals);
+    return parsed == null || parsed <= 0 ? token.amount : parsed;
+  }
+
+  /// The tokens riding in the main recipient's box, id → raw amount.
+  Map<String, int> get _mainRecipientTokens => {
+    for (final e in _heldAmounts.entries)
+      if (_tokenById(e.key) case final t?) e.key: _rawTokenAmount(t, e.value.text),
+  };
+
+  /// Storage-rent advice for a recipient box carrying [tokens], with a
+  /// one-tap fill of the suggested ERG into [erg]. Never blocks the send:
+  /// any amount the form accepts stays allowed.
+  Widget? _rentHint({
+    required String address,
+    required TextEditingController erg,
+    required Map<String, int> tokens,
+  }) {
+    final parameters = _rentParameters;
+    if (parameters == null || tokens.isEmpty) return null;
+    final typed = address.trim();
+    // Until a recipient is typed, size the box for an ordinary address.
+    final sizeFor = looksLikeRecipient(typed) ? typed : _args.receiveAddress;
+    if (sizeFor.isEmpty) return null;
+    final text = erg.text.trim();
+    final value = text.isEmpty ? minBoxNano : parseErgToNano(text);
+    if (value == null) return null;
+    final key = [
+      sizeFor,
+      value,
+      jsonEncode(tokens),
+      parameters.height,
+      parameters.storageFeeFactor,
+      parameters.factorFromNode,
+    ].join('|');
+    if (_rentEstimates.length >= 64 && !_rentEstimates.containsKey(key)) {
+      _rentEstimates.remove(_rentEstimates.keys.first);
+    }
+    final estimate = _rentEstimates.putIfAbsent(
+      key,
+      () => storageRent.estimateOutput(
+        address: sizeFor,
+        valueNano: value,
+        tokens: tokens,
+        parameters: parameters,
+      ),
+    );
+    if (estimate == null) return null;
+    final suggested = estimate.suggestedNano;
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: RentHint(
+        estimate: estimate,
+        onUseSuggested: suggested == null
+            ? null
+            : () => setState(() => erg.text = formatErg(suggested, unit: false)),
+      ),
+    );
+  }
+
   /// "Available 12.3456 ERG" under the amount field, for the chosen pocket.
   String? _availableLine() {
     final available = availableNano(
@@ -1048,6 +1131,8 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                     keyboardType: const TextInputType.numberWithOptions(
                       decimal: true,
                     ),
+                    // The rent hint sizes the box from this amount.
+                    onChanged: (_) => setState(() {}),
                     validator: (v) {
                       final n = parseDecimalToBase(v ?? '', token.decimals);
                       if (n == null || n <= 0) return 'Enter an amount';
@@ -1380,7 +1465,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                         AmountEntry(
                           controller: _amountCtrl,
                           label: 'ERG to send with it (optional)',
-                          helperText: 'Blank funds the minimum ERG for these tokens. Review shows the exact amount. ${_availableLine()}',
+                          helperText: 'Blank funds the minimum ERG for these tokens. Review shows the exact amount. ${_availableLine() ?? ''}',
                           onMax: _applyMaxErg,
                           onChanged: (_) => setState(() {}),
                           validator: (v) {
@@ -1390,6 +1475,12 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                             return null;
                           },
                         ),
+                        if (_rentHint(
+                          address: _recipientCtrl.text,
+                          erg: _amountCtrl,
+                          tokens: _mainRecipientTokens,
+                        ) case final hint?)
+                          hint,
                       ],
                     ],
                     const SizedBox(height: 16),
@@ -1434,6 +1525,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                                       controller: entry.amountCtrl,
                                       label: entryToken == null ? 'Amount (ERG)' : 'ERG to send with it (optional)',
                                       helperText: entryToken == null ? null : 'Blank funds the minimum ERG for this token.',
+                                      onChanged: (_) => setState(() {}),
                                       validator: (v) {
                                         if (entryToken != null && (v == null || v.trim().isEmpty)) return null;
                                         final n = parseErgToNano(v ?? '');
@@ -1486,6 +1578,17 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
                                             return null;
                                           },
                                         ),
+                                        if (_rentHint(
+                                          address: entry.address,
+                                          erg: entry.amountCtrl,
+                                          tokens: {
+                                            entryToken.id: _rawTokenAmount(
+                                              entryToken,
+                                              entry.tokenAmtCtrl!.text,
+                                            ),
+                                          },
+                                        ) case final hint?)
+                                          hint,
                                       ],
                                     ],
                                     const SizedBox(height: 8),

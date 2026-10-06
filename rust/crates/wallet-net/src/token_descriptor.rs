@@ -74,7 +74,7 @@ pub async fn load_from(id: &str, provider: &str, node: bool) -> Result<Value, St
             "Metadata provider must be an HTTPS URL without credentials, query or fragment".into(),
         );
     }
-    let client = reqwest::Client::builder()
+    let client = crate::http::client_builder()
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .connect_timeout(Duration::from_secs(5))
@@ -399,7 +399,7 @@ mod tests {
             }
             let _ = socket.write_all(response.as_bytes());
         });
-        let client = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
+        let client = crate::http::client_builder().no_proxy().redirect(reqwest::redirect::Policy::none())
             .timeout(Duration::from_secs(2)).build().unwrap();
         let answer = read(&client, reqwest::Url::parse(&format!("http://{addr}/fixture")).unwrap()).await;
         worker.join().unwrap();

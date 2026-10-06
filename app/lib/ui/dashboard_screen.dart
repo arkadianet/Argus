@@ -1,10 +1,3 @@
-import 'cold_signing_screen.dart';
-import '../services/public_wallet_sync.dart';
-import 'widgets/error_sheet.dart';
-import 'widgets/erg_rate_line.dart';
-import 'widgets/watch_account_list.dart';
-import '../services/watch_account_service.dart';
-import 'widgets/wallet_view_boundary.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -14,32 +7,31 @@ import '../bridge/argus_error.dart';
 import '../format.dart';
 import '../services/address_label_service.dart';
 import '../services/deep_link_controller.dart';
-import '../services/dexy_service.dart';
+import '../services/duckpools_service.dart';
 import '../services/ergopay_service.dart';
 import '../services/incoming_payment_watcher.dart';
-import '../services/notification_service.dart';
+import '../services/mix_service.dart';
 import '../services/network_controller.dart';
-import '../services/pockets.dart';
-import '../services/portfolio.dart';
+import '../services/notification_service.dart';
 import '../services/privacy_service.dart';
+import '../services/public_wallet_sync.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
-import '../services/duckpools_service.dart';
 import '../services/sigmafi_service.dart';
-import '../services/mix_service.dart';
 import '../services/stealth_service.dart';
-import '../services/sigmausd_service.dart';
-import '../services/token_pricer.dart';
-import '../services/token_pricing.dart';
-import '../services/watch_only_service.dart';
-import '../services/wallet_database_service.dart';
 import '../services/wallet_service.dart';
 import '../services/wallet_sync_controller.dart';
+import '../services/watch_account_service.dart';
+import '../services/watch_only_service.dart';
 import '../theme/argus_theme.dart';
 import 'assets_screen.dart';
 import 'create_wallet_screen.dart';
+import 'discover_screen.dart';
 import 'ergopay_screen.dart';
-import 'offline_banner.dart';
+import 'home/overview_model.dart';
+import 'home/unlock_gate.dart';
+import 'home/wallet_ledger.dart';
+import 'home/watched_wallet.dart';
 import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
 import 'scan_screen.dart';
@@ -48,19 +40,30 @@ import 'settings_screen.dart';
 import 'swap_hub_screen.dart';
 import 'transaction_detail_screen.dart';
 import 'transactions_screen.dart';
-import 'wallet_dialogs.dart';
 import 'wallets_overview_screen.dart';
-import 'widgets/activity_tile.dart';
-import 'widgets/asset_tile.dart';
-import 'widgets/wallet_token_count.dart';
-import 'discover_screen.dart';
 import 'widgets/discover_sheet.dart';
-import 'widgets/action_row.dart';
-import 'widgets/mix_strip.dart';
-import 'widgets/empty_state.dart';
-import 'widgets/soft_card.dart';
+import 'widgets/error_sheet.dart';
 import 'widgets/token_detail_sheet.dart';
+import 'widgets/wallet_view_boundary.dart';
+import 'widgets/watch_account_list.dart';
 
+export 'home/wallet_sections.dart' show SyncStatusLine;
+
+/// The app's home: the overview of every wallet, and the page of the one
+/// that is open.
+///
+/// The app always opens on the overview ([WalletsOverviewScreen]), with no
+/// unlock and no prompt. Tapping a wallet opens its page in place; back
+/// returns to the overview, which is how the user switches wallets. A seed
+/// wallet asks for its key once, when it is opened. A cancelled biometric
+/// prompt leaves its locked page ([UnlockGate]) with Unlock and Use PIN,
+/// and nothing asks again by itself. Watched addresses and accounts open
+/// the same page with key-only actions swapped for their watch-only
+/// equivalent ([WatchedWalletPage]).
+///
+/// This state also owns what must run whichever page shows: the poll of
+/// the unlocked wallet, the overview's public refresh, deep links and
+/// incoming-payment notifications.
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, this.initializeWalletService});
 
@@ -73,47 +76,51 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen>
     with WidgetsBindingObserver {
   bool _loading = true;
-
-  /// Gate-screen message (locked / no wallet / unlock errors). The synced
-  /// ledger reads its state from [_sync] instead.
-  String _status = 'Initializing...';
   final _sync = walletSyncController;
+  final _overview = WalletsOverviewModel();
+
+  /// The wallet whose page is showing; null shows the overview.
+  WalletRef? _open;
+
+  /// Shown on the overview: a startup error, or why a parked link waits.
+  String? _notice;
+  bool _noticeIsError = false;
+
+  /// The seed wallet being unlocked or unlocked: the one the gate and the
+  /// ledger belong to. Null until a seed wallet is opened.
+  String? _walletId;
   bool _walletUnlocked = false;
+
+  /// Unlock methods of [_methodsFor]; stale until it equals [_walletId].
+  String? _methodsFor;
   bool _hasSeed = false;
   bool _hasPin = false;
   bool _canBiometric = false;
   bool _unlockBusy = false;
-  int? _watchOnlyTotal = 0;
-  String? _watchError;
-  final Map<String, int?> _watchBalances = {};
 
-  /// Balances of wallets other than the active one, from each wallet's first
-  /// public address (as the overview does). Refreshed with the wallet list.
-  final Map<String, int?> _otherBalances = {};
-  final Map<String, LastKnownBalance> _lastKnown = {};
-  int _otherGeneration = 0;
-  bool _watchOnlyLoading = false;
-  int _watchOnlyGeneration = 0;
+  /// The gate shows the PIN field although biometrics are set up.
+  bool _usePin = false;
+
+  /// Why the open wallet is still locked, for the gate.
+  String? _gateStatus;
+  bool _gateStatusIsError = false;
   final _pinCtrl = TextEditingController();
-  List<WalletInfo> _wallets = [];
-  String? _walletId;
-  WatchAccount? _selectedWatchAccount;
-  String? _selectedWatchAddress;
-  bool get _watchSelected => _selectedWatchAccount != null || _selectedWatchAddress != null;
 
-  /// Home tabs: 0 wallet, 1 activity, 2 swap, 3 settings. Tabs are built on
-  /// first visit so unlocking doesn't fan out into every protocol screen's
-  /// network calls at once.
+  /// Wallet page tabs: 0 wallet, 1 activity, 2 swap, 3 settings. Tabs are
+  /// built on first visit so unlocking doesn't fan out into every protocol
+  /// screen's network calls at once.
   int _tab = 0;
   final Set<int> _visitedTabs = {0};
   SwapVenue _swapVenue = enabledVenues().first;
-  static const _tabTitles = ['Argus', 'Activity', 'Swap', 'Settings'];
+  static const _tabTitles = ['', 'Activity', 'Swap', 'Settings'];
 
   /// Poll for mempool changes (pending activity, balance, spendable UTXOs)
-  /// while the dashboard is open. A tick is a light refresh on the known
+  /// while a wallet is unlocked. A tick is a light refresh on the known
   /// addresses; discovery also runs when its freshness interval expires.
-  /// Manual refresh forces discovery; the probe timer remains separate. Paused while backgrounded; a
-  /// tick is skipped if the previous refresh is still in flight.
+  /// Manual refresh forces discovery; the probe timer remains separate.
+  /// Paused while backgrounded; a tick is skipped if the previous refresh is
+  /// still in flight. The same timer drives the overview's own refresh,
+  /// locked or not, on its five-minute floor.
   Timer? _pollTimer;
   Timer? _probeTimer;
   bool _pollBackgrounded = false;
@@ -136,8 +143,9 @@ class _DashboardScreenState extends State<DashboardScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     walletService.unlocked.addListener(_syncLock);
-    watchOnlyService.addListener(_onWatchOnlyChanged);
-    watchAccountService.addListener(_onWatchAccountChanged);
+    _overview.attach();
+    watchOnlyService.addListener(_onWatchedListChanged);
+    watchAccountService.addListener(_onWatchedListChanged);
     _sync.addListener(_onSyncChanged);
     mixService.addListener(_onSyncChanged);
     duckpoolsService.addListener(_onDuckpoolsChanged);
@@ -150,6 +158,46 @@ class _DashboardScreenState extends State<DashboardScreen>
     _init();
   }
 
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    _probeTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    walletService.unlocked.removeListener(_syncLock);
+    watchOnlyService.removeListener(_onWatchedListChanged);
+    watchAccountService.removeListener(_onWatchedListChanged);
+    _sync.removeListener(_onSyncChanged);
+    mixService.removeListener(_onSyncChanged);
+    duckpoolsService.removeListener(_onDuckpoolsChanged);
+    sigmafiService.removeListener(_onDuckpoolsChanged);
+    deepLinkController.removeListener(_onDeepLink);
+    _overview.dispose();
+    _pinCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _init() async {
+    try {
+      await (widget.initializeWalletService ?? walletService.init)();
+      await networkController.load();
+      networkController.probe();
+      await _overview.loadWallets();
+    } on ArgusException catch (e) {
+      _notice = '${e.code}: ${e.message}';
+      _noticeIsError = true;
+    } catch (e) {
+      _notice = 'Error: $e';
+      _noticeIsError = true;
+    }
+    // No unlock and no biometric prompt here: the app opens on the overview,
+    // and a wallet asks for its key when the user opens it.
+    if (!mounted) return;
+    setState(() => _loading = false);
+    unawaited(_overview.refreshOnLaunch());
+  }
+
+  // ── Listeners ─────────────────────────────────────────────────────────
+
   void _onSyncChanged() {
     if (mounted) setState(() {});
     _openPendingDeepLink();
@@ -159,6 +207,23 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   void _onDuckpoolsChanged() {
     if (mounted) setState(() {});
+  }
+
+  /// A watched wallet that stopped being watched cannot stay open.
+  void _onWatchedListChanged() {
+    final open = _open;
+    if (open == null || !open.watched || !mounted) return;
+    final exists = open.kind == WalletKind.watchedAddress
+        ? watchOnlyService.addresses.contains(open.id)
+        : watchAccountService.accounts.any((a) => a.key == open.id);
+    if (!exists) _closeWallet();
+  }
+
+  void _syncLock() {
+    if (!mounted) return;
+    setState(() {
+      if (!walletService.unlocked.value && _walletUnlocked) _resetLocked();
+    });
   }
 
   /// Value the wallet's lend tokens once per sync, at most every few
@@ -185,45 +250,57 @@ class _DashboardScreenState extends State<DashboardScreen>
     for (final tx in fresh) {
       notificationService.incomingPayment(
         nanoErg: (tx['value_nano_erg'] as num?)?.toInt() ?? 0,
-        walletName: _activeWalletName,
+        walletName: _walletName(_walletId),
         pending: ((tx['height'] as num?)?.toInt() ?? 0) == 0,
         stealth: tx['stealth'] == true,
       );
     }
   }
 
+  // ── Deep links ────────────────────────────────────────────────────────
+
   void _onDeepLink() {
     if (!_openPendingDeepLink() && mounted) {
-      // Parked until the wallet unlocks; tell the user why nothing happened.
+      // Parked until a wallet unlocks; tell the user why nothing happened.
       final link = deepLinkController.pending;
       if (!_walletUnlocked && link != null) {
-        setState(() => _status = isErgoPayLink(link)
-            ? 'Unlock to continue with the ErgoPay request.'
-            : 'Unlock to open what the notification is about.');
+        setState(() {
+          _notice = isErgoPayLink(link)
+              ? 'Unlock a wallet to continue with the ErgoPay request.'
+              : 'Unlock a wallet to open what the notification is about.';
+          _noticeIsError = false;
+        });
       }
     }
   }
 
   bool _ergoPayOpen = false;
 
-  /// Opens a parked ErgoPay link once the wallet is unlocked and has an
-  /// address. Returns false when it had to stay parked.
+  /// Opens a parked link once a wallet is unlocked and has an address.
+  /// Returns false when it had to stay parked.
   bool _openPendingDeepLink() {
     if (!mounted || _ergoPayOpen) return false;
     final link = deepLinkController.pending;
     if (link == null) return false;
-    if (!_walletUnlocked || !walletService.isUnlocked || _sync.receiveAddress == null) {
+    final walletId = _walletId;
+    if (walletId == null ||
+        !_walletUnlocked ||
+        !walletService.isUnlocked ||
+        _sync.receiveAddress == null) {
       return false;
     }
     deepLinkController.take();
+    if (_notice != null && !_noticeIsError) setState(() => _notice = null);
     if (isErgoPayLink(link)) {
       _openErgoPay(link);
       return true;
     }
     final route = argusLinkRoute(link);
     if (route == null) return true;
-    // A notification tap lands on the screen it names, over nothing else.
+    // A notification tap lands on the screen it names, over the unlocked
+    // wallet's page and nothing else.
     Navigator.of(context).popUntil((r) => r.isFirst);
+    if (_open != WalletRef.seed(walletId)) _showSeedPage(walletId);
     if (route == '/transactions') {
       _selectTab(1);
     } else {
@@ -269,17 +346,21 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
+  // ── Polling and lifecycle ─────────────────────────────────────────────
+
   void _pollTick() {
-    if (!mounted || !_walletUnlocked || _sync.busy) return;
+    if (!mounted) return;
     if (_pollBackgrounded) {
       final since = _backgroundedAt;
       if (since == null || DateTime.now().difference(since) > _backgroundPollWindow) {
         return;
       }
+    } else {
+      // Locked wallets and watched addresses, each on its own five-minute
+      // floor. This needs no unlock: the overview shows them before one.
+      unawaited(_overview.refreshIfDue());
     }
-    if (!_pollBackgrounded && publicWalletSync.isDue()) {
-      unawaited(_refreshOtherBalances());
-    }
+    if (!_walletUnlocked || _sync.busy) return;
     final now = DateTime.now();
     if (!shouldPoll(
       now: now,
@@ -305,39 +386,6 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   @override
-  void dispose() {
-    _pollTimer?.cancel();
-    _probeTimer?.cancel();
-    WidgetsBinding.instance.removeObserver(this);
-    walletService.unlocked.removeListener(_syncLock);
-    watchOnlyService.removeListener(_onWatchOnlyChanged);
-    watchAccountService.removeListener(_onWatchAccountChanged);
-    _sync.removeListener(_onSyncChanged);
-    mixService.removeListener(_onSyncChanged);
-    duckpoolsService.removeListener(_onDuckpoolsChanged);
-    sigmafiService.removeListener(_onDuckpoolsChanged);
-    deepLinkController.removeListener(_onDeepLink);
-    _pinCtrl.dispose();
-    super.dispose();
-  }
-
-  void _onWatchAccountChanged() {
-    if (!mounted) return;
-    setState(() {
-      if (!watchAccountService.accounts.contains(_selectedWatchAccount)) {
-        _selectedWatchAccount = null;
-      }
-    });
-  }
-
-  void _onWatchOnlyChanged() {
-    if (!watchOnlyService.addresses.contains(_selectedWatchAddress)) {
-      _selectedWatchAddress = null;
-    }
-    _refreshWatchOnly();
-  }
-
-  @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     publicWalletSync.setForeground(state == AppLifecycleState.resumed);
     // Pause mempool polling while backgrounded; resume on return.
@@ -354,22 +402,171 @@ class _DashboardScreenState extends State<DashboardScreen>
       _lastPollAt = DateTime.now();
       unawaited(_sync.refresh(discover: false, quiet: true));
     }
-    // Re-prompt biometrics when the session lock fired while backgrounded.
-    // If the user returned within the grace window the wallet is still
-    // unlocked and this is a no-op.
-    if (!_unlockBusy &&
-        !walletService.isUnlocked &&
-        _canBiometric &&
-        _walletId != null) {
-      _unlockBiometric();
+    // Deliberately no unlock here. A biometric sheet pauses and resumes the
+    // activity itself, so prompting on resume reopened the sheet the moment
+    // the user cancelled it, over and over (1.0.0-beta.1). After an
+    // auto-lock the wallet's page shows its gate; unlocking is the user's
+    // tap.
+  }
+
+  // ── Opening and closing wallets ───────────────────────────────────────
+
+  Future<void> _openWallet(WalletRef ref) async {
+    if (ref.watched) {
+      setState(() {
+        _open = ref;
+        _tab = 0;
+        _visitedTabs
+          ..clear()
+          ..add(0);
+      });
+      return;
+    }
+    await _openSeed(ref.id);
+  }
+
+  /// Shows [walletId]'s page without touching its lock state.
+  void _showSeedPage(String walletId) {
+    setState(() {
+      if (_open != WalletRef.seed(walletId)) {
+        _tab = 0;
+        _visitedTabs
+          ..clear()
+          ..add(0);
+      }
+      _open = WalletRef.seed(walletId);
+      _gateStatus = null;
+      _usePin = false;
+    });
+  }
+
+  /// Opens a seed wallet: straight in when it is the unlocked one, else its
+  /// gate, with biometrics asked once when they are set up.
+  Future<void> _openSeed(String walletId) async {
+    _pinCtrl.clear();
+    _showSeedPage(walletId);
+    if (walletService.isUnlocked && walletService.activeWalletId == walletId) {
+      if (_walletId == walletId && _walletUnlocked) return;
+      _walletId = walletId;
+      await sessionLock.run(() async {
+        await _refreshUnlockMethods();
+        await _afterUnlock();
+      });
+      return;
+    }
+    await _switchWallet(walletId);
+  }
+
+  /// Makes [walletId] the wallet to unlock, and asks for biometrics once
+  /// when they are set up. A cancel leaves the gate with Unlock and Use
+  /// PIN; nothing asks again by itself.
+  ///
+  /// A wallet unlocked before stays unlocked until this one's key is in
+  /// hand ([_lockOtherWallet]): backing out of the gate returns to the
+  /// overview with it still open. Its view and services are left as they
+  /// are; it just stops being polled while it is not the selected wallet.
+  Future<void> _switchWallet(String walletId) async {
+    try {
+      _walletId = walletId;
+      setState(() {
+        _walletUnlocked = false;
+        _incoming.reset();
+        _tab = 0;
+        _visitedTabs
+          ..clear()
+          ..add(0);
+        _usePin = false;
+      });
+      await _refreshUnlockMethods();
+      if (!mounted || _walletId != walletId) return;
+      setState(() {});
+      if (_open == WalletRef.seed(walletId) && _canBiometric && _hasPin) {
+        await _unlockBiometric();
+      }
+    } on ArgusException catch (e) {
+      if (!mounted) return;
+      showErrorSheet(context, code: e.code, message: e.message);
+    } catch (e) {
+      if (!mounted) return;
+      _snack('Could not open wallet: $e');
     }
   }
 
-  void _syncLock() {
-    if (!walletService.unlocked.value && _walletUnlocked && mounted) {
-      setState(_resetLocked);
+  /// Back to the overview. An unlocked wallet stays unlocked, so opening it
+  /// again asks for nothing; the session lock still locks it in the
+  /// background.
+  void _closeWallet() {
+    if (_open == null) return;
+    setState(() {
+      _open = null;
+      _tab = 0;
+      _visitedTabs
+        ..clear()
+        ..add(0);
+      _gateStatus = null;
+      _usePin = false;
+    });
+    _pinCtrl.clear();
+    unawaited(_overview.loadWallets());
+  }
+
+  /// System back on a wallet page: first to its Wallet tab, then out.
+  void _back() {
+    if (_tab != 0) {
+      _selectTab(0);
+    } else {
+      _closeWallet();
     }
   }
+
+  /// Renamed or re-pinned in its settings: the page title and the address
+  /// it is shown as come from the wallet list.
+  Future<void> _onWalletEdited() async {
+    await _overview.loadWallets();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _onWalletRemoved(String walletId) async {
+    if (!mounted) return;
+    final name = _walletName(walletId);
+    if (_open?.id == walletId) _closeWallet();
+    if (_walletId == walletId) {
+      setState(() {
+        _resetLocked();
+        _walletId = null;
+        _methodsFor = null;
+      });
+    }
+    await _overview.loadWallets();
+    _snack('"$name" removed');
+  }
+
+  void _onWatchedRemoved() {
+    _closeWallet();
+    _snack('Stopped watching');
+  }
+
+  Future<void> _openCreate() =>
+      _adopt(Navigator.push<String?>(context, fadeRoute(const CreateWalletScreen())));
+
+  Future<void> _openRestore() =>
+      _adopt(Navigator.push<String?>(context, fadeRoute(const RestoreWalletScreen())));
+
+  /// A created or restored wallet comes back unlocked: open it without a
+  /// second prompt.
+  Future<void> _adopt(Future<String?> pushed) async {
+    final walletId = await pushed;
+    if (walletId == null || !mounted) return;
+    _walletId = walletId;
+    _showSeedPage(walletId);
+    await sessionLock.run(() async {
+      await _overview.loadWallets();
+      await _refreshUnlockMethods();
+      await _afterUnlock();
+    });
+  }
+
+  // ── Unlocking ─────────────────────────────────────────────────────────
 
   void _resetLocked() {
     _walletUnlocked = false;
@@ -383,122 +580,41 @@ class _DashboardScreenState extends State<DashboardScreen>
     mixService.reset();
     duckpoolsService.reset();
     sigmafiService.clearIfForeign();
-    _status = _hasSeed ? 'Locked' : (_wallets.isNotEmpty ? 'Wallet found. Unlock to continue.' : 'No wallet. Create or restore one.');
-  }
-
-  Future<void> _refreshWatchOnly() async {
-    final generation = ++_watchOnlyGeneration;
-    final addrs = watchOnlyService.addresses;
-    if (addrs.isEmpty) {
-      if (mounted) setState(() {
-        _watchOnlyTotal = 0;
-        _watchBalances.clear();
-        _watchError = null;
-        _watchOnlyLoading = false;
-      });
-      return;
-    }
-    if (!mounted) return;
-    setState(() => _watchOnlyLoading = true);
-    final result = await readWatchBalances(addrs, (addr) async {
-      final bal = await walletService.getBalance(addr, nodeUrl: networkController.activeUrl);
-      return (bal['balance_nano_erg'] as num?)?.toInt() ?? 0;
-    });
-    if (generation != _watchOnlyGeneration) return;
-    if (mounted) setState(() {
-      _watchOnlyTotal = result.error == null
-          ? result.balances.values.fold<int>(0, (sum, bal) => sum + bal!) : null;
-      _watchBalances
-        ..clear()
-        ..addAll(result.balances);
-      _watchError = result.error;
-      _watchOnlyLoading = false;
-    });
-  }
-
-  Future<void> _refreshOtherBalances() async {
-    final gen = ++_otherGeneration;
-    final others = _wallets.where((w) => w.walletId != _walletId).toList();
-    // Paint the last snapshot first so the list is never blank, then
-    // refresh it live. A locked wallet's addresses are public and already
-    // recorded, so seeing its balance needs no unlock; only deriving new
-    // addresses does.
-    for (final w in others) {
-      final known = await WalletDatabaseService.lastKnownBalance(w.walletId);
-      if (known != null) {
-        _lastKnown[w.walletId] = known;
-        _otherBalances[w.walletId] = known.balanceNano;
-      }
-    }
-    if (mounted) setState(() {});
-    await publicWalletSync.tick(
-      wallets: {for (final w in _wallets) w.walletId: w.displayAddress},
-      controller: _sync,
-      activeId: walletService.activeWalletId,
-      unlocked: () => walletService.isUnlocked,
-    );
-    if (gen != _otherGeneration || !mounted) return;
-    for (final w in others) {
-      final known = await WalletDatabaseService.lastKnownBalance(w.walletId);
-      if (gen != _otherGeneration || !mounted) return;
-      if (known != null) {
-        _lastKnown[w.walletId] = known;
-        _otherBalances[w.walletId] = known.balanceNano;
-      }
-    }
-    setState(() {});
-  }
-
-  Future<void> _init() async {
-    try {
-      await (widget.initializeWalletService ?? walletService.init)();
-      await networkController.load();
-      networkController.probe();
-       await _loadWallets();
-      await _refreshUnlockMethods();
-      _status = _wallets.isEmpty
-          ? 'No wallet. Create or restore one.'
-          : 'Wallet found. Unlock to continue.';
-      // Auto-trigger biometric unlock when available so the user isn't
-      // forced to press a button just to open the wallet on launch.
-      if (_canBiometric && _walletId != null) {
-        _unlockBiometric();
-      }
-    } on ArgusException catch (e) {
-      _status = '${e.code}: ${e.message}';
-    } catch (e) {
-      _status = 'Error: $e';
-    }
-    _refreshWatchOnly();
-    if (mounted) setState(() => _loading = false);
-  }
-
-  Future<void> _loadWallets() async {
-    _wallets = await walletService.listWallets();
-    _refreshOtherBalances();
-    if (_wallets.isNotEmpty) {
-      if (_walletId == null || !_wallets.any((w) => w.walletId == _walletId)) {
-        _walletId = _wallets.first.walletId;
-      }
-    } else {
-      _walletId = null;
-      // Clear stale flags so a no-wallet gate rendered right after this
-      // doesn't still offer unlock options for a deleted wallet.
-      await _refreshUnlockMethods();
-    }
+    _usePin = false;
   }
 
   Future<void> _refreshUnlockMethods() async {
-    if (_walletId == null) {
+    final id = _walletId;
+    if (id == null) {
       _hasSeed = false;
       _hasPin = false;
       _canBiometric = false;
+      _methodsFor = null;
       return;
     }
-    _hasSeed = await SecureStorageService.hasEncryptedSeed(walletId: _walletId);
-    _hasPin = await SecureStorageService.hasPinWrap(walletId: _walletId);
-    _canBiometric = await SecureStorageService.hasBiometric() &&
-        await SecureStorageService.hasWrapKey(walletId: _walletId);
+    final hasSeed = await SecureStorageService.hasEncryptedSeed(walletId: id);
+    final hasPin = await SecureStorageService.hasPinWrap(walletId: id);
+    final canBiometric = await SecureStorageService.hasBiometric() &&
+        await SecureStorageService.hasWrapKey(walletId: id);
+    if (_walletId != id) return;
+    _hasSeed = hasSeed;
+    _hasPin = hasPin;
+    _canBiometric = canBiometric;
+    _methodsFor = id;
+  }
+
+  UnlockMethod get _unlockMethod {
+    if (!_hasSeed) return UnlockMethod.none;
+    if (!_hasPin) return UnlockMethod.legacy;
+    return _canBiometric ? UnlockMethod.biometric : UnlockMethod.pin;
+  }
+
+  void _setGateStatus(String? message, {bool error = false}) {
+    if (!mounted) return;
+    setState(() {
+      _gateStatus = message;
+      _gateStatusIsError = error;
+    });
   }
 
   Future<void> _afterUnlock() async {
@@ -518,7 +634,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (_sync.receiveAddress != null) {
       setState(() {
         _walletUnlocked = true;
-        _status = 'Unlocked';
+        _gateStatus = null;
       });
     }
     // Record the pinned address if only its index was ever stored, so the
@@ -526,34 +642,33 @@ class _DashboardScreenState extends State<DashboardScreen>
     // wallet is locked again.
     await walletService.backfillPinnedAddress().catchError((_) {});
     // 1. Derive the main address locally and paint from the cache (instant).
-    if (walletService.activeWalletId != walletId || _walletId != walletId)
-      return;
+    if (walletService.activeWalletId != walletId || _walletId != walletId) return;
     final ok = await _sync.hydrateAfterUnlock();
     if (!mounted ||
         walletService.activeWalletId != walletId ||
-        _walletId != walletId)
+        _walletId != walletId) {
       return;
+    }
     if (!walletService.isUnlocked) {
       setState(_resetLocked);
       return;
     }
-    await _loadWallets();
+    await _overview.loadWallets();
     if (!mounted ||
         walletService.activeWalletId != walletId ||
-        _walletId != walletId)
-      return;
-    if (!ok) {
-      debugPrint('argus: address derivation failed after unlock');
-      setState(() {
-        _walletUnlocked = true;
-        _status = 'Unlocked, but no address could be derived';
-      });
+        _walletId != walletId) {
       return;
     }
     setState(() {
       _walletUnlocked = true;
-      _status = 'Unlocked';
+      _gateStatus = null;
+      _usePin = false;
     });
+    if (!ok) {
+      debugPrint('argus: address derivation failed after unlock');
+      _snack('Unlocked, but no address could be derived');
+      return;
+    }
     // The published stealth string comes straight from the seed, so it can
     // be shown before any network call. Restoring a wallet lands here too,
     // and the refresh below runs the first stealth scan.
@@ -582,14 +697,6 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
   }
 
-  Future<void> _pinFailed() async {
-    await SecureStorageService.recordPinFailure();
-  }
-
-  Future<void> _pinSucceeded() async {
-    await SecureStorageService.clearPinGate();
-  }
-
   Future<void> _runUnlock(Future<void> Function() work) async {
     if (_unlockBusy) return;
     setState(() => _unlockBusy = true);
@@ -603,7 +710,17 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
   }
 
+  /// The wallet unlocked before is locked only once this one's key is in
+  /// hand, so an abandoned gate does not cost the user their open wallet.
+  Future<void> _lockOtherWallet(String walletId) async {
+    if (walletService.isUnlocked && walletService.activeWalletId != walletId) {
+      await walletService.lockForSwitch();
+    }
+  }
+
   Future<void> _unlockWithPin() async {
+    final walletId = _walletId;
+    if (walletId == null) return;
     final err = validatePin(_pinCtrl.text);
     if (err != null) {
       _snack(err);
@@ -612,83 +729,97 @@ class _DashboardScreenState extends State<DashboardScreen>
     await _runUnlock(() async {
       if (!await _pinAllowed()) return;
       try {
-        final json = await SecureStorageService.loadEncryptedSeed(walletId: _walletId);
-        final pinWrap = await SecureStorageService.loadPinWrap(walletId: _walletId);
+        final json = await SecureStorageService.loadEncryptedSeed(walletId: walletId);
+        final pinWrap = await SecureStorageService.loadPinWrap(walletId: walletId);
         if (json == null || pinWrap == null) {
-          if (mounted) setState(() => _status = 'No PIN-protected wallet found.');
+          _setGateStatus('No PIN-protected wallet found.', error: true);
           return;
         }
         final wrapKey = await walletService.unwrapKeyWithPin(pinWrap, _pinCtrl.text);
-        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: _walletId);
+        if (_walletId != walletId) return;
+        await _lockOtherWallet(walletId);
+        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: walletId);
         try {
-          await _pinSucceeded();
+          await SecureStorageService.clearPinGate();
         } catch (_) {}
         _pinCtrl.clear();
         HapticFeedback.lightImpact();
         await _afterUnlock();
       } on ArgusException catch (e) {
         try {
-          await _pinFailed();
+          await SecureStorageService.recordPinFailure();
         } catch (_) {}
-        showErrorSheet(context, code: e.code, message: e.message);
+        if (mounted) showErrorSheet(context, code: e.code, message: e.message);
       } on SecureStorageException catch (e) {
-        showErrorSheet(context, message: e.message);
+        if (mounted) showErrorSheet(context, message: e.message);
       }
     });
   }
 
+  /// One biometric prompt. Called when a wallet is opened and when the user
+  /// taps Unlock on its gate; never from a lifecycle event or a rebuild.
   Future<void> _unlockBiometric() async {
+    final walletId = _walletId;
+    if (walletId == null) return;
     await _runUnlock(() async {
       try {
-        final wrapKey = await sessionLock.run(() => SecureStorageService.authenticateBiometric(walletId: _walletId));
+        final wrapKey = await sessionLock.run(
+          () => SecureStorageService.authenticateBiometric(walletId: walletId),
+        );
+        if (!mounted || _walletId != walletId) return;
         if (wrapKey == null) {
-          if (!await SecureStorageService.hasWrapKey(walletId: _walletId)) {
-            _snack('Biometric unlock is not set up. Enable it in Settings after unlocking with PIN.');
-          } else if (mounted && !_walletUnlocked) {
-            setState(() => _status = 'Biometric cancelled. Enter PIN or tap below.');
+          if (!await SecureStorageService.hasWrapKey(walletId: walletId)) {
+            _canBiometric = false;
+            _setGateStatus('Biometric unlock is not set up for this wallet. Use its PIN.');
+          } else {
+            _setGateStatus('Biometric unlock cancelled. Tap Unlock to try again, or use your PIN.');
           }
           return;
         }
-        final json = await SecureStorageService.loadEncryptedSeed(walletId: _walletId);
+        final json = await SecureStorageService.loadEncryptedSeed(walletId: walletId);
         if (json == null) {
-          _snack('Biometric unlock is not set up');
+          _setGateStatus('Wallet data not found on this device.', error: true);
           return;
         }
-        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: _walletId);
+        await _lockOtherWallet(walletId);
+        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: walletId);
         HapticFeedback.lightImpact();
         await _afterUnlock();
       } on ArgusException catch (e) {
-        showErrorSheet(context, code: e.code, message: e.message);
+        if (mounted) showErrorSheet(context, code: e.code, message: e.message);
       } on SecureStorageException catch (e) {
-        showErrorSheet(context, message: e.message);
+        if (mounted) showErrorSheet(context, message: e.message);
       }
     });
   }
 
   Future<void> _unlockLegacyThenPin() async {
+    final walletId = _walletId;
+    if (walletId == null) return;
     await _runUnlock(() async {
       try {
-        final json = await SecureStorageService.loadEncryptedSeed(walletId: _walletId);
-        final wrapKey = await SecureStorageService.loadWrapKey(walletId: _walletId);
+        final json = await SecureStorageService.loadEncryptedSeed(walletId: walletId);
+        final wrapKey = await SecureStorageService.loadWrapKey(walletId: walletId);
         if (json == null || wrapKey == null) {
-          if (mounted) setState(() => _status = 'No wallet found. Create or restore.');
+          _setGateStatus('No wallet found. Create or restore.', error: true);
           return;
         }
-        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: _walletId);
+        await _lockOtherWallet(walletId);
+        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: walletId);
         if (!mounted) return;
         final pin = await _askNewPin();
         if (pin != null) {
           final pinWrap = await walletService.wrapKeyWithPin(wrapKey, pin);
-          await SecureStorageService.savePinWrap(pinWrap, walletId: _walletId);
-          await SecureStorageService.deleteWrapKey(walletId: _walletId);
+          await SecureStorageService.savePinWrap(pinWrap, walletId: walletId);
+          await SecureStorageService.deleteWrapKey(walletId: walletId);
           _hasPin = true;
           _canBiometric = false;
         }
         await _afterUnlock();
       } on ArgusException catch (e) {
-        showErrorSheet(context, code: e.code, message: e.message);
+        if (mounted) showErrorSheet(context, code: e.code, message: e.message);
       } on SecureStorageException catch (e) {
-        showErrorSheet(context, message: e.message);
+        if (mounted) showErrorSheet(context, message: e.message);
       }
     });
   }
@@ -720,149 +851,12 @@ class _DashboardScreenState extends State<DashboardScreen>
     return value;
   }
 
-  Future<void> _openCreate() async {
-    final walletId = await Navigator.push<String?>(
-      context,
-      fadeRoute(const CreateWalletScreen()),
-    );
-    if (walletId != null) {
-      _walletId = walletId;
-      await sessionLock.run(() async {
-        await _loadWallets();
-        await _refreshUnlockMethods();
-        await _afterUnlock();
-      });
-    }
-  }
-
-  Future<void> _openRestore() async {
-    final walletId = await Navigator.push<String?>(
-      context,
-      fadeRoute(const RestoreWalletScreen()),
-    );
-    if (walletId != null) {
-      _walletId = walletId;
-      await sessionLock.run(() async {
-        await _loadWallets();
-        await _refreshUnlockMethods();
-        await _afterUnlock();
-      });
-    }
-  }
-
-  Future<void> _switchWallet(String walletId) async {
-    if (!mounted) return;
-    setState(() {
-      _selectedWatchAccount = null;
-      _selectedWatchAddress = null;
-    });
-    if (walletId == _walletId && walletService.isUnlocked) return;
-    setState(() => _status = 'Switching wallet…');
-    try {
-      if (walletService.isUnlocked && walletService.activeWalletId != walletId) {
-        await walletService.lockForSwitch();
-      }
-      _walletId = walletId;
-      await _refreshUnlockMethods();
-      if (!mounted) return;
-
-      // A wallet that still has a stored wrap key (biometric mode) can be
-      // switched into directly. A PIN-only wallet has no raw wrap key, so the
-      // best UX is to land on its unlock gate and let the user unlock as usual.
-      final wrapKeyAvailable = await SecureStorageService.hasWrapKey(
-        walletId: walletId,
-      );
-      setState(() {
-        _resetLocked();
-        _status = _hasSeed
-            ? '$_activeWalletName locked. Enter its PIN below.'
-            : 'Wallet found. Unlock to continue.';
-      });
-      if (wrapKeyAvailable) {
-        // Loading another wallet's wrap key must be user-authenticated. On
-        // Android the stored key has no biometric ACL of its own, so a silent
-        // load here would let anyone holding the device bypass the lock
-        // screen; iOS enforces this inside the Keychain read itself.
-        final wrapKey = await sessionLock.run(
-          () => SecureStorageService.authenticateBiometric(walletId: walletId),
-        );
-        if (!mounted) return;
-        if (wrapKey == null) {
-          setState(() {
-            _resetLocked();
-            _status = 'Authentication cancelled. Unlock with PIN.';
-          });
-          return;
-        }
-        final json = await SecureStorageService.loadEncryptedSeed(
-          walletId: walletId,
-        );
-        if (!mounted) return;
-        if (json == null) {
-          setState(_resetLocked);
-          _snack('Wallet data not found');
-          return;
-        }
-        await walletService.restoreWallet(json, wrapKey: wrapKey, walletId: walletId);
-        if (!mounted) return;
-        setState(_resetLocked);
-        if (walletService.isUnlocked) {
-          await _afterUnlock();
-        }
-      }
-    } on ArgusException catch (e) {
-      if (!mounted) return;
-      setState(_resetLocked);
-      showErrorSheet(context, code: e.code, message: e.message);
-    } catch (e) {
-      if (!mounted) return;
-      setState(_resetLocked);
-      _snack('Could not switch wallet: $e');
-    }
-  }
-
-  Future<void> _openWalletOverview() async {
-    final picked = await Navigator.push<String>(
-      context,
-      fadeRoute(
-        WalletOverviewScreen(
-          selectedWalletId: _walletId,
-          activeBalanceNano: _walletUnlocked ? _sync.balanceNano : null,
-        ),
-      ),
-    );
-    if (!mounted) return;
-    // A wallet may have been removed inside the overview — capture the
-    // pre-reload selection so removal (and its replacement) is detectable
-    // after the list reload reassigns _walletId.
-    final previousId = _walletId;
-    await _loadWallets();
-    if (previousId != null &&
-        !_wallets.any((w) => w.walletId == previousId)) {
-      // The wallet this screen was showing was removed.
-      if (_wallets.isEmpty) {
-        if (walletService.isUnlocked) await walletService.lock();
-        setState(_resetLocked);
-        return;
-      }
-      // Land on the replacement the reload selected, regardless of what the
-      // overview popped with.
-      if (_walletId != null) {
-        await _switchWallet(_walletId!);
-        return;
-      }
-    }
-    if (picked != null && picked.isNotEmpty && (picked != previousId || _watchSelected)) {
-      await _switchWallet(picked);
-      return;
-    }
-    if (mounted) setState(() {});
-  }
-
   Future<void> _lock() async {
     await walletService.lock();
-    setState(_resetLocked);
+    if (mounted) setState(_resetLocked);
   }
+
+  // ── Wallet page actions ───────────────────────────────────────────────
 
   void _snack(String msg) {
     if (!mounted) return;
@@ -976,7 +970,10 @@ class _DashboardScreenState extends State<DashboardScreen>
   void _openTx(Map<String, dynamic> tx) {
     Navigator.push(
       context,
-      fadeRoute(const TransactionDetailScreen(), settings: RouteSettings(arguments: _args(transaction: tx))),
+      fadeRoute(
+        const TransactionDetailScreen(),
+        settings: RouteSettings(arguments: _args(transaction: tx)),
+      ),
     );
   }
 
@@ -999,1169 +996,6 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   void _openSettings() => _selectTab(3);
-
-  /// The settings tab renamed, deleted or picked another wallet. An empty id
-  /// means the wallet this screen pointed at is gone.
-  Future<void> _onSettingsWalletChanged(String switchedTo) async {
-    if (!mounted) return;
-    await _loadWallets();
-    if (!mounted) return;
-    if (switchedTo.isEmpty) {
-      setState(_resetLocked);
-      return;
-    }
-    if (switchedTo != _walletId) {
-      _selectTab(0);
-      // A wallet just created or restored from Settings is already
-      // unlocked: take it as the home wallet without a second unlock.
-      if (walletService.isUnlocked && walletService.activeWalletId == switchedTo) {
-        _walletId = switchedTo;
-        // Nothing of the previous wallet may carry over: its rows, its
-        // figures, or a broadcast it made moments ago.
-        _sync.deactivate();
-        await sessionLock.run(() async {
-          await _refreshUnlockMethods();
-          await _afterUnlock();
-        });
-        return;
-      }
-      await _switchWallet(switchedTo);
-      return;
-    }
-    if (mounted) setState(() {});
-  }
-
-  String get _activeWalletName {
-    for (final w in _wallets) {
-      if (w.walletId == _walletId) return w.name;
-    }
-    return 'Wallet';
-  }
-
-  bool get _balanceHidden => privacyService.hideBalances;
-
-  @override
-  Widget build(BuildContext context) {
-    if (_loading) return _splash();
-
-    final showTabs = !_watchSelected && _walletUnlocked && _sync.ownsWallet(_walletId);
-    return PopScope(
-      canPop: !showTabs || _tab == 0,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) _selectTab(0);
-      },
-      child: Scaffold(
-      appBar: AppBar(
-        title: Text(
-          showTabs ? _tabTitles[_tab] : 'Argus',
-          style: Theme.of(context).textTheme.headlineSmall,
-        ),
-        actions: [
-          if (_walletUnlocked && !_watchSelected)
-            IconButton(
-              icon: const Icon(Icons.qr_code_scanner),
-              tooltip: 'Scan',
-              onPressed: _scan,
-            ),
-          if (_walletUnlocked)
-            IconButton(
-              icon: const Icon(Icons.lock_open_outlined),
-              tooltip: 'Lock wallet',
-              onPressed: _lock,
-            ),
-          IconButton(
-            icon: const Icon(Icons.account_balance_wallet_outlined),
-            tooltip: 'Wallets',
-            onPressed: _openWalletOverview,
-          ),
-        ],
-      ),
-      body: ListenableBuilder(
-        listenable: Listenable.merge([addressLabelService, privacyService]),
-        builder: (context, _) => Column(
-          children: [
-            const WarningStrip(),
-            Expanded(
-              child: _watchSelected ? _watchedLedger() : WalletViewBoundary(
-                controller: _sync,
-                walletId: _walletId,
-                unlocked: _walletUnlocked,
-                ledger: (_) => _tabs(),
-                gate: (_) => _gate(),
-              ),
-            ),
-          ],
-        ),
-      ),
-      bottomNavigationBar: showTabs
-          ? NavigationBar(
-              selectedIndex: _tab,
-              onDestinationSelected: _selectTab,
-              destinations: const [
-                NavigationDestination(
-                  icon: Icon(Icons.account_balance_wallet_outlined),
-                  selectedIcon: Icon(Icons.account_balance_wallet),
-                  label: 'Wallet',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.schedule_outlined),
-                  selectedIcon: Icon(Icons.schedule),
-                  label: 'Activity',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.swap_horiz_outlined),
-                  selectedIcon: Icon(Icons.swap_horiz),
-                  label: 'Swap',
-                ),
-                NavigationDestination(
-                  icon: Icon(Icons.settings_outlined),
-                  selectedIcon: Icon(Icons.settings),
-                  label: 'Settings',
-                ),
-              ],
-            )
-          : null,
-      ),
-    );
-  }
-
-  /// Cold-start splash while the wallet core initialises: same branding as
-  /// the gate so the app doesn't open on a bare spinner.
-  Widget _splash() {
-    return Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const IrisMark(size: 72),
-            const SizedBox(height: 20),
-            Text('Argus', style: Theme.of(context).textTheme.headlineSmall),
-            const SizedBox(height: 8),
-            const SizedBox(width: 48, child: Hairline(gold: true)),
-            const SizedBox(height: 28),
-            const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  /// The unlocked home: tabs share one [WalletArgsScope] so embedded screens
-  /// see the same live balances a pushed route would get as arguments.
-  Widget _tabs() {
-    final args = _args();
-    Widget lazy(int i, Widget Function() build) =>
-        _visitedTabs.contains(i) ? build() : const SizedBox.shrink();
-    return WalletArgsScope(
-      key: const ValueKey('tabs'),
-      args: args,
-      child: IndexedStack(
-        index: _tab,
-        children: [
-          _ledger(),
-          lazy(
-            1,
-            () => TransactionsScreen(
-              key: ValueKey('activity-${_sync.receiveAddress}'),
-              embedded: true,
-              args: args,
-            ),
-          ),
-          lazy(
-            2,
-            () => SwapHubScreen(
-              embedded: true,
-              venue: _swapVenue,
-              onVenueChanged: (v) => _swapVenue = v,
-            ),
-          ),
-          lazy(
-            3,
-            () => SettingsScreen(
-              key: ValueKey('settings-$_walletId'),
-              embedded: true,
-              walletId: _walletId,
-              onWalletSwitched: _onSettingsWalletChanged,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _gate() {
-    return ListView(
-      key: const ValueKey('gate'),
-      padding: EdgeInsets.fromLTRB(
-          28, 36, 28, 40 + MediaQuery.paddingOf(context).bottom),
-      children: [
-        const SizedBox(height: 56),
-        const Center(child: IrisMark(size: 72)),
-        const SizedBox(height: 20),
-        Text(
-          'Argus',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.headlineSmall,
-        ),
-        const SizedBox(height: 8),
-        const Center(child: SizedBox(width: 48, child: Hairline(gold: true))),
-        const SizedBox(height: 12),
-        Text(
-          _hasSeed
-              ? 'Enter your PIN to open the ledger.'
-              : 'Create a wallet, or restore one you already have.',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.bodyMedium,
-        ),
-        if (_wallets.isNotEmpty || watchAccountService.accounts.isNotEmpty ||
-            watchOnlyService.addresses.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          _walletsCard(),
-        ],
-        if (_wallets.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Center(
-            child: InkWell(
-              onTap: _openWalletOverview,
-              borderRadius: BorderRadius.zero,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.account_balance_wallet_outlined,
-                      size: 18,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        _activeWalletName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ),
-                    const SizedBox(width: 2),
-                    Icon(
-                      Icons.chevron_right,
-                      size: 20,
-                      color: Theme.of(context).colorScheme.primary,
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-        // Errors, and the reason a parked link waits ("Unlock to ...").
-        if (_status.startsWith('Error') || _status.startsWith('Unlock to') || _status.contains(':')) ...[
-          const SizedBox(height: 12),
-          Text(_status,
-              textAlign: TextAlign.center,
-              style: TextStyle(color: rustFor(context))),
-        ],
-        if (watchOnlyService.addresses.isNotEmpty) ...[
-          const SizedBox(height: 24),
-          ListenableBuilder(
-            listenable: watchOnlyService,
-            builder: (context, _) => _watchOnlyLoading
-                ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
-                : Column(
-                    children: [
-                      if (_watchError != null) SelectableText(_watchError!),
-                      Text(
-                        'Watch-only balance',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        _watchOnlyTotal == null ? 'Balance unavailable' : formatErg(_watchOnlyTotal),
-                        style: const TextStyle(
-                          fontFamily: 'Newsreader',
-                          fontSize: 32,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        '${watchOnlyService.addresses.length} addresses',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 11),
-                      ),
-                    ],
-                  ),
-          ),
-        ],
-        const SizedBox(height: 36),
-        if (_hasSeed && _hasPin) ...[
-          PinFields(
-            pin: _pinCtrl,
-            label: 'PIN',
-            onSubmitted: (_) {
-              if (!_unlockBusy) _unlockWithPin();
-            },
-          ),
-          const SizedBox(height: 16),
-          FilledButton(
-            onPressed: _unlockBusy ? null : _unlockWithPin,
-            child: _unlockBusy
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Unlock'),
-          ),
-          if (_canBiometric)
-            TextButton(
-              onPressed: _unlockBusy ? null : _unlockBiometric,
-              child: const Text('Unlock with biometrics'),
-            ),
-        ] else if (_hasSeed)
-          FilledButton(
-            onPressed: _unlockBusy ? null : _unlockLegacyThenPin,
-            child: _unlockBusy
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Text('Unlock and set PIN'),
-          ),
-        const SizedBox(height: 20),
-        Row(
-          children: [
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _openCreate,
-                child: const Text('Create'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: OutlinedButton(
-                onPressed: _openRestore,
-                child: const Text('Restore'),
-              ),
-            ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  // ── Ledger (unlocked home) ─────────────────────────────────────────────
-
-  static const _assetCap = 4;
-
-  Widget _ledger() {
-    return ListenableBuilder(
-      listenable: Listenable.merge([networkController, tokenPricer, walletService.metadataChanges]),
-      builder: (context, _) {
-        // Stealth holdings are part of what the wallet owns, so they belong
-        // in the asset list; each tile knows how much of it is stealth.
-        final holdings = _sync.displayTokens.map(walletService.displayMetadata).toList();
-        final fungible = holdings.where((t) => !t.isCollectible).toList();
-        final nfts = holdings.where((t) => t.isCollectible).toList();
-        final fragmented = _sync.utxoCount > utxoFragmentationThreshold;
-        Widget tokenTile(TokenBalance t) => AssetTile.token(
-              t,
-              fiatText: t.isCollectible ? null : tokenPricer.fiatTextFor(tokenId: t.id, amount: t.amount, decimals: t.decimals),
-              hidden: _balanceHidden,
-              onTap: () => _openToken(t),
-            );
-        final assets = <Widget>[
-          AssetTile.erg(
-            // Display surface: stealth ERG is included, as it is in the
-            // portfolio card above and in the token tiles below. Send and
-            // coin selection still use _sync.balanceNano.
-            balanceNano: _sync.totalNanoWithStealth,
-            fiatText: networkController.fiatText(_sync.totalNanoWithStealth),
-            hidden: _balanceHidden,
-            onTap: () => Navigator.push(
-                context, fadeRoute(AssetsScreen(args: _displayArgs()))),
-          ),
-          ...fungible.map(tokenTile),
-          ...nfts.map(tokenTile),
-        ];
-        final visibleAssets = assets.take(_assetCap).toList();
-        final hiddenAssets = assets.length - visibleAssets.length;
-
-        return RefreshIndicator(
-          onRefresh: () => _sync.refresh(discover: true),
-          child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-          children: [
-            const OfflineBanner(),
-            _portfolioCard(fragmented),
-            _sectionHeader('Wallets', action: 'Manage', onTap: _openWalletOverview),
-            const SizedBox(height: 10),
-            _walletsCard(),
-            const SizedBox(height: 12),
-            _actionsRow(),
-            MixStrip(onOpen: () => _go('/mix')),
-            const SizedBox(height: 28),
-            _sectionHeader('Assets · $_activeWalletName',
-                action: hiddenAssets > 0
-                    ? 'View all (${assets.length})'
-                    : 'View all',
-                onTap: () => Navigator.push(context,
-                    fadeRoute(AssetsScreen(args: _displayArgs())))),
-            const SizedBox(height: 10),
-            SoftCard(
-              padding: EdgeInsets.zero,
-              child: DividedColumn(children: visibleAssets),
-            ),
-            const SizedBox(height: 28),
-            if (_watchError != null) Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: SelectableText(_watchError!),
-            ),
-            _sectionHeader('Recent activity',
-                action: _sync.displayActivity.isNotEmpty ? 'View all' : null,
-                onTap: () => _selectTab(1)),
-            const SizedBox(height: 10),
-            _sync.displayActivity.isEmpty
-                ? SoftCard(
-                    child: EmptyState(
-                      compact: true,
-                      icon: Icons.inbox_outlined,
-                      title: 'No activity yet',
-                      body: 'Share your address to receive your first ERG.',
-                      actionLabel: 'Show my address',
-                      onAction: () => _go('/receive'),
-                    ),
-                  )
-                : SoftCard(
-                    padding: EdgeInsets.zero,
-                    child: DividedColumn(
-                      children: [
-                        for (final tx in _sync.displayActivity.take(5))
-                          ActivityTile(
-                            tx: tx,
-                            hidden: _balanceHidden,
-                            onTap: () => _openTx(tx),
-                          ),
-                      ],
-                    ),
-                  ),
-            const SizedBox(height: 28),
-            _sectionHeader('Discover', action: 'Explore all', onTap: _exploreAll),
-            const SizedBox(height: 10),
-            SizedBox(
-              height: 168,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  if (discoverAvailable(DiscoverFeature.dexy))
-                    _discoverCard(
-                      feature: DiscoverFeature.dexy,
-                      subtitle: _positionLine(
-                        ids: [
-                          for (final v in DexyVariant.values) ...[v.tokenId, v.lpTokenId],
-                        ],
-                      ),
-                    ),
-                  _discoverCard(
-                    feature: DiscoverFeature.ageusd,
-                    subtitle: _positionLine(ids: const [SigmaUsdTokens.sigUsd, SigmaUsdTokens.sigRsv]),
-                  ),
-                  _discoverCard(feature: DiscoverFeature.spectrum),
-                  _discoverCard(
-                    feature: DiscoverFeature.duckpools,
-                    subtitle: switch ([
-                      duckpoolsService.positionLine(formatTokenAmountGrouped),
-                      duckpoolsService.loanLine(formatTokenAmountGrouped),
-                    ].whereType<String>().join(' · ')) {
-                      '' => null,
-                      final line => line,
-                    },
-                  ),
-                  _discoverCard(feature: DiscoverFeature.sigmafi, subtitle: sigmafiService.positionLine()),
-                  _discoverCard(
-                    feature: DiscoverFeature.mix,
-                    subtitle: mixService.enabled && mixService.active.isNotEmpty
-                        ? '${mixService.active.length} ${mixService.active.length == 1 ? 'mix' : 'mixes'} in the pool.'
-                        : null,
-                  ),
-                  _discoverCard(feature: DiscoverFeature.tokens),
-                  _discoverCard(feature: DiscoverFeature.utxos),
-                  _discoverCard(feature: DiscoverFeature.liquidity),
-                  _discoverCard(feature: DiscoverFeature.dapps),
-                  _discoverCard(feature: DiscoverFeature.rosen),
-                ],
-              ),
-            ),
-            const SizedBox(height: 28),
-            _sectionHeader('Tools'),
-            const SizedBox(height: 10),
-            SoftCard(
-              padding: EdgeInsets.zero,
-              // A tile draws its tap ripple on the nearest Material above it,
-              // and the card's own background would hide it.
-              child: Material(
-                type: MaterialType.transparency,
-                child: DividedColumn(
-                children: [
-                  for (final f in const [DiscoverFeature.tokens, DiscoverFeature.utxos, DiscoverFeature.mix])
-                    ListTile(
-                      key: Key('tool-${f.name}'),
-                      leading: Icon(discoverExplainers[f]!.icon, color: accentOf(context)),
-                      title: Text(discoverExplainers[f]!.title),
-                      subtitle: Text(discoverExplainers[f]!.blurb,
-                          style: TextStyle(fontSize: 12, color: ArgusColors.of(context).muted)),
-                      trailing: IconButton(
-                        tooltip: 'What is this?',
-                        icon: const Icon(Icons.info_outline, size: 18),
-                        onPressed: () => _openDiscover(f),
-                      ),
-                      onTap: () => _openFeature(f),
-                    ),
-                ],
-              ),
-              ),
-            ),
-            if (_sync.usedAddresses.isNotEmpty) ...[
-              const SizedBox(height: 28),
-              _sectionHeader('Addresses'),
-              const SizedBox(height: 10),
-              SoftCard(
-                padding: EdgeInsets.zero,
-                child: Column(
-                  children: [
-                    for (var i = 0; i < _sync.usedAddresses.length; i++) ...[
-                      if (i > 0) const Divider(height: 1, indent: 16),
-                      _addressTile(_sync.usedAddresses[i]),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _sectionHeader(String title, {String? action, VoidCallback? onTap}) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontFamily: 'Newsreader',
-              fontWeight: FontWeight.w600,
-              fontSize: 20,
-            ),
-          ),
-        ),
-        if (action != null)
-          InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(8),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(action,
-                      style: Theme.of(context)
-                          .textTheme
-                          .bodyMedium
-                          ?.copyWith(color: accentOf(context))),
-                  const SizedBox(width: 2),
-                  Icon(Icons.chevron_right, size: 18, color: accentOf(context)),
-                ],
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  /// Sync / block / UTXO strip inside the portfolio card.
-  Widget _statusStrip(bool fragmented) {
-    final muted = ArgusColors.of(context).muted;
-    final online = networkController.activeUrl != null;
-    final stale = _sync.isStale;
-    final status = _sync.statusLabel(online: online);
-    final synced = status == 'Synced';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (_sync.pinIssue != null) ...[
-          InkWell(
-            onTap: _openSettings,
-            borderRadius: BorderRadius.circular(8),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              child: Row(
-                children: [
-                  Icon(Icons.push_pin_outlined, size: 14, color: rust),
-                  const SizedBox(width: 6),
-                  Expanded(
-                    child: Text(_sync.pinIssue!, style: TextStyle(fontSize: 12.5, color: rust)),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-        ],
-          Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            decoration: BoxDecoration(
-              color: ArgusColors.of(context).inset,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Wrap(
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 0,
-              runSpacing: 4,
-              children: [
-                InkWell(
-                  onTap: () => _go('/utxos'),
-                  borderRadius: BorderRadius.circular(8),
-                  child: SyncStatusLine.wallet(
-                    sync: _sync,
-                    online: online,
-                    statusColor: synced ? moss : (stale ? rust : accentOf(context)),
-                    height: networkController.height,
-                    fragmented: fragmented,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                InkWell(
-                  onTap: _openSettings,
-                  borderRadius: BorderRadius.circular(8),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 4, vertical: 2),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text('Network',
-                            style:
-                                TextStyle(fontSize: 12.5, color: muted)),
-                        Icon(Icons.chevron_right, size: 16, color: muted),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-
-  /// Total across every wallet and watched address, with the sync strip.
-  Widget _portfolioCard(bool fragmented) {
-    final colors = ArgusColors.of(context);
-    final muted = colors.muted;
-    final total = _sync.totalNanoWithStealth;
-    final portfolio = portfolioTotal([
-      // Stealth ERG and money in the mixing pool are the wallet's too; only
-      // send and coin selection use the spendable figure. The headline must
-      // never be smaller than the pockets it is broken down into.
-      total == null ? null : total + mixService.inMixNano + mixService.mixedNano,
-      for (final w in _wallets)
-        if (w.walletId != _walletId) _otherBalances[w.walletId],
-      for (final a in watchOnlyService.addresses) _watchBalances[a],
-    ]);
-    final subtitle = portfolioSubtitle(
-      wallets: _wallets.length,
-      watched: watchOnlyService.addresses.length,
-      unknown: portfolio.unknown,
-    );
-    final value = holdingsValue(
-      ergNano: portfolio.totalNano,
-      tokens: [
-        for (final t in _sync.displayTokens) (id: t.id, amount: t.amount, decimals: t.decimals),
-        for (final w in _wallets)
-          if (w.walletId != _walletId) ...?_lastKnown[w.walletId]?.tokens,
-      ],
-      result: tokenPricer.result,
-    );
-    final fiatValue = tokenPricer.fiatTextForUsd(tokenPricer.result.ergUsd == null ? null : value.usd);
-    // Where the money sits, so the headline total is never a number the
-    // rest of the screen appears to contradict.
-    final pockets = walletPockets(
-      publicNano: _sync.balanceNano,
-      stealthNano: _sync.stealthNano,
-      stealthUnknown: _sync.stealthScanning && _sync.stealthBalanceUnknown,
-      mixedNano: mixService.mixedNano,
-      inMixNano: mixService.inMixNano,
-    );
-    final breakdown = pocketBreakdown(pockets, hidden: _balanceHidden);
-    // Status parts stand on their own: an unpriced wallet must still be
-    // told that the total omits stealth funds nobody could look up.
-    final statusParts = <String>[
-      if (fiatValue != null) '$fiatValue ${networkController.fiatCode.toUpperCase()}',
-      if (fiatValue != null && value.unpriced + value.excluded > 0)
-        '${value.unpriced + value.excluded} unpriced',
-      if (fiatValue != null && tokenPricer.stale) 'prices stale',
-    ];
-    final fiat = _balanceHidden
-        ? '≈ ${networkController.fiatSymbol}•••• ${networkController.fiatCode.toUpperCase()}'
-        : statusParts.isEmpty
-            ? null
-            : statusParts.join(' · ');
-    return SoftCard(
-      padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'PORTFOLIO',
-                      style: Theme.of(context).textTheme.titleSmall?.copyWith(color: muted),
-                    ),
-                    const SizedBox(height: 8),
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Flexible(
-                          child: _sync.balanceNano == null && _sync.isSyncing && portfolio.known == 0
-                              ? Container(
-                                  width: 150,
-                                  height: 34,
-                                  margin: const EdgeInsets.only(bottom: 6),
-                                  decoration: BoxDecoration(
-                                    color: muted.withValues(alpha: 0.18),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                )
-                              : Text(
-                                  _balanceHidden
-                                      ? '••••••'
-                                      : formatErg(portfolio.totalNano, unit: false, maxFrac: 4),
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .displayLarge
-                                      ?.copyWith(fontSize: 44),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                        ),
-                        const SizedBox(width: 8),
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Text(
-                            'ERG',
-                            style: TextStyle(fontFamily: 'Newsreader', fontSize: 18, color: muted),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      [if (fiat != null) fiat, subtitle].join('  ·  '),
-                      style: TextStyle(fontSize: 14, color: muted),
-                    ),
-                    const SizedBox(height: 2),
-                    const ErgRateLine(),
-                    if (breakdown != null) ...[
-                      const SizedBox(height: 2),
-                      Text(breakdown, style: TextStyle(fontSize: 13, color: muted)),
-                    ],
-                  ],
-                ),
-              ),
-              _iconCircle(
-                _balanceHidden ? Icons.visibility_off_outlined : Icons.visibility_outlined,
-                onTap: () => privacyService.setHideBalances(!_balanceHidden),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          _statusStrip(fragmented),
-        ],
-      ),
-    );
-  }
-
-  /// Public watch selection never changes the wallet holding signing keys.
-  Widget _watchedLedger() {
-    final account = _selectedWatchAccount;
-    final address = _selectedWatchAddress;
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        if (account != null)
-          WatchAccountList(selectedAccount: account, hideBalances: _balanceHidden),
-        if (address != null)
-          SoftCard(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('Watch-only address', style: TextStyle(fontWeight: FontWeight.bold)),
-                const Text('Cannot sign locally. Send with an offline signer; change returns to this same address. A watched account tracks more addresses.'),
-                OutlinedButton(
-                  onPressed: () => Navigator.push(context, MaterialPageRoute<void>(
-                    builder: (_) => ColdWatchSendScreen.address(address: address),
-                  )),
-                  child: const Text('Send with offline signer'),
-                ),
-                Text(address),
-                Text(_balanceHidden ? '•••••• ERG' :
-                    _watchBalances[address] == null ? 'Balance unavailable' : formatErg(_watchBalances[address])),
-                OutlinedButton(
-                  onPressed: () => Navigator.pushNamed(context, '/receive',
-                    arguments: WalletRouteArgs(
-                      watchOnly: true,
-                      senderAddress: address,
-                      receiveAddress: address,
-                      changeAddress: address,
-                    )),
-                  child: const Text('Receive'),
-                ),
-              ],
-            ),
-          ),
-        const SizedBox(height: 12),
-        const ErgRateLine(),
-        const SizedBox(height: 12),
-        _walletsCard(),
-      ],
-    );
-  }
-
-  Widget _walletsCard() {
-    final rows = <Widget>[
-      for (final w in _wallets) _walletRow(w),
-      for (final account in watchAccountService.accounts)
-        ListTile(
-          key: ValueKey('watch-account-${account.key}'),
-          selected: identical(account, _selectedWatchAccount),
-          leading: const Icon(Icons.visibility_outlined),
-          title: const Text('Watch-only account'),
-          subtitle: Text('${shorten(account.key, head: 6, tail: 6)} · Cannot sign locally'),
-          trailing: Icon(identical(account, _selectedWatchAccount)
-              ? Icons.check_circle_outline : Icons.chevron_right),
-          onTap: () => setState(() {
-            _selectedWatchAccount = account;
-            _selectedWatchAddress = null;
-            _tab = 0;
-          }),
-        ),
-      for (final a in watchOnlyService.addresses) _watchRow(a),
-    ];
-    return SoftCard(
-      padding: EdgeInsets.zero,
-      child: DividedColumn(indent: 16, children: rows),
-    );
-  }
-
-  Widget _walletRow(WalletInfo w) {
-    final colors = ArgusColors.of(context);
-    final isActive = w.walletId == _walletId && walletService.isUnlocked;
-    final isSelected = isActive && !_watchSelected;
-    final known = _lastKnown[w.walletId];
-    // The active row must agree with the portfolio card above it: both are
-    // display surfaces, so both include stealth funds.
-    final live = _otherBalances[w.walletId];
-    // A locked wallet's live figure covers its known addresses; its
-    // stealth funds can only come from the last sync, since rescanning
-    // needs its seed.
-    final cachedStealth = known?.stealthNano ?? 0;
-    final display = walletRowDisplay(
-      isActive: isActive,
-      spendableNano: _sync.balanceNano,
-      stealthNano: _sync.stealthNano,
-      cachedNano: live == null
-          ? known?.balanceNano
-          : live + cachedStealth,
-      hidden: _balanceHidden,
-    );
-    final stealthSeen = known?.stealthScannedAt;
-    final lockedStealthNote = !isActive && cachedStealth > 0 && !_balanceHidden
-        ? 'includes ${formatErg(cachedStealth, maxFrac: 4)} stealth'
-            '${stealthSeen == null ? '' : ', as of ${formatSyncAge(stealthSeen)}'}'
-        : null;
-    final balance = display.balanceNano;
-    final stealthNote = display.note;
-    final addr = isActive ? (_sync.receiveAddress ?? w.displayAddress) : w.displayAddress;
-    // Public snapshots always carry their age, even after a successful read.
-    final asOf = !isActive && known != null
-        ? formatSyncAge(DateTime.now().subtract(known.age))
-        : null;
-    return InkWell(
-      onTap: isSelected ? null : () => _switchWallet(w.walletId),
-      onLongPress: () async {
-        if (await renameWalletDialog(context, w) && mounted) await _loadWallets();
-        if (mounted) setState(() {});
-      },
-      borderRadius: BorderRadius.circular(cardRadius),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 14,
-              child: Center(
-                child: isSelected
-                    ? Container(
-                        width: 10,
-                        height: 10,
-                        decoration: const BoxDecoration(color: moss, shape: BoxShape.circle),
-                      )
-                    : Container(
-                        width: 10,
-                        height: 10,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          border: Border.all(color: colors.muted, width: 1.5),
-                        ),
-                      ),
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          w.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      if (isSelected)
-                        const Text(
-                          'ACTIVE',
-                          style: TextStyle(fontSize: 11, letterSpacing: 1, fontWeight: FontWeight.w600, color: moss),
-                        )
-                      else
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(isActive ? Icons.lock_open_outlined : Icons.lock_outline, size: 12, color: colors.muted),
-                            const SizedBox(width: 3),
-                            Text(
-                              isActive ? 'UNLOCKED' : 'LOCKED',
-                              style: TextStyle(fontSize: 11, letterSpacing: 1, color: colors.muted),
-                            ),
-                          ],
-                        ),
-                    ],
-                  ),
-                  if (addr != null && addr.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(shorten(addr, head: 6, tail: 6), style: monoStyle(context, size: 11.5).copyWith(color: colors.muted)),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            // Takes its share of the row so the figure sits flush right on
-            // every row, note or no note; a long note wraps inside it.
-            Expanded(
-              child: _rowBalance(
-                balance,
-                isActive ? _sync.isSyncing : false,
-                asOf: asOf,
-                tokenHoldings: isActive
-                    ? (_sync.balanceNano == null ? null : [
-                        for (final t in (_sync.stealthBalanceUnknown ? _sync.tokens : _sync.displayTokens))
-                          (id: t.id, amount: t.amount),
-                      ])
-                    : (known == null || !known.tokensKnown ? null : [
-                        for (final t in known.tokens) (id: t.id, amount: t.amount),
-                      ]),
-                publicTokensOnly: !isActive || _sync.stealthBalanceUnknown,
-                note: isActive ? stealthNote : lockedStealthNote,
-                tokens: isActive
-                    ? [
-                        for (final t in _sync.displayTokens)
-                          (id: t.id, amount: t.amount, decimals: t.decimals),
-                      ]
-                    : (known?.tokens ?? const []),
-              ),
-            ),
-            const SizedBox(width: 4),
-            Icon(Icons.chevron_right, size: 18, color: colors.muted),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _watchRow(String address) {
-    final colors = ArgusColors.of(context);
-    final label = addressLabelService.labelFor(address);
-    return InkWell(
-      key: ValueKey('watch-address-$address'),
-      onTap: () => setState(() {
-        _selectedWatchAddress = address;
-        _selectedWatchAccount = null;
-        _tab = 0;
-      }),
-      borderRadius: BorderRadius.circular(cardRadius),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
-        child: Row(
-          children: [
-            SizedBox(
-              width: 14,
-              child: Center(child: Icon(Icons.visibility_outlined, size: 14, color: colors.muted)),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          label != null && label.isNotEmpty ? label : 'Watched',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text('WATCH-ONLY', style: TextStyle(fontSize: 11, letterSpacing: 1, color: colors.muted)),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Text(shorten(address, head: 6, tail: 6), style: monoStyle(context, size: 11.5).copyWith(color: colors.muted)),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            _rowBalance(_watchBalances[address], _watchOnlyLoading),
-            const SizedBox(width: 4),
-            Icon(_selectedWatchAddress == address ? Icons.check_circle_outline : Icons.chevron_right, size: 18, color: colors.muted),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _rowBalance(
-    int? nano,
-    bool loading, {
-    String? asOf,
-    String? note,
-    Iterable<({String id, int amount})>? tokenHoldings,
-    bool publicTokensOnly = true,
-    Iterable<({String id, int amount, int decimals})> tokens = const [],
-  }) {
-    final colors = ArgusColors.of(context);
-    final text = nano == null
-        ? (loading ? '…' : '—')
-        : (_balanceHidden ? '••••' : formatErg(nano, unit: false, maxFrac: 2));
-    // ERG plus whatever tokens this wallet holds: a row showing only its
-    // ERG value understates a wallet whose worth is mostly tokens.
-    final usd = nano == null || _balanceHidden
-        ? null
-        : holdingsValue(ergNano: nano, tokens: tokens, result: tokenPricer.result).usd;
-    final fiatText = usd == null || tokenPricer.result.ergUsd == null
-        ? (nano == null || _balanceHidden ? null : networkController.fiatText(nano))
-        : tokenPricer.fiatTextForUsd(usd);
-    final fiat = [
-      if (fiatText != null) fiatText,
-      if (asOf != null && asOf.isNotEmpty) 'as of $asOf',
-      if (note != null) note,
-    ].join(' · ');
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.baseline,
-          textBaseline: TextBaseline.alphabetic,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              text,
-              style: const TextStyle(fontFamily: 'Newsreader', fontWeight: FontWeight.w600, fontSize: 18),
-            ),
-            const SizedBox(width: 4),
-            Text('ERG', style: TextStyle(fontSize: 12, color: colors.muted)),
-          ],
-        ),
-        WalletTokenCount(
-          holdings: tokenHoldings,
-          publicOnly: publicTokensOnly,
-          hidden: _balanceHidden,
-        ),
-        if (fiat.isNotEmpty)
-          Text(
-            fiat,
-            textAlign: TextAlign.end,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(fontSize: 12, color: colors.muted),
-          ),
-      ],
-    );
-  }
-
-  Widget _actionsRow() {
-    return HomeActionRow(
-      actions: [
-        HomeAction(icon: Icons.north_east, label: 'Send', onTap: () => _go('/send')),
-        HomeAction(icon: Icons.south_west, label: 'Receive', onTap: () => _go('/receive')),
-        HomeAction(icon: Icons.swap_horiz, label: 'Swap', onTap: () => _goHub(SwapVenue.spectrum)),
-        HomeAction(icon: Icons.blender_outlined, label: 'Mix', onTap: () => _go('/mix')),
-      ],
-    );
-  }
-
-  Widget _iconCircle(IconData icon, {VoidCallback? onTap}) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(22),
-      child: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: dark ? watchfulSurface : bannerTint,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Icon(icon,
-            size: 19,
-            color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7)),
-      ),
-    );
-  }
-
-  /// "You hold 12.5 SigUSD · 3 SigRSV" when the wallet has a position in
-  /// any of [ids]; null otherwise so the card keeps its marketing line.
-  String? _positionLine({required List<String> ids}) {
-    final held = <String>[];
-    for (final t in _sync.tokens) {
-      if (!ids.contains(t.id) || t.amount <= 0) continue;
-      held.add(_balanceHidden
-          ? '•••• ${t.label}'
-          : '${formatTokenAmountGrouped(t.amount, t.decimals)} ${t.label}');
-    }
-    if (held.isEmpty) return null;
-    return 'You hold ${held.take(2).join(' · ')}';
-  }
 
   /// Where a feature lives: a venue in the Swap tab, or a route.
   void _openFeature(DiscoverFeature feature) {
@@ -2187,105 +1021,258 @@ class _DashboardScreenState extends State<DashboardScreen>
     if (chosen != null && mounted) _openFeature(chosen);
   }
 
-  /// A card opens the feature's explainer; [subtitle] is the wallet's own
-  /// position when it has one, else the feature's blurb.
-  Widget _discoverCard({required DiscoverFeature feature, String? subtitle}) {
-    final e = discoverExplainers[feature]!;
-    final title = e.title;
-    final icon = e.icon;
-    final VoidCallback onTap = () => _openDiscover(feature);
-    final line = subtitle ?? e.blurb;
-    final muted = ArgusColors.of(context).muted;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      width: 168,
-      margin: const EdgeInsets.only(right: 12),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(20),
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surface,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: ArgusColors.of(context).cardBorder),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                  color: dark ? watchfulSurface : bannerTint,
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(icon, size: 19, color: accentOf(context)),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                title,
-                style: const TextStyle(
-                  fontFamily: 'Newsreader',
-                  fontWeight: FontWeight.w600,
-                  fontSize: 16,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Expanded(
-                child: Text(
-                  line,
-                  style: TextStyle(fontSize: 12, height: 1.3, color: muted),
-                ),
-              ),
-              Row(
-                  children: [
-                    Text('What is this?', style: TextStyle(fontSize: 12, color: accentOf(context))),
-                    const SizedBox(width: 4),
-                    Icon(Icons.arrow_forward, size: 14, color: accentOf(context)),
-                  ],
-                ),
-            ],
-          ),
+  String _walletName(String? walletId) =>
+      (walletId == null ? null : _overview.wallet(walletId)?.name) ?? 'Wallet';
+
+  String _watchedName(WalletRef ref) {
+    if (ref.kind == WalletKind.watchedAddress) {
+      return addressLabelService.labelFor(ref.id) ?? 'Watched address';
+    }
+    for (final a in watchAccountService.accounts) {
+      if (a.key == ref.id) return a.label ?? 'Watched account';
+    }
+    return 'Watched account';
+  }
+
+  bool get _balanceHidden => privacyService.hideBalances;
+
+  // ── Build ─────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) return _splash();
+    final open = _open;
+    if (open == null) return _overviewScreen();
+    if (open.kind == WalletKind.seed) return _seedPage(open.id);
+    return _watchedPage(open);
+  }
+
+  /// Cold-start splash while the wallet core initialises: same branding as
+  /// the overview so the app doesn't open on a bare spinner.
+  Widget _splash() {
+    return Scaffold(
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const IrisMark(size: 72),
+            const SizedBox(height: 20),
+            Text('Argus', style: Theme.of(context).textTheme.headlineSmall),
+            const SizedBox(height: 8),
+            const SizedBox(width: 48, child: Hairline(gold: true)),
+            const SizedBox(height: 28),
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _addressTile(Map<String, dynamic> a) {
-    final muted = ArgusColors.of(context).muted;
-    final addr = a['address']?.toString() ?? '';
-    final nano = (a['balance_nano_erg'] as num?)?.toInt();
-    final label = addressLabelService.labelFor(addr);
-    return InkWell(
-      onTap: () => _labelAddress(addr),
-      borderRadius: BorderRadius.circular(20),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    shorten(addr, head: 10, tail: 8),
-                    style: monoStyle(context, size: 12.5),
-                  ),
-                  if (label != null && label.isNotEmpty) ...[
-                    const SizedBox(height: 2),
-                    Text(label,
-                        style: TextStyle(fontSize: 12, color: muted)),
-                  ],
-                ],
+  Widget _overviewScreen() {
+    return WalletsOverviewScreen(
+      model: _overview,
+      onOpen: _openWallet,
+      onCreate: _openCreate,
+      onRestore: _openRestore,
+      onWatchAddress: () => addWatchAddress(context),
+      onWatchAccount: () => addWatchAccount(context),
+      onSettings: () => Navigator.push(context, fadeRoute(const SettingsScreen())),
+      onLock: walletService.isUnlocked ? _lock : null,
+      notice: _notice,
+      noticeIsError: _noticeIsError,
+    );
+  }
+
+  Widget _watchedPage(WalletRef ref) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([addressLabelService, watchAccountService]),
+      builder: (context, _) => WatchedWalletPage(
+        key: ValueKey(ref),
+        target: ref,
+        name: _watchedName(ref),
+        cached: ref.kind == WalletKind.watchedAddress
+            ? _overview.watchedHoldings(ref.id)
+            : null,
+        onClose: _closeWallet,
+        onRemoved: _onWatchedRemoved,
+      ),
+    );
+  }
+
+  Widget _seedPage(String walletId) {
+    final info = _overview.wallet(walletId);
+    final name = info?.name ?? 'Wallet';
+    final unlocked = _walletUnlocked && _walletId == walletId;
+    final owns = unlocked && _sync.ownsWallet(walletId);
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _back();
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          leading: BackButton(onPressed: _closeWallet),
+          title: Text(
+            owns && _tab != 0 ? _tabTitles[_tab] : name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          actions: [
+            if (owns)
+              IconButton(
+                icon: const Icon(Icons.qr_code_scanner),
+                tooltip: 'Scan',
+                onPressed: _scan,
               ),
-            ),
-            Text(
-              _balanceHidden ? '••••' : formatErg(nano, maxFrac: 4),
-              style: Theme.of(context).textTheme.bodyMedium,
-            ),
+            if (owns)
+              IconButton(
+                icon: const Icon(Icons.lock_open_outlined),
+                tooltip: 'Lock wallet',
+                onPressed: _lock,
+              ),
           ],
         ),
+        body: ListenableBuilder(
+          listenable: Listenable.merge([addressLabelService, privacyService]),
+          builder: (context, _) => Column(
+            children: [
+              const WarningStrip(),
+              Expanded(
+                child: WalletViewBoundary(
+                  controller: _sync,
+                  walletId: walletId,
+                  unlocked: unlocked,
+                  ledger: (_) => _tabs(walletId),
+                  gate: (_) => _gate(walletId, info),
+                ),
+              ),
+            ],
+          ),
+        ),
+        bottomNavigationBar: owns
+            ? NavigationBar(
+                selectedIndex: _tab,
+                onDestinationSelected: _selectTab,
+                destinations: const [
+                  NavigationDestination(
+                    icon: Icon(Icons.account_balance_wallet_outlined),
+                    selectedIcon: Icon(Icons.account_balance_wallet),
+                    label: 'Wallet',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.schedule_outlined),
+                    selectedIcon: Icon(Icons.schedule),
+                    label: 'Activity',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.swap_horiz_outlined),
+                    selectedIcon: Icon(Icons.swap_horiz),
+                    label: 'Swap',
+                  ),
+                  NavigationDestination(
+                    icon: Icon(Icons.settings_outlined),
+                    selectedIcon: Icon(Icons.settings),
+                    label: 'Settings',
+                  ),
+                ],
+              )
+            : null,
+      ),
+    );
+  }
+
+  Widget _gate(String walletId, WalletInfo? info) {
+    final known = _overview.lastKnown(walletId);
+    final ready = _methodsFor == walletId && _walletId == walletId;
+    return UnlockGate(
+      name: info?.name ?? 'Wallet',
+      address: info?.displayAddress,
+      pinnedIndex: info?.pinnedAddressIndex,
+      lastKnownNano: known == null ? null : known.balanceNano + known.stealthNano,
+      lastKnownAge: known?.age,
+      hidden: _balanceHidden,
+      // Until this wallet's methods are read, offer nothing that would act
+      // on the previous wallet's.
+      method: ready ? _unlockMethod : UnlockMethod.biometric,
+      pinController: _pinCtrl,
+      busy: _unlockBusy || !ready,
+      usePin: _usePin,
+      onUnlock: _unlockBiometric,
+      onUsePin: () => setState(() => _usePin = true),
+      onUseBiometrics: () => setState(() => _usePin = false),
+      onUnlockWithPin: _unlockWithPin,
+      onUnlockLegacy: _unlockLegacyThenPin,
+      status: _gateStatus ?? (_noticeIsError ? null : _notice),
+      statusIsError: _gateStatus != null && _gateStatusIsError,
+    );
+  }
+
+  /// The unlocked wallet's tabs share one [WalletArgsScope] so embedded
+  /// screens see the same live balances a pushed route would get as
+  /// arguments.
+  Widget _tabs(String walletId) {
+    final args = _args();
+    Widget lazy(int i, Widget Function() build) =>
+        _visitedTabs.contains(i) ? build() : const SizedBox.shrink();
+    return WalletArgsScope(
+      key: const ValueKey('tabs'),
+      args: args,
+      child: IndexedStack(
+        index: _tab,
+        children: [
+          WalletLedger(
+            sync: _sync,
+            wallet: _overview.wallet(walletId),
+            actions: WalletLedgerActions(
+              go: _go,
+              swap: _goHub,
+              showActivity: () => _selectTab(1),
+              showSettings: _openSettings,
+              viewAssets: () => Navigator.push(
+                context,
+                fadeRoute(AssetsScreen(args: _displayArgs())),
+              ),
+              openTx: _openTx,
+              openToken: _openToken,
+              labelAddress: _labelAddress,
+              openFeature: _openFeature,
+              explainFeature: _openDiscover,
+              exploreAll: _exploreAll,
+            ),
+          ),
+          lazy(
+            1,
+            () => TransactionsScreen(
+              key: ValueKey('activity-${_sync.receiveAddress}'),
+              embedded: true,
+              args: args,
+            ),
+          ),
+          lazy(
+            2,
+            () => SwapHubScreen(
+              embedded: true,
+              venue: _swapVenue,
+              onVenueChanged: (v) => _swapVenue = v,
+            ),
+          ),
+          lazy(
+            3,
+            () => SettingsScreen(
+              key: ValueKey('settings-$walletId'),
+              embedded: true,
+              walletId: walletId,
+              onShowAllWallets: _closeWallet,
+              onWalletChanged: _onWalletEdited,
+              onWalletRemoved: _onWalletRemoved,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2304,64 +1291,4 @@ bool shouldPoll({
   final since = now.difference(lastPollAt);
   if (since >= pollInterval) return true;
   return hasPending && since >= fastPollInterval;
-}
-
-class SyncStatusLine extends StatelessWidget {
-  const SyncStatusLine({super.key, required this.status, required this.statusColor,
-    required this.height, required this.count, required this.fragmented, required this.age});
-  /// Keeps the last successful age visible while the next sync is in flight.
-  factory SyncStatusLine.wallet({
-    Key? key,
-    required WalletSyncController sync,
-    required bool online,
-    required Color statusColor,
-    required int? height,
-    required bool fragmented,
-  }) => SyncStatusLine(
-    key: key,
-    status: sync.statusLabel(online: online),
-    statusColor: statusColor,
-    height: height,
-    count: sync.utxoCount,
-    fragmented: fragmented,
-    age: formatSyncAge(sync.lastSyncedAt),
-  );
-
-  final String status;
-  final Color statusColor;
-  final int? height;
-  final int count;
-  final bool fragmented;
-  final String age;
-
-  @override
-  Widget build(BuildContext context) {
-    final muted = ArgusColors.of(context).muted;
-    final style = TextStyle(fontSize: 12.5, color: muted);
-    return Wrap(
-      spacing: 10,
-      runSpacing: 4,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        // Each segment keeps its icon with its label, and the label itself
-        // gives way at large text sizes rather than running off the line.
-        Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.circle, size: 8, color: statusColor),
-          const SizedBox(width: 6),
-          Flexible(child: Text(status, style: style.copyWith(fontWeight: FontWeight.w500))),
-        ]),
-        Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.inventory_2_outlined, size: 13, color: muted),
-          const SizedBox(width: 4),
-          Flexible(
-            child: Text(height == null ? 'Block unavailable' : 'Block ${formatWithCommas(height!)}', style: style),
-          ),
-        ]),
-        Text('$count UTXOs${fragmented ? ' · Fragmented' : ''}',
-          style: style.copyWith(color: fragmented ? rustFor(context) : muted,
-            fontWeight: fragmented ? FontWeight.w600 : FontWeight.w400)),
-        if (age.isNotEmpty) Text(age, style: style),
-      ],
-    );
-  }
 }

@@ -1,9 +1,15 @@
 //! Read every pool from mainnet. Ignored: needs the network.
 
+/// reqwest 0.13 is built without a default rustls crypto provider.
+fn client() -> reqwest::Client {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    reqwest::Client::new()
+}
+
 #[tokio::test]
 #[ignore = "needs the network"]
 async fn duckpools_live_pools_parse() {
-    let client = reqwest::Client::new();
+    let client = client();
     for pool in duckpools::POOLS {
         let url = format!(
             "https://api.ergoplatform.com/api/v1/boxes/unspent/byErgoTree/{}?limit=5",
@@ -39,7 +45,7 @@ async fn duckpools_live_pools_parse() {
 #[tokio::test]
 #[ignore = "needs the network"]
 async fn duckpools_live_quotes_and_rates() {
-    let client = reqwest::Client::new();
+    let client = client();
     let pool = &duckpools::POOLS[0];
     let text = client
         .get(format!("https://api.ergoplatform.com/api/v1/boxes/unspent/byErgoTree/{}?limit=5", pool.ergo_tree))

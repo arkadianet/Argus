@@ -2,10 +2,14 @@ import 'package:flutter/material.dart';
 
 import '../../format.dart';
 import '../../services/activity_classifier.dart';
+import '../../services/token_metadata.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 
 /// One transaction row shared by the home card and the Activity tab.
+///
+/// Tokens are named and scaled by the one token lookup, the same as the
+/// asset list, and the row repaints when that lookup learns something.
 class ActivityTile extends StatelessWidget {
   const ActivityTile({
     super.key,
@@ -23,7 +27,12 @@ class ActivityTile extends StatelessWidget {
   final bool showTxId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ValueListenableBuilder<int>(
+    valueListenable: walletService.metadataChanges,
+    builder: (context, _, _) => _row(context),
+  );
+
+  Widget _row(BuildContext context) {
     final muted = ArgusColors.of(context).muted;
     final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
     final kind = classifyActivity(tx);
@@ -51,8 +60,8 @@ class ActivityTile extends StatelessWidget {
     final line = activityLine(
       tx,
       hidden: hidden,
-      name: (id) => walletService.cachedTokenMeta(id)?.name,
-      decimals: (id) => walletService.cachedTokenMeta(id)?.decimals ?? 0,
+      name: (id) => tokenName(id),
+      decimals: (id) => tokenDecimals(id),
     );
     // A stealth receipt has no counterparty to name: the payer built a
     // one-time script, and nothing on chain says who they were.
@@ -67,6 +76,23 @@ class ActivityTile extends StatelessWidget {
         : (isContractAddress(counterparty)
             ? (kind == ActivityKind.swap ? null : 'contract ${shorten(counterparty, head: 6, tail: 4)}')
             : '${outgoing ? 'to' : 'from'} ${shorten(counterparty, head: 6, tail: 4)}');
+
+    final when = Text(
+      formatActivityTime(ts),
+      style: TextStyle(fontSize: 12, color: muted),
+    );
+    final status = Text(
+      confirmed ? 'Confirmed' : 'Pending',
+      style: TextStyle(
+        fontSize: 12,
+        color: confirmed ? moss : ArgusColors.of(context).accentText,
+        fontWeight: FontWeight.w500,
+      ),
+    );
+    // At large text sizes a side column for the time takes half the row and
+    // leaves the names a few letters; it moves under the line instead, as
+    // the Assets filters do.
+    final stacked = MediaQuery.textScalerOf(context).scale(14) / 14 > 1.4;
 
     return InkWell(
       onTap: onTap,
@@ -87,17 +113,23 @@ class ActivityTile extends StatelessWidget {
                 children: [
                   Row(
                     children: [
-                      Text(
-                        activityTitle(kind),
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                      Flexible(
+                        child: Text(
+                          activityTitle(kind),
+                          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 2),
+                  // Two lines: named tokens and the ERG leg are what the row
+                  // is for, and one line cut them off at phone width.
                   Text(
                     [line, if (who != null) who].join(' '),
                     style: TextStyle(fontSize: 12.5, color: muted),
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                   ),
                   if (showTxId && txId.isNotEmpty) ...[
@@ -107,24 +139,18 @@ class ActivityTile extends StatelessWidget {
                       style: monoStyle(context, size: 11).copyWith(color: muted),
                     ),
                   ],
+                  if (stacked) ...[
+                    const SizedBox(height: 3),
+                    Wrap(spacing: 10, children: [when, status]),
+                  ],
                 ],
               ),
             ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(formatActivityTime(ts), style: TextStyle(fontSize: 12, color: muted)),
-                const SizedBox(height: 3),
-                Text(
-                  confirmed ? 'Confirmed' : 'Pending',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: confirmed ? moss : ArgusColors.of(context).accentText,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
+            if (!stacked)
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [when, const SizedBox(height: 3), status],
+              ),
           ],
         ),
       ),

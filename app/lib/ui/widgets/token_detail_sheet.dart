@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../format.dart';
 import '../../services/token_pricer.dart';
 import '../../services/network_controller.dart';
 import '../../services/privacy_service.dart';
+import '../../services/token_metadata.dart';
 import '../../services/token_pricing.dart';
 import '../../services/verified_tokens.dart';
 import '../../services/wallet_service.dart';
@@ -222,7 +222,10 @@ class _TokenDetailBody extends StatelessWidget {
     final theme = Theme.of(context);
     final muted = ArgusColors.of(context).muted;
     final ticker = tokenTicker(token);
-    final amount = formatTokenAmountGrouped(token.amount, token.decimals);
+    final scaled = hasKnownScale(token);
+    // Raw units already name their unit; a ticker after them would read as
+    // if they were whole tokens.
+    final amount = holdingAmountText(token);
     final verified = verifiedToken(token.id);
     final caution = cautionedToken(token.id);
     final impersonates = impersonatedToken(tokenId: token.id, name: token.name);
@@ -303,7 +306,7 @@ class _TokenDetailBody extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      '${formatTokenAmountGrouped(token.stealthAmount, token.decimals)} '
+                      '${holdingAmountText(token, units: token.stealthAmount)} '
                       'of this sits in stealth boxes. Sweep it from Receive '
                       'before spending it.',
                       style: TextStyle(fontSize: 12.5, color: muted),
@@ -402,7 +405,7 @@ class _TokenDetailBody extends StatelessWidget {
             ),
             const SizedBox(height: 4),
             Text(
-              '$amount $ticker',
+              scaled ? '$amount $ticker' : amount,
               style: const TextStyle(
                 fontFamily: 'Newsreader',
                 fontWeight: FontWeight.w600,
@@ -491,7 +494,9 @@ class _TokenDetailBody extends StatelessWidget {
                       : 'Original emission unavailable',
                 ),
                 Text(
-                  'Decimals: ${token.decimals} · ${token.decimalsEvidence.name} evidence',
+                  scaled
+                      ? 'Decimals: ${token.decimals} · ${token.decimalsEvidence.name} evidence'
+                      : 'Decimals unknown · amounts are shown in raw units',
                 ),
                 Text('Declared artwork kind: ${token.declaredAssetKind.name}'),
                 if (token.source != null)
@@ -612,7 +617,7 @@ class _PriceLine extends StatelessWidget {
         '$unit each',
         if (held != null) '$held held',
         via,
-        if (!price.countsInTotal) 'not counted in totals (unverified)',
+        if (!price.countsInTotal) 'not counted in totals (${price.excludedBecause})',
       ].join(' · ');
     }
     return Text(text, style: TextStyle(fontSize: 12.5, color: muted));

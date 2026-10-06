@@ -36,6 +36,25 @@ void main() {
     expect(find.text('≈ \$1.00 USD'), findsOneWidget);
   });
 
+  testWidgets('a token nothing can scale says its amount is raw units', (tester) async {
+    // No name, no evidence: the zero decimals are a default, not knowledge.
+    final unknown = TokenBalance(id: 'e91cbc48' * 8, amount: 5000);
+    await tester.pumpWidget(_wrap(AssetTile.token(unknown)));
+    expect(find.text('5,000 raw units'), findsOneWidget);
+    expect(find.textContaining('5,000 E91CBC'), findsNothing,
+        reason: 'base units must not read as whole tokens');
+  });
+
+  testWidgets('a known zero scale is a scale', (tester) async {
+    final comet = TokenBalance(
+      id: '0cd8c9f416e5b1ca9f986a7f10a84191dfb85941619e49e53c0dc30ebf83324b',
+      amount: 69,
+      name: 'COMET',
+    );
+    await tester.pumpWidget(_wrap(AssetTile.token(comet)));
+    expect(find.text('69 COMET'), findsOneWidget);
+  });
+
   testWidgets('tap invokes onTap', (tester) async {
     var taps = 0;
     await tester.pumpWidget(_wrap(AssetTile.token(token, onTap: () => taps++)));

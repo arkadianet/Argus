@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../bridge/api.dart' as api;
 import 'wallet_service.dart';
 import 'network_controller.dart';
+import 'pending_balance.dart';
 
 const watchAccountLimitations =
     'Public payment addresses only. Cannot see stealth identities or stealth funds: the /3\' branch is hardened. This balance excludes stealth funds. Cannot sign locally; sending requires an offline signer.';
@@ -14,9 +15,14 @@ const watchAccountExpected =
     'Expected an Ergo Wallet App extended public key: 156 hex characters starting 0488b21e (mainnet), depth 4 external chain /0 or depth 3 account 0. Base58 xpub and testnet are not supported.';
 
 class WatchAccount {
-  WatchAccount(this.key, {this.highestUsed = -1});
+  WatchAccount(this.key, {this.highestUsed = -1, this.label});
   final String key;
   int highestUsed;
+
+  /// The user's name for this account, shown in the wallet list. Kept with
+  /// the account rather than in the address book: an extended key is not a
+  /// payment address and must never be offered as a recipient.
+  String? label;
   WatchAccountSnapshot? snapshot;
   String? error;
   bool busy = false;
@@ -29,14 +35,19 @@ class WatchAccountSnapshot {
     this.balance,
     this.tokens,
     this.history,
-    this.highestUsed,
-  );
+    this.highestUsed, {
+    this.pending,
+  });
   final List<String> addresses;
   final String receiveAddress;
   final int balance;
   final Map<String, int> tokens;
   final List<Map<String, dynamic>> history;
   final int highestUsed;
+
+  /// How [balance] splits into confirmed and pending, summed address by
+  /// address. Null when the node answered without a split.
+  final PendingBalance? pending;
 }
 
 /// Bound node pressure and retain submission order, including on failures.
@@ -71,6 +82,7 @@ Future<WatchAccountSnapshot> scanWatchAccount({
   var empty = 0;
   var lastUsed = highestUsed;
   var total = 0;
+  PendingBalance? pending = const PendingBalance(confirmedNano: 0);
   final addresses = <String>[];
   final transactions = <String, Map<String, dynamic>>{};
   final tokens = <String, int>{};
@@ -100,6 +112,10 @@ Future<WatchAccountSnapshot> scanWatchAccount({
         final used = rows.isNotEmpty || nano != 0 || assets.isNotEmpty;
         addresses.add(address);
         total += nano;
+        final split = PendingBalance.fromJson(funds['summary']);
+        // One address without a split leaves the account without one:
+        // a partial sum would understate what is pending.
+        pending = split == null ? null : pending?.plus(split);
         for (final asset in assets) {
           final id = asset['id'] as String;
           tokens[id] = (tokens[id] ?? 0) + (asset['amount'] as num).toInt();
@@ -128,6 +144,7 @@ Future<WatchAccountSnapshot> scanWatchAccount({
             tokens,
             sorted,
             lastUsed,
+            pending: pending,
           );
         }
       }
@@ -174,10 +191,12 @@ class WatchAccountService extends ChangeNotifier {
     accounts.clear();
     if (raw != null) {
       for (final row in jsonDecode(raw) as List) {
+        final label = row['label'];
         accounts.add(
           WatchAccount(
             row['key'] as String,
             highestUsed: row['highestUsed'] as int,
+            label: label is String && label.trim().isNotEmpty ? label : null,
           ),
         );
       }
@@ -199,6 +218,21 @@ class WatchAccountService extends ChangeNotifier {
     }
     unawaited(refresh(account));
     return true;
+  }
+
+  /// Renames [account]; an empty label clears it. Restores the previous
+  /// name when the write fails, as add and remove do.
+  Future<void> setLabel(WatchAccount account, String label) async {
+    if (!accounts.contains(account)) return;
+    final previous = account.label;
+    final trimmed = label.trim();
+    account.label = trimmed.isEmpty ? null : trimmed;
+    try {
+      await _save();
+    } catch (_) {
+      account.label = previous;
+      rethrow;
+    }
   }
 
   Future<void> remove(WatchAccount account) async {
@@ -223,6 +257,7 @@ class WatchAccountService extends ChangeNotifier {
             'kind': 'extendedPublicKey',
             'key': a.key,
             'highestUsed': a.highestUsed,
+            if (a.label != null) 'label': a.label,
           },
       ]),
     );

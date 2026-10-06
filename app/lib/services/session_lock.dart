@@ -10,6 +10,11 @@ import 'wallet_service.dart';
 /// Biometric sheets, share sheets, and the camera pause the activity. A short
 /// grace window plus an explicit suppress count keep those from wiping the
 /// in-memory handle mid-unlock.
+///
+/// Locking is all this does. Unlocking again is the user's tap on the
+/// wallet's page: because a biometric sheet itself pauses and resumes the
+/// activity, anything that prompted on resume would reopen the sheet the
+/// moment the user dismissed it (the 1.0.0-beta.1 launch loop).
 class SessionLock {
   SessionLock({
     required this.onLock,

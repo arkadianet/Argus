@@ -5,7 +5,7 @@ use std::sync::Arc;
 use citadel_core::{BlockHeight, NodeConfig, NodeError};
 use ergo_lib::ergotree_ir::chain::address::{AddressEncoder, NetworkPrefix};
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
-use ergo_node_interface::NodeInterface;
+use wallet_net::node_interface::NodeInterface;
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 

@@ -5,6 +5,10 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Release signing comes from the environment (see example.env). Debug
+// builds need none of it.
+val releaseStore: String? = System.getenv("ARGUS_KEYSTORE")
+
 android {
     namespace = "com.argus.argus_wallet"
     compileSdk = flutter.compileSdkVersion
@@ -52,7 +56,6 @@ android {
         }
     }
 
-    val releaseStore = System.getenv("ARGUS_KEYSTORE")
     signingConfigs {
         create("release") {
             if (!releaseStore.isNullOrBlank()) {
@@ -73,15 +76,29 @@ android {
 
     buildTypes {
         release {
-            require(!releaseStore.isNullOrBlank()) {
-                "Release builds require ARGUS_KEYSTORE. Copy example.env to .env and set the signing values."
-            }
             signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+}
+
+// The release build type is configured on every build, debug ones included,
+// so its keystore is required only once the task graph shows a release
+// variant is actually being assembled, packaged or bundled. A debug build
+// then needs no signing values; a release build without them stops here,
+// before anything runs, with the message below.
+gradle.taskGraph.whenReady {
+    val buildsRelease = allTasks.any { task ->
+        task.project.path == project.path &&
+            Regex("^(assemble|package|bundle)\\w*Release$").matches(task.name)
+    }
+    if (buildsRelease) {
+        require(!releaseStore.isNullOrBlank()) {
+            "Release builds require ARGUS_KEYSTORE. Copy example.env to .env and set the signing values."
         }
     }
 }

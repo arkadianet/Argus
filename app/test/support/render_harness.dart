@@ -8,11 +8,14 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-/// Renders whole screens with the app's real fonts and saves them as PNGs.
-///
-/// PNGs are written only when ARGUS_UI_RENDERS is set: `1` writes to
-/// `<repo>/ui-renders/`, any other value is taken as the directory. The
-/// directory gets a `.gitignore` of `*` so renders never get committed.
+/// Screenshots of real screens for a person to look at, written under
+/// `<repo>/ui-renders/` (never committed: the folder ignores itself). Off
+/// unless ARGUS_RENDER or ARGUS_UI_RENDERS is set, so an ordinary test run
+/// writes nothing. ARGUS_UI_RENDERS may also name another directory.
+final renderEnabled =
+    Platform.environment['ARGUS_RENDER'] != null || (Platform.environment['ARGUS_UI_RENDERS'] ?? '').isNotEmpty;
+
+const renderBoundaryKey = ValueKey('render-boundary');
 
 /// The phone the renders are drawn for, in logical pixels.
 const renderSize = Size(390, 844);
@@ -23,11 +26,15 @@ const _statusBar = 24.0;
 
 final _boundary = GlobalKey();
 
-/// Loads the fonts the app bundles (Newsreader, Karla, IBM Plex Mono and
-/// the Material icons) and Roboto from the Flutter SDK, which stands in
-/// for the phone's system fallback: the brand fonts have no ≈ or Σ.
-/// Without this the test font draws every glyph as a box.
-Future<void> loadRenderFonts() async {
+bool _fontsLoaded = false;
+
+/// The app's own fonts, plus the Material icon font, so renders show text
+/// and icons as the phone does rather than test boxes. Also loads Roboto
+/// from the Flutter SDK to stand in for the phone's system fallback: the
+/// brand fonts have no ≈ or Σ.
+Future<void> loadAppFonts() async {
+  if (_fontsLoaded) return;
+  _fontsLoaded = true;
   final manifest = json.decode(await rootBundle.loadString('FontManifest.json')) as List<dynamic>;
   for (final entry in manifest.cast<Map<String, dynamic>>()) {
     final loader = FontLoader(entry['family'] as String);
@@ -46,6 +53,9 @@ Future<void> loadRenderFonts() async {
   }
   if (any) await roboto.load();
 }
+
+/// The home screens' render tests call it by this name.
+Future<void> loadRenderFonts() => loadAppFonts();
 
 File? _sdkFont(String name) {
   final starts = <Directory>[
@@ -125,27 +135,40 @@ Future<void> pumpFullLength(
 
 /// Where renders go, or null when they weren't asked for.
 Directory? renderDirectory() {
-  final setting = Platform.environment['ARGUS_UI_RENDERS'];
-  if (setting == null || setting.isEmpty || setting == '0') return null;
-  final dir = Directory(setting == '1' || setting == 'true' ? '${Directory.current.parent.path}/ui-renders' : setting);
+  if (!renderEnabled) return null;
+  final setting = Platform.environment['ARGUS_UI_RENDERS'] ?? '';
+  final custom = setting.isNotEmpty && setting != '1' && setting != 'true' && setting != '0';
+  final dir = Directory(custom ? setting : '${Directory.current.parent.path}/ui-renders');
   dir.createSync(recursive: true);
   final ignore = File('${dir.path}/.gitignore');
-  if (!ignore.existsSync()) ignore.writeAsStringSync('# Renders from test/home_design_render_test.dart\n*\n');
+  if (!ignore.existsSync()) ignore.writeAsStringSync('# Screenshots from the render tests\n*\n');
   return dir;
 }
 
-/// Saves the current frame, modal sheets included, as [name].png; a name
-/// with slashes lands in subfolders.
-Future<void> saveRender(WidgetTester tester, String name) async {
+Future<void> _writePng(WidgetTester tester, RenderRepaintBoundary boundary, String name, double pixelRatio) async {
   final dir = renderDirectory();
   if (dir == null) return;
-  final boundary = _boundary.currentContext!.findRenderObject()! as RenderRepaintBoundary;
   await tester.runAsync(() async {
-    final image = await boundary.toImage(pixelRatio: renderPixelRatio);
+    final image = await boundary.toImage(pixelRatio: pixelRatio);
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
     image.dispose();
     final file = File('${dir.path}/$name.png');
     await file.parent.create(recursive: true);
     await file.writeAsBytes(bytes!.buffer.asUint8List());
   });
+}
+
+/// Saves the frame [pumpRender] drew, modal sheets included, as
+/// [name].png; a name with slashes lands in subfolders.
+Future<void> saveRender(WidgetTester tester, String name) async {
+  final boundary = _boundary.currentContext?.findRenderObject();
+  if (boundary is! RenderRepaintBoundary) return;
+  await _writePng(tester, boundary, name, renderPixelRatio);
+}
+
+/// Writes what [renderBoundaryKey] shows to `ui-renders/<name>.png`.
+Future<void> renderPng(WidgetTester tester, String name) async {
+  if (!renderEnabled) return;
+  final boundary = tester.renderObject<RenderRepaintBoundary>(find.byKey(renderBoundaryKey));
+  await _writePng(tester, boundary, name, 2);
 }

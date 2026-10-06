@@ -15,7 +15,7 @@ stealth = { workspace = true }
 zerojoin = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-base64 = "0.22"
+base64 = "0.23"
 thiserror = { workspace = true }
 hex = { workspace = true }
 zeroize = { workspace = true, features = ["zeroize_derive"] }
@@ -23,4 +23,6 @@ aes-gcm = { workspace = true, features = ["aes"] }
 argon2 = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
-num-bigint = { workspace = true }
+# Not the workspace num-bigint: sigma-rust's AutolykosSolution.pow_distance is a
+# num-bigint 0.4 BigUint.
+num-bigint = "0.4"

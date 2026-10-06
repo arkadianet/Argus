@@ -25,6 +25,37 @@ void main() {
     });
   });
 
+  group('which tokens a pool set trades', () {
+    test('comes from the pools, whatever encodes their reserves', () {
+      // The picker builds from this; a reserve sent as a string must not
+      // take the whole sheet down with a cast error.
+      final set = AmmPoolSet(
+        truncated: false,
+        pools: [
+          {'pool_type': 'N2T', 'erg_reserves': '5', 'token_y': {'token_id': 'y1', 'amount': '7'}},
+          {
+            'pool_type': 'T2T',
+            'token_x': {'token_id': 'x2', 'amount': 1},
+            'token_y': {'token_id': 'y1', 'amount': 2},
+          },
+        ],
+        tokens: const {},
+      );
+      expect(set.tokenIds, {'y1', 'x2'});
+      expect(poolTokenIds(set.pools[1]), ['x2', 'y1']);
+    });
+
+    test('resolution order follows pool depth, deepest first', () {
+      final ids = poolTokenIdsByDepth([
+        {'erg_reserves': 10, 'token_y': {'token_id': 'shallow', 'amount': 1}},
+        {'token_x': {'token_id': 'tx', 'amount': 1}, 'token_y': {'token_id': 'ty', 'amount': 1}},
+        {'erg_reserves': 1000, 'token_y': {'token_id': 'deep', 'amount': 1}},
+        {'erg_reserves': '500', 'token_y': {'token_id': 'mid', 'amount': 1}},
+      ]);
+      expect(ids, ['deep', 'mid', 'shallow', 'tx', 'ty']);
+    });
+  });
+
   group('AmmPoolSet.fromJson', () {
     test('surfaces truncation so a missing pool is explainable', () {
       final set = AmmPoolSet.fromJson({

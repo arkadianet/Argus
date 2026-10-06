@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/public_wallet_sync.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
-import 'package:argus_wallet/ui/wallets_overview_screen.dart';
+import 'package:argus_wallet/services/network_controller.dart';
+import 'package:argus_wallet/ui/dashboard_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -41,9 +42,11 @@ void main() {
         null,
       );
     });
+    networkController.probing = true;
+    addTearDown(() => networkController.probing = false);
     await tester.pumpWidget(
       MaterialApp(
-        home: WalletOverviewScreen(initializeWalletService: () async {}),
+        home: DashboardScreen(initializeWalletService: () async {}),
       ),
     );
     await tester.pumpAndSettle();

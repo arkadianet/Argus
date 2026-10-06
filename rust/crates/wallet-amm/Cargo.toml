@@ -1,0 +1,17 @@
+[package]
+name = "wallet-amm"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Argus-owned Spectrum pool math, pool graph, on-chain prices and circular-arbitrage sizing: pure, no network, no keys"
+
+# Deliberately no vendored crate and no ergo-lib: everything here is
+# arithmetic over pool reserves, so it compiles and tests on its own and
+# the later de-vendoring pass can build the transaction side on top of it.
+[dependencies]
+serde = { workspace = true }
+num-bigint = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

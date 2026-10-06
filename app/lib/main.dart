@@ -10,13 +10,16 @@ import 'services/network_controller.dart';
 import 'services/privacy_service.dart';
 import 'services/token_pricer.dart';
 import 'services/session_lock.dart';
+import 'services/spend_policy.dart';
 import 'services/stealth_service.dart';
+import 'services/update_service.dart';
 import 'services/watch_only_service.dart';
 import 'services/wallet_service.dart';
 import 'services/wallet_sync_controller.dart';
 import 'theme/argus_theme.dart';
 import 'theme/theme_controller.dart';
 import 'ui/ageusd_screen.dart';
+import 'ui/arbitrage_screen.dart';
 import 'ui/contacts_screen.dart';
 import 'ui/create_wallet_screen.dart';
 import 'ui/dashboard_screen.dart';
@@ -54,6 +57,7 @@ Future<void> main() async {
     watchOnlyService.load().catchError((_) {}),
     watchAccountService.load().catchError((_) {}),
     privacyService.load().catchError((_) {}),
+    spendPolicy.load().catchError((_) {}),
     previewSettings.load().catchError((_) {}),
     stealthService.load().catchError((_) {}),
     tokenPricer.load().catchError((_) {}),
@@ -61,6 +65,8 @@ Future<void> main() async {
   networkController.priceRefresher = tokenPricer.refresh;
   await MixBackground.init();
   runApp(const ArgusApp());
+  // Off until the user turns it on in About; then at most one request a day.
+  updateService.checkOnStart().catchError((_) {});
 }
 
 class ArgusApp extends StatefulWidget {
@@ -143,6 +149,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/contacts' => const ContactsScreen(),
               '/tx' => const TransactionDetailScreen(),
               '/utxos' => const UtxoManagementScreen(),
+              UtxoManagementScreen.cleanupRoute => const UtxoManagementScreen(openCleanup: true),
               '/stakes' => const StakeRecoveryScreen(),
               '/tokens' => const TokenToolsScreen(),
               '/discover' => const DiscoverScreen(),
@@ -155,6 +162,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/dexy' => const DexyScreen(),
               '/ageusd' => const AgeUsdScreen(),
               '/swap' => const SwapHubScreen(),
+              '/arbitrage' => const ArbitrageScreen(),
               _ => null,
             };
             if (page == null) return null;

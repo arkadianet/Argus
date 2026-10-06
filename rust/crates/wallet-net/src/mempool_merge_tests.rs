@@ -22,16 +22,29 @@ fn pair(boxes: Vec<ErgoBox>) -> Pair {
     (boxes, inputs)
 }
 
-// Independent pre-change nonempty-mempool path, including discarded conversion.
+fn single(confirmed: Pair, txs: &[serde_json::Value]) -> Pair {
+    let read = AddressRead {
+        tree: TREE.to_string(),
+        confirmed,
+        mempool: txs.to_vec(),
+    };
+    let s = spendable_across(vec![read], true);
+    (s.boxes, s.inputs)
+}
+
+// Independent reference: the pre-wallet-level single-address merge, with
+// discarded conversion, keeping only the first copy of a box id.
 fn old(confirmed_boxes: Pair, txs: &[serde_json::Value], tree: &str) -> Pair {
     let spent = spent_box_ids(txs);
     let (confirmed, _) = confirmed_boxes;
+    let mut seen = std::collections::HashSet::new();
     let mut boxes: Vec<ErgoBox> = confirmed
         .into_iter()
         .filter(|b| !spent.contains(&b.box_id().to_string()))
+        .filter(|b| seen.insert(b.box_id().to_string()))
         .collect();
     for b in owned_outputs(txs, tree) {
-        if !spent.contains(&b.box_id().to_string()) {
+        if !spent.contains(&b.box_id().to_string()) && seen.insert(b.box_id().to_string()) {
             boxes.push(b);
         }
     }
@@ -53,16 +66,19 @@ fn merge_matches_old_tuple_bytes() {
         vec![
             serde_json::json!({"inputs": confirmed.iter().map(|b| serde_json::json!({"boxId": b.box_id().to_string()})).collect::<Vec<_>>()}),
         ],
+        // Two transactions need two ids: the union keeps one per id. The
+        // outputs carry their own transaction id, so parsing does not
+        // depend on the wrapper's.
         vec![
             serde_json::json!({"id": "91".repeat(32), "inputs": [{"boxId": confirmed[0].box_id().to_string()}], "outputs": [pending, confirmed[1]]}),
-            serde_json::json!({"id": "91".repeat(32), "inputs": [{"boxId": pending.box_id().to_string()}], "outputs": [final_output, {"ergoTree": TREE}, {"ergoTree": "00"}]}),
+            serde_json::json!({"id": "92".repeat(32), "inputs": [{"boxId": pending.box_id().to_string()}], "outputs": [final_output, {"ergoTree": TREE}, {"ergoTree": "00"}]}),
             serde_json::json!({"outputs": [final_output]}),
         ],
     ];
     for boxes in [vec![], confirmed] {
         for txs in &cases {
             let before = old(pair(boxes.clone()), txs, TREE);
-            let after = merge_confirmed(pair(boxes.clone()), txs, TREE);
+            let after = single(pair(boxes.clone()), txs);
             assert_eq!(
                 serde_json::to_vec(&before).unwrap(),
                 serde_json::to_vec(&after).unwrap()
@@ -81,7 +97,7 @@ fn mempool_merge_benchmark() {
         ];
         assert_eq!(
             serde_json::to_vec(&old(pair(boxes.clone()), &txs, TREE)).unwrap(),
-            serde_json::to_vec(&merge_confirmed(pair(boxes.clone()), &txs, TREE)).unwrap()
+            serde_json::to_vec(&single(pair(boxes.clone()), &txs)).unwrap()
         );
         for trial in 0..3 {
             let mut times = [0.0; 2];
@@ -92,7 +108,7 @@ fn mempool_merge_benchmark() {
                 let result = if which == 0 {
                     old(confirmed, &txs, TREE)
                 } else {
-                    merge_confirmed(confirmed, &txs, TREE)
+                    single(confirmed, &txs)
                 };
                 times[which] = start.elapsed().as_secs_f64() * 1000.0;
                 black_box(result);

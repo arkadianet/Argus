@@ -2,7 +2,7 @@
 //!
 //! Detects whether the node has extraIndex enabled and its sync status.
 
-use ergo_node_interface::NodeInterface;
+use wallet_net::node_interface::NodeInterface;
 use serde::{Deserialize, Serialize};
 
 /// Capability tier based on node features

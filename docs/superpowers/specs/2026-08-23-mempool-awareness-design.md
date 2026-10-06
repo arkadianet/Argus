@@ -1,7 +1,111 @@
 # Mempool Awareness — Design
 
 Date: 2026-08-23
-Status: approved, pending implementation plan
+Status: implemented (see *Status, 2026-10-06* below); three decisions changed
+
+## Status, 2026-10-06
+
+### Audit of the design against the code at 1.0.0-beta.1
+
+| Part | Before this round | Gap found |
+|---|---|---|
+| 1. Activity | Done for the unlocked wallet: `get_pending_transactions` and the `pending` rows of `get_sync_inputs`, deduplicated by id in Rust and in `mergePending`. Watched accounts get them through `TransactionsScreen` → `loadHistory`. | Locked / non-active wallets (the public snapshot) showed confirmed history only. Watched addresses have no activity view at all. |
+| 2. Balance | Done as one mempool-aware figure per address (`balance_from_inputs`), summed in Dart. | Summing per address double-counts a chain of spends across two of the wallet's addresses (see 3a). No confirmed / pending split anywhere. |
+| 3a. Spent boxes | `get_effective_unspent` per address, used by every Rust spend through `gather_unspent`. | **Not safe.** (1) The node lists a mempool transaction under a script only for outputs and *confirmed* inputs, so a spend of unconfirmed change shows under the next address, not the one holding the change; merged per address, that change stayed spendable. (2) A spend paying none of the wallet's addresses is never listed. (3) Any mempool failure — including an HTTP error, which parsed as an empty mempool — silently offered every spent box. (4) Only the first 100 transactions were read. (5) Dart's own box listing (coin control, UTXO tools, mix funding finder) read the node directly and ignored the mempool entirely. (6) Stealth boxes (explorer) and transactions built by dApps / ErgoPay were not checked. |
+| 3b. Unconfirmed outputs | Done, unconditionally (always 0-conf). | No way to wait for confirmations. |
+| 4. Polling | Done in `dashboard_screen.dart`: 20 s, 5 s while something is pending, paused when backgrounded except for a 10-minute window that lets incoming payments be announced. | — |
+
+### What is built now
+
+- **One choke point.** `api::mempool::gather_spendable` (wallet-ffi) is where
+  every wallet spend gathers inputs; `gather_unspent`, `gather_unspent_all`
+  and `gather_wallet_boxes` all go through it. It reads each address
+  (confirmed pages, then the *complete* mempool list — paged past 100, and
+  read again until two passes agree, since a live mempool can reorder
+  between pages) and merges them in `wallet_net::mempool::spendable_across`:
+  spent is judged over the **union** of every address's mempool list, and
+  every unconfirmed output — offered, or held back while waiting — is
+  checked by id against `/transactions/unconfirmed/inputs/byBoxId/{id}` (a
+  pending spend paying elsewhere; only an answer naming the box counts). A
+  box a pending transaction spends is never offered.
+- **The setting.** Settings → Security → *Spend unconfirmed funds*
+  (`SpendPolicy`, default **on** — `defaultSpendUnconfirmed`). Off, incoming
+  funds and the wallet's own change wait for one confirmation; on, they can
+  be spent at once. Rust holds it (`set_spend_unconfirmed`); the app hands it
+  over in `WalletService.init` and on every change. While waiting, the
+  outputs left out are remembered per wallet by the spends' gathering, and a
+  builder's shortfall becomes "2.5 ERG is still confirming …" when those
+  funds would have covered it (`explain_shortfall`) — not for hand-picked
+  inputs, which the held-back boxes were never among.
+- **Built elsewhere.** `dapp_prepare_sign` and `describe_reduced_transaction`
+  (ErgoPay) refuse a transaction spending a box a pending transaction already
+  spends, and — while waiting — the wallet's own unconfirmed boxes.
+  `send_erg` and `sign_preparation` check stealth inputs by id just before
+  broadcast or export-signing, so the node learns which stealth boxes are
+  ours no earlier than the user commits. `dapp_utxos` follows the setting
+  and marks unconfirmed boxes.
+- **Listing.** `list_spendable_boxes` gives coin control and the UTXO tools
+  the same view, each box carrying `confirmed`; the mix funding finder asks
+  for confirmed boxes only, since a mix entry waits for its funding box.
+- **Balance.** `get_sync_inputs` and the new sequential `get_public_sync_inputs`
+  return a wallet-wide `summary` (confirmed, pending in, pending out, per
+  token), valued once over the union — as is each address's own figure —
+  and a UTXO count of what the wallet holds once pending settles;
+  `get_balance` returns the same split for one address. The sync controller
+  exposes it as `pending` (`PendingBalance`), takes the balance from it,
+  drops a broadcast of its own once the node lists it (no double count),
+  persists the split with the snapshot and restores it on unlock and wallet
+  switch; the public refresh of locked wallets stores it with pending
+  activity rows.
+- **Display.** `PendingBalanceLine` ("+2.5 ERG pending · 105.21 confirmed")
+  on the Assets screen and, since the home screen became an overview of
+  every wallet (roadmap/structure), under the overview total, on every
+  overview row, and under the balance of each wallet page, seed or watched.
+  The unlocked wallet's split is the sync controller's `pending`; another
+  seed wallet's is the one saved with its snapshot (`lastKnownPending`); a
+  watched address's is its `get_balance` `summary`; a watched account's is
+  its scan's sum. The line splits the figure it sits under
+  (`PendingBalance.under`): stealth and mixing pockets, and the other
+  wallets in the total, are in blocks, so they count as confirmed.
+
+### Decisions changed
+
+- **Spending fails closed on a mempool error** (was: degrade to confirmed
+  only, never a send failure). Offering a box a pending transaction spends is
+  a double spend the node rejects — or accepts in place of the first payment.
+  If the mempool cannot be read whole, the spend fails with "Could not check
+  pending transactions" and can be retried. *Display* still degrades to the
+  confirmed view.
+- **The balance is shown with its split** (was: one mempool-aware number).
+  The number is unchanged; a line beside it says what is pending and what is
+  confirmed.
+- **Spending unconfirmed funds is a setting** (was: always on). Default on.
+
+### Not done
+
+- A locked wallet's pending line is as old as its snapshot (the row says
+  "as of …"); it is read again only by the public refresh.
+- Watched accounts sum per-address splits, so a chain of spends across two of
+  their addresses can count the middle box twice in the pending line (their
+  history screen is valued correctly). Read once across the account to fix.
+- The offline cold signer cannot see the mempool; the request it signs was
+  gathered under these rules on the watching device.
+- The "still confirming" wording is applied where each spend path maps its
+  funding errors (about twenty sites in `api.rs`), from a per-wallet record
+  the spends' gathering keeps. A new spend path has to wrap its errors the
+  same way; carrying the held-back figures out of the gathering in a typed
+  error would remove both the duplication and the record.
+- Stealth funds are confirmed only (the explorer lists confirmed boxes), so
+  unconfirmed stealth receipts are never offered under either setting.
+- No transaction in the app is built and broadcast as a chain on its own
+  outputs through the gathering; the AMM pool bootstrap → create and the mix
+  funding → entry each wait for their first step to confirm, as before. The
+  arbitrage chain (roadmap/pricing) is built on its own outputs outside the
+  gathering: its first leg is funded through `gather_spendable`, its later
+  legs spend the previous leg's payout whatever the setting, and the sale
+  back of a stranded token gathers that token's box like any spend, so it
+  waits for its confirmation while the wallet does (see the pricing and
+  arbitrage design, *Pending transactions*).
 
 ## Goal
 
@@ -67,6 +171,11 @@ mempool must never break the confirmed view. `get_effective_utxos` already
 models this — it logs a warning and returns confirmed UTXOs — and that behaviour
 is the rule for all four consumers.
 
+*Changed 2026-10-06:* for the three display consumers only. Spending fails
+closed instead — see *Decisions changed* above. The 100-transaction cap is
+now paged past, up to 1,000 per script; past that a spend fails rather than
+trusting a partial list.
+
 ## 1. Activity list
 
 A new FFI call returns unconfirmed transactions for the wallet's addresses,
@@ -112,6 +221,8 @@ them are examined. Iterating transaction-by-transaction and applying deltas as
 it goes will get this wrong.
 
 A single mempool-aware number is shown rather than a confirmed/pending split.
+*(Changed 2026-10-06: the number stays, and a line beside it shows the
+pending movement and the confirmed figure.)*
 
 ## 3. Spendable UTXOs
 
@@ -186,10 +297,10 @@ accepted, and can be dropped for unconditional polling.
 
 | Case | Behaviour |
 |---|---|
-| Mempool query fails | Warn, fall back to confirmed-only. Never surfaced as a send failure. |
+| Mempool query fails | Display: warn, fall back to confirmed-only. Spending: fail with a retryable error (changed 2026-10-06; it used to fall back too). |
 | Mempool output will not deserialise | Skip that box, keep the rest. Never abort the whole UTXO set. |
 | Parent dropped, child invalid | Node rejects on broadcast; surface the node error rather than pre-empting it. |
-| Node lacks the endpoint | Same as a failed query — confirmed-only. |
+| Node lacks the endpoint | Same as a failed query. A node without `inputs/byBoxId` answers 404, which reads as "not spent": the address lists still catch every spend that touches the wallet. |
 
 ## Testing
 
