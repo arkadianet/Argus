@@ -47,9 +47,10 @@ pub fn spend_unconfirmed() -> bool {
 /// Read `addresses` for spending and merge them across the wallet: every
 /// address's confirmed pages then its complete mempool list, ownership
 /// checked as each is admitted (see `gather_unspent_ordered`). Unconfirmed
-/// boxes are offered only when `allow_unconfirmed`, and each one is first
-/// checked against the mempool by id — the address lists cannot show a
-/// pending spend that pays none of the wallet's addresses.
+/// boxes are offered only when `allow_unconfirmed`, and each one — offered
+/// or held back — is first checked against the mempool by id: the address
+/// lists cannot show a pending spend that pays none of the wallet's
+/// addresses.
 pub(crate) async fn read_spendable(
     handle_id: u64,
     client: &ErgoNodeClient,
@@ -69,15 +70,16 @@ pub(crate) async fn read_spendable(
     )
     .await?;
     let mut spendable = wallet_net::mempool::spendable_across(reads, allow_unconfirmed);
-    if allow_unconfirmed {
-        client.drop_spent_unconfirmed(&mut spendable).await;
-    }
+    client
+        .drop_spent_unconfirmed(&mut spendable, GATHER_ADDRESS_CONCURRENCY)
+        .await;
     Ok(spendable)
 }
 
 /// The wallet's spendable boxes under the user's policy: the one place every
 /// wallet spend gathers its inputs. What waiting held back is remembered for
-/// [`explain_shortfall`].
+/// [`explain_shortfall`]; only spends record it, so a listing a page polls
+/// cannot replace the figures between a spend's gathering and its error.
 pub(crate) async fn gather_spendable(
     handle_id: u64,
     client: &ErgoNodeClient,
@@ -99,11 +101,10 @@ pub(crate) async fn gather_watched(
     for address in addresses.iter().filter(|a| !a.is_empty()) {
         reads.push(client.read_for_spending(address).await?);
     }
-    let allow = spend_unconfirmed();
-    let mut spendable = wallet_net::mempool::spendable_across(reads, allow);
-    if allow {
-        client.drop_spent_unconfirmed(&mut spendable).await;
-    }
+    let mut spendable = wallet_net::mempool::spendable_across(reads, spend_unconfirmed());
+    client
+        .drop_spent_unconfirmed(&mut spendable, GATHER_ADDRESS_CONCURRENCY)
+        .await;
     Ok(spendable)
 }
 
@@ -216,6 +217,17 @@ pub(crate) fn explain_shortfall(handle_id: u64, error: String) -> String {
     explain_with(&held, error)
 }
 
+/// [`explain_shortfall`], unless the user picked the inputs by hand: boxes
+/// that waiting left out were never among those to choose from, so allowing
+/// unconfirmed spending would not help that choice.
+pub(crate) fn explain_for(handle_id: u64, hand_picked: bool, error: String) -> String {
+    if hand_picked {
+        error
+    } else {
+        explain_shortfall(handle_id, error)
+    }
+}
+
 /// A builder's or selector's failure as the app's error, explained when the
 /// wallet's waiting for confirmations is what left it short.
 pub(crate) fn shortfall_error(handle_id: u64, error: impl std::fmt::Display) -> String {
@@ -297,8 +309,9 @@ fn explain_with(held: &HeldBack, error: String) -> String {
     }
 }
 
-/// The first whole number after any of `keywords` in `text`, skipping
-/// spaces, colons and a currency word, as in "need 5", "have: 3".
+/// The first whole number after the earliest of `keywords` in `text`,
+/// skipping the rest of the keyword's word, spaces and colons, as in
+/// "need 5", "needs 9", "have: 3".
 fn number_after(text: &str, keywords: &[&str]) -> Option<u64> {
     let start = keywords
         .iter()
@@ -351,16 +364,30 @@ pub(crate) async fn check_external_inputs(
         ))
         .to_json_string()
     };
-    let mut confirming = 0u64;
-    for id in input_ids {
-        let status = if allow {
-            match client.mempool_spends(id).await.map_err(unreadable)? {
-                true => BoxStatus::SpentInMempool,
-                false => BoxStatus::Confirmed,
+    // Allowed to spend unconfirmed boxes, only a pending spend matters, so
+    // one lookup per input will do; confirmed or not is not asked.
+    let look_up = |id: &String| {
+        let id = id.clone();
+        async move {
+            if allow {
+                client.mempool_spends(&id).await.map(|spent| match spent {
+                    true => BoxStatus::SpentInMempool,
+                    false => BoxStatus::Confirmed,
+                })
+            } else {
+                client.box_status(&id).await
             }
-        } else {
-            client.box_status(id).await.map_err(unreadable)?
-        };
+        }
+    };
+    let mut statuses = Vec::with_capacity(input_ids.len());
+    for chunk in input_ids.chunks(GATHER_ADDRESS_CONCURRENCY) {
+        let answers = futures::future::join_all(chunk.iter().map(look_up)).await;
+        for (id, answer) in chunk.iter().zip(answers) {
+            statuses.push((id, answer.map_err(unreadable)?));
+        }
+    }
+    let mut confirming = 0u64;
+    for (id, status) in statuses {
         match status {
             BoxStatus::SpentInMempool => {
                 return Err(ArgusError::TxBuildFailed(format!(
@@ -463,7 +490,7 @@ pub(crate) async fn sync_inputs_together(client: &ErgoNodeClient, addresses: &[S
     let reads =
         futures::future::join_all(addresses.iter().map(|address| sync_read(client, address)))
             .await;
-    sync_inputs_json(client, reads).await
+    sync_inputs_json(client, reads, GATHER_ADDRESS_CONCURRENCY).await
 }
 
 async fn mempool_or_nothing(client: &ErgoNodeClient, address: &str) -> Vec<serde_json::Value> {
@@ -501,14 +528,19 @@ async fn sync_read_in_turn(client: &ErgoNodeClient, address: &str) -> SyncRead {
 /// pending activity rows, the UTXO count, the wallet-wide pending summary,
 /// and the node that answered.
 ///
-/// The summary is valued once over the union of every address's mempool
-/// list, so a payment between two of the wallet's addresses or a chain of
-/// spends across them nets correctly, which per-address balances summed
-/// cannot. Like the rows, it is null when any confirmed listing failed: a
+/// Everything is valued over the union of every address's mempool list —
+/// each address's own figure too — so a payment between two of the
+/// wallet's addresses or a chain of spends across them nets correctly. Like
+/// the rows, the summary is null when any confirmed listing failed: a
 /// missing listing hides spent inputs. Unconfirmed outputs that a pending
 /// transaction paying elsewhere already spends are found by id, a few at
-/// most per sync; a lookup that fails leaves the output counted.
-async fn sync_inputs_json(client: &ErgoNodeClient, reads: Vec<SyncRead>) -> String {
+/// most per sync and `concurrency` at a time; a lookup that fails leaves
+/// the output counted.
+async fn sync_inputs_json(
+    client: &ErgoNodeClient,
+    reads: Vec<SyncRead>,
+    concurrency: usize,
+) -> String {
     let union = wallet_net::mempool::unique_transactions(reads.iter().map(|r| r.txs.as_slice()));
     let mut trees = HashSet::new();
     let mut confirmed: Vec<ErgoBox> = Vec::new();
@@ -522,20 +554,18 @@ async fn sync_inputs_json(client: &ErgoNodeClient, reads: Vec<SyncRead>) -> Stri
             Err(_) => complete = false,
         }
     }
-    let markers = spent_elsewhere(client, &union, &trees, &confirmed).await;
+    let markers = spent_elsewhere(client, &union, &trees, &confirmed, concurrency).await;
+    let valued: Vec<serde_json::Value> = union.iter().chain(markers.iter()).cloned().collect();
 
     let mut balances = serde_json::Map::new();
     for read in &reads {
         if let Ok(boxes) = &read.boxes {
-            let txs: Vec<serde_json::Value> =
-                read.txs.iter().chain(markers.iter()).cloned().collect();
             balances.insert(
                 read.address.clone(),
-                super::balance_from_inputs(&read.address, boxes, &txs),
+                super::balance_from_inputs(&read.address, boxes, &valued),
             );
         }
     }
-    let valued: Vec<serde_json::Value> = union.iter().chain(markers.iter()).cloned().collect();
     let mut values = HashMap::new();
     let mut ids = HashSet::new();
     for b in &confirmed {
@@ -547,7 +577,9 @@ async fn sync_inputs_json(client: &ErgoNodeClient, reads: Vec<SyncRead>) -> Stri
         // A missing listing can hide a spent input from any transaction.
         // Null means unavailable; an empty array would claim no pending activity.
         "pending": if complete { Some(super::pending_from_inputs(&union, &trees, &values)) } else { None },
-        "utxo_count": if complete { Some(ids.len()) } else { None },
+        // The boxes the wallet holds once what is pending settles, so the
+        // count agrees with the boxes the UTXO tools list.
+        "utxo_count": if complete { Some(settled_box_count(&ids, &valued, &trees)) } else { None },
         "summary": if complete {
             Some(wallet_net::mempool::pending_summary(&confirmed, &valued, &trees).to_json())
         } else {
@@ -562,6 +594,34 @@ async fn sync_inputs_json(client: &ErgoNodeClient, reads: Vec<SyncRead>) -> Stri
     .to_string()
 }
 
+/// The set's unconfirmed outputs nothing pending spends (as far as `txs`
+/// say), by id.
+fn arriving_ids(
+    txs: &[serde_json::Value],
+    trees: &HashSet<String>,
+    confirmed_ids: &HashSet<String>,
+) -> HashSet<String> {
+    let spent = wallet_net::mempool::spent_box_ids(txs);
+    txs.iter()
+        .flat_map(|tx| tx["outputs"].as_array().cloned().unwrap_or_default())
+        .filter(|o| o["ergoTree"].as_str().is_some_and(|t| trees.contains(t)))
+        .filter_map(|o| o["boxId"].as_str().map(str::to_string))
+        .filter(|id| !spent.contains(id) && !confirmed_ids.contains(id))
+        .collect()
+}
+
+/// Confirmed boxes nothing pending spends, plus the outputs pending
+/// transactions leave the set.
+fn settled_box_count(
+    confirmed_ids: &HashSet<String>,
+    txs: &[serde_json::Value],
+    trees: &HashSet<String>,
+) -> usize {
+    let spent = wallet_net::mempool::spent_box_ids(txs);
+    confirmed_ids.iter().filter(|id| !spent.contains(*id)).count()
+        + arriving_ids(txs, trees, confirmed_ids).len()
+}
+
 /// Id-less marker transactions spending the set's unconfirmed outputs that a
 /// pending transaction already spends without paying the set, so the
 /// valuation does not count them as arriving.
@@ -570,28 +630,21 @@ async fn spent_elsewhere(
     union: &[serde_json::Value],
     trees: &HashSet<String>,
     confirmed: &[ErgoBox],
+    concurrency: usize,
 ) -> Vec<serde_json::Value> {
-    let spent = wallet_net::mempool::spent_box_ids(union);
     let confirmed: HashSet<String> = confirmed.iter().map(|b| b.box_id().to_string()).collect();
-    let mut candidates: Vec<String> = union
-        .iter()
-        .flat_map(|tx| tx["outputs"].as_array().cloned().unwrap_or_default())
-        .filter(|o| o["ergoTree"].as_str().is_some_and(|t| trees.contains(t)))
-        .filter_map(|o| o["boxId"].as_str().map(str::to_string))
-        .filter(|id| !spent.contains(id) && !confirmed.contains(id))
-        .collect();
-    candidates.sort();
-    candidates.dedup();
-    let mut markers = Vec::new();
-    for id in candidates
+    let candidates: Vec<String> = arriving_ids(union, trees, &confirmed).into_iter().collect();
+    let answers = client.mempool_spends_each(candidates, concurrency).await;
+    let mut spent: Vec<String> = answers
         .into_iter()
-        .take(wallet_net::client::UNCONFIRMED_CHECKS)
-    {
-        if matches!(client.mempool_spends(&id).await, Ok(true)) {
-            markers.push(serde_json::json!({ "inputs": [{ "boxId": id }] }));
-        }
-    }
-    markers
+        .filter(|(_, answer)| matches!(answer, Ok(true)))
+        .map(|(id, _)| id)
+        .collect();
+    spent.sort();
+    spent
+        .into_iter()
+        .map(|id| serde_json::json!({ "inputs": [{ "boxId": id }] }))
+        .collect()
 }
 
 /// Balances, pending activity and the pending summary for a wallet this
@@ -610,7 +663,7 @@ pub async fn get_public_sync_inputs(
             reads.push(sync_read_in_turn(&client, &address).await);
         }
     }
-    Ok(sync_inputs_json(&client, reads).await)
+    Ok(sync_inputs_json(&client, reads, 1).await)
 }
 
 #[cfg(test)]

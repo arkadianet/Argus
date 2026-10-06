@@ -584,6 +584,84 @@ async fn waiting_explains_an_empty_wallet_in_multi_send_and_the_utxo_tools() {
     assert!(message(&error).starts_with("0.6989 ERG is still confirming"), "{error}");
 }
 
+#[tokio::test]
+async fn hand_picked_inputs_are_not_told_to_wait() {
+    let _policy = policy(false);
+    let w = Sent::new(21);
+    let node = Node::start(w.chain.clone());
+    // The user chose the free box alone; the confirming change was never
+    // among the boxes to choose from, so waiting would not help this send.
+    let error = super::super::prepare_send(
+        w.handle,
+        w.address.clone(),
+        vec![w.address.clone()],
+        w.address.clone(),
+        w.foreign.clone(),
+        500_000_000,
+        None,
+        None,
+        Some(node.url.clone()),
+        None,
+        Some(vec![Sent::id(&w.free)]),
+        None,
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(!message(&error).contains("still confirming"), "{error}");
+}
+
+#[tokio::test]
+async fn waiting_never_promises_change_already_forwarded() {
+    let _policy = policy(false);
+    let mut w = Sent::new(22);
+    // The change was forwarded whole to someone else by a second pending
+    // transaction that no list of the wallet's shows.
+    let onward = boxed(&address_to_ergo_tree(&w.foreign).unwrap(), &tx_id(7), 0, 697_800_000);
+    let forward = pending_tx(&tx_id(7), &[&w.change], &[&onward]);
+    w.chain.spent_in_mempool.insert(Sent::id(&w.change));
+    w.chain
+        .listed
+        .entry(address_to_ergo_tree(&w.foreign).unwrap())
+        .or_default()
+        .push(forward);
+    let node = Node::start(w.chain.clone());
+    let error = send(&w, &node, 500_000_000).await.unwrap_err();
+    assert!(!message(&error).contains("still confirming"), "{error}");
+}
+
+#[tokio::test]
+async fn each_address_is_valued_over_the_whole_wallet() {
+    let handle = register_handle(WalletHandle::restore_from_seed(&[23; 64]).unwrap());
+    let address = |i| with_handle(handle, "test", |h| h.derive_address(i).map_err(err_str)).unwrap();
+    let (a, b) = (address(0), address(1));
+    let (tree_a, tree_b) = (address_to_ergo_tree(&a).unwrap(), address_to_ergo_tree(&b).unwrap());
+    // A pays B (pending); B's unconfirmed box is spent back to A (pending).
+    // The node lists the second transaction under A only.
+    let root = boxed(&tree_a, &tx_id(1), 0, 5 * ERG);
+    let middle = boxed(&tree_b, &tx_id(8), 0, 4_998_900_000);
+    let end = boxed(&tree_a, &tx_id(9), 0, 4_997_800_000);
+    let mut chain = Chain::default();
+    chain.unspent.insert(a.clone(), vec![root.clone()]);
+    chain.pend(&pending_tx(&tx_id(8), &[&root], &[&middle]));
+    chain.pend(&pending_tx(&tx_id(9), &[&middle], &[&end]));
+    assert!(!chain.listed[&tree_b].iter().any(|t| t["id"] == tx_id(9).as_str()));
+    let node = Node::start(chain);
+
+    let sync: serde_json::Value = serde_json::from_str(
+        &super::super::get_sync_inputs(vec![a.clone(), b.clone()], Some(node.url.clone()))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(sync["balances"][&b]["balance_nano_erg"], 0, "the middle box is spent");
+    assert_eq!(sync["balances"][&a]["balance_nano_erg"], 4_997_800_000u64);
+    assert_eq!(sync["summary"]["balance_nano_erg"], 4_997_800_000u64);
+    // Once it settles the wallet holds one box: the end of the chain.
+    assert_eq!(sync["utxo_count"], 1);
+    let _ = wallet_lock(handle);
+}
+
 // ─── What the sync shows ─────────────────────────────────────────────────
 
 #[tokio::test]

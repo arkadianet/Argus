@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `check_external_inputs`, `check_stealth_inputs`, `erg_text`, `explain_held`, `explain_shortfall`, `explain_with`, `forget_held_back`, `gather_spendable`, `gather_watched`, `held_back_of`, `is_empty`, `listing_json`, `mempool_or_nothing`, `nothing`, `number_after`, `owned_tree`, `read_spendable`, `record_held_back`, `shortfall_error`, `spent_elsewhere`, `sync_inputs_json`, `sync_inputs_together`, `sync_read_in_turn`, `sync_read`, `token_in`
+// These functions are ignored because they are not marked as `pub`: `arriving_ids`, `check_external_inputs`, `check_stealth_inputs`, `erg_text`, `explain_for`, `explain_held`, `explain_shortfall`, `explain_with`, `forget_held_back`, `gather_spendable`, `gather_watched`, `held_back_of`, `is_empty`, `listing_json`, `mempool_or_nothing`, `nothing`, `number_after`, `owned_tree`, `read_spendable`, `record_held_back`, `settled_box_count`, `shortfall_error`, `spent_elsewhere`, `sync_inputs_json`, `sync_inputs_together`, `sync_read_in_turn`, `sync_read`, `token_in`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `HeldBack`, `SyncRead`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `eq`, `fmt`
 

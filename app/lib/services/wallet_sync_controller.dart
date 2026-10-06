@@ -100,6 +100,10 @@ abstract interface class WalletSyncPendingRead {
   /// Null when a confirmed listing failed: a missing listing hides spent
   /// inputs, so nothing pending can be valued.
   Future<PendingBalance?> pending();
+
+  /// Ids of the pending transactions the node listed in this read. A
+  /// broadcast of this app's among them is already in the node's figures.
+  Future<Set<String>> pendingIds();
 }
 
 class _LiveSyncRead implements WalletSyncRead, WalletSyncPendingRead {
@@ -147,6 +151,12 @@ class _LiveSyncRead implements WalletSyncRead, WalletSyncPendingRead {
   @override
   Future<PendingBalance?> pending() async =>
       PendingBalance.fromJson((await _inputs)['summary']);
+
+  @override
+  Future<Set<String>> pendingIds() async => {
+    for (final row in ((await _inputs)['pending'] as List? ?? const []))
+      if (row is Map && row['tx_id'] is String) row['tx_id'] as String,
+  };
 
   @override
   Future<String?> servedBy() async {
@@ -880,6 +890,11 @@ class WalletSyncController extends ChangeNotifier {
             (Object _) => null,
           )
         : Future<PendingBalance?>.value();
+    final listedFuture = read is WalletSyncPendingRead
+        ? (read as WalletSyncPendingRead).pendingIds().catchError(
+            (Object _) => <String>{},
+          )
+        : Future<Set<String>>.value(const {});
     final historyFuture = _fetchHistory(addresses, read);
     final countFuture = (read?.count() ?? _gw.countUnspentBoxes(addresses))
         .catchError((_) => utxoCount);
@@ -890,8 +905,12 @@ class WalletSyncController extends ChangeNotifier {
 
     final balances = await balancesFuture;
     final summary = await pendingFuture;
+    final listed = await listedFuture;
     if (!_current(generation, walletId)) return;
     final failed = balances.failed;
+    // A broadcast the node now lists as pending is in its figures already;
+    // carrying the delta too would count it twice until history caught up.
+    _broadcasts.removeWhere((id, _) => listed.contains(id));
     // The wallet-wide valuation wins over the per-address sum whenever the
     // node could make it; it is null exactly when a listing failed.
     final nodeErg = summary?.netNano ?? balances.erg;

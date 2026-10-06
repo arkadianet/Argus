@@ -23,10 +23,13 @@ class _PendingRead implements WalletSyncRead, WalletSyncPendingRead {
   Future<String?> servedBy() async => gw.servedByUrl;
   @override
   Future<PendingBalance?> pending() async => gw.summary;
+  @override
+  Future<Set<String>> pendingIds() async => gw.listed;
 }
 
 class PendingGateway extends GatedGateway {
   PendingBalance? summary;
+  Set<String> listed = {};
   @override
   WalletSyncRead startRead(List<String> addresses) =>
       _PendingRead(this, addresses);
@@ -102,6 +105,22 @@ void main() {
     expect(c.pending!.netNano, c.balanceNano);
     expect(c.pending!.pendingOutNano, 7 * erg);
     expect(c.pending!.confirmedNano, 5 * erg);
+    expect(c.pending!.transactions, 3);
+  });
+
+  test('a broadcast the node already lists is not counted twice', () async {
+    // The node's next answer includes the send: its figures moved by it.
+    gw.summary = const PendingBalance(
+      confirmedNano: 5 * erg,
+      pendingOutNano: 5 * erg,
+      pendingInNano: 2 * erg,
+      transactions: 3,
+    );
+    gw.listed = {'sent'};
+    c.noteBroadcast('sent', valueNano: -2 * erg);
+    await c.refresh(discover: false, quiet: true);
+    expect(c.balanceNano, 2 * erg);
+    expect(c.pending!.netNano, 2 * erg);
     expect(c.pending!.transactions, 3);
   });
 

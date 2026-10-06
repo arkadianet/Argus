@@ -20,36 +20,43 @@ Status: implemented (see *Status, 2026-10-06* below); three decisions changed
 - **One choke point.** `api::mempool::gather_spendable` (wallet-ffi) is where
   every wallet spend gathers inputs; `gather_unspent`, `gather_unspent_all`
   and `gather_wallet_boxes` all go through it. It reads each address
-  (confirmed pages, then the *complete* mempool list, paged past 100) and
-  merges them in `wallet_net::mempool::spendable_across`: spent is judged over
-  the **union** of every address's mempool list, and every unconfirmed output
-  still offered is checked by id against
-  `/transactions/unconfirmed/inputs/byBoxId/{id}` (a pending spend paying
-  elsewhere). A box a pending transaction spends is never offered.
+  (confirmed pages, then the *complete* mempool list — paged past 100, and
+  read again until two passes agree, since a live mempool can reorder
+  between pages) and merges them in `wallet_net::mempool::spendable_across`:
+  spent is judged over the **union** of every address's mempool list, and
+  every unconfirmed output — offered, or held back while waiting — is
+  checked by id against `/transactions/unconfirmed/inputs/byBoxId/{id}` (a
+  pending spend paying elsewhere; only an answer naming the box counts). A
+  box a pending transaction spends is never offered.
 - **The setting.** Settings → Security → *Spend unconfirmed funds*
   (`SpendPolicy`, default **on** — `defaultSpendUnconfirmed`). Off, incoming
   funds and the wallet's own change wait for one confirmation; on, they can
   be spent at once. Rust holds it (`set_spend_unconfirmed`); the app hands it
   over in `WalletService.init` and on every change. While waiting, the
-  outputs left out are remembered per wallet, and a builder's shortfall
-  becomes "2.5 ERG is still confirming …" when those funds would have
-  covered it (`explain_shortfall`).
+  outputs left out are remembered per wallet by the spends' gathering, and a
+  builder's shortfall becomes "2.5 ERG is still confirming …" when those
+  funds would have covered it (`explain_shortfall`) — not for hand-picked
+  inputs, which the held-back boxes were never among.
 - **Built elsewhere.** `dapp_prepare_sign` and `describe_reduced_transaction`
   (ErgoPay) refuse a transaction spending a box a pending transaction already
   spends, and — while waiting — the wallet's own unconfirmed boxes.
-  `send_erg` checks stealth inputs by id just before broadcast, so the node
-  learns which stealth boxes are ours no earlier than the broadcast tells it.
-  `dapp_utxos` follows the setting and marks unconfirmed boxes.
+  `send_erg` and `sign_preparation` check stealth inputs by id just before
+  broadcast or export-signing, so the node learns which stealth boxes are
+  ours no earlier than the user commits. `dapp_utxos` follows the setting
+  and marks unconfirmed boxes.
 - **Listing.** `list_spendable_boxes` gives coin control and the UTXO tools
   the same view, each box carrying `confirmed`; the mix funding finder asks
   for confirmed boxes only, since a mix entry waits for its funding box.
 - **Balance.** `get_sync_inputs` and the new sequential `get_public_sync_inputs`
   return a wallet-wide `summary` (confirmed, pending in, pending out, per
-  token), valued once over the union; `get_balance` returns the same split
-  for one address. The sync controller exposes it as `pending`
-  (`PendingBalance`), takes the balance from it, persists it with the
-  snapshot and restores it on unlock and wallet switch; the public refresh of
-  locked wallets stores it with pending activity rows.
+  token), valued once over the union — as is each address's own figure —
+  and a UTXO count of what the wallet holds once pending settles;
+  `get_balance` returns the same split for one address. The sync controller
+  exposes it as `pending` (`PendingBalance`), takes the balance from it,
+  drops a broadcast of its own once the node lists it (no double count),
+  persists the split with the snapshot and restores it on unlock and wallet
+  switch; the public refresh of locked wallets stores it with pending
+  activity rows.
 - **Display.** `PendingBalanceLine` ("+2.5 ERG pending · 105.21 confirmed")
   under the dashboard portfolio total, on the Assets screen and under each
   watched account.
@@ -77,6 +84,11 @@ Status: implemented (see *Status, 2026-10-06* below); three decisions changed
   history screen is valued correctly). Read once across the account to fix.
 - The offline cold signer cannot see the mempool; the request it signs was
   gathered under these rules on the watching device.
+- The "still confirming" wording is applied where each spend path maps its
+  funding errors (about twenty sites in `api.rs`), from a per-wallet record
+  the spends' gathering keeps. A new spend path has to wrap its errors the
+  same way; carrying the held-back figures out of the gathering in a typed
+  error would remove both the duplication and the record.
 - Stealth funds are confirmed only (the explorer lists confirmed boxes), so
   unconfirmed stealth receipts are never offered under either setting.
 - No transaction in the app is built and broadcast as a chain on its own

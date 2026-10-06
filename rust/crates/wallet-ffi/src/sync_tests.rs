@@ -19,10 +19,12 @@ impl ReplayNode {
         ))
         .unwrap();
         let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        // The output carries its id, as a node's always does: the UTXO count
+        // after the pending spend settles counts it in place of the input.
         let pending = serde_json::json!([{
             "id": "pending-test",
             "inputs": [{"boxId": fixture["items"][0]["boxId"]}],
-            "outputs": [{"ergoTree": tree, "value": 123, "assets": []}]
+            "outputs": [{"boxId": "pending-out", "ergoTree": tree, "value": 123, "assets": []}]
         }]);
         let boxes = serde_json::json!([fixture["items"][0], fixture["items"][1]]);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

@@ -26,6 +26,20 @@ pub const MEMPOOL_MAX_TXS: usize = 1_000;
 /// this many the rest are left out rather than offered unchecked.
 pub const UNCONFIRMED_CHECKS: usize = 32;
 
+/// Further passes over a list longer than one page before giving up on it
+/// holding still.
+const MEMPOOL_STABLE_READS: usize = 2;
+
+/// The ids in a mempool list, sorted, to tell two reads of it apart.
+fn transaction_ids(txs: &[serde_json::Value]) -> Vec<String> {
+    let mut ids: Vec<String> = txs
+        .iter()
+        .filter_map(|tx| tx["id"].as_str().map(str::to_string))
+        .collect();
+    ids.sort();
+    ids
+}
+
 /// Where one box stands, as the node sees it now.
 #[derive(Debug, Clone, PartialEq)]
 pub enum BoxStatus {
@@ -666,17 +680,39 @@ impl ErgoNodeClient {
     /// Unconfirmed transactions touching `ergo_tree`, for spending: the whole
     /// list or an error. A partial list may omit the transaction that spends
     /// a box, and offering that box again is the double spend this guards.
+    ///
+    /// One page is one consistent answer. Past one page, the mempool can
+    /// reorder between requests (a higher fee arrives, a transaction leaves)
+    /// and slide a transaction across a page boundary unseen, so the list is
+    /// read again until two passes agree.
     pub async fn mempool_txs_complete(
         &self,
         ergo_tree: &str,
     ) -> Result<Vec<serde_json::Value>, String> {
-        match self.mempool_pages(ergo_tree).await? {
-            (txs, true) => Ok(txs),
-            (_, false) => Err(format!(
+        let too_many = || {
+            format!(
                 "more than {MEMPOOL_MAX_TXS} pending transactions touch one address; \
                  they cannot all be checked"
-            )),
+            )
+        };
+        let (mut txs, whole) = self.mempool_pages(ergo_tree).await?;
+        if !whole {
+            return Err(too_many());
         }
+        if txs.len() < MEMPOOL_PAGE {
+            return Ok(txs);
+        }
+        for _ in 0..MEMPOOL_STABLE_READS {
+            let (again, whole) = self.mempool_pages(ergo_tree).await?;
+            if !whole {
+                return Err(too_many());
+            }
+            if transaction_ids(&again) == transaction_ids(&txs) {
+                return Ok(again);
+            }
+            txs = again;
+        }
+        Err("pending transactions kept changing while they were read; try again".into())
     }
 
     /// Whether a transaction in the node's mempool already spends `box_id`.
@@ -685,20 +721,67 @@ impl ErgoNodeClient {
     /// the box's own script. A pending spend of an *unconfirmed* box is listed
     /// under the wallet only when it also pays the wallet, so a box forwarded
     /// whole to someone else is found here, by id, instead.
+    ///
+    /// Only an answer naming the box counts as spent: an empty or `null`
+    /// answer is "not found", and anything else is an error rather than a
+    /// guess either way.
     pub async fn mempool_spends(&self, box_id: &str) -> Result<bool, String> {
         let response = self
             .inner
             .send_get_req(&format!("/transactions/unconfirmed/inputs/byBoxId/{box_id}"))
             .await
             .map_err(|e| format!("Node request: {e}"))?;
-        match response.status().as_u16() {
-            200..=299 => Ok(true),
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        match status {
             404 => Ok(false),
-            status => {
-                let text = response.text().await.unwrap_or_default();
-                Err(format!("Mempool input lookup failed ({status}): {text}"))
+            200..=299 => {
+                let body = text.trim();
+                if body.is_empty() || body == "null" {
+                    return Ok(false);
+                }
+                let answer: serde_json::Value = serde_json::from_str(body)
+                    .map_err(|e| format!("Mempool input lookup: {e}"))?;
+                match answer["boxId"].as_str() {
+                    Some(id) if id.eq_ignore_ascii_case(box_id) => Ok(true),
+                    _ => Err(format!(
+                        "Mempool input lookup for {box_id} answered about something else"
+                    )),
+                }
+            }
+            status => Err(format!("Mempool input lookup failed ({status}): {text}")),
+        }
+    }
+
+    /// [`Self::mempool_spends`] for each of `ids`, at most `concurrency`
+    /// lookups at a time. Only the first [`UNCONFIRMED_CHECKS`] ids (sorted)
+    /// are looked up; the rest are absent from the answer, as is any lookup
+    /// that could not run.
+    pub async fn mempool_spends_each(
+        &self,
+        mut ids: Vec<String>,
+        concurrency: usize,
+    ) -> std::collections::HashMap<String, Result<bool, String>> {
+        ids.sort();
+        ids.dedup();
+        ids.truncate(UNCONFIRMED_CHECKS);
+        let mut answers = std::collections::HashMap::new();
+        for chunk in ids.chunks(concurrency.max(1)) {
+            let mut lookups = tokio::task::JoinSet::new();
+            for id in chunk {
+                let (client, id) = (self.clone(), id.clone());
+                lookups.spawn(async move {
+                    let spent = client.mempool_spends(&id).await;
+                    (id, spent)
+                });
+            }
+            while let Some(done) = lookups.join_next().await {
+                if let Ok((id, spent)) = done {
+                    answers.insert(id, spent);
+                }
             }
         }
+        answers
     }
 
     /// Where `box_id` stands: spent by a pending transaction, in the confirmed
@@ -760,20 +843,26 @@ impl ErgoNodeClient {
 
     /// Drop offered unconfirmed boxes that a pending transaction already
     /// spends without paying any of the read addresses (see
-    /// [`Self::mempool_spends`]). A box whose state cannot be read, or one
-    /// past [`UNCONFIRMED_CHECKS`], is dropped too: it is not offered on a
-    /// guess. Confirmed boxes need no such check.
-    pub async fn drop_spent_unconfirmed(&self, spendable: &mut crate::mempool::Spendable) {
-        let mut ids: Vec<String> = spendable.unconfirmed.iter().cloned().collect();
-        ids.sort();
-        let mut drop = std::collections::HashSet::new();
-        for (i, id) in ids.into_iter().enumerate() {
-            let keep = i < UNCONFIRMED_CHECKS && matches!(self.mempool_spends(&id).await, Ok(false));
-            if !keep {
-                drop.insert(id);
-            }
-        }
-        spendable.remove(&drop);
+    /// [`Self::mempool_spends`]), and likewise from what waiting held back,
+    /// so a box already gone is never named as "still confirming". A box
+    /// whose state cannot be read, or one past [`UNCONFIRMED_CHECKS`], is
+    /// dropped too: it is not offered, or promised, on a guess. Confirmed
+    /// boxes need no such check.
+    pub async fn drop_spent_unconfirmed(
+        &self,
+        spendable: &mut crate::mempool::Spendable,
+        concurrency: usize,
+    ) {
+        let offered: Vec<String> = spendable.unconfirmed.iter().cloned().collect();
+        let held: Vec<String> = spendable.held_back.iter().map(|b| b.box_id.clone()).collect();
+        let answers = self
+            .mempool_spends_each(offered.iter().chain(&held).cloned().collect(), concurrency)
+            .await;
+        let free = |id: &String| matches!(answers.get(id), Some(Ok(false)));
+        let gone: std::collections::HashSet<String> =
+            offered.into_iter().filter(|id| !free(id)).collect();
+        spendable.remove(&gone);
+        spendable.held_back.retain(|b| free(&b.box_id));
     }
 
     pub async fn address_has_transactions(&self, address: &str) -> Result<bool, String> {

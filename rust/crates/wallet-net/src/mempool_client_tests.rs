@@ -135,14 +135,18 @@ async fn pages_are_read_until_a_short_one() {
         _ => (500, String::new()),
     });
     let client = node.client();
-    assert_eq!(client.mempool_txs_complete(TREE).await.unwrap().len(), 103);
-    assert_eq!(
+    // The display read takes one pass.
+    assert_eq!(client.mempool_txs_for(TREE).await.unwrap().len(), 103);
+    let offsets = || {
         node.requests()
             .iter()
             .map(|r| offset_of(r))
-            .collect::<Vec<_>>(),
-        [0, 100]
-    );
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(offsets(), [0, 100]);
+    // The spending read takes a second to see that the list held still.
+    assert_eq!(client.mempool_txs_complete(TREE).await.unwrap().len(), 103);
+    assert_eq!(offsets(), [0, 100, 0, 100, 0, 100]);
 }
 
 #[tokio::test]
@@ -158,9 +162,13 @@ async fn a_list_past_the_cap_shows_but_cannot_be_spent_from() {
 async fn a_pending_spend_is_read_by_box_id() {
     let node = Node::start(|target| {
         if target.ends_with("/spent") {
-            (200, r#"{"boxId":"spent"}"#.into())
+            (200, r#"{"boxId":"spent","spendingProof":{}}"#.into())
         } else if target.ends_with("/free") {
             (404, r#"{"error":404,"reason":"not-found"}"#.into())
+        } else if target.ends_with("/nothing") {
+            (200, "null".into())
+        } else if target.ends_with("/other") {
+            (200, r#"{"boxId":"someone-else"}"#.into())
         } else {
             (503, String::new())
         }
@@ -168,6 +176,10 @@ async fn a_pending_spend_is_read_by_box_id() {
     let client = node.client();
     assert!(client.mempool_spends("spent").await.unwrap());
     assert!(!client.mempool_spends("free").await.unwrap());
+    // A success without the box is "not found", never "spent".
+    assert!(!client.mempool_spends("nothing").await.unwrap());
+    // An answer about another box is an error, not a guess either way.
+    assert!(client.mempool_spends("other").await.is_err());
     assert!(client.mempool_spends("broken").await.is_err());
     assert!(node
         .requests()
@@ -218,12 +230,11 @@ async fn a_spending_read_fails_when_the_mempool_cannot_be_read() {
 #[tokio::test]
 async fn only_unconfirmed_boxes_nothing_pending_spends_stay_offered() {
     let node = Node::start(|target| {
-        if target.ends_with("/free") {
-            (404, String::new())
-        } else if target.ends_with("/spent") {
-            (200, "{}".into())
-        } else {
-            (500, String::new())
+        let id = target.rsplit('/').next().unwrap_or_default();
+        match id {
+            "free" | "still-coming" => (404, String::new()),
+            "spent" | "forwarded" => (200, format!(r#"{{"boxId":"{id}"}}"#)),
+            _ => (500, String::new()),
         }
     });
     let fixture = |index: u16| -> ErgoBox {
@@ -246,13 +257,73 @@ async fn only_unconfirmed_boxes_nothing_pending_spends_stay_offered() {
         spendable.boxes.push(b);
         spendable.inputs.push(input);
     }
-    node.client().drop_spent_unconfirmed(&mut spendable).await;
+    // What waiting held back is checked the same way: a box a pending
+    // transaction paying elsewhere already spent is not "still confirming".
+    for name in ["still-coming", "forwarded", "unknown"] {
+        let b = fixture(9);
+        let mut input =
+            ergo_tx::Eip12InputBox::from_ergo_box(&b, b.transaction_id.to_string(), b.index);
+        input.box_id = name.to_string();
+        spendable.held_back.push(input);
+    }
+    node.client().drop_spent_unconfirmed(&mut spendable, 4).await;
     assert_eq!(
         spendable.inputs.iter().map(|i| i.box_id.as_str()).collect::<Vec<_>>(),
         ["confirmed", "free"]
     );
     assert_eq!(spendable.boxes.len(), 2);
     assert_eq!(spendable.unconfirmed, ["free".to_string()].into());
+    assert_eq!(
+        spendable.held_back.iter().map(|i| i.box_id.as_str()).collect::<Vec<_>>(),
+        ["still-coming"]
+    );
     // Confirmed boxes are not looked up one by one.
     assert!(!node.requests().iter().any(|r| r.ends_with("/confirmed")));
+}
+
+#[tokio::test]
+async fn a_long_list_is_read_until_it_holds_still() {
+    // Two pages; a transaction arrives between the first and second pass,
+    // and the third pass agrees with the second.
+    let passes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = passes.clone();
+    let node = Node::start(move |target| {
+        let offset = offset_of(target);
+        if offset == 0 {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }
+        let extra = usize::from(seen.load(Ordering::SeqCst) >= 2);
+        match offset {
+            0 => (200, page(0, 100)),
+            100 => (200, page(100, 3 + extra)),
+            _ => (500, String::new()),
+        }
+    });
+    let txs = node.client().mempool_txs_complete(TREE).await.unwrap();
+    assert_eq!(txs.len(), 104, "the settled list, not the first pass");
+    assert_eq!(passes.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn a_list_that_never_holds_still_is_not_trusted() {
+    let passes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = passes.clone();
+    let node = Node::start(move |target| {
+        let offset = offset_of(target);
+        if offset == 0 {
+            seen.fetch_add(1, Ordering::SeqCst);
+        }
+        match offset {
+            0 => (200, page(0, 100)),
+            // A different tail on every pass.
+            100 => (200, page(100 + 10 * seen.load(Ordering::SeqCst), 3)),
+            _ => (500, String::new()),
+        }
+    });
+    let error = node.client().mempool_txs_complete(TREE).await.unwrap_err();
+    assert!(error.contains("kept changing"), "{error}");
+    // A single page is one answer and needs no second pass.
+    let one = Node::start(|_| (200, page(0, 7)));
+    assert_eq!(one.client().mempool_txs_complete(TREE).await.unwrap().len(), 7);
+    assert_eq!(one.requests().len(), 1);
 }

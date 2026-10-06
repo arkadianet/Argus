@@ -1786,9 +1786,10 @@ async fn prepare_management<S>(
     let (boxes, inputs) = gather_unspent(handle_id, &client, spend_addresses).await?;
     let (boxes, inputs) = apply_mixed_rule(handle_id, boxes, inputs, Some(selected_box_ids))?;
     let inputs = filter_selected_inputs(inputs, selected_box_ids)?;
+    let hand_picked = !selected_box_ids.is_empty();
     if inputs.is_empty() {
         let error = ArgusError::NoUtxos(no_inputs_message).to_json_string();
-        return Err(mempool::explain_shortfall(handle_id, error));
+        return Err(mempool::explain_for(handle_id, hand_picked, error));
     }
     let height = client
         .current_height()
@@ -1797,7 +1798,7 @@ async fn prepare_management<S>(
     let change_tree = address_to_ergo_tree(change_address)
         .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
     let mut built = build(&inputs, &change_tree, height)
-        .map_err(|e| mempool::explain_shortfall(handle_id, e))?;
+        .map_err(|e| mempool::explain_for(handle_id, hand_picked, e))?;
 
     if let Some(custom_fee) = fee_nano {
         if custom_fee < TX_FEE_NANO {
@@ -2092,6 +2093,7 @@ pub async fn prepare_send(
     stealth_boxes_json: Option<String>,
     babel_token_id: Option<String>,
 ) -> Result<String, String> {
+    let hand_picked = input_box_ids.as_ref().is_some_and(|ids| !ids.is_empty());
     let (input_boxes, ergo_boxes, built, stealth_trees, babel) = prepare(
         handle_id,
         &sender_address,
@@ -2108,7 +2110,7 @@ pub async fn prepare_send(
         babel_token_id,
     )
     .await
-    .map_err(|e| mempool::explain_shortfall(handle_id, e))?;
+    .map_err(|e| mempool::explain_for(handle_id, hand_picked, e))?;
     let recipient_erg = built.summary.recipient_erg;
     let miner_fee = built.summary.miner_fee;
     let change_erg = built.summary.change_erg;
@@ -2927,6 +2929,8 @@ pub fn preparation_details(handle_id: u64, preparation_id: u64) -> Result<String
 pub async fn sign_preparation(handle_id: u64, preparation_id: u64) -> Result<String, String> {
     let prep = take_preparation(handle_id, preparation_id)?;
     let client = node_client(prep.node_url.clone()).await?;
+    // Signed for broadcast elsewhere, it would double-spend all the same.
+    mempool::check_stealth_inputs(&client, &prep.ergo_boxes, &prep.stealth_trees).await?;
     let tx_json = sign_prepared_tx(handle_id, &prep, &client, "sign_preparation").await?;
     serde_json::to_string(&tx_json)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
@@ -3086,9 +3090,10 @@ pub async fn prepare_send_multi(
         boxes.push(crate::api_stealth_impl::to_ergo_box(b)?);
     }
     let (mut boxes, eip12) = apply_mixed_rule(handle_id, boxes, eip12, input_box_ids.as_deref())?;
+    let hand_picked = input_box_ids.as_ref().is_some_and(|ids| !ids.is_empty());
     if eip12.is_empty() {
         let error = ArgusError::NoUtxos(spend.join(",")).to_json_string();
-        return Err(mempool::explain_shortfall(handle_id, error));
+        return Err(mempool::explain_for(handle_id, hand_picked, error));
     }
 
     // Collect tokens we need to cover
@@ -3198,7 +3203,7 @@ pub async fn prepare_send_multi(
             .collect::<Vec<_>>();
         build_preferring_one_pocket(&eip12, &stealth_ids, build)
     }
-    .map_err(|e| mempool::explain_shortfall(handle_id, e))?;
+    .map_err(|e| mempool::explain_for(handle_id, hand_picked, e))?;
     if let Some(pick) = &babel {
         boxes.push(pick.ergo_box.clone());
     }
@@ -6889,7 +6894,8 @@ pub async fn dapp_utxos(
     node_url: Option<String>,
 ) -> Result<String, String> {
     let client = node_client(node_url).await?;
-    let spendable = mempool::gather_spendable(handle_id, &client, &addresses).await?;
+    let spendable =
+        mempool::read_spendable(handle_id, &client, &addresses, mempool::spend_unconfirmed()).await?;
     // Which of them are in a block: with unconfirmed spending allowed the
     // gathered set also holds this wallet's mempool outputs, and a page must
     // not take those as settled.
