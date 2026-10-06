@@ -23,7 +23,7 @@ Sources: arkadianet/ergo (Rust node with consensus parity to the Scala reference
 
 ## Rent per box (E2)
 
-`box_rent_report` lists the confirmed unspent boxes at the wallet's addresses (the endpoint the screen already uses, read a second time) and returns each box's size, fee, charge (`fee`, `whole_box` or `none`), due height and blocks to go. Each card shows the fee, the due block and an approximate date at 2-minute blocks. **Due soon** means collectable now or within 30 days (21,600 blocks); **at risk** means the value does not exceed the fee, whenever it falls due. Boxes the protocol cannot charge say so. The summary card counts both, names the rate, and a "Rent" filter keeps the flagged boxes. A failed report leaves the list and the tools working.
+`box_rent_report` lists the confirmed unspent boxes at the wallet's addresses (the node's unspent-box index the screen already reads, queried by script, a second time) and returns each box's size, fee, charge (`fee`, `whole_box` or `none`), due height and blocks to go. Boxes ergo-lib cannot parse are counted as unmeasured and named in the summary rather than dropped. Each card shows the fee, the due block and an approximate date at 2-minute blocks. **Due soon** means collectable now or within 30 days (21,600 blocks); **at risk** means the value does not exceed the fee, whenever it falls due. Boxes the protocol cannot charge say so. The summary card counts both, names the rate, and a "Rent" filter keeps the flagged boxes. A failed report leaves the list and the tools working.
 
 ## Send hint (E1)
 
