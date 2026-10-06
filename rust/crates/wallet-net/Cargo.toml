@@ -22,3 +22,5 @@ tracing = { workspace = true }
 num-bigint = "0.4"
 base16 = "0.2"
 reqwest = { workspace = true }
+rustls = { workspace = true }
+webpki-roots = { workspace = true }

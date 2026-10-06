@@ -1,4 +1,5 @@
 pub mod client;
+pub mod http;
 pub mod mempool;
 
 pub use client::*;

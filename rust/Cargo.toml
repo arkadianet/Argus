@@ -77,7 +77,11 @@ rand = "0.10"
 flutter_rust_bridge = "=2.11.1"
 
 # ─── HTTP ────────────────────────────────────────────────────────────────
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
+# reqwest 0.13 dropped its bundled-roots rustls feature, so wallet-net::http
+# builds the TLS config 0.12's "rustls-tls" gave: ring and webpki-roots.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
 
 # ─── Vendored Citadel crates ─────────────────────────────────────────────
 citadel-core = { path = "crates/vendor/citadel-core" }

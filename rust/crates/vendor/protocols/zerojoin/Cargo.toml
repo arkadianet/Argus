@@ -26,3 +26,4 @@ ergo-node-client = { workspace = true }
 citadel-core = { workspace = true }
 tokio = { workspace = true }
 reqwest = { workspace = true }
+rustls = { workspace = true }

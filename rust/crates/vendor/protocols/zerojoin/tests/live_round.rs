@@ -63,11 +63,17 @@ fn secret(mix: u32, round: u32) -> MixSecret {
 // Live discovery
 // ---------------------------------------------------------------------------
 
+/// reqwest 0.13 is built without a default rustls crypto provider.
+fn client() -> reqwest::Client {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    reqwest::Client::new()
+}
+
 /// Unspent boxes guarded by exactly this ErgoTree, via the node's extra index.
 async fn unspent_by_tree(tree_hex: &str, limit: usize) -> Vec<Eip12InputBox> {
     let url = format!("{NODE}/blockchain/box/unspent/byErgoTree?limit={limit}");
     let body = serde_json::Value::String(tree_hex.to_string());
-    let text = reqwest::Client::new()
+    let text = client()
         .post(&url)
         .json(&body)
         .send()
