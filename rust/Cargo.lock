@@ -92,7 +92,7 @@ dependencies = [
  "num-traits",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -408,7 +408,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -710,7 +710,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -757,7 +757,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -933,7 +933,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -965,7 +965,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -994,7 +994,7 @@ dependencies = [
  "hex",
  "indexmap",
  "serde",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -2331,7 +2331,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2618,7 +2618,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2632,7 +2632,7 @@ dependencies = [
  "hex",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tracing",
 ]
 
@@ -2706,7 +2706,7 @@ dependencies = [
  "ergotree-ir",
  "hex",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -2724,7 +2724,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sigma-ser",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "zeroize",
 ]
 
@@ -3173,7 +3173,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "stealth",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "zeroize",
  "zerojoin",
 ]
@@ -3202,7 +3202,7 @@ dependencies = [
  "sigmausd",
  "stake-recovery",
  "stealth",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
  "wallet-core",
@@ -3224,7 +3224,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -3544,7 +3544,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sigma-ser",
- "thiserror 1.0.69",
+ "thiserror 2.0.21",
  "tokio",
  "zeroize",
 ]
