@@ -1234,7 +1234,11 @@ class _UtxoCard extends StatelessWidget {
               ],
               if (rent != null && rentParameters != null) ...[
                 const SizedBox(height: 8),
-                BoxRentLine(rent: rent!, parameters: rentParameters!),
+                BoxRentLine(
+                  rent: rent!,
+                  parameters: rentParameters!,
+                  hasTokens: box.assets.isNotEmpty,
+                ),
               ],
               if (box.assets.length >= 2)
                 TextButton.icon(
@@ -1253,10 +1257,18 @@ class _UtxoCard extends StatelessWidget {
 /// When a box's storage rent falls due, what it costs, and whether the
 /// box can pay it.
 class BoxRentLine extends StatelessWidget {
-  const BoxRentLine({super.key, required this.rent, required this.parameters});
+  const BoxRentLine({
+    super.key,
+    required this.rent,
+    required this.parameters,
+    required this.hasTokens,
+  });
 
   final BoxRent rent;
   final RentParameters parameters;
+
+  /// Whether a collector would take tokens along with the ERG.
+  final bool hasTokens;
 
   @override
   Widget build(BuildContext context) {
@@ -1266,6 +1278,7 @@ class BoxRentLine extends StatelessWidget {
     final fee = formatErg(rent.feeNano, maxFrac: 5);
     final when = rentWhen(rent.blocksUntilDue);
     final block = 'block ${formatWithCommas(rent.dueHeight)}';
+    final whole = hasTokens ? 'whole, tokens included' : 'whole';
     final (IconData icon, Color color, String text) = switch (rent) {
       BoxRent(charge: RentCharge.none) => (
         Icons.hourglass_empty,
@@ -1277,13 +1290,13 @@ class BoxRentLine extends StatelessWidget {
         Icons.warning_amber_rounded,
         rustFor(context),
         'At risk: its $fee rent is more than it holds, so it can be '
-            'collected now, tokens included.',
+            'collected now${hasTokens ? ', tokens included' : ''}.',
       ),
       BoxRent(atRisk: true) => (
         Icons.warning_amber_rounded,
         rustFor(context),
         'At risk: its $fee rent is more than it holds. From $block '
-            '($when) it can be collected whole, tokens included.',
+            '($when) it can be collected $whole.',
       ),
       BoxRent(collectableNow: true) => (
         Icons.schedule,

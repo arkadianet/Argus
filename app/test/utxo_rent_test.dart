@@ -2,6 +2,9 @@ import 'package:argus_wallet/services/storage_rent.dart';
 import 'package:argus_wallet/services/utxo_plans.dart';
 import 'package:argus_wallet/services/utxo_tools_controller.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
+import 'package:argus_wallet/theme/argus_theme.dart';
+import 'package:argus_wallet/ui/utxo_management_screen.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 InputBoxInput box(
@@ -227,5 +230,78 @@ void main() {
     tools.setRent(const {});
     expect(tools.filter, UtxoFilter.all);
     expect(tools.filtered, hasLength(3));
+  });
+
+  group('rent line', () {
+    const parameters = RentParameters(
+      height: 1900000,
+      storageFeeFactor: 1250000,
+      factorFromNode: true,
+    );
+
+    Future<String> line(
+      WidgetTester tester,
+      BoxRent rent, {
+      bool hasTokens = false,
+    }) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: argusTheme(watchful: false),
+          home: Scaffold(
+            body: BoxRentLine(
+              rent: rent,
+              parameters: parameters,
+              hasTokens: hasTokens,
+            ),
+          ),
+        ),
+      );
+      return tester.widget<Text>(find.byType(Text)).data!;
+    }
+
+    BoxRent at(int blocks, RentCharge charge, {int fee = 96250000}) => BoxRent(
+      boxId: 'x',
+      valueNano: 0,
+      creationHeight: 0,
+      sizeBytes: 77,
+      feeNano: fee,
+      charge: charge,
+      chargeNano: 0,
+      dueHeight: 1900000 + blocks,
+      blocksUntilDue: blocks,
+      collectableNow: blocks <= 1,
+    );
+
+    testWidgets('names the fee, the due block and when', (tester) async {
+      expect(
+        await line(tester, at(21600, RentCharge.fee)),
+        'Storage rent of 0.09625 ERG due in ~30 days (block 1,921,600).',
+      );
+      expect(
+        await line(tester, at(0, RentCharge.fee)),
+        'Storage rent of 0.09625 ERG can be charged now (due block 1,900,000).',
+      );
+    });
+
+    testWidgets('mentions tokens only when a box holds some', (tester) async {
+      expect(
+        await line(tester, at(5000, RentCharge.wholeBox)),
+        'At risk: its 0.09625 ERG rent is more than it holds. From block '
+        '1,905,000 (in ~7 days) it can be collected whole.',
+      );
+      expect(
+        await line(tester, at(-10, RentCharge.wholeBox), hasTokens: true),
+        'At risk: its 0.09625 ERG rent is more than it holds, so it can be '
+        'collected now, tokens included.',
+      );
+    });
+
+    testWidgets('says when the protocol cannot charge a box', (tester) async {
+      expect(
+        await line(tester, at(5, RentCharge.none, fee: -2104967296)),
+        'No storage rent can be charged on a box over 1,717 bytes under '
+        'current rules.',
+      );
+    });
   });
 }
