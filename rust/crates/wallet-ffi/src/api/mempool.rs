@@ -22,8 +22,10 @@ use super::{node_client, recover, with_handle, GATHER_ADDRESS_CONCURRENCY};
 use crate::error::ArgusError;
 
 /// Whether coin selection may spend boxes created by transactions still in
-/// the mempool. The app sets this from its stored setting before any wallet
-/// call; until then it holds the app's default, which allows it.
+/// the mempool. The app's setting (and its default, `defaultSpendUnconfirmed`
+/// in `spend_policy.dart`) is handed over in `WalletService.init`, before any
+/// wallet exists to spend from, so this initial value is never observed by a
+/// spend.
 static SPEND_UNCONFIRMED: AtomicBool = AtomicBool::new(true);
 
 /// Allow or forbid spending unconfirmed funds (incoming payments and the
