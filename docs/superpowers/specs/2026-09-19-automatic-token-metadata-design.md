@@ -212,8 +212,10 @@ of 6de6f46e…" — and amount fields say they take raw units. A known zero
 
 Rows name up to two tokens, then sum up the rest: "69 COMET + 1.5 SigUSD +
 1 more token + 1.8162 ERG". Named tokens are listed first; an unnamed one is
-its short id. A swap shows both legs, "0.75 ERG → 69 COMET". ERG keeps four
-decimals: two would turn a fee-only row into "0 ERG".
+its short id. A swap shows both legs, "0.75 ERG for 69 COMET". ERG keeps four
+decimals: two would turn a fee-only row into "0 ERG". The line may take two
+lines, and above 1.4x text the time and status move under it (the asset row's
+amount likewise), so the names stay legible at large text sizes.
 
 ## Still open
 
