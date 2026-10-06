@@ -55,13 +55,13 @@ Map<String, dynamic> opportunityJson({int net = 25000000, bool trusted = true}) 
       'trusted': trusted,
     };
 
-Map<String, dynamic> scanJson({List<Map<String, dynamic>>? opportunities}) => {
+Map<String, dynamic> scanJson({List<Map<String, dynamic>>? opportunities, int height = 1888712}) => {
       'opportunities': opportunities ?? [opportunityJson()],
       'cycles_checked': 46,
       'pools_in_graph': 88,
       'skipped_busy': 1,
       'skipped_untrusted': 2,
-      'height': 1888712,
+      'height': height,
       'pool_count': 548,
       'truncated': false,
       'mempool_checked': true,
@@ -69,6 +69,7 @@ Map<String, dynamic> scanJson({List<Map<String, dynamic>>? opportunities}) => {
     };
 
 class FakeApi extends ArbitrageApi {
+  int tip = 1888712;
   String? lastScanOptions;
   String? lastPrepare;
   String executeAnswer = jsonEncode({
@@ -81,7 +82,7 @@ class FakeApi extends ArbitrageApi {
   @override
   Future<String> scan({String? nodeUrl, required String optionsJson}) async {
     lastScanOptions = optionsJson;
-    return jsonEncode(scanJson());
+    return jsonEncode(scanJson(height: tip));
   }
 
   @override
@@ -98,6 +99,9 @@ class FakeApi extends ArbitrageApi {
 
   @override
   void discard(BigInt chainId) => discarded.add(chainId);
+
+  @override
+  Future<int?> height({String? nodeUrl}) async => tip;
 
   @override
   Future<String> execute({required BigInt handleId, required BigInt chainId}) async => executeAnswer;
@@ -259,6 +263,35 @@ void main() {
         scanner.dispose();
         async.elapse(const Duration(minutes: 5));
         expect(calls, 4);
+      });
+    });
+
+    test('with a height to watch, the pools are read again only when a block arrives', () {
+      fakeAsync((async) {
+        var calls = 0;
+        var tip = 100;
+        final scanner = ArbitrageScanner(
+          interval: const Duration(seconds: 20),
+          height: () async => tip,
+          scan: () async {
+            calls++;
+            return ArbScanResult.fromJson(scanJson(height: tip), DateTime(2026));
+          },
+        );
+        scanner.start();
+        async.flushMicrotasks();
+        expect(calls, 1);
+        async.elapse(const Duration(minutes: 2));
+        expect(calls, 1, reason: 'same block, same pools');
+        tip = 101;
+        async.elapse(const Duration(seconds: 20));
+        expect(calls, 2);
+        async.elapse(const Duration(seconds: 40));
+        expect(calls, 2);
+        scanner.refresh();
+        async.flushMicrotasks();
+        expect(calls, 3, reason: 'a pull to refresh always reads the pools');
+        scanner.dispose();
       });
     });
 

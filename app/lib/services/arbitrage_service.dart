@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../bridge/api/arbitrage.dart' as arb_api;
@@ -20,8 +21,11 @@ const arbMinDepthErg = poolDepthFloorErg;
 /// are gone by the time a phone signs.
 const arbDefaultMinProfitNano = 10000000;
 
-/// How often the screen re-reads the pools while it is open.
-const arbScanInterval = Duration(seconds: 30);
+/// How often the open screen asks the node for its height. The pools are
+/// read again only when a new block arrives (or on a pull to refresh):
+/// reading every pool costs about a megabyte, the height a few hundred
+/// bytes, and pools only move when a block lands.
+const arbScanInterval = Duration(seconds: 20);
 
 /// How often a broadcast chain is checked while the screen is open.
 const arbStatusInterval = Duration(seconds: 10);
@@ -342,6 +346,15 @@ class ArbitrageApi {
 
   Future<String> prepareUnwind({required BigInt handleId, required BigInt chainId}) =>
       arb_api.arbitragePrepareUnwind(handleId: handleId, chainId: chainId);
+
+  /// The node's height from `/info`, or null when it does not answer.
+  Future<int?> height({String? nodeUrl}) async {
+    if (nodeUrl == null) return null;
+    final base = nodeUrl.replaceAll(RegExp(r'/+$'), '');
+    final res = await http.get(Uri.parse('$base/info')).timeout(const Duration(seconds: 8));
+    if (res.statusCode != 200) return null;
+    return ((jsonDecode(res.body) as Map)['fullHeight'] as num?)?.toInt();
+  }
 }
 
 /// Circular arbitrage across Spectrum pools: what the screen calls.
@@ -439,19 +452,33 @@ class ArbitrageService {
   Future<ArbUnwind> prepareUnwind(int chainId) async => ArbUnwind.fromJson(
         (jsonDecode(await _api.prepareUnwind(handleId: _requireHandle(), chainId: BigInt.from(chainId))) as Map).cast(),
       );
+
+  /// The node's height, or null when it cannot be read.
+  Future<int?> nodeHeight() async {
+    try {
+      return await _api.height(nodeUrl: _nodeUrl());
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 final arbitrageService = ArbitrageService();
 
 /// Scans while the screen is open and in front, never otherwise: one
-/// scan at a time, the newest answer wins.
+/// scan at a time, the newest answer wins, and with [height] given only
+/// when a new block has arrived since the last scan.
 class ArbitrageScanner extends ChangeNotifier {
   ArbitrageScanner({
     required this.scan,
+    this.height,
     this.interval = arbScanInterval,
   });
 
   final Future<ArbScanResult> Function() scan;
+
+  /// The node's height; null scans on every tick.
+  final Future<int?> Function()? height;
   final Duration interval;
 
   ArbScanResult? result;
@@ -463,13 +490,24 @@ class ArbitrageScanner extends ChangeNotifier {
 
   bool get active => _active;
 
-  /// Scan now and every [interval] until [stop] or [pause].
+  /// Scan now, then on every [interval] that brings a new block, until
+  /// [stop] or [pause].
   void start() {
     if (_active) return;
     _active = true;
     _timer?.cancel();
-    _timer = Timer.periodic(interval, (_) => refresh());
+    _timer = Timer.periodic(interval, (_) => _tick());
     refresh();
+  }
+
+  Future<void> _tick() async {
+    final probe = height;
+    if (probe != null && error == null) {
+      final h = await probe();
+      // An unreadable height is not a new block; the next tick asks again.
+      if (!_active || h == null || h == result?.height) return;
+    }
+    await refresh();
   }
 
   /// The app went to the background: no scans until [start] again.

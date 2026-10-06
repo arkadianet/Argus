@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:argus_wallet/services/amm_service.dart';
@@ -29,7 +28,7 @@ class ScreenApi extends FakeApi {
     for (final leg in second['legs'] as List) {
       leg['pool_id'] = (leg['pool_id'] as String).replaceAll('a', 'f').replaceAll('c', '9');
     }
-    return jsonEncode(scanJson(opportunities: empty ? [] : [opportunityJson(), second]));
+    return jsonEncode(scanJson(opportunities: empty ? [] : [opportunityJson(), second], height: tip));
   }
 }
 
@@ -214,6 +213,9 @@ void main() {
     tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
     await tester.pump();
     expect(api.scans, 2);
+    await tester.pump(arbScanInterval);
+    expect(api.scans, 2, reason: 'no new block, no new read of every pool');
+    api.tip++;
     await tester.pump(arbScanInterval);
     expect(api.scans, 3);
   });

@@ -57,7 +57,7 @@ String arbErrorText(Object e) {
 
 class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingObserver, TxReceiptOwner {
   late final ArbitrageService _service = widget.service ?? arbitrageService;
-  late final ArbitrageScanner _scanner = ArbitrageScanner(scan: _scan);
+  late final ArbitrageScanner _scanner = ArbitrageScanner(scan: _scan, height: _service.nodeHeight);
   int _minProfitNano = arbDefaultMinProfitNano;
   bool _includeUntrusted = false;
   AmmPoolSet? _names;
@@ -182,7 +182,7 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
         Text(
           'Pools sometimes disagree on a price. This finds round trips from ERG through them that '
           'pay back more ERG than they cost: pool fees, plus a miner fee and the Argus fee for every leg. '
-          'Scans run only while this screen is open.',
+          'Pools are read again at each new block, and only while this screen is open.',
           style: TextStyle(color: colors.muted, fontSize: 13, height: 1.4),
         ),
         const SizedBox(height: 12),

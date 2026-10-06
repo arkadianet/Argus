@@ -167,8 +167,11 @@ Node sources are converted at today's cross rate for non-USD currencies.
 ## F2: arbitrage
 
 **Scan** (`arbitrage_scan`), only while the screen is open and in front,
-every 30 s, paused while a review is open: every pool box read fresh from
-the user's node and parsed strictly; Dexy pools excluded; pools at least
+paused while a review is open. The screen asks the node for its height
+every 20 s (a few hundred bytes) and reads every pool again only when a
+new block has arrived or the user pulls to refresh: a full read is about a
+megabyte, and pools only move when a block lands. Every pool box is read
+fresh from the user's node and parsed strictly; Dexy pools excluded; pools at least
 50 ERG deep (T2T by their ERG-equivalent side); cycles of 2–3 legs; one
 mempool read per pool contract to skip pools a pending transaction is
 already spending. Routes through unverified tokens are left out unless the
