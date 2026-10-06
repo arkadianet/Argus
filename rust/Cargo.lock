@@ -3128,6 +3128,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wallet-amm"
+version = "0.1.0"
+dependencies = [
+ "num-bigint 0.5.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "wallet-core"
 version = "0.1.0"
 dependencies = [
@@ -3177,6 +3186,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "wallet-amm",
  "wallet-core",
  "wallet-net",
  "zeroize",

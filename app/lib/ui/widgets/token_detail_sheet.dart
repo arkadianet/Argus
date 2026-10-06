@@ -612,7 +612,7 @@ class _PriceLine extends StatelessWidget {
         '$unit each',
         if (held != null) '$held held',
         via,
-        if (!price.countsInTotal) 'not counted in totals (unverified)',
+        if (!price.countsInTotal) 'not counted in totals (${price.excludedBecause})',
       ].join(' · ');
     }
     return Text(text, style: TextStyle(fontSize: 12.5, color: muted));

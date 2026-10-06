@@ -22,6 +22,10 @@ use crate::error::ArgusError;
 /// Pending transactions: the unconfirmed-spending policy, where every wallet
 /// spend gathers its inputs, and the pending summary the sync shows.
 pub mod mempool;
+/// On-chain token and LP-token prices from Spectrum pools (`wallet-amm`).
+pub mod pricing;
+/// Circular arbitrage across Spectrum pools, on the chained-legs design.
+pub mod arbitrage;
 
 /// Argus app fee: paid on every transaction the wallet builds (sends, UTXO
 /// tools, swaps, mints). ErgoPay transactions are built by the dApp and are

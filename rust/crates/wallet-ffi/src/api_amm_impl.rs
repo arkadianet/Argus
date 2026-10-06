@@ -368,7 +368,7 @@ const DEXY_POOL_NFTS: [&str; 2] = [
     "4ecaa1aac9846b1454563ae51746db95a3a40ee9f8c5f5301afbe348ae803d41",
 ];
 
-fn keep_pool(pool_id: &str) -> bool {
+pub(crate) fn keep_pool(pool_id: &str) -> bool {
     !DEXY_POOL_NFTS.contains(&pool_id)
 }
 

@@ -1,6 +1,7 @@
 #![allow(unexpected_cfgs)]
 
 mod api_amm_impl;
+mod arbitrage_chain;
 mod api_dapp_impl;
 mod api_dexy_impl;
 mod api_duckpools_impl;
