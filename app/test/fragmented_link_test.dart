@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/home_finders.dart';
 import 'support/home_harness.dart';
 
 /// A node whose sync reads report [utxos] boxes for the wallet.
@@ -83,7 +84,7 @@ void main() {
     expect(
       find.descendant(
         of: indicator,
-        matching: find.text('${utxoFragmentationThreshold + 1} UTXOs · Fragmented'),
+        matching: textPlain('${utxoFragmentationThreshold + 1} UTXOs · Fragmented'),
       ),
       findsOneWidget,
     );
@@ -92,8 +93,11 @@ void main() {
     expect(find.text('Cleanup review'), findsOneWidget);
     await tester.pageBack();
     await tester.pumpAndSettle();
-    // The rest of the line still opens the UTXO tools.
-    await tester.tap(find.textContaining('Block'));
+    // The status line above it still opens the UTXO tools.
+    final status = find.byKey(const Key('wallet-status'));
+    expect(find.descendant(of: status, matching: textPlainContaining('UTXOs')), findsNothing,
+        reason: 'while fragmented the count leads its own line');
+    await tester.tap(status);
     await tester.pumpAndSettle();
     expect(find.text('UTXO tools'), findsOneWidget);
     await tester.pageBack();
@@ -105,7 +109,9 @@ void main() {
     api.utxos = 3;
     await openWallet(tester);
     expect(find.byKey(const Key('utxo-fragmented')), findsNothing);
-    await tester.tap(find.text('3 UTXOs'));
+    final status = find.byKey(const Key('wallet-status'));
+    expect(find.descendant(of: status, matching: textPlainContaining('3 UTXOs')), findsOneWidget);
+    await tester.tap(status);
     await tester.pumpAndSettle();
     expect(find.text('UTXO tools'), findsOneWidget);
     await tester.pageBack();

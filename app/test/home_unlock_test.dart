@@ -119,7 +119,7 @@ void main() {
   testWidgets('back from the gate is the overview, and asks nothing', (tester) async {
     final keystore = await launch(tester);
     await openDaily(tester);
-    await tester.tap(find.byType(BackButton));
+    await tester.tap(find.byTooltip('All wallets'));
     await tester.pumpAndSettle();
     expect(find.byType(WalletsOverviewScreen), findsOneWidget);
     expect(keystore.prompts, 1);
@@ -180,7 +180,7 @@ void main() {
   testWidgets('reopening the unlocked wallet from the overview asks nothing', (tester) async {
     final keystore = await launch(tester, biometricResult: 'wrap-key');
     await openDaily(tester);
-    await tester.tap(find.byType(BackButton));
+    await tester.tap(find.byTooltip('All wallets'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Unlocked'), findsOneWidget, reason: 'the overview row says so');
     await openDaily(tester);
@@ -193,7 +193,7 @@ void main() {
     final keystore = await launch(tester, biometricResult: 'wrap-key');
     await openDaily(tester);
     expect(walletService.activeWalletId, 'unlock-w1');
-    await tester.tap(find.byType(BackButton));
+    await tester.tap(find.byTooltip('All wallets'));
     await tester.pumpAndSettle();
     keystore.biometricResult = null;
     await tester.tap(find.byKey(const ValueKey('overview-row-seed-unlock-w2')));

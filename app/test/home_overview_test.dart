@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/home_finders.dart';
 import 'support/home_harness.dart';
 
 // A1: the app opens on an overview of every wallet on the device, with
@@ -93,19 +94,18 @@ void main() {
       expect(find.text(name), findsOneWidget, reason: name);
     }
     // 12 + 2.5 + 1 ERG; the never-synced wallet is counted as not loaded.
-    expect(
-      tester.widget<Text>(find.byKey(const Key('overview-total'))).data,
-      formatErg(15500000000, unit: false, maxFrac: 4),
-    );
-    expect(find.textContaining('1 not loaded'), findsOneWidget);
-    // The pinned wallet is shown as its pinned address, with what index 0
-    // holds called out under it.
+    expect(plainOf(tester, find.byKey(const Key('overview-total'))), '15.5 ERG');
+    expect(textPlainContaining('1 wallet not loaded'), findsOneWidget);
+    // What index 0 of the pinned wallet holds is called out under its row.
     final row = find.byKey(const ValueKey('overview-row-seed-ov-pinned'));
-    expect(find.descendant(of: row, matching: find.text(shorten(vanity, head: 6, tail: 6))), findsOneWidget);
-    expect(
-      find.descendant(of: row, matching: find.text('incl. 3 ERG on 1 other address')),
-      findsOneWidget,
-    );
+    expect(find.descendant(of: row, matching: textPlain('3 ERG on another address')), findsOneWidget);
+    // Opened (the fingerprint prompt cancelled), the locked page still shows
+    // the wallet as its pinned address, not index 0, and its whole balance.
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(find.text('#275'), findsOneWidget);
+    expect(find.text(shorten(vanity, head: 8, tail: 6)), findsOneWidget);
+    expect(textPlain('12 ERG'), findsOneWidget);
     await disposeHome(tester);
   });
 
@@ -115,12 +115,12 @@ void main() {
     addTearDown(() => privacyService.setHideBalances(false));
     await wallets(tester, pinnedSnapshot: snapshot('ov-pinned', 12000000000));
     await pumpHome(tester);
-    expect(tester.widget<Text>(find.byKey(const Key('overview-total'))).data, '••••••');
-    expect(find.text('12'), findsNothing);
-    expect(find.text('2.5'), findsNothing);
-    expect(find.text('••••'), findsNWidgets(3), reason: 'every row with a known balance');
-    expect(find.text('incl. funds on 1 other address'), findsOneWidget);
-    expect(find.textContaining('3 ERG'), findsNothing);
+    expect(plainOf(tester, find.byKey(const Key('overview-total'))), '•••••• ERG');
+    expect(textPlainContaining(RegExp(r'\b12\b')), findsNothing);
+    expect(textPlainContaining('2.5'), findsNothing);
+    expect(textPlain('•••• ERG'), findsNWidgets(3), reason: 'every row with a known balance');
+    expect(textPlain('Funds on another address'), findsOneWidget);
+    expect(textPlainContaining('3 ERG'), findsNothing);
     await disposeHome(tester);
   });
 
@@ -141,7 +141,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('overview-watch-address')));
     await tester.pumpAndSettle();
-    expect(find.text('Watch an address'), findsOneWidget);
+    expect(find.descendant(of: find.byType(AlertDialog), matching: find.text('Watch an address')), findsOneWidget);
     await tester.tap(find.text('Cancel'));
     await tester.pumpAndSettle();
     await disposeHome(tester);
@@ -169,11 +169,8 @@ void main() {
     expect(walletService.isUnlocked, isFalse);
     expect(api.balanceCalls, containsAll([zero, vanity]));
     final row = find.byKey(const ValueKey('overview-row-seed-ov-pinned'));
-    expect(find.descendant(of: row, matching: find.text('13.5')), findsOneWidget);
-    expect(
-      find.descendant(of: row, matching: find.text('incl. 4 ERG on 1 other address')),
-      findsOneWidget,
-    );
+    expect(find.descendant(of: row, matching: textPlain('13.5 ERG')), findsOneWidget);
+    expect(find.descendant(of: row, matching: textPlain('4 ERG on another address')), findsOneWidget);
     await disposeHome(tester);
   });
 

@@ -26,16 +26,21 @@ import '../services/watch_only_service.dart';
 import '../theme/argus_theme.dart';
 import 'assets_screen.dart';
 import 'create_wallet_screen.dart';
-import 'discover_screen.dart';
 import 'ergopay_screen.dart';
+import 'home/erg_price_feed.dart';
+import 'home/home_data.dart' show isPendingTx;
+import 'home/home_models.dart';
 import 'home/overview_model.dart';
 import 'home/unlock_gate.dart';
 import 'home/wallet_ledger.dart';
+import 'home/wallet_nav_bar.dart';
+import 'home/wallet_page.dart';
 import 'home/watched_wallet.dart';
 import 'pin_fields.dart';
 import 'restore_wallet_screen.dart';
 import 'scan_screen.dart';
 import 'send_screen.dart';
+import 'settings/network_settings_page.dart';
 import 'settings_screen.dart';
 import 'swap_hub_screen.dart';
 import 'transaction_detail_screen.dart';
@@ -46,8 +51,6 @@ import 'widgets/error_sheet.dart';
 import 'widgets/token_detail_sheet.dart';
 import 'widgets/wallet_view_boundary.dart';
 import 'widgets/watch_account_list.dart';
-
-export 'home/wallet_sections.dart' show SyncStatusLine;
 
 /// The app's home: the overview of every wallet, and the page of the one
 /// that is open.
@@ -61,9 +64,14 @@ export 'home/wallet_sections.dart' show SyncStatusLine;
 /// the same page with key-only actions swapped for their watch-only
 /// equivalent ([WatchedWalletPage]).
 ///
+/// An unlocked seed wallet's page has four tabs: Wallet ([WalletLedger]),
+/// Activity, Discover (every protocol and tool, which replaced the Swap
+/// tab: Swap is one of the wallet's actions) and Settings.
+///
 /// This state also owns what must run whichever page shows: the poll of
-/// the unlocked wallet, the overview's public refresh, deep links and
-/// incoming-payment notifications.
+/// the unlocked wallet, the overview's public refresh, the ERG price
+/// history the home screens chart, deep links and incoming-payment
+/// notifications.
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, this.initializeWalletService});
 
@@ -78,6 +86,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   bool _loading = true;
   final _sync = walletSyncController;
   final _overview = WalletsOverviewModel();
+  final _price = ErgPriceFeed();
 
   /// The wallet whose page is showing; null shows the overview.
   WalletRef? _open;
@@ -106,13 +115,12 @@ class _DashboardScreenState extends State<DashboardScreen>
   bool _gateStatusIsError = false;
   final _pinCtrl = TextEditingController();
 
-  /// Wallet page tabs: 0 wallet, 1 activity, 2 swap, 3 settings. Tabs are
-  /// built on first visit so unlocking doesn't fan out into every protocol
+  /// Wallet page tabs: 0 wallet, 1 activity, 2 discover, 3 settings. Tabs
+  /// are built on first visit so unlocking doesn't fan out into every
   /// screen's network calls at once.
   int _tab = 0;
   final Set<int> _visitedTabs = {0};
-  SwapVenue _swapVenue = enabledVenues().first;
-  static const _tabTitles = ['', 'Activity', 'Swap', 'Settings'];
+  static const _tabOrder = [WalletTab.wallet, WalletTab.activity, WalletTab.discover, WalletTab.settings];
 
   /// Poll for mempool changes (pending activity, balance, spendable UTXOs)
   /// while a wallet is unlocked. A tick is a light refresh on the known
@@ -144,6 +152,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     WidgetsBinding.instance.addObserver(this);
     walletService.unlocked.addListener(_syncLock);
     _overview.attach();
+    _price.attach();
     watchOnlyService.addListener(_onWatchedListChanged);
     watchAccountService.addListener(_onWatchedListChanged);
     _sync.addListener(_onSyncChanged);
@@ -172,6 +181,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     sigmafiService.removeListener(_onDuckpoolsChanged);
     deepLinkController.removeListener(_onDeepLink);
     _overview.dispose();
+    _price.dispose();
     _pinCtrl.dispose();
     super.dispose();
   }
@@ -864,37 +874,14 @@ class _DashboardScreenState extends State<DashboardScreen>
   }
 
   Future<void> _labelAddress(String address) async {
-    final existing = addressLabelService.labelFor(address) ?? '';
-    final ctrl = TextEditingController(text: existing);
-    final ok = await showDialog<bool>(
+    final label = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Address label'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SelectableText(
-              shorten(address, head: 10, tail: 8),
-              style: monoStyle(ctx, size: 11),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: ctrl,
-              decoration: const InputDecoration(labelText: 'Label (optional)'),
-              autofocus: true,
-              textCapitalization: TextCapitalization.words,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
-        ],
+      builder: (_) => _AddressLabelDialog(
+        address: address,
+        initial: addressLabelService.labelFor(address) ?? '',
       ),
     );
-    final label = ctrl.text;
-    ctrl.dispose();
-    if (ok != true) return;
+    if (label == null) return;
     await addressLabelService.setLabel(address, label);
     if (mounted) setState(() {});
   }
@@ -959,12 +946,15 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
   }
 
-  /// Switches to the swap tab on [venue]; embedded screens read balances
-  /// from the enclosing [WalletArgsScope].
-  void _goHub(SwapVenue venue) {
-    venue = coerceVenue(venue);
-    if (_swapVenue != venue) setState(() => _swapVenue = venue);
-    _selectTab(2);
+  /// The swap screen on [venue]: the DEX from the Swap action, AgeUSD and
+  /// Dexy from their Discover rows. It reads live balances from the app's
+  /// wallet scope, as every pushed screen does.
+  void _openSwap(SwapVenue venue) {
+    if (!_guardUnlocked()) return;
+    Navigator.push(
+      context,
+      fadeRoute(SwapHubScreen(initialTab: coerceVenue(venue)), settings: RouteSettings(arguments: _args())),
+    );
   }
 
   void _openTx(Map<String, dynamic> tx) {
@@ -997,28 +987,19 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   void _openSettings() => _selectTab(3);
 
-  /// Where a feature lives: a venue in the Swap tab, or a route.
+  /// Where a feature lives: a venue of the swap screen, or a route.
   void _openFeature(DiscoverFeature feature) {
     final e = discoverExplainers[feature]!;
     if (e.venue != null) {
-      _goHub(e.venue!);
+      _openSwap(e.venue!);
     } else {
       _go(e.route!);
     }
   }
 
+  /// A Discover row: the feature's explainer, whose button opens it.
   void _openDiscover(DiscoverFeature feature) {
     showDiscoverSheet(context, feature: feature, onGo: () => _openFeature(feature));
-  }
-
-  /// The Discover page lists everything; its explainer's button comes
-  /// back here with the feature to open.
-  Future<void> _exploreAll() async {
-    final chosen = await Navigator.push<DiscoverFeature>(
-      context,
-      fadeRoute(const DiscoverScreen(), settings: RouteSettings(arguments: _args())),
-    );
-    if (chosen != null && mounted) _openFeature(chosen);
   }
 
   String _walletName(String? walletId) =>
@@ -1075,13 +1056,14 @@ class _DashboardScreenState extends State<DashboardScreen>
   Widget _overviewScreen() {
     return WalletsOverviewScreen(
       model: _overview,
+      priceFeed: _price,
       onOpen: _openWallet,
       onCreate: _openCreate,
       onRestore: _openRestore,
       onWatchAddress: () => addWatchAddress(context),
       onWatchAccount: () => addWatchAccount(context),
       onSettings: () => Navigator.push(context, fadeRoute(const SettingsScreen())),
-      onLock: walletService.isUnlocked ? _lock : null,
+      onNetwork: () => Navigator.push(context, fadeRoute(const NetworkSettingsPage())),
       notice: _notice,
       noticeIsError: _noticeIsError,
     );
@@ -1097,6 +1079,7 @@ class _DashboardScreenState extends State<DashboardScreen>
         cached: ref.kind == WalletKind.watchedAddress
             ? _overview.watchedHoldings(ref.id)
             : null,
+        priceFeed: _price,
         onClose: _closeWallet,
         onRemoved: _onWatchedRemoved,
       ),
@@ -1108,78 +1091,42 @@ class _DashboardScreenState extends State<DashboardScreen>
     final name = info?.name ?? 'Wallet';
     final unlocked = _walletUnlocked && _walletId == walletId;
     final owns = unlocked && _sync.ownsWallet(walletId);
+    final tab = _tabOrder[_tab];
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _back();
       },
-      child: Scaffold(
-        appBar: AppBar(
-          leading: BackButton(onPressed: _closeWallet),
-          title: Text(
-            owns && _tab != 0 ? _tabTitles[_tab] : name,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.headlineSmall,
-          ),
-          actions: [
-            if (owns)
-              IconButton(
-                icon: const Icon(Icons.qr_code_scanner),
-                tooltip: 'Scan',
-                onPressed: _scan,
-              ),
-            if (owns)
-              IconButton(
-                icon: const Icon(Icons.lock_open_outlined),
-                tooltip: 'Lock wallet',
-                onPressed: _lock,
-              ),
-          ],
-        ),
+      child: WalletPageScreen(
+        title: owns && tab != WalletTab.wallet ? walletTabLook(tab).label : name,
+        onBack: _closeWallet,
+        actions: [
+          if (owns && tab == WalletTab.wallet)
+            IconButton(
+              key: const Key('wallet-scan'),
+              icon: const Icon(Icons.qr_code_scanner),
+              tooltip: 'Scan a QR code',
+              onPressed: _scan,
+            ),
+        ],
         body: ListenableBuilder(
           listenable: Listenable.merge([addressLabelService, privacyService]),
-          builder: (context, _) => Column(
-            children: [
-              const WarningStrip(),
-              Expanded(
-                child: WalletViewBoundary(
-                  controller: _sync,
-                  walletId: walletId,
-                  unlocked: unlocked,
-                  ledger: (_) => _tabs(walletId),
-                  gate: (_) => _gate(walletId, info),
-                ),
-              ),
-            ],
+          builder: (context, _) => WalletViewBoundary(
+            controller: _sync,
+            walletId: walletId,
+            unlocked: unlocked,
+            ledger: (_) => _tabs(walletId),
+            gate: (_) => _gate(walletId, info),
           ),
         ),
-        bottomNavigationBar: owns
-            ? NavigationBar(
-                selectedIndex: _tab,
-                onDestinationSelected: _selectTab,
-                destinations: const [
-                  NavigationDestination(
-                    icon: Icon(Icons.account_balance_wallet_outlined),
-                    selectedIcon: Icon(Icons.account_balance_wallet),
-                    label: 'Wallet',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.schedule_outlined),
-                    selectedIcon: Icon(Icons.schedule),
-                    label: 'Activity',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.swap_horiz_outlined),
-                    selectedIcon: Icon(Icons.swap_horiz),
-                    label: 'Swap',
-                  ),
-                  NavigationDestination(
-                    icon: Icon(Icons.settings_outlined),
-                    selectedIcon: Icon(Icons.settings),
-                    label: 'Settings',
-                  ),
-                ],
+        navBar: owns
+            ? ListenableBuilder(
+                listenable: _sync,
+                builder: (context, _) => WalletNavBar(
+                  current: tab,
+                  onSelect: (t) => _selectTab(_tabOrder.indexOf(t)),
+                  pendingCount: _sync.displayActivity.where(isPendingTx).length,
+                ),
               )
             : null,
       ),
@@ -1228,9 +1175,10 @@ class _DashboardScreenState extends State<DashboardScreen>
           WalletLedger(
             sync: _sync,
             wallet: _overview.wallet(walletId),
+            priceFeed: _price,
             actions: WalletLedgerActions(
               go: _go,
-              swap: _goHub,
+              swap: _openSwap,
               showActivity: () => _selectTab(1),
               showSettings: _openSettings,
               viewAssets: () => Navigator.push(
@@ -1240,9 +1188,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               openTx: _openTx,
               openToken: _openToken,
               labelAddress: _labelAddress,
-              openFeature: _openFeature,
-              explainFeature: _openDiscover,
-              exploreAll: _exploreAll,
+              lock: _lock,
             ),
           ),
           lazy(
@@ -1253,14 +1199,7 @@ class _DashboardScreenState extends State<DashboardScreen>
               args: args,
             ),
           ),
-          lazy(
-            2,
-            () => SwapHubScreen(
-              embedded: true,
-              venue: _swapVenue,
-              onVenueChanged: (v) => _swapVenue = v,
-            ),
-          ),
+          lazy(2, () => WalletDiscover(sync: _sync, onExplain: _openDiscover)),
           lazy(
             3,
             () => SettingsScreen(
@@ -1274,6 +1213,59 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Names an address; pops with the label, or null when cancelled.
+///
+/// It owns its field's controller, so the field keeps it for as long as the
+/// dialog is on screen, its closing animation included: disposing it when
+/// the dialog's future completed left the fading field with a dead
+/// controller.
+class _AddressLabelDialog extends StatefulWidget {
+  const _AddressLabelDialog({required this.address, required this.initial});
+
+  final String address;
+  final String initial;
+
+  @override
+  State<_AddressLabelDialog> createState() => _AddressLabelDialogState();
+}
+
+class _AddressLabelDialogState extends State<_AddressLabelDialog> {
+  late final _ctrl = TextEditingController(text: widget.initial);
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Address label'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SelectableText(
+            shorten(widget.address, head: 10, tail: 8),
+            style: monoStyle(context, size: 11),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _ctrl,
+            decoration: const InputDecoration(labelText: 'Label (optional)'),
+            autofocus: true,
+            textCapitalization: TextCapitalization.words,
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(onPressed: () => Navigator.pop(context, _ctrl.text), child: const Text('Save')),
+      ],
     );
   }
 }

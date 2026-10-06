@@ -73,10 +73,12 @@ File? _sdkFont(String name) {
 
 /// The app's theme for [palette], with Roboto behind the brand fonts for
 /// the glyphs they lack, as the phone's own fallback would be.
-ThemeData renderTheme(PaletteSpec palette) {
-  final theme = argusThemeFor(palette);
-  return theme.copyWith(textTheme: theme.textTheme.apply(fontFamilyFallback: const ['Roboto']));
-}
+ThemeData renderTheme(PaletteSpec palette) => withRenderFallback(argusThemeFor(palette));
+
+/// [theme] with Roboto behind its fonts, for a render of a screen that
+/// takes its theme from elsewhere.
+ThemeData withRenderFallback(ThemeData theme) =>
+    theme.copyWith(textTheme: theme.textTheme.apply(fontFamilyFallback: const ['Roboto']));
 
 /// Pumps [screen] as the whole app on a [renderSize] phone, or [height]
 /// tall, with text at [textScale].

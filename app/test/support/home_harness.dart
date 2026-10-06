@@ -4,6 +4,7 @@ import 'package:argus_wallet/bridge/argus_error.dart';
 import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/network_controller.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
+import 'package:argus_wallet/theme/argus_theme.dart';
 import 'package:argus_wallet/theme/theme_controller.dart';
 import 'package:argus_wallet/ui/dashboard_screen.dart';
 import 'package:argus_wallet/ui/receive_screen.dart';
@@ -201,13 +202,16 @@ class FakeKeystore {
 
 /// Pumps the real home screen at phone size, in the app's theme, without
 /// native init or the node probe. Text scale is clamped to 1.6 as the app
-/// itself does, unless [clampText] is false.
+/// itself does, unless [clampText] is false. [palette] picks a palette
+/// other than the app's default for the brightness, as Display settings
+/// would.
 Future<void> pumpHome(
   WidgetTester tester, {
   Size size = const Size(390, 844),
   double textScale = 1,
   bool clampText = true,
   bool dark = false,
+  PaletteSpec? palette,
   Map<String, WidgetBuilder> routes = const {},
   TransitionBuilder? builder,
 }) async {
@@ -218,14 +222,18 @@ Future<void> pumpHome(
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
   final scaler = TextScaler.linear(textScale);
+  // Where a test has loaded the app's fonts, Roboto stands in behind them
+  // as the phone's own fallback would; elsewhere the test font is used.
+  final light = palette != null && !palette.isDark ? argusThemeFor(palette) : themeController.lightTheme;
+  final darkTheme = palette != null && palette.isDark ? argusThemeFor(palette) : themeController.darkTheme;
   await tester.pumpWidget(
     RepaintBoundary(
       key: renderBoundaryKey,
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
-        theme: themeController.lightTheme,
-        darkTheme: themeController.darkTheme,
-        themeMode: dark ? ThemeMode.dark : ThemeMode.light,
+        theme: withRenderFallback(light),
+        darkTheme: withRenderFallback(darkTheme),
+        themeMode: dark || (palette?.isDark ?? false) ? ThemeMode.dark : ThemeMode.light,
         builder: (context, child) {
           final scaled = MediaQuery(
             data: MediaQuery.of(context).copyWith(

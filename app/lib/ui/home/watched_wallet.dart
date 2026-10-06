@@ -5,14 +5,12 @@ import 'package:flutter/services.dart';
 
 import '../../format.dart';
 import '../../services/network_controller.dart';
-import '../../services/pending_balance.dart';
 import '../../services/privacy_service.dart';
 import '../../services/token_pricer.dart';
 import '../../services/wallet_service.dart';
 import '../../services/watch_account_service.dart';
 import '../../theme/argus_theme.dart';
 import '../cold_signing_screen.dart';
-import '../offline_banner.dart';
 import '../settings_screen.dart';
 import '../transaction_detail_screen.dart';
 import '../transactions_screen.dart';
@@ -20,9 +18,12 @@ import '../widgets/asset_tile.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/soft_card.dart';
 import '../widgets/token_detail_sheet.dart';
+import 'erg_price_feed.dart';
+import 'home_data.dart';
+import 'home_models.dart';
 import 'overview_model.dart';
-import 'value_lines.dart';
-import 'wallet_sections.dart';
+import 'wallet_nav_bar.dart';
+import 'wallet_page.dart';
 
 /// What a watched wallet's page shows, read from public data only: the
 /// node's balance and history for a watched address, the last scan for a
@@ -242,8 +243,8 @@ List<TokenBalance> orderTokensForWatched(List<TokenBalance> tokens) {
 }
 
 /// The standard wallet page for a wallet with no key on this device. Same
-/// sections as a seed wallet; Send becomes "Send with offline signer", and
-/// whatever needs a key here (swap, mix, tools) is left out.
+/// page as a seed wallet's; Send becomes "Send with offline signer", and
+/// whatever needs a key here (swap, mix, tools, Discover) is left out.
 class WatchedWalletPage extends StatefulWidget {
   const WatchedWalletPage({
     super.key,
@@ -252,6 +253,7 @@ class WatchedWalletPage extends StatefulWidget {
     required this.onClose,
     required this.onRemoved,
     this.cached,
+    this.priceFeed,
   });
 
   final WalletRef target;
@@ -266,16 +268,20 @@ class WatchedWalletPage extends StatefulWidget {
   /// The overview's last read of a watched address, painted at once.
   final WatchedHoldings? cached;
 
+  /// ERG's day of prices, for the ERG row's 24h change.
+  final ErgPriceFeed? priceFeed;
+
+  /// No Discover: a watched wallet has no keys to use a protocol with.
+  static const _tabs = [WalletTab.wallet, WalletTab.activity, WalletTab.settings];
+
   @override
   State<WatchedWalletPage> createState() => _WatchedWalletPageState();
 }
 
 class _WatchedWalletPageState extends State<WatchedWalletPage> {
   late final WatchedWalletSource _source = _sourceFor(widget.target);
-  int _tab = 0;
-  final Set<int> _visited = {0};
-  static const _assetCap = 4;
-  static const _titles = ['', 'Activity', 'Settings'];
+  WalletTab _tab = WalletTab.wallet;
+  final Set<WalletTab> _visited = {WalletTab.wallet};
 
   WatchedWalletSource _sourceFor(WalletRef ref) {
     if (ref.kind == WalletKind.watchedAccount) {
@@ -302,17 +308,17 @@ class _WatchedWalletPageState extends State<WatchedWalletPage> {
     super.dispose();
   }
 
-  void _selectTab(int index) {
-    if (index == _tab) return;
+  void _selectTab(WalletTab tab) {
+    if (tab == _tab) return;
     setState(() {
-      _tab = index;
-      _visited.add(index);
+      _tab = tab;
+      _visited.add(tab);
     });
   }
 
   void _back() {
-    if (_tab != 0) {
-      _selectTab(0);
+    if (_tab != WalletTab.wallet) {
+      _selectTab(WalletTab.wallet);
     } else {
       widget.onClose();
     }
@@ -320,9 +326,7 @@ class _WatchedWalletPageState extends State<WatchedWalletPage> {
 
   void _snack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _send() async {
@@ -366,10 +370,17 @@ class _WatchedWalletPageState extends State<WatchedWalletPage> {
   }
 
   void _openToken(TokenBalance t) => showTokenDetailSheet(
-    context,
-    token: t,
-    explorerUrl: networkController.explorerToken(t.id),
-  );
+        context,
+        token: t,
+        explorerUrl: networkController.explorerToken(t.id),
+      );
+
+  void _allAssets() => Navigator.push(context, fadeRoute(WatchedAssetsScreen(source: _source)));
+
+  Future<void> _copyAddress(String address) async {
+    await Clipboard.setData(ClipboardData(text: address));
+    _snack('Address copied');
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -378,296 +389,191 @@ class _WatchedWalletPageState extends State<WatchedWalletPage> {
       onPopInvokedWithResult: (didPop, _) {
         if (!didPop) _back();
       },
-      child: Scaffold(
-        appBar: AppBar(
-          leading: BackButton(onPressed: widget.onClose),
-          title: Text(
-            _tab == 0 ? widget.name : _titles[_tab],
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: Theme.of(context).textTheme.headlineSmall,
-          ),
+      child: ListenableBuilder(
+        listenable: _source,
+        builder: (context, _) => WalletPageScreen(
+          title: _tab == WalletTab.wallet ? widget.name : walletTabLook(_tab).label,
+          onBack: widget.onClose,
           actions: [
-            if (_tab == 0)
-              ListenableBuilder(
-                listenable: _source,
-                builder: (context, _) => IconButton(
-                  tooltip: _source.isAccount ? 'Rescan account' : 'Refresh',
-                  icon: _source.loading
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.refresh),
-                  onPressed: _source.loading ? null : _source.refresh,
-                ),
+            if (_tab == WalletTab.wallet)
+              IconButton(
+                tooltip: _source.isAccount ? 'Rescan account' : 'Refresh',
+                icon: _source.loading
+                    ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.refresh),
+                onPressed: _source.loading ? null : _source.refresh,
               ),
           ],
-        ),
-        body: Column(
-          children: [
-            const WarningStrip(),
-            Expanded(
-              child: IndexedStack(
-                index: _tab,
-                children: [
-                  _walletTab(),
-                  _visited.contains(1)
-                      ? _activityTab()
-                      : const SizedBox.shrink(),
-                  _visited.contains(2)
-                      ? SettingsScreen(
-                          key: ValueKey('settings-${widget.target}'),
-                          embedded: true,
-                          watched: widget.target,
-                          onShowAllWallets: widget.onClose,
-                          onWalletRemoved: (_) => widget.onRemoved(),
-                        )
-                      : const SizedBox.shrink(),
-                ],
-              ),
-            ),
-          ],
-        ),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _tab,
-          onDestinationSelected: _selectTab,
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.account_balance_wallet_outlined),
-              selectedIcon: Icon(Icons.account_balance_wallet),
-              label: 'Wallet',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.schedule_outlined),
-              selectedIcon: Icon(Icons.schedule),
-              label: 'Activity',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.settings_outlined),
-              selectedIcon: Icon(Icons.settings),
-              label: 'Settings',
-            ),
-          ],
+          body: IndexedStack(
+            index: WatchedWalletPage._tabs.indexOf(_tab),
+            children: [
+              _walletTab(),
+              _visited.contains(WalletTab.activity) ? _activityTab() : const SizedBox.shrink(),
+              _visited.contains(WalletTab.settings)
+                  ? SettingsScreen(
+                      key: ValueKey('settings-${widget.target}'),
+                      embedded: true,
+                      watched: widget.target,
+                      onShowAllWallets: widget.onClose,
+                      onWalletRemoved: (_) => widget.onRemoved(),
+                    )
+                  : const SizedBox.shrink(),
+            ],
+          ),
+          navBar: WalletNavBar(
+            current: _tab,
+            onSelect: _selectTab,
+            watchOnly: true,
+            pendingCount: _source.recent.where(isPendingTx).length,
+          ),
         ),
       ),
     );
   }
 
   Widget _activityTab() {
-    return ListenableBuilder(
-      listenable: _source,
-      builder: (context, _) {
-        final args = _source.routeArgs;
-        if (args == null) {
-          return EmptyState(
-            icon: Icons.account_tree_outlined,
-            title: 'Account not scanned',
-            body: 'Refresh the account to read its addresses and activity.',
-            actionLabel: 'Refresh account',
-            onAction: _source.refresh,
-          );
-        }
-        return TransactionsScreen(
-          // A rescan can change the address set; the list follows it.
-          key: ValueKey('watched-activity-${args.historyAddresses.length}'),
-          embedded: true,
-          args: args,
-        );
-      },
+    final args = _source.routeArgs;
+    if (args == null) {
+      return EmptyState(
+        icon: Icons.account_tree_outlined,
+        title: 'Account not scanned',
+        body: 'Refresh the account to read its addresses and activity.',
+        actionLabel: 'Refresh account',
+        onAction: _source.refresh,
+      );
+    }
+    return TransactionsScreen(
+      // A rescan can change the address set; the list follows it.
+      key: ValueKey('watched-activity-${args.historyAddresses.length}'),
+      embedded: true,
+      args: args,
     );
   }
 
   Widget _walletTab() {
     return ListenableBuilder(
       listenable: Listenable.merge([
-        _source,
         privacyService,
         tokenPricer,
         networkController,
         walletService.metadataChanges,
+        ?widget.priceFeed,
       ]),
       builder: (context, _) {
         final s = _source;
         final hidden = privacyService.hideBalances;
         final holdings = s.tokens.map(walletService.displayMetadata).toList();
-        final values = [
-          for (final t in holdings)
-            (id: t.id, amount: t.amount, decimals: t.decimals),
-        ];
-        final tiles = <Widget>[
-          AssetTile.erg(
-            balanceNano: s.balanceNano,
-            fiatText: networkController.fiatText(s.balanceNano),
-            hidden: hidden,
-            showChevron: false,
-          ),
-          for (final t in holdings)
-            AssetTile.token(
-              t,
-              fiatText: t.isCollectible
-                  ? null
-                  : tokenPricer.fiatTextFor(
-                      tokenId: t.id,
-                      amount: t.amount,
-                      decimals: t.decimals,
-                    ),
-              hidden: hidden,
-              onTap: () => _openToken(t),
-            ),
-        ];
-        final identity = s.identity;
-        return RefreshIndicator(
+        final shown = s.recent.take(WalletPageView.activityLimit).toList();
+        final data = watchedPageData(
+          s,
+          ref: widget.target,
+          name: widget.name,
+          holdings: holdings,
+          shown: shown,
+          hidden: hidden,
+          price: ergPriceView(widget.priceFeed?.history),
+        );
+        final address = s.identity;
+        return WalletPageView(
+          data: data,
           onRefresh: s.refresh,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
-            children: [
-              const OfflineBanner(),
-              WalletBalanceCard(
-                label: s.isAccount ? 'WATCHED ACCOUNT' : 'WATCHED ADDRESS',
-                balanceNano: s.balanceNano,
-                loading: s.balanceNano == null && s.loading,
-                hidden: hidden,
-                onToggleHidden: () => privacyService.setHideBalances(!hidden),
-                valueLine: s.balanceNano == null
-                    ? null
-                    : headlineValueLine(
-                        ergNano: s.balanceNano,
-                        tokens: values,
-                        hidden: hidden,
-                      ),
-                pending: switch (s.balanceNano) {
-                  final shown? => s.pending?.under(shown),
-                  null => null,
-                },
-                identity: identity == null
-                    ? null
-                    : WalletIdentityLine(address: identity),
-                footer: WatchedStatusStrip(
-                  lines: [
-                    'Watch-only · cannot sign here',
-                    if (s.loading)
-                      s.isAccount ? 'Scanning…' : 'Refreshing…'
-                    else if (s.updatedAt != null)
-                      'Updated ${formatSyncAge(s.updatedAt)}',
-                  ],
-                  error: s.error,
-                ),
-              ),
-              const SizedBox(height: 12),
-              WatchOnlyActions(
-                onSend: s.ready ? _send : null,
-                // An account without a complete scan has no unused address
-                // it can vouch for; the scan is a refresh away.
-                onReceive: !s.isAccount || (s.ready && !s.loading)
-                    ? _receive
-                    : null,
-              ),
-              const SizedBox(height: 14),
-              WalletNotice(
-                lines: s.isAccount
-                    ? const [
-                        watchAccountLimitations,
-                        'Discovery stops after 20 unused addresses. Payments beyond a larger gap can be missed.',
-                      ]
-                    : const [
-                        'Cannot sign locally. Send with an offline signer; change returns to this same address. A watched account tracks more addresses.',
-                      ],
-              ),
-              const SizedBox(height: 28),
-              AssetsSection(
-                title: 'Assets',
-                tiles: tiles.take(_assetCap).toList(),
-                total: tiles.length,
-                onViewAll: tiles.length > _assetCap
-                    ? () => Navigator.push(
-                        context,
-                        fadeRoute(WatchedAssetsScreen(source: _source)),
-                      )
-                    : null,
-              ),
-              const SizedBox(height: 28),
-              RecentActivitySection(
-                rows: s.recent,
-                hidden: hidden,
-                onOpen: _openTx,
-                onViewAll: s.ready ? () => _selectTab(1) : null,
-                loading: !s.activityLoaded && s.loading,
-                error: s.recent.isEmpty ? s.activityError : null,
-                emptyBody: s.ready
-                    ? 'Payments to this ${s.isAccount ? 'account' : 'address'} will show up here.'
-                    : 'Refresh the account to read its activity.',
-              ),
-              if (identity != null) ...[
-                const SizedBox(height: 28),
-                _AddressCard(
-                  title: s.isAccount ? 'First address' : 'Address',
-                  address: identity,
-                  note: s.isAccount
-                      ? 'Check this matches the first address in the wallet the key came from: '
-                            'an extended key has no checksum. '
-                            '${s.historyAddresses.length} addresses scanned.'
-                      : null,
-                  onCopy: () async {
-                    await Clipboard.setData(ClipboardData(text: identity));
-                    _snack('Address copied');
-                  },
-                ),
-              ],
-            ],
-          ),
+          onToggleHidden: () => privacyService.setHideBalances(!hidden),
+          onAction: (a) => switch (a) {
+            WalletAction.sendOffline => _send(),
+            WalletAction.receive => _receive(),
+            _ => null,
+          },
+          onAsset: (id) {
+            if (id == 'ERG') return _allAssets();
+            for (final t in holdings) {
+              if (t.id == id) return _openToken(t);
+            }
+          },
+          onAllAssets: _allAssets,
+          onActivity: (id) {
+            for (final (i, tx) in shown.indexed) {
+              if (activityRowId(tx, i) == id) return _openTx(tx);
+            }
+          },
+          onAllActivity: s.ready ? () => _selectTab(WalletTab.activity) : null,
+          onReceive: data.watched!.canReceive && s.ready ? _receive : null,
+          onRetry: networkController.probe,
+          onCopyAddress: address == null ? null : () => _copyAddress(address),
         );
       },
     );
   }
 }
 
-class _AddressCard extends StatelessWidget {
-  const _AddressCard({
-    required this.title,
-    required this.address,
-    required this.onCopy,
-    this.note,
-  });
-
-  final String title;
-  final String address;
-  final String? note;
-  final VoidCallback onCopy;
-
-  @override
-  Widget build(BuildContext context) {
-    final muted = ArgusColors.of(context).muted;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SectionHeader(title),
-        const SizedBox(height: 10),
-        SoftCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SelectableText(address, style: monoStyle(context, size: 12.5)),
-              if (note != null) ...[
-                const SizedBox(height: 8),
-                Text(note!, style: TextStyle(fontSize: 12.5, color: muted)),
-              ],
-              const SizedBox(height: 4),
-              Align(
-                alignment: Alignment.centerRight,
-                child: TextButton.icon(
-                  onPressed: onCopy,
-                  icon: const Icon(Icons.copy, size: 16),
-                  label: const Text('Copy'),
-                ),
-              ),
-            ],
-          ),
-        ),
+/// A watched wallet's page from its public reads: the balance and tokens
+/// of the address or the account's last scan, its last few transactions,
+/// and what it can and cannot do from here.
+WalletPageData watchedPageData(
+  WatchedWalletSource s, {
+  required WalletRef ref,
+  required String name,
+  required List<TokenBalance> holdings,
+  required List<Map<String, dynamic>> shown,
+  required bool hidden,
+  ErgPriceView? price,
+}) {
+  final nano = s.balanceNano;
+  final value = holdingsFiat(nano, [
+    for (final t in holdings) (id: t.id, amount: t.amount, decimals: t.decimals),
+  ]);
+  return WalletPageData(
+    wallet: WalletSummary(
+      ref: ref,
+      name: name,
+      nanoErg: nano,
+      loading: nano == null && s.loading,
+      fiatValue: value.fiat,
+      tokenCount: nano == null ? null : holdings.length,
+      pending: nano == null ? null : s.pending?.under(nano),
+      address: s.identity,
+    ),
+    currency: homeCurrency(),
+    offline: networkOffline(),
+    assets: nano == null ? const [] : assetRows(nano, holdings, price),
+    assetCount: nano == null ? 0 : 1 + holdings.length,
+    activity: [for (final (i, tx) in shown.indexed) activityRow(tx, id: activityRowId(tx, i))],
+    activityLoading: !s.activityLoaded && s.loading,
+    activityError: s.recent.isEmpty ? s.activityError : null,
+    activityEmpty: s.ready ? 'No activity yet' : 'Refresh the account to read its activity.',
+    activityEmptyAction: s.ready ? 'Show its address' : null,
+    unpricedCount: value.unpriced,
+    pricesNote: pricesNote(),
+    hidden: hidden,
+    pendingCount: s.recent.where(isPendingTx).length,
+    watched: WatchedDetails(
+      status: [
+        'Watch-only · cannot sign here',
+        if (s.loading)
+          s.isAccount ? 'Scanning…' : 'Refreshing…'
+        else if (s.updatedAt != null)
+          'Updated ${formatSyncAge(s.updatedAt)}',
       ],
-    );
-  }
+      error: s.error,
+      notes: s.isAccount
+          ? const [
+              watchAccountLimitations,
+              'Discovery stops after 20 unused addresses. Payments beyond a larger gap can be missed.',
+            ]
+          : const [
+              'Cannot sign locally. Send with an offline signer; change returns to this same address. A watched account tracks more addresses.',
+            ],
+      addressTitle: s.isAccount ? 'First address' : 'Address',
+      addressNote: s.isAccount
+          ? 'Check this matches the first address in the wallet the key came from: '
+              'an extended key has no checksum. '
+              '${s.historyAddresses.length} addresses scanned.'
+          : null,
+      canSend: s.ready,
+      // An account without a complete scan has no unused address it can
+      // vouch for; the scan is a refresh away.
+      canReceive: !s.isAccount || (s.ready && !s.loading),
+    ),
+  );
 }
 
 /// Every holding of a watched wallet. The signing wallet's Assets screen

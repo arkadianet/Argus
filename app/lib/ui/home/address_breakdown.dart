@@ -4,60 +4,22 @@ import 'package:flutter/services.dart';
 import '../../format.dart';
 import '../../services/address_holdings.dart';
 import '../../theme/argus_theme.dart';
-
-/// The quiet "incl. 3.2 ERG · 4 tokens on 1 other address" line under a
-/// wallet's identity. Only built when other addresses hold something.
-class FundsElsewhereLink extends StatelessWidget {
-  const FundsElsewhereLink({
-    super.key,
-    required this.funds,
-    required this.hidden,
-    this.onTap,
-    this.fontSize = 12.5,
-  });
-
-  final FundsElsewhere funds;
-  final bool hidden;
-  final VoidCallback? onTap;
-  final double fontSize;
-
-  @override
-  Widget build(BuildContext context) {
-    final muted = ArgusColors.of(context).muted;
-    final text = Text(
-      fundsElsewhereLine(funds, hidden: hidden),
-      key: const Key('funds-elsewhere'),
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(fontSize: fontSize, color: muted),
-    );
-    if (onTap == null) return text;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(6),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Flexible(child: text),
-            Icon(Icons.chevron_right, size: 16, color: muted),
-          ],
-        ),
-      ),
-    );
-  }
-}
+import 'home_format.dart';
+import 'home_style.dart';
+import 'home_widgets.dart';
+import 'wallet_tools_sheet.dart';
 
 /// Holdings in the order the breakdown lists them: the address the wallet
 /// is shown as first, then every other funded address by index. Empty
-/// addresses are counted, not listed: a wallet can know dozens.
+/// addresses are counted, not listed, unless [listEmpty]: a wallet can
+/// know dozens.
 ({List<AddressHolding> listed, int emptyOthers}) breakdownRows(
   List<AddressHolding> holdings, {
   required String? identity,
+  bool listEmpty = false,
 }) {
   final listed = <AddressHolding>[];
-  var empty = 0;
+  final empty = <AddressHolding>[];
   AddressHolding? shownAs;
   for (final h in holdings) {
     if (h.address == identity) {
@@ -65,38 +27,50 @@ class FundsElsewhereLink extends StatelessWidget {
     } else if (h.holdsFunds) {
       listed.add(h);
     } else {
-      empty++;
+      empty.add(h);
     }
   }
-  listed.sort((a, b) {
+  int byIndex(AddressHolding a, AddressHolding b) {
     final ia = a.index, ib = b.index;
     if (ia == null && ib == null) return a.address.compareTo(b.address);
     if (ia == null) return 1;
     if (ib == null) return -1;
     return ia.compareTo(ib);
-  });
-  return (listed: [?shownAs, ...listed], emptyOthers: empty);
+  }
+
+  listed.sort(byIndex);
+  if (!listEmpty) return (listed: [?shownAs, ...listed], emptyOthers: empty.length);
+  return (listed: [?shownAs, ...listed, ...empty..sort(byIndex)], emptyOthers: 0);
 }
 
 /// Per-address split of a wallet's balance: index, address, ERG, tokens,
-/// with the address the wallet is shown as marked.
+/// with the address the wallet is shown as marked. From More it lists the
+/// empty addresses as well, so any address can be labelled; [labels] tells
+/// the sheet when a label changes.
 Future<void> showAddressBreakdownSheet(
   BuildContext context, {
   required String walletName,
   required List<AddressHolding> holdings,
   required String? identity,
   required bool hidden,
+  bool listEmpty = false,
+  String? Function(String address)? labelFor,
+  ValueChanged<String>? onLabel,
+  Listenable? labels,
 }) {
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (ctx) => AddressBreakdownSheet(
-      walletName: walletName,
-      holdings: holdings,
-      identity: identity,
-      hidden: hidden,
-    ),
+  Widget sheet() => AddressBreakdownSheet(
+        walletName: walletName,
+        holdings: holdings,
+        identity: identity,
+        hidden: hidden,
+        listEmpty: listEmpty,
+        labelFor: labelFor,
+        onLabel: onLabel,
+      );
+  return showHomeSheet<void>(
+    context,
+    // A label given from the sheet shows at once.
+    builder: (ctx) => labels == null ? sheet() : ListenableBuilder(listenable: labels, builder: (_, _) => sheet()),
   );
 }
 
@@ -107,60 +81,62 @@ class AddressBreakdownSheet extends StatelessWidget {
     required this.holdings,
     required this.identity,
     required this.hidden,
+    this.listEmpty = false,
+    this.labelFor,
+    this.onLabel,
   });
 
   final String walletName;
   final List<AddressHolding> holdings;
   final String? identity;
   final bool hidden;
+  final bool listEmpty;
+
+  /// The user's own name for an address, shown under it.
+  final String? Function(String address)? labelFor;
+
+  /// Tapping an address names it.
+  final ValueChanged<String>? onLabel;
 
   @override
   Widget build(BuildContext context) {
-    final muted = ArgusColors.of(context).muted;
-    final rows = breakdownRows(holdings, identity: identity);
+    final t = HomeText.of(context);
+    final rows = breakdownRows(holdings, identity: identity, listEmpty: listEmpty);
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: 0.6,
       minChildSize: 0.3,
-      maxChildSize: 0.92,
+      maxChildSize: 1,
       builder: (context, scroll) => ListView(
         controller: scroll,
-        padding: EdgeInsets.fromLTRB(
-          20,
-          0,
-          20,
-          24 + MediaQuery.paddingOf(context).bottom,
-        ),
+        padding: EdgeInsets.only(bottom: 16 + MediaQuery.paddingOf(context).bottom),
         children: [
-          Text(
-            'Where $walletName holds funds',
-            style: const TextStyle(
-              fontFamily: 'Newsreader',
-              fontWeight: FontWeight.w600,
-              fontSize: 20,
+          HomeSheetHeader(title: 'Addresses', subject: walletName),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(homeGutter, 0, homeGutter, 8),
+            child: Text(
+              'The wallet is shown as one address, but its balance covers every '
+              'address it knows. Any of them can spend from this wallet.',
+              style: t.secondary.copyWith(height: 1.4),
             ),
           ),
-          const SizedBox(height: 6),
-          Text(
-            'The wallet is shown as one address, but its balance covers every '
-            'address it knows. Any of them can spend from this wallet.',
-            style: TextStyle(fontSize: 13, color: muted),
-          ),
-          const SizedBox(height: 14),
           for (final h in rows.listed)
             _AddressHoldingRow(
               holding: h,
               shownAs: h.address == identity,
               hidden: hidden,
+              label: labelFor?.call(h.address),
+              onLabel: onLabel,
             ),
-          if (rows.emptyOthers > 0) ...[
-            const SizedBox(height: 8),
-            Text(
-              '${rows.emptyOthers} other known '
-              '${rows.emptyOthers == 1 ? 'address holds' : 'addresses hold'} nothing.',
-              style: TextStyle(fontSize: 12.5, color: muted),
+          if (rows.emptyOthers > 0)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(homeGutter, 8, homeGutter, 0),
+              child: Text(
+                '${rows.emptyOthers} other known '
+                '${rows.emptyOthers == 1 ? 'address holds' : 'addresses hold'} nothing.',
+                style: t.secondary,
+              ),
             ),
-          ],
         ],
       ),
     );
@@ -172,92 +148,67 @@ class _AddressHoldingRow extends StatelessWidget {
     required this.holding,
     required this.shownAs,
     required this.hidden,
+    this.label,
+    this.onLabel,
   });
 
   final AddressHolding holding;
   final bool shownAs;
   final bool hidden;
+  final String? label;
+  final ValueChanged<String>? onLabel;
+
+  Future<void> _copy(BuildContext context) async {
+    await Clipboard.setData(ClipboardData(text: holding.address));
+    if (context.mounted) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(content: Text('Address copied')));
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final muted = ArgusColors.of(context).muted;
+    final t = HomeText.of(context);
+    final accent = ArgusColors.of(context).accentText;
     final tokens = holding.tokenCount;
-    return InkWell(
-      key: ValueKey('holding-${holding.address}'),
-      borderRadius: BorderRadius.circular(12),
-      onLongPress: () async {
-        await Clipboard.setData(ClipboardData(text: holding.address));
-        if (context.mounted) {
-          ScaffoldMessenger.maybeOf(
-            context,
-          )?.showSnackBar(const SnackBar(content: Text('Address copied')));
-        }
-      },
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 52,
-              child: Text(
-                holding.index == null ? '#?' : '#${holding.index}',
-                style: monoStyle(context, size: 12.5).copyWith(color: muted),
-              ),
-            ),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    shorten(holding.address, head: 9, tail: 7),
-                    style: monoStyle(context, size: 12.5),
-                  ),
-                  if (shownAs)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.push_pin_outlined,
-                            size: 12,
-                            color: accentOf(context),
-                          ),
-                          const SizedBox(width: 3),
-                          Flexible(
-                            child: Text(
-                              'Shown as this wallet',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: accentOf(context),
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  hidden ? '•••• ERG' : formatErg(holding.nanoErg, maxFrac: 4),
-                  style: Theme.of(context).textTheme.bodyMedium,
-                ),
-                if (tokens > 0 && !hidden)
-                  Text(
-                    '$tokens ${tokens == 1 ? 'token' : 'tokens'}',
-                    style: TextStyle(fontSize: 12, color: muted),
-                  ),
-              ],
-            ),
-          ],
+    final index = holding.index == null ? '#?' : '#${holding.index}';
+    final named = label != null && label!.trim().isNotEmpty ? label!.trim() : null;
+    final amount = hidden ? '$maskedFigure${nbsp}ERG' : '${summaryErg(holding.nanoErg)}${nbsp}ERG';
+    final tokenText = tokens > 0 && !hidden ? countLabel(tokens, 'token') : null;
+    final address = shorten(holding.address, head: 9, tail: 7);
+    return HomeRow(
+      inkKey: ValueKey('holding-${holding.address}'),
+      onTap: onLabel == null ? null : () => onLabel!(holding.address),
+      onLongPress: () => _copy(context),
+      hint: onLabel == null ? 'Long press to copy' : 'Names this address. Long press to copy',
+      semanticLabel: spoken([
+        'Address $index',
+        address,
+        if (shownAs) 'shown as this wallet',
+        ?named,
+        amount,
+        ?tokenText,
+      ].join(', ')),
+      // The index sits in the mark column, shrunk to fit when it runs long.
+      leading: SizedBox(
+        width: homeMarkSize,
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          alignment: AlignmentDirectional.centerStart,
+          child: Text(index, style: monoStyle(context, size: 12.5).copyWith(color: t.muted)),
         ),
       ),
+      title: Text(address, maxLines: 1, overflow: TextOverflow.ellipsis, style: monoStyle(context, size: 13).copyWith(color: t.ink)),
+      subtitle: shownAs || named != null
+          ? TextSpan(
+              children: [
+                if (shownAs)
+                  TextSpan(text: 'Shown as this wallet', style: TextStyle(color: accent, fontWeight: FontWeight.w500)),
+                if (named != null) TextSpan(text: shownAs ? '  ·  $named' : named),
+              ],
+            )
+          : null,
+      figure: TextSpan(text: amount),
+      subfigure: tokenText == null ? null : TextSpan(text: tokenText),
     );
   }
 }
