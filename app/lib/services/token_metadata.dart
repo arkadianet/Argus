@@ -50,6 +50,16 @@ int? tokenDecimals(String id, {TokenBalance? held}) {
   return m == null || !hasKnownScale(m) ? null : m.decimals;
 }
 
+/// A holding's amount in its own scale, "1,234.5", or "5,000 raw units"
+/// when nothing knows its decimals. [units] stands in for the amount, for
+/// a part of the holding such as what sits in stealth boxes.
+String holdingAmountText(TokenBalance t, {int? units}) {
+  final amount = BigInt.from(units ?? t.amount);
+  return hasKnownScale(t)
+      ? formatUnits(amount, t.decimals)
+      : rawUnitsText(amount);
+}
+
 /// [units] of token [id]: "1,234.5 SigUSD", or — when no layer knows the
 /// token's decimals — "1,234,500 raw units of 03faf2cb…".
 String tokenAmountText(

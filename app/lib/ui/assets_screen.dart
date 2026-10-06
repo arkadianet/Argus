@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../format.dart';
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
+import '../services/token_metadata.dart';
 import '../services/token_pricer.dart';
 import '../services/verified_tokens.dart';
 import '../services/wallet_service.dart';
@@ -361,7 +362,7 @@ class _CollectibleCard extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Held: ${formatTokenAmountGrouped(token.amount, token.decimals)}',
+                      'Held: ${holdingAmountText(token)}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 12),
