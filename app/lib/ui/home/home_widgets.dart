@@ -23,6 +23,7 @@ class TappableNode extends StatelessWidget {
     required this.child,
     this.onLongPress,
     this.hint,
+    this.button,
   });
 
   final String label;
@@ -31,11 +32,15 @@ class TappableNode extends StatelessWidget {
   final String? hint;
   final Widget child;
 
+  /// Announce a button even while [onTap] is null: a disabled action is
+  /// still an action. Defaults to whether there is a tap.
+  final bool? button;
+
   @override
   Widget build(BuildContext context) {
     return Semantics(
       container: true,
-      button: onTap != null,
+      button: button ?? onTap != null,
       enabled: onTap != null,
       label: label,
       hint: hint,
@@ -168,11 +173,17 @@ class HomeRow extends StatelessWidget {
     this.onLongPress,
     this.inkKey,
     this.hint,
+    this.subtitleLines = 1,
   });
 
   final Widget leading;
   final Widget title;
   final InlineSpan? subtitle;
+
+  /// Lines the detail may take at normal text sizes: one in a list of
+  /// figures, more where the detail is a sentence. Large text allows three
+  /// more.
+  final int subtitleLines;
   final InlineSpan? figure;
   final InlineSpan? subfigure;
   final Widget? footnote;
@@ -209,7 +220,7 @@ class HomeRow extends StatelessWidget {
       children: [
         title,
         if (subtitle != null)
-          Text.rich(subtitle!, style: t.secondary, maxLines: large ? 3 : 1, overflow: TextOverflow.ellipsis),
+          Text.rich(subtitle!, style: t.secondary, maxLines: subtitleLines + (large ? 2 : 0), overflow: TextOverflow.ellipsis),
         if (large && figures != null) ...[const SizedBox(height: 4), figures],
       ],
     );

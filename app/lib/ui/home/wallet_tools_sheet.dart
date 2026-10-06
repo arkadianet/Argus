@@ -177,7 +177,18 @@ class WalletToolsSheet extends StatelessWidget {
 }
 
 /// What the overview's "Add a wallet" row offers.
-enum AddWalletChoice { create, restore, watch }
+enum AddWalletChoice {
+  create('overview-create'),
+  restore('overview-restore'),
+  watchAddress('overview-watch-address'),
+  watchAccount('overview-watch-xpub');
+
+  const AddWalletChoice(this.keyName);
+
+  /// The same key wherever the choice is offered: the first-launch page
+  /// and the sheet are never on screen together.
+  final String keyName;
+}
 
 ({IconData icon, String title, String blurb}) addWalletLook(AddWalletChoice choice) => switch (choice) {
       AddWalletChoice.create => (
@@ -190,10 +201,15 @@ enum AddWalletChoice { create, restore, watch }
           title: 'Restore a wallet',
           blurb: 'From its 12, 15 or 24-word recovery phrase.',
         ),
-      AddWalletChoice.watch => (
+      AddWalletChoice.watchAddress => (
           icon: Icons.visibility_outlined,
           title: 'Watch an address',
           blurb: 'Balance and activity, without its keys.',
+        ),
+      AddWalletChoice.watchAccount => (
+          icon: Icons.account_tree_outlined,
+          title: 'Watch an account',
+          blurb: 'Every address of an extended public key (xpub).',
         ),
     };
 
@@ -205,8 +221,8 @@ Future<AddWalletChoice?> showAddWalletSheet(BuildContext context) {
   );
 }
 
-/// Create, restore or watch: three rows in a sheet, so the overview needs
-/// only one quiet row for all three.
+/// Create, restore or watch: four rows in a sheet, so the overview needs
+/// only one quiet row for all of them.
 class AddWalletSheet extends StatelessWidget {
   const AddWalletSheet({super.key, required this.onSelect});
 
@@ -226,7 +242,7 @@ class AddWalletSheet extends StatelessWidget {
             const HomeSheetHeader(title: 'Add a wallet'),
             for (final choice in AddWalletChoice.values)
               HomeRow(
-                inkKey: Key('overview-add-${choice.name}'),
+                inkKey: Key(choice.keyName),
                 onTap: () => onSelect(choice),
                 semanticLabel: '${addWalletLook(choice).title}, ${addWalletLook(choice).blurb}',
                 leading: HomeDisc(child: Icon(addWalletLook(choice).icon, size: 18, color: t.ink)),

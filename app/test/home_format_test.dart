@@ -75,8 +75,8 @@ void main() {
   });
 
   group('balance notes', () {
-    const one = OtherAddressFunds(nanoErg: 3200000000, tokenCount: 4, addressCount: 1);
-    const two = OtherAddressFunds(nanoErg: 0, tokenCount: 1, addressCount: 2);
+    const one = FundsElsewhere(nanoErg: 3200000000, tokenCount: 4, addressCount: 1);
+    const two = FundsElsewhere(nanoErg: 0, tokenCount: 1, addressCount: 2);
 
     test('say where funds sit off the primary address', () {
       expect(spoken(otherAddressLine(one, hidden: false)), 'incl. 3.2 ERG · 4 tokens on 1 other address');
@@ -86,13 +86,57 @@ void main() {
       expect(spoken(otherAddressLine(one, hidden: true, compact: true)), 'Funds on another address');
     });
 
-    test('say what is pending', () {
-      const incoming = PendingFunds(nanoErg: 2500000000);
-      const outgoing = PendingFunds(nanoErg: -1200000000, tokenCount: 2);
-      expect(spoken(pendingLine(incoming, hidden: false)), '+2.5 ERG pending');
-      expect(spoken(pendingLine(incoming, hidden: false, short: true)), '+2.5 pending');
-      expect(spoken(pendingLine(outgoing, hidden: false)), '−1.2 ERG · 2 tokens pending');
-      expect(spoken(pendingLine(incoming, hidden: true)), '•••• ERG pending');
+    test('split what is pending against the figure above it', () {
+      // 2.5 arriving under a 107.7134 balance: the rest is in blocks.
+      const incoming = PendingBalance(confirmedNano: 105213400000, pendingInNano: 2500000000, transactions: 1);
+      const outgoing = PendingBalance(confirmedNano: 12000000000, pendingOutNano: 2000000000, transactions: 1);
+      expect(spoken(pendingText(incoming, hidden: false)!), '+2.5 ERG pending · 105.21 confirmed');
+      expect(spoken(pendingText(outgoing, hidden: false)!), '−2 ERG pending · 12 confirmed');
+      // The split of a wallet, under a total that also holds other wallets.
+      expect(spoken(pendingText(incoming.under(1107713400000), hidden: false)!), '+2.5 ERG pending · 1,105.21 confirmed');
+      expect(spoken(pendingText(incoming, hidden: true)!), '•••• ERG pending');
+    });
+
+    test('say something is pending when its value is not known yet', () {
+      const unknown = PendingBalance(confirmedNano: 7000000000, transactions: 2);
+      expect(spoken(pendingText(unknown, hidden: false)!), 'Pending · 7 confirmed');
+      expect(pendingText(const PendingBalance(confirmedNano: 7000000000), hidden: false), isNull);
+      expect(pendingText(null, hidden: false), isNull);
+    });
+
+    test('say what is not on public addresses, and how old it is', () {
+      const stealth = PocketBalance(pocket: Pocket.stealth, nanoErg: 1000000000);
+      const mixing = PocketBalance(pocket: Pocket.inMix, nanoErg: 3000000000);
+      const public = PocketBalance(pocket: Pocket.public, nanoErg: 5000000000);
+      expect(pocketsLine(const [public], hidden: false), isNull);
+      expect(spoken(pocketsLine(const [public, stealth, mixing], hidden: false)!), 'incl. 1 ERG stealth · 3 ERG in mix');
+      expect(spoken(pocketsLine(const [stealth], hidden: false, asOf: '3h ago')!), 'incl. 1 ERG stealth, as of 3h ago');
+      expect(spoken(pocketsLine(const [stealth], hidden: true)!), 'incl. •••• ERG stealth');
+      expect(
+        spoken(pocketsLine(const [PocketBalance(pocket: Pocket.stealth, nanoErg: 0, unknown: true)], hidden: false)!),
+        'incl. stealth unknown',
+        reason: 'an unread pocket is said to be unknown, never zero',
+      );
+    });
+  });
+
+  group('activity rows', () {
+    test('sign each leg, and name raw units as raw units', () {
+      expect(spoken(legText(AmountLeg(amount: BigInt.from(2500000000), decimals: 9, unit: 'ERG'))), '+2.5 ERG');
+      expect(spoken(legText(AmountLeg(amount: BigInt.from(-69), decimals: 0, unit: 'COMET'))), '−69 COMET');
+      expect(spoken(legText(AmountLeg(amount: BigInt.from(150), decimals: null, unit: 'SigUSD'))),
+          '+150 raw units of SigUSD');
+    });
+
+    test('say when as briefly as a row can', () {
+      final now = DateTime(2026, 10, 7, 9, 30);
+      int at(DateTime t) => t.millisecondsSinceEpoch;
+      expect(spoken(shortActivityTime(at(DateTime(2026, 10, 7, 22, 8)), now: now)), '10:08 pm');
+      expect(spoken(shortActivityTime(at(DateTime(2026, 10, 7, 0, 5)), now: now)), '12:05 am');
+      expect(shortActivityTime(at(DateTime(2026, 10, 6, 23, 50)), now: now), 'Yesterday');
+      expect(spoken(shortActivityTime(at(DateTime(2026, 10, 2, 12)), now: now)), 'Oct 2');
+      expect(spoken(shortActivityTime(at(DateTime(2025, 12, 30, 12)), now: now)), 'Dec 30, 2025');
+      expect(shortActivityTime(0, now: now), '', reason: 'a broadcast with no time yet');
     });
   });
 
@@ -105,20 +149,28 @@ void main() {
   });
 
   test('wallet page offers what each kind of wallet can do', () {
-    const watched = WalletSummary(id: 'w', name: 'Cold', kind: WalletKind.watchOnly);
-    const seed = WalletSummary(id: 's', name: 'Main');
-    const net = NetworkStatus(state: SyncState.synced);
+    const watched = WalletSummary(ref: WalletRef.watchedAddress('w'), name: 'Cold');
+    const seed = WalletSummary(ref: WalletRef.seed('s'), name: 'Main');
     expect(
-      const WalletPageData(wallet: watched, currency: _aud, network: net).actions,
+      const WalletPageData(wallet: watched, currency: _aud).actions,
       [WalletAction.sendOffline, WalletAction.receive],
     );
     expect(
-      const WalletPageData(wallet: seed, currency: _aud, network: net).actions,
+      const WalletPageData(wallet: seed, currency: _aud).actions,
       [WalletAction.send, WalletAction.receive, WalletAction.swap, WalletAction.more],
     );
-    final tools = const WalletPageData(wallet: seed, currency: _aud, network: net, fragmented: true).tools;
+    final tools = const WalletPageData(wallet: seed, currency: _aud, fragmented: true).tools;
     expect(tools.map((t) => t.tool), [WalletTool.mix, WalletTool.tokens, WalletTool.utxos, WalletTool.addresses, WalletTool.lock]);
     expect(tools[2].status, 'Fragmented');
     expect(tools[2].warn, isTrue);
+    // An account before its first scan can neither vouch for an address to
+    // receive at nor build a send.
+    const unscanned = WalletPageData(
+      wallet: watched,
+      currency: _aud,
+      watched: WatchedDetails(status: ['Watch-only'], canSend: false, canReceive: false),
+    );
+    expect(unscanned.disabled, {WalletAction.sendOffline, WalletAction.receive});
+    expect(const WalletPageData(wallet: seed, currency: _aud).disabled, isEmpty);
   });
 }

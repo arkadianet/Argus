@@ -11,21 +11,27 @@ import 'home_style.dart';
 import 'home_widgets.dart';
 
 /// The balance on its raised panel, set as type rather than boxed: a label,
-/// the numeral, its value, and one line for what is pending and what is
-/// stealth.
+/// the numeral, its value and what the value leaves out, then a line for
+/// what is pending and one for what is not on public addresses.
 class HomeBalance extends StatelessWidget {
   const HomeBalance({
     super.key,
     required this.label,
     required this.nanoErg,
-    required this.currency,
+    this.currency,
     this.labelExtra,
-    this.status,
+    this.loading = false,
     this.fiatValue,
     this.unpricedCount = 0,
+    this.pricesNote,
+    this.notLoaded = 0,
+    this.asOf,
     this.pending,
-    this.stealthNano = 0,
+    this.pockets = const [],
+    this.pocketsAsOf,
     this.hidden = false,
+    this.figureKey,
+    this.pendingKey,
   });
 
   /// Room kept clear at the end of the label line for the hide-balances
@@ -35,58 +41,88 @@ class HomeBalance extends StatelessWidget {
   /// "Total balance" or "Balance".
   final String label;
 
-  /// Read after the label in the same capitals, e.g. "Watch-only".
+  /// Read after the label in the same capitals, e.g. "Watched account".
   final String? labelExtra;
 
-  /// The wallet's sync state, at the far end of the label line.
-  final NetworkStatus? status;
-
-  /// Null while unknown: drawn as a placeholder, never as zero.
+  /// Null while unknown: drawn as a placeholder while [loading], else as a
+  /// dash, never as zero.
   final int? nanoErg;
-  final FiatCurrency currency;
+  final bool loading;
+
+  /// What [fiatValue] is in; without one no value is shown.
+  final FiatCurrency? currency;
   final double? fiatValue;
   final int unpricedCount;
-  final PendingFunds? pending;
-  final int stealthNano;
+
+  /// Why the fiat value may not be current ("prices 3 h old").
+  final String? pricesNote;
+
+  /// Wallets the figure leaves out because their balance is unknown.
+  final int notLoaded;
+
+  /// Age of a snapshot figure ("3h ago").
+  final String? asOf;
+  final PendingBalance? pending;
+  final List<PocketBalance> pockets;
+  final String? pocketsAsOf;
   final bool hidden;
 
-  bool get _showPending => pending != null && !pending!.isEmpty;
+  /// Keys for the numeral and the pending line, so a figure can be found
+  /// without knowing how it is set.
+  final Key? figureKey;
+  final Key? pendingKey;
+
+  /// The value, when there is one and something to say it in.
+  ({double value, FiatCurrency currency})? get _fiat => switch ((fiatValue, currency)) {
+        (final double value, final FiatCurrency currency) => (value: value, currency: currency),
+        _ => null,
+      };
+
+  /// How old the figures are and what they leave out besides tokens:
+  /// "prices 3 h old", "1 wallet not loaded", "as of 3h ago". None of it
+  /// gives an amount away.
+  List<String> _notes() => [
+        if (_fiat != null && pricesNote != null) pricesNote!,
+        if (notLoaded > 0) '${countLabel(notLoaded, 'wallet')} not loaded',
+        if (asOf != null) 'as of $asOf',
+      ];
+
+  /// Tokens the fiat value leaves out. Hidden: a count of holdings tells
+  /// an onlooker as much as an amount.
+  bool get _showUnpriced => _fiat != null && unpricedCount > 0 && !hidden;
 
   String _spoken() {
     final nano = nanoErg;
-    if (nano == null) return '$label loading';
-    if (hidden) return '$label hidden';
+    if (nano == null) return '$label ${loading ? 'loading' : 'unavailable'}';
+    final pendingLine = pendingText(pending, hidden: hidden);
+    // Hidden, the screen's dots would be read out one by one; the word is
+    // what they stand for.
+    if (hidden) return spoken(['$label hidden', ..._notes(), if (pendingLine != null) 'something pending'].join(', '));
+    final fiat = _fiat;
     return spoken([
       '$label ${summaryErg(nano)} ERG',
-      if (fiatValue != null) 'about ${fiatFigure(fiatValue!, currency, approximate: false)} ${currency.code}',
-      if (fiatValue != null && unpricedCount > 0) '$unpricedCount tokens unpriced',
-      if (_showPending) pendingLine(pending!, hidden: false),
-      if (stealthNano > 0) 'incl. ${summaryErg(stealthNano)} ERG stealth',
+      if (fiat != null) 'about ${fiatFigure(fiat.value, fiat.currency, approximate: false)} ${fiat.currency.code}',
+      if (_showUnpriced) '$unpricedCount tokens unpriced',
+      ..._notes(),
+      ?pendingLine,
+      ?pocketsLine(pockets, hidden: false, asOf: pocketsAsOf),
     ].join(', '));
   }
 
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
-    final tag = status;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Padding(
           padding: const EdgeInsetsDirectional.only(end: _cornerReserve),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text.rich(
-                  TextSpan(
-                    text: label.toUpperCase(),
-                    children: [if (labelExtra != null) TextSpan(text: '   ·   ${labelExtra!.toUpperCase()}')],
-                  ),
-                  style: t.label,
-                ),
-              ),
-              if (tag != null) HomeSyncTag(status: tag),
-            ],
+          child: Text.rich(
+            TextSpan(
+              text: label.toUpperCase(),
+              children: [if (labelExtra != null) TextSpan(text: '   ·   ${labelExtra!.toUpperCase()}')],
+            ),
+            style: t.label,
           ),
         ),
         const SizedBox(height: 6),
@@ -123,7 +159,7 @@ class HomeBalance extends StatelessWidget {
       color: t.ink,
       fontFeatures: const [FontFeature.liningFigures()],
     );
-    if (nano == null) {
+    if (nano == null && loading) {
       return Container(
         width: 168,
         height: 34,
@@ -131,7 +167,11 @@ class HomeBalance extends StatelessWidget {
         decoration: BoxDecoration(color: t.muted.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(6)),
       );
     }
-    final (whole, fraction) = hidden ? ('••••••', '') : splitFraction(summaryErg(nano));
+    final (whole, fraction) = nano == null
+        ? ('—', '')
+        : hidden
+            ? ('••••••', '')
+            : splitFraction(summaryErg(nano));
     // One line at any text size: a balance broken over two lines reads as
     // two numbers, so it shrinks to fit instead.
     return FittedBox(
@@ -143,10 +183,10 @@ class HomeBalance extends StatelessWidget {
             // Masked, the dots are set smaller than digits (at full size
             // they read as a password field) in a line of the same height,
             // so hiding balances moves nothing.
-            if (hidden)
+            if (hidden && nano != null)
               TextSpan(text: whole, style: TextStyle(fontSize: 28, height: 46 * 1.1 / 28, letterSpacing: 3, color: t.muted))
             else
-              TextSpan(text: whole),
+              TextSpan(text: whole, style: nano == null ? TextStyle(color: t.muted) : null),
             // The fraction is set smaller and quieter, so the magnitude
             // reads first.
             if (fraction.isNotEmpty)
@@ -157,6 +197,7 @@ class HomeBalance extends StatelessWidget {
             ),
           ],
         ),
+        key: figureKey,
         maxLines: 1,
         softWrap: false,
         style: style,
@@ -167,79 +208,118 @@ class HomeBalance extends StatelessWidget {
   List<Widget> _lines(BuildContext context) {
     final t = HomeText.of(context);
     final lines = <Widget>[];
-    if (fiatValue != null) {
+    final caveats = [if (_showUnpriced) '$unpricedCount${nbsp}unpriced', ..._notes()];
+    final fiat = _fiat;
+    if (fiat != null || caveats.isNotEmpty) {
       lines.add(Text.rich(
         TextSpan(
           children: [
-            TextSpan(
-              text: hidden ? '≈$nbsp${currency.symbol}$maskedFigure' : fiatFigure(fiatValue!, currency),
-              style: t.primary,
-            ),
-            // Honest about what the value leaves out.
-            if (unpricedCount > 0 && !hidden) TextSpan(text: '   ·   $unpricedCount${nbsp}unpriced'),
+            if (fiat != null)
+              TextSpan(
+                text: hidden ? '≈$nbsp${fiat.currency.symbol}$maskedFigure' : fiatFigure(fiat.value, fiat.currency),
+                style: t.primary,
+              ),
+            // Honest about what the value leaves out, and how old it is.
+            for (final (i, c) in caveats.indexed) TextSpan(text: i == 0 && fiat == null ? c : '   ·   $c'),
           ],
         ),
         style: t.secondary,
       ));
     }
-    final meta = <InlineSpan>[
-      if (_showPending) ...[
-        WidgetSpan(
-          alignment: PlaceholderAlignment.middle,
-          child: Padding(
-            padding: const EdgeInsetsDirectional.only(end: 4),
-            child: Icon(Icons.schedule, size: 14, color: t.ink),
-          ),
-        ),
-        TextSpan(text: pendingLine(pending!, hidden: hidden), style: TextStyle(color: t.ink, fontWeight: FontWeight.w500)),
-      ],
-      if (stealthNano > 0) ...[
-        if (_showPending) const TextSpan(text: '   ·   '),
-        TextSpan(text: 'incl.$nbsp${hidden ? maskedFigure : summaryErg(stealthNano)}${nbsp}ERG stealth'),
-      ],
-    ];
-    if (meta.isNotEmpty) {
+    if (pendingText(pending, hidden: hidden) != null) {
       lines.add(Padding(
         padding: const EdgeInsets.only(top: 2),
-        child: Text.rich(TextSpan(children: meta), style: t.secondary),
+        child: HomePendingLine(key: pendingKey, pending: pending, hidden: hidden),
+      ));
+    }
+    if (pocketsLine(pockets, hidden: hidden, asOf: pocketsAsOf) case final note?) {
+      lines.add(Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Text(note, style: t.secondary),
       ));
     }
     return lines;
   }
 }
 
-/// "● Synced", or what is wrong instead, in a word or two.
-class HomeSyncTag extends StatelessWidget {
-  const HomeSyncTag({super.key, required this.status});
+/// "+2.5 ERG pending · 105.21 confirmed" under a balance, in ink with a
+/// clock, or nothing while nothing touching the balance is in the mempool.
+/// Emphasised by weight, not colour: the accent is kept for the one thing
+/// on a screen to act on.
+class HomePendingLine extends StatelessWidget {
+  const HomePendingLine({super.key, required this.pending, required this.hidden});
 
-  final NetworkStatus status;
-
-  static (String, Color) look(BuildContext context, NetworkStatus status) => switch (status.state) {
-        SyncState.synced => ('Synced', moss),
-        SyncState.syncing => ('Syncing', ArgusColors.of(context).accent),
-        SyncState.stale => ('Out of date', rustFor(context)),
-        SyncState.offline => ('Offline', rustFor(context)),
-      };
+  final PendingBalance? pending;
+  final bool hidden;
 
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
-    final (word, dot) = look(context, status);
-    final problem = status.state == SyncState.stale || status.state == SyncState.offline;
-    final text = [word, if (status.age != null) status.age!].join(' · ');
+    final text = pendingText(pending, hidden: hidden);
+    if (text == null) return const SizedBox.shrink();
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Icon(Icons.schedule, size: 14, color: t.ink),
+        ),
+        const SizedBox(width: 4),
+        Flexible(child: Text(text, style: t.secondary.copyWith(color: t.ink, fontWeight: FontWeight.w500))),
+      ],
+    );
+  }
+}
+
+/// The address a wallet is shown as, with its pinned index when it has one:
+/// "📌 #275  9evoke9R…KmPoW".
+class HomeIdentityLine extends StatelessWidget {
+  const HomeIdentityLine({super.key, required this.address, this.pinnedIndex});
+
+  final String address;
+  final int? pinnedIndex;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = HomeText.of(context);
+    final pinned = pinnedIndex != null && pinnedIndex! > 0;
     return Semantics(
-      label: text,
+      label: spoken('${pinned ? 'Pinned address #$pinnedIndex, ' : 'Address '}${shorten(address, head: 8, tail: 6)}'),
       excludeSemantics: true,
       child: Row(
-        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(width: 6, height: 6, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
-          const SizedBox(width: 6),
-          Text(text, style: t.secondary.copyWith(color: problem ? rustFor(context) : t.muted)),
+          if (pinned) ...[
+            Icon(Icons.push_pin_outlined, size: 13, color: t.muted),
+            const SizedBox(width: 3),
+            Text('#$pinnedIndex', style: t.secondary),
+            const SizedBox(width: 8),
+          ],
+          Flexible(
+            child: Text(
+              shorten(address, head: 8, tail: 6),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: monoStyle(context, size: 12).copyWith(color: t.muted),
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+/// The word for a status, its dot, and whether it is a problem.
+(String, Color, bool) syncLook(BuildContext context, NetworkStatus status) {
+  final (word, dot) = switch (status.state) {
+    SyncState.synced => ('Synced', moss),
+    SyncState.syncing => ('Syncing…', ArgusColors.of(context).accent),
+    SyncState.partial => ('Not synced', ArgusColors.of(context).accent),
+    SyncState.stale => ('Out of sync', rustFor(context)),
+    SyncState.offline => ('Offline', rustFor(context)),
+  };
+  final problem = status.state == SyncState.stale || status.state == SyncState.offline;
+  return (status.label ?? word, dot, problem);
 }
 
 /// A one-line row for a note about the balance: an icon in the mark
@@ -254,6 +334,7 @@ class HomeLineRow extends StatelessWidget {
     this.onTap,
     this.inkKey,
     this.hint,
+    this.trailing,
     this.padding = const EdgeInsets.symmetric(horizontal: homeGutter),
   });
 
@@ -266,6 +347,9 @@ class HomeLineRow extends StatelessWidget {
   final VoidCallback? onTap;
   final Key? inkKey;
   final String? hint;
+
+  /// A control of its own at the end of the line, e.g. a dismiss button.
+  final Widget? trailing;
   final EdgeInsetsGeometry padding;
 
   @override
@@ -290,17 +374,19 @@ class HomeLineRow extends StatelessWidget {
             const SizedBox(width: 12),
             Text(action!, style: t.secondary.copyWith(color: colors.accentText, fontWeight: FontWeight.w500)),
           ],
-          if (onTap != null)
+          if (onTap != null && trailing == null)
             Icon(Icons.chevron_right, size: 18, color: action != null ? colors.accentText : t.muted),
         ],
       ),
     );
-    return TappableNode(
+    final tappable = TappableNode(
       label: semanticLabel,
       hint: hint,
       onTap: onTap,
       child: InkWell(key: inkKey, onTap: onTap, child: row),
     );
+    if (trailing == null) return tappable;
+    return Row(children: [Expanded(child: tappable), trailing!]);
   }
 }
 
@@ -309,8 +395,9 @@ class HomeLineRow extends StatelessWidget {
 ///
 /// It names ERG and its source, so it can't be mistaken for the balance's
 /// own history. Without history it is the price and a caption saying why;
-/// without a price it says that. The sparkline sits beside the figures,
-/// or under them when large text leaves no room.
+/// without a price it says that; a price that is not current says how old
+/// it is. The sparkline sits beside the figures, or under them when large
+/// text leaves no room.
 class ErgPriceStrip extends StatelessWidget {
   const ErgPriceStrip({super.key, required this.price, required this.currency});
 
@@ -329,10 +416,11 @@ class ErgPriceStrip extends StatelessWidget {
     final change = price.changePercent;
     final trend = price.hasTrend && rate != null;
     final rising = (change ?? 0) >= 0;
+    final window = price.trendSource == null ? price.window : '${price.window} via ${price.trendSource}';
     final caption = [
       price.source,
-      if (trend) price.window else if (rate != null && price.historyUnavailable != null) price.historyUnavailable!,
-      if (price.stale) 'stale',
+      if (trend) window else if (price.historyUnavailable != null) price.historyUnavailable!,
+      ?price.staleNote,
     ].join('   ·   ');
     final InlineSpan figures = rate == null
         ? TextSpan(text: 'ERG price unavailable', style: t.primary)
@@ -358,13 +446,13 @@ class ErgPriceStrip extends StatelessWidget {
       ],
     );
     final spokenLabel = rate == null
-        ? 'ERG price unavailable, ${price.source}'
+        ? ['ERG price unavailable', price.source, ?price.historyUnavailable].join(', ')
         : [
             'ERG price ${fiatFigure(rate, currency, approximate: false)} ${currency.code}',
-            if (trend) '${rising ? 'up' : 'down'} ${change!.abs().toStringAsFixed(1)}% over ${price.window}',
+            if (trend) '${rising ? 'up' : 'down'} ${change!.abs().toStringAsFixed(1)}% over $window',
             price.source,
             if (!trend && price.historyUnavailable != null) price.historyUnavailable!,
-            if (price.stale) 'stale',
+            ?price.staleNote,
           ].join(', ');
     Widget spark({double? width}) => SizedBox(
           key: const Key('home-price-sparkline'),
@@ -532,11 +620,18 @@ class HideBalancesButton extends StatelessWidget {
   }
 }
 
-/// A short line saying the network is current, which opens the network
-/// settings: the overview's only status line.
-HomeLineRow homeNetworkRow(BuildContext context, NetworkStatus network, {VoidCallback? onTap}) {
+/// A short line saying whether a node answers and how far the chain has
+/// got: the overview's only status line. It opens the network settings, or
+/// with no node looks again.
+HomeLineRow homeNetworkRow(
+  BuildContext context,
+  NetworkStatus network, {
+  VoidCallback? onTap,
+  String? action,
+  String? hint,
+}) {
   final t = HomeText.of(context);
-  final (word, dot) = HomeSyncTag.look(context, network);
+  final (word, dot, problem) = syncLook(context, network);
   final parts = [
     if (network.blockHeight != null) 'Block$nbsp${formatWithCommas(network.blockHeight!)}',
     if (network.age != null) network.age!,
@@ -544,12 +639,13 @@ HomeLineRow homeNetworkRow(BuildContext context, NetworkStatus network, {VoidCal
   return HomeLineRow(
     inkKey: const Key('home-network'),
     onTap: onTap,
-    hint: onTap == null ? null : 'Network settings',
-    semanticLabel: spoken([word, ...parts].join(', ')),
+    action: action,
+    hint: hint ?? (onTap == null ? null : 'Network settings'),
+    semanticLabel: spoken([word, ...parts, ?action].join(', ')),
     leading: Container(width: 7, height: 7, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
     text: TextSpan(
       children: [
-        TextSpan(text: word, style: TextStyle(color: t.ink, fontWeight: FontWeight.w500)),
+        TextSpan(text: word, style: TextStyle(color: problem ? rustFor(context) : t.ink, fontWeight: FontWeight.w500)),
         for (final p in parts) TextSpan(text: '   ·   $p'),
       ],
     ),

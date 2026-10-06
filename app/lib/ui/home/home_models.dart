@@ -1,22 +1,24 @@
 import '../../services/activity_classifier.dart';
+import '../../services/address_holdings.dart';
+import '../../services/pending_balance.dart';
+import '../../services/pockets.dart';
+import 'overview_model.dart';
 
 export '../../services/activity_classifier.dart' show ActivityKind;
+export '../../services/address_holdings.dart' show FundsElsewhere;
+export '../../services/pending_balance.dart' show PendingBalance;
+export '../../services/pockets.dart' show Pocket, PocketBalance;
+export 'overview_model.dart' show WalletKind, WalletRef;
 
 /// View models for the wallets overview and the wallet page.
 ///
 /// Plain immutable values: whoever builds them reads the services, so the
 /// screens stay pure and can be rendered from sample data. Amounts stay
 /// raw (nanoERG, token base units) and fiat stays a number, so the screens
-/// format every figure the same way instead of each caller doing it.
-
-/// Whether this phone holds the wallet's keys or only watches it.
-enum WalletKind {
-  /// Seed on this phone; can sign.
-  seed,
-
-  /// Address or account watched without keys; sends are signed elsewhere.
-  watchOnly,
-}
+/// format every figure the same way instead of each caller doing it. Where
+/// a service already has a value type for something (what is pending, what
+/// sits on other addresses, a pocket), the screens take that type as it is,
+/// so the wording and the arithmetic stay the service's own.
 
 /// The display currency for fiat figures.
 class FiatCurrency {
@@ -32,45 +34,30 @@ class FiatCurrency {
   final int decimals;
 }
 
-/// ERG not yet confirmed, signed from the wallet's side: positive is on
-/// its way in, negative on its way out.
-class PendingFunds {
-  const PendingFunds({required this.nanoErg, this.tokenCount = 0});
+/// How current the figures on screen are, for the dot beside the status.
+enum SyncState {
+  synced,
+  syncing,
 
-  final int nanoErg;
-
-  /// Token IDs moving in the same unconfirmed transactions.
-  final int tokenCount;
-
-  bool get isEmpty => nanoErg == 0 && tokenCount == 0;
+  /// Something to know about rather than act on: history incomplete, only
+  /// public data, not synced yet.
+  partial,
+  stale,
+  offline,
 }
-
-/// Funds the wallet holds on addresses other than its pinned primary one.
-/// The balance includes them; this says where they are.
-class OtherAddressFunds {
-  const OtherAddressFunds({
-    required this.nanoErg,
-    required this.tokenCount,
-    required this.addressCount,
-  });
-
-  final int nanoErg;
-  final int tokenCount;
-  final int addressCount;
-}
-
-/// How current the figures on screen are.
-enum SyncState { synced, syncing, stale, offline }
 
 class NetworkStatus {
-  const NetworkStatus({required this.state, this.blockHeight, this.age});
+  const NetworkStatus({required this.state, this.blockHeight, this.age, this.label});
 
   final SyncState state;
   final int? blockHeight;
 
-  /// Age of the last successful sync ("4m ago"); shown only once the
-  /// figures are no longer fresh, since "Synced" already says they are.
+  /// Age of the last successful sync ("4m ago").
   final String? age;
+
+  /// The words for [state] when a service has its own ("History
+  /// incomplete", "Public data · known addresses only").
+  final String? label;
 }
 
 /// The ERG price and, when there is history, its 24-hour trend.
@@ -85,15 +72,16 @@ class ErgPriceView {
     this.points = const [],
     this.changePercent,
     this.window = '24h',
+    this.trendSource,
     this.historyUnavailable,
-    this.stale = false,
+    this.staleNote,
   });
 
   /// Current price of one ERG in the display currency; null when no
   /// source could price it.
   final double? fiatPerErg;
 
-  /// Where the price comes from, e.g. `Oracle pool`, `CoinGecko`.
+  /// Where the price comes from, e.g. `SigmaUSD oracle`, `CoinGecko`.
   final String source;
 
   /// Prices over [window], oldest first. Fewer than two points means no
@@ -106,12 +94,17 @@ class ErgPriceView {
   /// The span [points] and [changePercent] cover.
   final String window;
 
-  /// Why there is no history, in a few words ("No history on this
-  /// node"). Null when history is available or nobody said why.
+  /// Where the history comes from, when that is not [source]: the price
+  /// can come from a fallback feed while the chart is the oracle's.
+  final String? trendSource;
+
+  /// Why there is no history, in a few words. Null when history is
+  /// available or nobody said why.
   final String? historyUnavailable;
 
-  /// The last refresh failed and [fiatPerErg] is an older figure.
-  final bool stale;
+  /// How old the price is when it is not current ("3 h old"): a stale
+  /// price is shown with its age, never as if it were today's.
+  final String? staleNote;
 
   bool get hasTrend => points.length >= 2 && changePercent != null;
 }
@@ -119,47 +112,79 @@ class ErgPriceView {
 /// One wallet as the overview lists it, and as the wallet page heads it.
 class WalletSummary {
   const WalletSummary({
-    required this.id,
+    required this.ref,
     required this.name,
-    this.kind = WalletKind.seed,
     this.nanoErg,
+    this.loading = false,
+    this.unavailable,
     this.fiatValue,
-    this.tokenCount = 0,
-    this.stealthNano = 0,
+    this.tokenCount,
+    this.publicTokensOnly = false,
+    this.pockets = const [],
+    this.pocketsAsOf,
     this.pending,
     this.otherAddresses,
     this.unlocked = false,
     this.asOf,
+    this.address,
+    this.pinnedIndex,
   });
 
-  final String id;
+  final WalletRef ref;
   final String name;
-  final WalletKind kind;
 
-  /// Display balance (spendable plus stealth plus other addresses); null
-  /// while unknown, which must never read as zero.
+  /// Display balance (public, stealth and mixing pockets, every known
+  /// address); null while unknown, which must never read as zero.
   final int? nanoErg;
+
+  /// No balance yet and one on its way.
+  final bool loading;
+
+  /// Why [nanoErg] is null, when there is something to say ("Not loaded
+  /// yet", "Balance unavailable").
+  final String? unavailable;
 
   /// Value of ERG plus priced tokens in the display currency.
   final double? fiatValue;
 
-  /// Distinct token IDs held, NFTs included.
-  final int tokenCount;
+  /// Distinct token IDs held, NFTs included; null when the source cannot
+  /// say, which is shown as no count rather than "0 tokens".
+  final int? tokenCount;
 
-  /// Part of [nanoErg] received privately to stealth addresses.
-  final int stealthNano;
+  /// The count covers public addresses only: a locked wallet cannot see
+  /// its stealth tokens.
+  final bool publicTokensOnly;
 
-  final PendingFunds? pending;
-  final OtherAddressFunds? otherAddresses;
+  /// The parts of [nanoErg] that are not on public addresses: stealth,
+  /// mixed, in a mix. Empty when it is all public.
+  final List<PocketBalance> pockets;
+
+  /// Age of the pockets' figures when they are older than the balance: a
+  /// locked wallet cannot rescan for stealth funds.
+  final String? pocketsAsOf;
+
+  /// What the mempool does to [nanoErg], already split against it
+  /// ([PendingBalance.under]); null when nothing valued it.
+  final PendingBalance? pending;
+  final FundsElsewhere? otherAddresses;
 
   /// Open in this session: entering it again asks for nothing.
   final bool unlocked;
 
-  /// Age of a snapshot balance ("3h ago"), set only when it is old enough
-  /// to matter. Locked wallets show the last public snapshot.
+  /// Age of a snapshot balance ("3h ago"). Locked and watched wallets show
+  /// the last public read.
   final String? asOf;
 
-  bool get watchOnly => kind == WalletKind.watchOnly;
+  /// The address the wallet is shown as: the pinned address, index 0, the
+  /// watched address or a watched account's first address.
+  final String? address;
+
+  /// Set when [address] is a pinned address, shown as "#275".
+  final int? pinnedIndex;
+
+  String get id => ref.id;
+  WalletKind get kind => ref.kind;
+  bool get watchOnly => ref.watched;
 }
 
 /// Everything the wallets overview shows.
@@ -168,29 +193,48 @@ class OverviewData {
     required this.wallets,
     required this.currency,
     required this.network,
+    this.watched = const [],
     this.totalNano,
+    this.loading = false,
+    this.notLoaded = 0,
     this.totalFiat,
     this.unpricedCount = 0,
+    this.pricesNote,
     this.pending,
     this.price,
     this.hidden = false,
   });
 
+  /// Wallets with keys on this phone, in the order the user dragged them.
   final List<WalletSummary> wallets;
+
+  /// Watched addresses and accounts.
+  final List<WalletSummary> watched;
   final FiatCurrency currency;
   final NetworkStatus network;
 
-  /// Sum across wallets; null when no wallet's balance is known yet.
+  /// Sum across the wallets whose balance is known; null when none is.
   final int? totalNano;
+
+  /// Nothing known yet and something on its way.
+  final bool loading;
+
+  /// Wallets left out of [totalNano] because their balance is unknown.
+  final int notLoaded;
   final double? totalFiat;
 
   /// Tokens the fiat total leaves out because nothing prices them.
   final int unpricedCount;
-  final PendingFunds? pending;
+
+  /// Said beside the fiat total when the prices are not current.
+  final String? pricesNote;
+  final PendingBalance? pending;
   final ErgPriceView? price;
 
   /// Hidden-balances mode: every amount is masked.
   final bool hidden;
+
+  bool get isEmpty => wallets.isEmpty && watched.isEmpty;
 }
 
 /// What an asset row is, for its badge and its mark.
@@ -207,6 +251,7 @@ class AssetRowData {
     this.fiatValue,
     this.unitFiat,
     this.changePercent,
+    this.priceNote,
     this.kind = AssetKind.token,
     this.verified = false,
     this.caution = false,
@@ -221,16 +266,23 @@ class AssetRowData {
 
   /// Base units (nanoERG for ERG).
   final BigInt amount;
-  final int decimals;
+
+  /// Null when nothing knows the token's scale: the amount is then shown
+  /// as the raw units it is, never as whole tokens.
+  final int? decimals;
+
+  /// Null when nothing prices the holding.
   final double? fiatValue;
 
   /// Price of one unit, shown in place of the name. Set for ERG, whose
-  /// row carries its price and 24h change now that the wallet page has
-  /// no price strip.
+  /// row carries its price and 24h change.
   final double? unitFiat;
 
   /// 24h change in percent of [unitFiat].
   final double? changePercent;
+
+  /// How old the price is when it is not current ("3 h old").
+  final String? priceNote;
   final AssetKind kind;
 
   /// On-chain-verified registry entry.
@@ -246,7 +298,9 @@ class AmountLeg {
 
   /// Signed base units: negative left the wallet.
   final BigInt amount;
-  final int decimals;
+
+  /// Null when nothing knows the token's scale (raw units).
+  final int? decimals;
   final String unit;
 }
 
@@ -264,14 +318,15 @@ class ActivityRowData {
   final String id;
   final ActivityKind kind;
 
-  /// "Today, 10:08 pm".
+  /// "10:08 pm", "Yesterday", "Oct 2"; empty when the time is not known.
   final String time;
 
   /// Amounts that moved, most telling first; the row shows the first and
   /// summarises the rest.
   final List<AmountLeg> legs;
 
-  /// Already phrased: "to 9fRx…3kQe", "contract 5vSU…SCqM", "Spectrum".
+  /// Already phrased: "to 9fRx…3kQe", "contract 5vSU…SCqM", "stealth
+  /// payment".
   final String? counterparty;
   final bool pending;
 
@@ -297,20 +352,67 @@ class WalletToolEntry {
   final bool warn;
 }
 
+/// The one line about mixes, while any is running or has just finished.
+class MixLine {
+  const MixLine({required this.text, this.finished = false});
+
+  final String text;
+
+  /// A finished mix is announced until dismissed.
+  final bool finished;
+}
+
+/// What a watched wallet's page adds: how it is read, what it cannot do,
+/// and the address it is shown as.
+class WatchedDetails {
+  const WatchedDetails({
+    required this.status,
+    this.error,
+    this.notes = const [],
+    this.addressTitle = 'Address',
+    this.addressNote,
+    this.canSend = true,
+    this.canReceive = true,
+  });
+
+  /// "Watch-only · cannot sign here", "Updated 2m ago".
+  final List<String> status;
+  final String? error;
+
+  /// What this wallet can and cannot do, one sentence each.
+  final List<String> notes;
+  final String addressTitle;
+  final String? addressNote;
+
+  /// False while the action cannot work, e.g. before an account's first
+  /// scan.
+  final bool canSend;
+  final bool canReceive;
+}
+
 /// Everything the wallet page shows.
 class WalletPageData {
   const WalletPageData({
     required this.wallet,
     required this.currency,
-    required this.network,
+    this.status,
+    this.offline = false,
     this.assets = const [],
     this.assetCount = 0,
     this.activity = const [],
+    this.activityLoading = false,
+    this.activityError,
+    this.activityEmpty = 'No activity yet',
+    this.activityEmptyAction = 'Show my address',
     this.utxoCount,
     this.fragmented = false,
     this.unpricedCount = 0,
+    this.pricesNote,
     this.hidden = false,
     this.pendingCount = 0,
+    this.pinIssue,
+    this.mix,
+    this.watched,
     List<WalletAction>? actions,
     List<WalletToolEntry>? tools,
   })  : _actions = actions,
@@ -318,7 +420,13 @@ class WalletPageData {
 
   final WalletSummary wallet;
   final FiatCurrency currency;
-  final NetworkStatus network;
+
+  /// The wallet's sync state, with its block and UTXO count; null for a
+  /// watched wallet, which says how it is read instead ([watched]).
+  final NetworkStatus? status;
+
+  /// No node answers: said once, with a way to look again.
+  final bool offline;
 
   /// The holdings worth a glance, ERG first; [assetCount] is all of them,
   /// NFTs included.
@@ -328,15 +436,32 @@ class WalletPageData {
   /// Newest first; the page shows three.
   final List<ActivityRowData> activity;
 
+  /// Nothing read yet, and a read on its way.
+  final bool activityLoading;
+  final String? activityError;
+
+  /// What an empty activity list says, and the link that goes with it
+  /// (the wallet's Receive), if any.
+  final String activityEmpty;
+  final String? activityEmptyAction;
+
   final int? utxoCount;
 
-  /// Enough small boxes to slow sends down; the card offers a tidy-up.
+  /// Enough small boxes to slow sends down; the page offers a tidy-up.
   final bool fragmented;
   final int unpricedCount;
+  final String? pricesNote;
   final bool hidden;
 
   /// Unconfirmed transactions, for the Activity tab's badge.
   final int pendingCount;
+
+  /// The pinned address cannot be derived; settings can fix it.
+  final String? pinIssue;
+  final MixLine? mix;
+
+  /// Set for a watched address or account.
+  final WatchedDetails? watched;
 
   final List<WalletAction>? _actions;
   final List<WalletToolEntry>? _tools;
@@ -348,6 +473,14 @@ class WalletPageData {
       (wallet.watchOnly
           ? const [WalletAction.sendOffline, WalletAction.receive]
           : const [WalletAction.send, WalletAction.receive, WalletAction.swap, WalletAction.more]);
+
+  /// Actions drawn but not offered right now.
+  Set<WalletAction> get disabled => {
+        if (watched case final w?) ...{
+          if (!w.canSend) WalletAction.sendOffline,
+          if (!w.canReceive) WalletAction.receive,
+        },
+      };
 
   List<WalletToolEntry> get tools =>
       _tools ??

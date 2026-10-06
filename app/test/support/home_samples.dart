@@ -4,12 +4,14 @@ import 'package:argus_wallet/ui/home/home_models.dart';
 
 /// Sample data for the home redesign: the figures from the beta.1 home
 /// screen (25,529.3427 ERG across 2 wallets and 1 watched, A$11,951.52,
-/// 46 unpriced, block 1,888,681, 165 UTXOs), with the pending payment,
-/// other-address funds and token names the coming work adds.
+/// 46 unpriced, block 1,888,681, 165 UTXOs), with a pending payment,
+/// other-address funds and token names.
 
 const aud = FiatCurrency(symbol: r'A$', code: 'AUD');
 
-const syncedAtTip = NetworkStatus(state: SyncState.synced, blockHeight: 1888681);
+const connected = NetworkStatus(state: SyncState.synced, blockHeight: 1888681, label: 'Connected');
+
+const syncedAtTip = NetworkStatus(state: SyncState.synced, blockHeight: 1888681, age: 'just now', label: 'Synced');
 
 BigInt _units(num whole, int decimals) => BigInt.from((whole * math.pow(10, decimals)).round());
 int _nano(num erg) => (erg * 1e9).round();
@@ -22,7 +24,7 @@ const ergPricePoints = [
 
 const ergPriceWithHistory = ErgPriceView(
   fiatPerErg: 0.4682,
-  source: 'Oracle pool',
+  source: 'SigmaUSD oracle',
   points: ergPricePoints,
   changePercent: 2.4,
 );
@@ -30,41 +32,60 @@ const ergPriceWithHistory = ErgPriceView(
 /// What the strip shows on a node without the extra index.
 const ergPriceWithoutHistory = ErgPriceView(
   fiatPerErg: 0.4682,
-  source: 'Oracle pool',
-  historyUnavailable: 'No price history on this node',
+  source: 'SigmaUSD oracle',
+  historyUnavailable: 'This node has no price history for SigmaUSD oracle yet',
+);
+
+const mainAddress = '9fRAxbQ2mTe8LwZk5Ny7cVh3PdG6uJs1BqX4aKoHnYtMv9WEeR';
+const watchedAddress = '9hY16vzHmmfyVBwKeFGHvb2bMFsG94A1u7To1QWtUokACyFVENQ';
+
+/// 2.5 ERG arriving into a wallet showing 107.7134.
+final mainPending = PendingBalance(
+  confirmedNano: _nano(107.7134) - _nano(2.5),
+  pendingInNano: _nano(2.5),
+  transactions: 1,
 );
 
 final mainWallet = WalletSummary(
-  id: 'main',
+  ref: const WalletRef.seed('main'),
   name: 'Main Wallet',
   nanoErg: _nano(107.7134),
   fiatValue: 50.43,
   tokenCount: 50,
-  stealthNano: _nano(0.001),
-  pending: PendingFunds(nanoErg: _nano(2.5)),
-  otherAddresses: OtherAddressFunds(nanoErg: _nano(3.2), tokenCount: 4, addressCount: 1),
+  pockets: [PocketBalance(pocket: Pocket.stealth, nanoErg: _nano(0.001))],
+  pending: mainPending,
+  otherAddresses: FundsElsewhere(nanoErg: _nano(3.2), tokenCount: 4, addressCount: 1),
   unlocked: true,
+  address: mainAddress,
 );
 
-const emptyWallet = WalletSummary(id: '9evoke9', name: '9evoke9', nanoErg: 0, fiatValue: 0);
+const emptyWallet = WalletSummary(
+  ref: WalletRef.seed('9evoke9'),
+  name: '9evoke9',
+  nanoErg: 0,
+  fiatValue: 0,
+  tokenCount: 0,
+);
 
 final watchedWallet = WalletSummary(
-  id: 'watched',
+  ref: const WalletRef.watchedAddress(watchedAddress),
   name: 'Watched',
-  kind: WalletKind.watchOnly,
   nanoErg: _nano(25421.6293),
   fiatValue: 11901.08,
   tokenCount: 3,
+  address: watchedAddress,
 );
 
-OverviewData sampleOverview({bool hidden = false, List<WalletSummary>? wallets}) => OverviewData(
-      wallets: wallets ?? [emptyWallet, mainWallet, watchedWallet],
+OverviewData sampleOverview({bool hidden = false, List<WalletSummary>? wallets, List<WalletSummary>? watched}) =>
+    OverviewData(
+      wallets: wallets ?? [emptyWallet, mainWallet],
+      watched: watched ?? [watchedWallet],
       currency: aud,
-      network: syncedAtTip,
+      network: connected,
       totalNano: _nano(25529.3427),
       totalFiat: 11951.52,
       unpricedCount: 46,
-      pending: PendingFunds(nanoErg: _nano(2.5)),
+      pending: mainPending.under(_nano(25529.3427)),
       price: ergPriceWithHistory,
       hidden: hidden,
     );
@@ -137,7 +158,7 @@ final _mainActivity = [
   ActivityRowData(
     id: 'a1',
     kind: ActivityKind.received,
-    time: 'Just now',
+    time: '10:41 pm',
     pending: true,
     counterparty: 'from 9gF3uX…Wq7z',
     legs: [AmountLeg(amount: BigInt.from(_nano(2.5)), decimals: 9, unit: 'ERG')],
@@ -157,7 +178,6 @@ final _mainActivity = [
     id: 'a3',
     kind: ActivityKind.swap,
     time: 'Yesterday',
-    counterparty: 'Spectrum',
     legs: [
       AmountLeg(amount: BigInt.from(79), decimals: 0, unit: 'SigRSV'),
       AmountLeg(amount: BigInt.from(-_nano(4.2)), decimals: 9, unit: 'ERG'),
@@ -175,7 +195,7 @@ final _mainActivity = [
 WalletPageData sampleMainPage({bool hidden = false, List<ActivityRowData>? activity}) => WalletPageData(
       wallet: mainWallet,
       currency: aud,
-      network: syncedAtTip,
+      status: syncedAtTip,
       assets: _mainAssets,
       assetCount: 51,
       activity: activity ?? _mainActivity,
@@ -189,7 +209,6 @@ WalletPageData sampleMainPage({bool hidden = false, List<ActivityRowData>? activ
 WalletPageData sampleWatchedPage({bool hidden = false}) => WalletPageData(
       wallet: watchedWallet,
       currency: aud,
-      network: syncedAtTip,
       assets: [
         // On a node without price history the row has the price but no
         // 24h change.
@@ -240,12 +259,18 @@ WalletPageData sampleWatchedPage({bool hidden = false}) => WalletPageData(
           id: 'w3',
           kind: ActivityKind.received,
           time: 'Sep 2',
-          counterparty: 'Rosen bridge',
+          counterparty: 'from 9gRosn…Br1d',
           legs: [AmountLeg(amount: _units(1204.5, 6), decimals: 6, unit: 'rsADA')],
         ),
       ],
-      utxoCount: 12,
       hidden: hidden,
+      watched: const WatchedDetails(
+        status: ['Watch-only · cannot sign here', 'Updated 2m ago'],
+        notes: [
+          'Cannot sign locally. Send with an offline signer; change returns to this same address. '
+              'A watched account tracks more addresses.',
+        ],
+      ),
     );
 
 /// The samples' own amounts and counts as summary surfaces print them, for
@@ -255,4 +280,5 @@ const hiddenModeFigures = [
   '25,529', '107.71', '25,421', '11,951', '11,901', '50.43', '2.5 ERG', '3.2 ERG', '0.001',
   '18,252,893,012', '1.81', '4.2 ERG', '12,000', '1,204.5', '2,400', '4.18', '0.87', '0.21',
   '69 COMET', '79 SigRSV', '50 tokens', '4 tokens', '3 tokens', 'Empty', 'empty', 'Assets, 51', '165',
+  'confirmed',
 ];

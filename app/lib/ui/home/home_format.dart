@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import '../../format.dart';
+import '../../services/token_amounts.dart';
 import 'home_models.dart';
 
 /// Figures for the overview and the wallet page.
@@ -108,7 +109,7 @@ String countLabel(int n, String singular, [String? plural]) =>
 /// compact form, for an overview row, drops "incl." and reads "another
 /// address" for one. Hidden balances say only that there are funds there:
 /// a token count tells an onlooker as much as an amount.
-String otherAddressLine(OtherAddressFunds funds, {required bool hidden, bool compact = false}) {
+String otherAddressLine(FundsElsewhere funds, {required bool hidden, bool compact = false}) {
   final parts = <String>[
     if (!hidden && funds.nanoErg != 0) '${summaryErg(funds.nanoErg)}${nbsp}ERG',
     if (!hidden && funds.tokenCount > 0) countLabel(funds.tokenCount, 'token'),
@@ -120,16 +121,70 @@ String otherAddressLine(OtherAddressFunds funds, {required bool hidden, bool com
   return compact ? '${parts.join(' · ')} $where' : 'incl.$nbsp${parts.join(' · ')} $where';
 }
 
-/// "+2.5 ERG pending", or the token count alone when no ERG moves. The
-/// short form, beside a figure already in ERG, leaves the unit out.
-String pendingLine(PendingFunds pending, {required bool hidden, bool short = false}) {
-  final unit = short ? '' : '${nbsp}ERG';
-  final parts = <String>[
-    if (pending.nanoErg != 0)
-      hidden ? '$maskedFigure$unit' : '${signedSummaryAmount(BigInt.from(pending.nanoErg), 9)}$unit',
-    if (pending.tokenCount > 0) countLabel(pending.tokenCount, 'token'),
+/// "incl. 2 ERG stealth · 3 ERG in mix": the parts of a balance that are
+/// not on its public addresses, or null when there are none. A pocket
+/// whose amount could not be read says so rather than show a zero. [asOf]
+/// dates figures older than the balance, as a locked wallet's stealth
+/// scan is.
+String? pocketsLine(List<PocketBalance> pockets, {required bool hidden, String? asOf}) {
+  final shown = pockets.where((p) => p.pocket != Pocket.public && (p.nanoErg > 0 || p.unknown)).toList();
+  if (shown.isEmpty) return null;
+  final parts = [
+    for (final p in shown)
+      p.unknown
+          ? '${p.pocket.label.toLowerCase()} unknown'
+          : '${hidden ? maskedFigure : summaryErg(p.nanoErg)}${nbsp}ERG ${p.pocket.label.toLowerCase()}',
   ];
-  return '${parts.join(' · ')}${nbsp}pending';
+  return 'incl.$nbsp${parts.join(' · ')}${asOf == null ? '' : ', as of $asOf'}';
+}
+
+/// What the mempool does to the balance above it: "+2.5 ERG pending ·
+/// 105.21 confirmed"; "Pending · 105.21 confirmed" while a broadcast's
+/// value is not known yet; "•••• ERG pending" with balances hidden; null
+/// when nothing is pending. The split is the one [pendingBalanceText]
+/// words, so the confirmed side is the figure above less what is pending,
+/// and other wallets' funds, stealth and mixes count as confirmed. Only the
+/// figures are set as every summary figure here is.
+String? pendingText(PendingBalance? pending, {required bool hidden}) {
+  if (pending == null || !pending.hasPending) return null;
+  if (hidden) return '$maskedFigure${nbsp}ERG pending';
+  final delta = pending.pendingDeltaNano;
+  final lead = delta == 0 ? 'Pending' : '${signedSummaryAmount(BigInt.from(delta), 9)}${nbsp}ERG pending';
+  return '$lead · ${summaryErg(pending.confirmedNano)} confirmed';
+}
+
+/// One leg of a transaction as a row shows it: "+2.5 ERG", "−69 COMET",
+/// or "+150 raw units of SigUSD" when nothing knows the token's scale.
+String legText(AmountLeg leg) {
+  final unit = leg.unit;
+  if (leg.amount == BigInt.zero) return '0$nbsp$unit';
+  final sign = leg.amount.isNegative ? minusSign : '+';
+  final decimals = leg.decimals;
+  if (decimals == null) return '$sign${rawUnitsText(leg.amount.abs())} of $unit';
+  return '$sign${summaryAmount(leg.amount, decimals)}$nbsp$unit';
+}
+
+/// When a transaction happened, as short as a home row can say it: the
+/// time today ("10:08 pm"), "Yesterday", the day this year ("Oct 2"), and
+/// the year as well before that. Empty when the time is not known. The
+/// Activity tab keeps the full "Today, 10:08 pm" form.
+String shortActivityTime(int? timestampMs, {DateTime? now}) {
+  if (timestampMs == null || timestampMs <= 0) return '';
+  final at = DateTime.fromMillisecondsSinceEpoch(timestampMs);
+  final today = now ?? DateTime.now();
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  // Calendar days, not 24-hour spans: 11 pm the night before is
+  // "Yesterday" at 8 am.
+  final days = DateTime.utc(today.year, today.month, today.day)
+      .difference(DateTime.utc(at.year, at.month, at.day))
+      .inDays;
+  if (days <= 0) {
+    final hour = at.hour % 12 == 0 ? 12 : at.hour % 12;
+    return '$hour:${at.minute.toString().padLeft(2, '0')}$nbsp${at.hour < 12 ? 'am' : 'pm'}';
+  }
+  if (days == 1) return 'Yesterday';
+  final day = '${months[at.month - 1]}$nbsp${at.day}';
+  return at.year == today.year ? day : '$day, ${at.year}';
 }
 
 /// Splits "25,529.34" into "25,529" and ".34" so the fraction can be set

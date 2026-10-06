@@ -31,13 +31,30 @@ double _labelNeed(BuildContext context, String label, TextStyle style) {
 /// accent; the rest sit recessed in the panel. Four abreast, then two by
 /// two at large text sizes, rather than squeeze a name.
 class HomeActionCircles extends StatelessWidget {
-  const HomeActionCircles({super.key, required this.actions, required this.onAction});
+  const HomeActionCircles({
+    super.key,
+    required this.actions,
+    required this.onAction,
+    this.disabled = const {},
+    this.watched = false,
+  });
 
   final List<WalletAction> actions;
   final ValueChanged<WalletAction> onAction;
 
+  /// Drawn, so the page keeps its shape, but not offered right now.
+  final Set<WalletAction> disabled;
+
+  /// A watched wallet's actions keep the keys they have always had
+  /// ("watch-action-send"), which other screens' tests look for.
+  final bool watched;
+
   static const _size = 44.0;
   static const _gap = 8.0;
+
+  Key _key(WalletAction action) => watched
+      ? Key('watch-action-${action == WalletAction.sendOffline ? 'send' : action.name}')
+      : Key('wallet-action-${action.name}');
 
   @override
   Widget build(BuildContext context) {
@@ -83,36 +100,44 @@ class HomeActionCircles extends StatelessWidget {
     final look = walletActionLook(action);
     final colors = ArgusColors.of(context);
     final t = HomeText.of(context);
+    final enabled = !disabled.contains(action);
+    final onTap = enabled ? () => onAction(action) : null;
+    // Disabled reads as the same button at a lower opacity, so the page
+    // keeps its shape while, say, an account's first scan runs.
     return TappableNode(
       label: look.label,
-      onTap: () => onAction(action),
-      child: InkWell(
-        key: Key('wallet-action-${action.name}'),
-        onTap: () => onAction(action),
-        borderRadius: BorderRadius.circular(homeRadius),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: _size,
-                height: _size,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: primary ? colors.accent : colors.inset,
+      onTap: onTap,
+      button: true,
+      child: Opacity(
+        opacity: enabled ? 1 : 0.38,
+        child: InkWell(
+          key: _key(action),
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(homeRadius),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: _size,
+                  height: _size,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: primary ? colors.accent : colors.inset,
+                  ),
+                  child: Icon(look.icon, size: homeIconSize, color: primary ? colors.onAccent : t.ink),
                 ),
-                child: Icon(look.icon, size: homeIconSize, color: primary ? colors.onAccent : t.ink),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                balancedLabel(context, look.label, style, labelWidth),
-                textAlign: TextAlign.center,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: style,
-              ),
-            ],
+                const SizedBox(height: 6),
+                Text(
+                  balancedLabel(context, look.label, style, labelWidth),
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: style,
+                ),
+              ],
+            ),
           ),
         ),
       ),

@@ -3,7 +3,8 @@
 // text and in the dark one at 2x, and checked for layout errors, 48 dp
 // touch targets, labelled controls, screen-reader sentences and hidden
 // balances. Text contrast is checked from the palette tokens in
-// home_contrast_test.dart. To also save PNGs under <repo>/ui-renders/v3/:
+// home_contrast_test.dart; the screens as the app wires them, in
+// home_wired_test.dart. To also save PNGs under <repo>/ui-renders/v3/:
 //
 //   ARGUS_UI_RENDERS=1 flutter test test/home_design_render_test.dart
 //
@@ -13,7 +14,10 @@
 import 'package:argus_wallet/theme/argus_theme.dart';
 import 'package:argus_wallet/ui/home/home_models.dart';
 import 'package:argus_wallet/ui/home/overview_screen.dart';
+import 'package:argus_wallet/ui/home/wallet_nav_bar.dart';
 import 'package:argus_wallet/ui/home/wallet_page.dart';
+import 'package:argus_wallet/ui/home/wallet_tools_sheet.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -41,30 +45,65 @@ void _noop([Object? _]) {}
 OverviewScreen _overview(OverviewData data) => OverviewScreen(
       data: data,
       onOpenWallet: _noop,
-      onWalletOptions: _noop,
-      onCreate: _noop,
-      onRestore: _noop,
-      onWatch: _noop,
+      onReorder: (_, _) {},
+      onAdd: _noop,
       onSettings: _noop,
       onToggleHidden: _noop,
       onNetwork: _noop,
       onLearnMore: _noop,
+      footnote: 'Long-press a wallet to change the order.',
     );
 
-WalletPageScreen _walletPage(WalletPageData data, {ValueChanged<WalletTool>? onTool}) => WalletPageScreen(
-      data: data,
-      onTab: _noop,
-      onBack: _noop,
-      onScan: _noop,
-      onToggleHidden: _noop,
-      onAction: _noop,
-      onTool: onTool ?? _noop,
-      onAsset: _noop,
-      onAllAssets: _noop,
-      onActivity: _noop,
-      onAllActivity: _noop,
-      onTidyUp: _noop,
-      onOtherAddresses: _noop,
+/// A wallet page framed as the app frames it: back, the wallet's name, the
+/// scanner for a seed wallet, the page and the tabs.
+Widget _walletPage(
+  WalletPageData data, {
+  VoidCallback? onBack,
+  VoidCallback? onScan,
+  ValueChanged<WalletTab>? onTab,
+  VoidCallback? onToggleHidden,
+  ValueChanged<WalletAction>? onAction,
+  ValueChanged<WalletTool>? onTool,
+  ValueChanged<String>? onAsset,
+  VoidCallback? onAllAssets,
+  ValueChanged<String>? onActivity,
+  VoidCallback? onAllActivity,
+  VoidCallback? onStatus,
+  VoidCallback? onTidyUp,
+  VoidCallback? onOtherAddresses,
+}) =>
+    WalletPageScreen(
+      title: data.wallet.name,
+      onBack: onBack ?? _noop,
+      actions: [
+        if (!data.wallet.watchOnly)
+          IconButton(
+            key: const Key('wallet-scan'),
+            icon: const Icon(Icons.qr_code_scanner),
+            tooltip: 'Scan a QR code',
+            onPressed: onScan ?? _noop,
+          ),
+      ],
+      body: WalletPageView(
+        data: data,
+        onToggleHidden: onToggleHidden ?? _noop,
+        onAction: onAction ?? _noop,
+        onTool: onTool ?? _noop,
+        onAsset: onAsset ?? _noop,
+        onAllAssets: onAllAssets ?? _noop,
+        onActivity: onActivity ?? _noop,
+        onAllActivity: onAllActivity ?? _noop,
+        onStatus: onStatus ?? _noop,
+        onTidyUp: onTidyUp ?? _noop,
+        onOtherAddresses: onOtherAddresses ?? _noop,
+        onCopyAddress: _noop,
+      ),
+      navBar: WalletNavBar(
+        current: WalletTab.wallet,
+        onSelect: onTab ?? _noop,
+        watchOnly: data.wallet.watchOnly,
+        pendingCount: data.pendingCount,
+      ),
     );
 
 /// Scrolls [finder] into full view, building it first if the list hasn't,
@@ -93,7 +132,7 @@ void _expectNoFigures(WidgetTester tester) {
   final shown = tester.widgetList<RichText>(find.byType(RichText)).map((t) => t.text.toPlainText()).join('\n');
   for (final figure in hiddenModeFigures) {
     // On screen a figure is joined to its unit by a no-break space.
-    final pattern = RegExp(RegExp.escape(figure).replaceAll(' ', '[  ]'));
+    final pattern = RegExp(RegExp.escape(figure).replaceAll(' ', '[  ]'));
     expect(pattern.hasMatch(shown), isFalse, reason: '"$figure" is on screen with balances hidden');
     expect(find.bySemanticsLabel(pattern), findsNothing, reason: '"$figure" is read out with balances hidden');
   }
@@ -119,22 +158,23 @@ void main() {
       expect(tester.takeException(), isNull);
       await saveRender(tester, _file('overview', palette, scale));
       expect(
-        find.bySemanticsLabel(
-            RegExp(r'^Total balance 25,529\.34 ERG, about A\$11,951\.52 AUD, 46 tokens unpriced, \+2\.5 ERG pending$')),
+        find.bySemanticsLabel(RegExp(r'^Total balance 25,529\.34 ERG, about A\$11,951\.52 AUD, 46 tokens unpriced, '
+            r'\+2\.5 ERG pending · 25,526\.84 confirmed$')),
         findsOneWidget,
       );
-      expect(find.bySemanticsLabel('ERG price A\$0.47 AUD, up 2.4% over 24h, Oracle pool'), findsOneWidget);
-      expect(find.bySemanticsLabel('Synced, Block 1,888,681'), findsOneWidget);
+      expect(find.bySemanticsLabel('ERG price A\$0.47 AUD, up 2.4% over 24h, SigmaUSD oracle'), findsOneWidget);
+      expect(find.bySemanticsLabel('Connected, Block 1,888,681'), findsOneWidget);
       await _accessible(tester);
       if (scale == 1) {
         // At 2x the list builds rows only as they near the screen.
         expect(
           find.bySemanticsLabel(RegExp(r'^Main Wallet, unlocked, 107\.71 ERG, about A\$50\.43 AUD, 50 tokens, '
-              r'\+2\.5 ERG pending, incl\. 3\.2 ERG · 4 tokens on another address$')),
+              r'\+2\.5 ERG pending · 105\.21 confirmed, incl\. 3\.2 ERG · 4 tokens on another address, '
+              r'incl\. 0\.001 ERG stealth$')),
           findsOneWidget,
         );
         expect(find.bySemanticsLabel(RegExp(r'^9evoke9, 0 ERG, empty$')), findsOneWidget);
-        expect(find.bySemanticsLabel(RegExp(r'^Watched, watch-only, 25,421\.62 ERG')), findsOneWidget);
+        expect(find.bySemanticsLabel(RegExp(r'^Watched, watch-only, 9hY16v…VENQ, 25,421\.62 ERG')), findsOneWidget);
         // Every wallet and the way to add one, with room to spare.
         final fold = tester.view.physicalSize.height / tester.view.devicePixelRatio;
         expect(tester.getBottomLeft(find.byKey(const Key('overview-add-wallet'))).dy, lessThan(fold - 48));
@@ -148,16 +188,15 @@ void main() {
       await saveRender(tester, _file('wallet', palette, scale));
       expect(
         find.bySemanticsLabel(RegExp(r'^Balance 107\.71 ERG, about A\$50\.43 AUD, 46 tokens unpriced, '
-            r'\+2\.5 ERG pending, incl\. 0\.001 ERG stealth$')),
+            r'\+2\.5 ERG pending · 105\.21 confirmed, incl\. 0\.001 ERG stealth$')),
         findsOneWidget,
       );
       expect(find.bySemanticsLabel('incl. 3.2 ERG · 4 tokens on 1 other address'), findsOneWidget);
-      expect(find.bySemanticsLabel('165 UTXOs, fragmented. Tidy up'), findsOneWidget);
       expect(find.byKey(const Key('home-price-sparkline')), findsNothing, reason: 'the price strip is overview-only');
       expect(find.byTooltip('All wallets'), findsOneWidget);
       expect(find.byKey(const Key('wallet-tab-discover')), findsOneWidget);
       if (scale == 1) {
-        expect(_assetsAboveFold(tester), greaterThanOrEqualTo(5), reason: 'balance, actions and the holdings fit');
+        expect(_assetsAboveFold(tester), greaterThanOrEqualTo(4), reason: 'balance, actions and the holdings fit');
       }
       await _accessible(tester);
 
@@ -169,6 +208,8 @@ void main() {
       for (final action in ['send', 'receive', 'swap', 'more']) {
         expect(find.byKey(Key('wallet-action-$action')), findsOneWidget);
       }
+      expect(find.bySemanticsLabel('Synced, Block 1,888,681, just now'), findsOneWidget);
+      expect(find.bySemanticsLabel('165 UTXOs, fragmented. Tidy up'), findsOneWidget);
       expect(find.bySemanticsLabel(RegExp(r'^ERG, price A\$0\.47, up 2\.4% over 24h, 107\.71, about A\$50\.43 AUD$')),
           findsOneWidget);
       expect(find.bySemanticsLabel(RegExp(r'^COMET, verified, Comet, 69, about A\$0\.21 AUD$')), findsOneWidget);
@@ -179,7 +220,7 @@ void main() {
       );
       expect(find.bySemanticsLabel(RegExp(r'^Sent, −1\.81 ERG, −69 COMET \+ 1 more, contract 5vSUZR…SCqM, 10:08 pm$')),
           findsOneWidget);
-      expect(find.bySemanticsLabel(RegExp(r'^Received, pending, \+2\.5 ERG, from 9gF3uX…Wq7z, Just now$')),
+      expect(find.bySemanticsLabel(RegExp(r'^Received, pending, \+2\.5 ERG, from 9gF3uX…Wq7z, 10:41 pm$')),
           findsOneWidget);
       await _accessible(tester);
     });
@@ -210,12 +251,15 @@ void main() {
       await saveRender(tester, _file('watched', palette));
       expect(find.bySemanticsLabel('Send with offline signer'), findsOneWidget);
       expect(find.bySemanticsLabel('Receive'), findsOneWidget);
+      expect(find.byKey(const Key('watch-action-send')), findsOneWidget);
+      expect(find.byKey(const Key('watch-action-receive')), findsOneWidget);
       for (final keyed in ['send', 'swap', 'more']) {
         expect(find.byKey(Key('wallet-action-$keyed')), findsNothing, reason: '$keyed needs keys on this phone');
       }
       expect(find.byKey(const Key('wallet-scan')), findsNothing);
       expect(find.byKey(const Key('wallet-tab-discover')), findsNothing);
-      expect(find.textContaining('WATCH-ONLY'), findsOneWidget);
+      expect(find.textContaining('WATCHED ADDRESS'), findsOneWidget);
+      expect(find.bySemanticsLabel('Watch-only · cannot sign here, Updated 2m ago'), findsOneWidget);
       expect(find.bySemanticsLabel(RegExp(r'^ERG, price A\$0\.47, 25,421\.62')), findsOneWidget,
           reason: 'no 24h change without price history');
       await _accessible(tester);
@@ -229,11 +273,36 @@ void main() {
     await _accessible(tester);
   });
 
+  testWidgets('an account before its first scan cannot send or receive yet', (tester) async {
+    final taps = <WalletAction>[];
+    final page = sampleWatchedPage();
+    await pumpRender(
+      tester,
+      _walletPage(
+        WalletPageData(
+          wallet: page.wallet,
+          currency: aud,
+          watched: const WatchedDetails(status: ['Watch-only · cannot sign here'], canSend: false, canReceive: false),
+        ),
+        onAction: taps.add,
+      ),
+      palette: watchfulPalette,
+    );
+    await tester.tap(find.byKey(const Key('watch-action-receive')));
+    await tester.tap(find.byKey(const Key('watch-action-send')));
+    expect(taps, isEmpty);
+    // Still announced as the action it is, disabled.
+    expect(
+      tester.getSemantics(find.bySemanticsLabel('Receive')),
+      isSemantics(isButton: true, hasEnabledState: true, isEnabled: false, hasTapAction: false),
+    );
+  });
+
   testWidgets('overview hides every amount', (tester) async {
     await pumpRender(tester, _overview(sampleOverview(hidden: true)), palette: watchfulPalette);
     expect(tester.takeException(), isNull);
     await saveRender(tester, _file('overview', watchfulPalette, 1, '-hidden'));
-    expect(find.bySemanticsLabel('Total balance hidden'), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp(r'^Total balance hidden')), findsOneWidget);
     expect(find.byTooltip('Show balances'), findsOneWidget);
     _expectNoFigures(tester);
   });
@@ -243,47 +312,48 @@ void main() {
     await pumpRender(tester, screen, palette: watchfulPalette);
     expect(tester.takeException(), isNull);
     await saveRender(tester, _file('wallet', watchfulPalette, 1, '-hidden'));
-    expect(find.bySemanticsLabel('Balance hidden'), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp(r'^Balance hidden')), findsOneWidget);
     await pumpFullLength(tester, screen, listKey: const Key('wallet-list'), palette: watchfulPalette);
     _expectNoFigures(tester);
   });
 
   testWidgets('add a wallet', (tester) async {
-    final taps = <String>[];
-    await pumpRender(
-      tester,
-      OverviewScreen(
-        data: sampleOverview(),
-        onCreate: () => taps.add('create'),
-        onRestore: () => taps.add('restore'),
-        onWatch: () => taps.add('watch'),
-      ),
-      palette: watchfulPalette,
-    );
-    for (final choice in ['create', 'restore', 'watch']) {
+    final taps = <AddWalletChoice>[];
+    await pumpRender(tester, OverviewScreen(data: sampleOverview(), onAdd: taps.add), palette: watchfulPalette);
+    for (final choice in AddWalletChoice.values) {
       await _reveal(tester, find.byKey(const Key('overview-add-wallet')));
       await tester.tap(find.byKey(const Key('overview-add-wallet')));
       await tester.pumpAndSettle();
-      if (choice == 'create') {
+      if (choice == AddWalletChoice.create) {
         expect(tester.takeException(), isNull);
         await saveRender(tester, _file('add-wallet', watchfulPalette));
         await _accessible(tester);
       }
-      await tester.tap(find.byKey(Key('overview-add-$choice')));
+      await tester.tap(find.byKey(Key(choice.keyName)));
       await tester.pumpAndSettle();
     }
-    expect(taps, ['create', 'restore', 'watch']);
+    expect(taps, AddWalletChoice.values);
   });
 
   testWidgets('first launch', (tester) async {
-    await pumpRender(tester, _overview(sampleOverview(wallets: const [])), palette: watchfulPalette);
+    final taps = <AddWalletChoice>[];
+    await pumpRender(
+      tester,
+      OverviewScreen(data: sampleOverview(wallets: const [], watched: const []), onAdd: taps.add, onSettings: _noop),
+      palette: watchfulPalette,
+    );
     expect(tester.takeException(), isNull);
     await saveRender(tester, _file('overview', watchfulPalette, 1, '-empty'));
     expect(find.text('Create a wallet'), findsOneWidget);
     expect(find.text('Restore from recovery phrase'), findsOneWidget);
     expect(find.text('Watch an address'), findsOneWidget);
+    expect(find.text('Watch an account (xpub)'), findsOneWidget);
     expect(find.byTooltip('Settings'), findsOneWidget, reason: 'a node can be set before the first restore');
     await _accessible(tester);
+    for (final choice in AddWalletChoice.values) {
+      await tester.tap(find.byKey(Key(choice.keyName)));
+    }
+    expect(taps, AddWalletChoice.values);
   });
 
   testWidgets('overview reports what was tapped', (tester) async {
@@ -292,32 +362,45 @@ void main() {
       tester,
       OverviewScreen(
         data: sampleOverview(),
-        onOpenWallet: (id) => taps.add('open $id'),
-        onWalletOptions: (id) => taps.add('options $id'),
+        onOpenWallet: (ref) => taps.add('open ${ref.id}'),
+        onReorder: (from, to) => taps.add('move $from to $to'),
         onSettings: () => taps.add('settings'),
         onToggleHidden: () => taps.add('hide'),
         onNetwork: () => taps.add('network'),
       ),
       palette: ledgerPalette,
     );
-    for (final key in ['overview-wallet-main', 'overview-settings', 'home-hide-balances', 'home-network']) {
+    for (final key in ['overview-row-seed-main', 'overview-settings', 'home-hide-balances', 'home-network']) {
       await _reveal(tester, find.byKey(Key(key)));
       await tester.tap(find.byKey(Key(key)));
     }
-    await tester.longPress(find.byKey(const Key('overview-wallet-9evoke9')));
-    expect(taps, ['open main', 'settings', 'hide', 'network', 'options 9evoke9']);
+    // A long press picks a wallet up; dropping it lower moves it.
+    final first = find.byKey(const Key('overview-row-seed-9evoke9'));
+    await _reveal(tester, find.byKey(const Key('overview-row-seed-main')));
+    // Past the whole of the next row, which is tall with its notes.
+    final below = tester.getSize(find.byKey(const Key('overview-row-seed-main'))).height;
+    final drag = await tester.startGesture(tester.getCenter(first));
+    await tester.pump(kLongPressTimeout + const Duration(milliseconds: 100));
+    for (var moved = 0.0; moved < below + 100; moved += 10) {
+      await drag.moveBy(const Offset(0, 10));
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await drag.up();
+    await tester.pumpAndSettle();
+    expect(taps, ['open main', 'settings', 'hide', 'network', 'move 0 to 2']);
   });
 
   testWidgets('wallet reports what was tapped', (tester) async {
     final taps = <String>[];
     await pumpRender(
       tester,
-      WalletPageScreen(
-        data: sampleMainPage(),
+      _walletPage(
+        sampleMainPage(),
         onBack: () => taps.add('back'),
         onScan: () => taps.add('scan'),
         onToggleHidden: () => taps.add('hide'),
         onAction: (a) => taps.add(a.name),
+        onStatus: () => taps.add('status'),
         onTidyUp: () => taps.add('tidy'),
         onOtherAddresses: () => taps.add('addresses'),
         onTab: (t) => taps.add('tab ${t.name}'),
@@ -336,8 +419,9 @@ void main() {
       'wallet-action-send',
       'wallet-action-receive',
       'wallet-action-swap',
-      'wallet-other-addresses',
-      'home-tidy-up',
+      'funds-elsewhere',
+      'wallet-status',
+      'utxo-fragmented',
       'home-asset-ERG',
       'wallet-all-assets',
       'home-activity-a2',
@@ -356,6 +440,7 @@ void main() {
       'receive',
       'swap',
       'addresses',
+      'status',
       'tidy',
       'asset ERG',
       'all assets',
@@ -368,8 +453,8 @@ void main() {
     final taps = <String>[];
     await pumpRender(
       tester,
-      WalletPageScreen(
-        data: sampleMainPage(),
+      _walletPage(
+        sampleMainPage(),
         onAction: (a) => taps.add(a.name),
         onTidyUp: () => taps.add('tidy'),
         onAsset: (id) => taps.add('asset $id'),
@@ -389,7 +474,7 @@ void main() {
       _overview(OverviewData(
         wallets: sampleOverview().wallets,
         currency: aud,
-        network: syncedAtTip,
+        network: connected,
         totalNano: sampleOverview().totalNano,
         price: ergPriceWithoutHistory,
       )),
@@ -397,15 +482,40 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     expect(find.byKey(const Key('home-price-sparkline')), findsNothing);
-    expect(find.bySemanticsLabel('ERG price A\$0.47 AUD, Oracle pool, No price history on this node'), findsOneWidget);
+    expect(
+      find.bySemanticsLabel(
+          'ERG price A\$0.47 AUD, SigmaUSD oracle, This node has no price history for SigmaUSD oracle yet'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a stale price says how old it is, and no trend', (tester) async {
+    await pumpRender(
+      tester,
+      _overview(OverviewData(
+        wallets: sampleOverview().wallets,
+        currency: aud,
+        network: connected,
+        totalNano: sampleOverview().totalNano,
+        totalFiat: 11951.52,
+        pricesNote: 'prices 3 h old',
+        price: const ErgPriceView(fiatPerErg: 0.4682, source: 'SigmaUSD oracle', staleNote: '3 h old'),
+      )),
+      palette: watchfulPalette,
+    );
+    expect(find.bySemanticsLabel(RegExp(r'^Total balance 25,529\.34 ERG, about A\$11,951\.52 AUD, prices 3 h old')),
+        findsOneWidget);
+    expect(find.bySemanticsLabel('ERG price A\$0.47 AUD, SigmaUSD oracle, 3 h old'), findsOneWidget);
   });
 
   testWidgets('a wallet still syncing shows a placeholder, not zero', (tester) async {
     await pumpRender(
       tester,
       _overview(const OverviewData(
-        wallets: [WalletSummary(id: 'new', name: 'Fresh restore')],
+        wallets: [WalletSummary(ref: WalletRef.seed('new'), name: 'Fresh restore', loading: true)],
         currency: aud,
+        loading: true,
+        notLoaded: 1,
         network: NetworkStatus(state: SyncState.syncing, blockHeight: 1888681),
         price: ErgPriceView(fiatPerErg: null, source: 'CoinGecko'),
       )),
@@ -413,8 +523,8 @@ void main() {
     );
     expect(tester.takeException(), isNull);
     expect(find.bySemanticsLabel('Total balance loading'), findsOneWidget);
-    expect(find.bySemanticsLabel(RegExp(r'^Fresh restore, balance unavailable')), findsOneWidget);
-    expect(find.bySemanticsLabel('Syncing, Block 1,888,681'), findsOneWidget);
+    expect(find.bySemanticsLabel(RegExp(r'^Fresh restore, loading…')), findsOneWidget);
+    expect(find.bySemanticsLabel('Syncing…, Block 1,888,681'), findsOneWidget);
     expect(find.bySemanticsLabel('ERG price unavailable, CoinGecko'), findsOneWidget);
   });
 
@@ -422,7 +532,7 @@ void main() {
     final taps = <String>[];
     await pumpRender(
       tester,
-      WalletPageScreen(data: sampleMainPage(activity: const []), onAction: (a) => taps.add(a.name)),
+      _walletPage(sampleMainPage(activity: const []), onAction: (a) => taps.add(a.name)),
       palette: watchfulPalette,
     );
     await _reveal(tester, find.byKey(const Key('wallet-no-activity')));
