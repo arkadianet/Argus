@@ -174,10 +174,93 @@ class TokenDescriptorStore {
   }
 }
 
+/// How a failed node lookup is read. Shared by every automatic resolver —
+/// the wallet's sync pass and the public pool-token catalog — so the two
+/// cannot drift into treating the same answer differently.
+abstract final class DescriptorLookupFailure {
+  /// Marker the Rust side puts on an error the provider failed to answer,
+  /// as opposed to one it answered negatively.
+  static const retryableMarker = 'RETRYABLE:';
+
+  /// An unambiguous "this endpoint cannot serve issuance lookups at all".
+  /// A 404 is deliberately NOT here: `/blockchain/token/byId/{id}` answers
+  /// that both for a node without the index and for a token the node simply
+  /// does not know, and treating the first missing dust token as a dead node
+  /// would unname the whole wallet.
+  static bool unsupported(Object error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('extraindex') ||
+        text.contains('extra_index') ||
+        text.contains('must be an https url');
+  }
+
+  /// Whether the provider gave a definite "no such token", as opposed to
+  /// failing to answer. Only the former is worth remembering.
+  ///
+  /// The distinction is made in Rust, where the error still has a type:
+  /// `reqwest::Error`'s Display collapses connection refusal, DNS and TLS
+  /// failures into one opaque string, so no amount of matching here could
+  /// tell them apart from an answer. The timeout raised on this side is
+  /// recognised too, since it never reaches that layer.
+  static bool durableNegative(Object error) {
+    final text = error.toString();
+    if (text.contains(retryableMarker)) return false;
+    final lower = text.toLowerCase();
+    return !lower.contains('timed out') && !lower.contains('cancelled');
+  }
+
+  static bool notFound(Object error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('404') || text.contains('not found');
+  }
+}
+
 /// A descriptor as stored: chain-derived facts plus the evidence that backs
 /// them. Deliberately not a `TokenBalance` — it carries no amount, so a
 /// holding can never be reconstructed from the cache alone.
 class CachedDescriptor {
+  /// Reads one `inspect_token_metadata` answer. [source] is the endpoint
+  /// that gave it, recorded so provenance survives a restart.
+  factory CachedDescriptor.fromInspection(
+    Map<String, dynamic> m, {
+    required String source,
+  }) => CachedDescriptor(
+    id: m['id'] as String,
+    name: m['name'] as String?,
+    decimals: (m['decimals'] as num?)?.toInt() ?? 0,
+    emissionAmount: (m['emissionAmount'] as num?)?.toInt(),
+    iconUrl: m['iconUrl'] as String?,
+    supplyEvidence: TokenDescriptorStore.byName(
+      SupplyEvidence.values,
+      m['supplyEvidence'],
+      SupplyEvidence.unknown,
+    ),
+    decimalsEvidence: TokenDescriptorStore.byName(
+      DecimalsEvidence.values,
+      m['decimalsEvidence'],
+      DecimalsEvidence.unknown,
+    ),
+    declaredAssetKind: TokenDescriptorStore.byName(
+      DeclaredAssetKind.values,
+      m['declaredAssetKind'],
+      DeclaredAssetKind.none,
+    ),
+    metadataState: TokenDescriptorStore.byName(
+      MetadataState.values,
+      m['metadataState'],
+      MetadataState.partial,
+    ),
+    mediaState: TokenDescriptorStore.byName(
+      MediaState.values,
+      m['mediaState'],
+      MediaState.unknown,
+    ),
+    source: source,
+    // Persisted, so a restart can still tell that the issuance registers
+    // were never read and ask for them again.
+    incomplete: m['incomplete'] == true,
+  );
+
   const CachedDescriptor({
     required this.id,
     this.name,

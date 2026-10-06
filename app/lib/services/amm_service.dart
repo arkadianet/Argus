@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 export 'verified_tokens.dart' show isVerifiedToken, verifiedTokenLabels, verifiedToken, cautionedToken, impersonatedToken;
@@ -7,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../bridge/api.dart' as api;
 import '../bridge/argus_error.dart';
 import 'network_controller.dart';
+import 'token_catalog.dart';
 import 'wallet_service.dart';
 
 /// Tolerance absorbing pool movement between the cached quote and the
@@ -38,6 +40,12 @@ class AmmPoolSet {
   /// True when discovery hit its 1000-box cap and pools may be missing.
   final bool truncated;
   final List<Map<String, dynamic>> pools;
+
+  /// Name and scale of the pool tokens the public layers know — the pool
+  /// catalog and the curated registry, never a wallet's own descriptors —
+  /// and only those: an unknown token is absent, so `?? fallback` reaches
+  /// the caller's fallback instead of a made-up zero. Which tokens a pool
+  /// set trades is [tokenIds], not the keys here.
   final Map<String, AmmTokenMeta> tokens;
 
   const AmmPoolSet({
@@ -45,6 +53,16 @@ class AmmPoolSet {
     required this.pools,
     required this.tokens,
   });
+
+  AmmPoolSet withTokens(Map<String, AmmTokenMeta> tokens) =>
+      AmmPoolSet(truncated: truncated, pools: pools, tokens: tokens);
+
+  /// Every token a pool in this set trades (ERG excluded).
+  Set<String> get tokenIds => {
+    for (final pool in pools)
+      for (final (id, _) in poolSides(pool))
+        if (id != null) id,
+  };
 
   Map<String, dynamic> toJson() => {
         'truncated': truncated,
@@ -74,12 +92,12 @@ class CachedPoolSet {
   final Duration age;
 }
 
-/// On-disk copies of the last pool list and every token's metadata, so the
-/// swap picker paints at once and the Rust side skips token lookups it has
-/// already done on a previous launch.
+/// The on-disk copy of the last pool list, so the swap picker paints at
+/// once. Token names are not part of it: they live in the public token
+/// catalog, and a cached set takes them from there when it is read, so a
+/// list saved before a token was resolved still shows its name afterwards.
 class AmmPoolCache {
   static const _poolsKey = 'argus_amm_pools_v1';
-  static const _tokensKey = 'argus_amm_tokens_v1';
 
   static Future<void> save(AmmPoolSet set, {String? nodeUrl}) async {
     final prefs = await SharedPreferences.getInstance();
@@ -88,20 +106,20 @@ class AmmPoolCache {
       jsonEncode({
         'saved_at': DateTime.now().millisecondsSinceEpoch,
         'node_url': nodeUrl,
-        'set': set.toJson(),
+        'set': set.withTokens(const {}).toJson(),
       }),
     );
-    await rememberTokens(set.tokens);
   }
 
   static Future<CachedPoolSet?> load() async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_poolsKey);
     if (raw == null) return null;
+    final CachedPoolSet cached;
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
       final savedAt = DateTime.fromMillisecondsSinceEpoch((map['saved_at'] as num).toInt());
-      return CachedPoolSet(
+      cached = CachedPoolSet(
         set: AmmPoolSet.fromJson((map['set'] as Map).cast<String, dynamic>()),
         nodeUrl: map['node_url'] as String?,
         age: DateTime.now().difference(savedAt),
@@ -109,33 +127,54 @@ class AmmPoolCache {
     } catch (_) {
       return null;
     }
+    // Sets saved by earlier builds carry a placeholder for every token they
+    // could not name; whatever is in the file is replaced, not trusted.
+    await publicTokenCatalog.ensureLoaded();
+    return CachedPoolSet(
+      set: cached.set.withTokens(publicPoolTokenMeta(cached.set.pools)),
+      nodeUrl: cached.nodeUrl,
+      age: cached.age,
+    );
   }
+}
 
-  static Future<void> rememberTokens(Map<String, AmmTokenMeta> tokens) async {
-    if (tokens.isEmpty) return;
-    final prefs = await SharedPreferences.getInstance();
-    final existing = _decodeTokens(prefs.getString(_tokensKey));
-    for (final e in tokens.entries) {
-      if (e.value.name.isNotEmpty) existing[e.key] = e.value.toJson();
+/// Name and scale of [pools]' tokens from the wallet-independent layers
+/// only (see `WalletService.publicTokenMeta`). A pool set is cached and
+/// handed to pricing and routing, so a wallet's own descriptors must not
+/// leak into it; screens that want those layered on top ask the lookup.
+Map<String, AmmTokenMeta> publicPoolTokenMeta(
+  Iterable<Map<String, dynamic>> pools,
+) {
+  final out = <String, AmmTokenMeta>{};
+  for (final pool in pools) {
+    for (final (id, _) in poolSides(pool)) {
+      if (id == null || out.containsKey(id)) continue;
+      final known = walletService.publicTokenMeta(id);
+      if (known == null || known.decimalsEvidence == DecimalsEvidence.invalid) {
+        continue;
+      }
+      out[id] = AmmTokenMeta(name: known.label, decimals: known.decimals);
     }
-    await prefs.setString(_tokensKey, jsonEncode(existing));
   }
+  return out;
+}
 
-  /// JSON map of token id → {name, decimals}, for seeding the Rust cache.
-  static Future<String?> knownTokensJson() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_tokensKey);
-    return raw == null || raw.isEmpty ? null : raw;
-  }
-
-  static Map<String, dynamic> _decodeTokens(String? raw) {
-    if (raw == null || raw.isEmpty) return {};
-    try {
-      return (jsonDecode(raw) as Map).cast<String, dynamic>();
-    } catch (_) {
-      return {};
+/// The tokens [pools] trade, in the order the catalog should resolve them:
+/// pools with the deepest ERG side first, so the pairs most people trade
+/// are named first. Only public pool data decides the order; anything a
+/// wallet holds must not, or the sequence of lookups would say what it is.
+List<String> poolTokenIdsByDepth(List<Map<String, dynamic>> pools) {
+  BigInt depth(Map<String, dynamic> pool) =>
+      BigInt.tryParse('${pool['erg_reserves'] ?? ''}') ?? BigInt.from(-1);
+  final ordered = [...pools]..sort((a, b) => depth(b).compareTo(depth(a)));
+  final out = <String>[];
+  final seen = <String>{};
+  for (final pool in ordered) {
+    for (final (id, _) in poolSides(pool)) {
+      if (id != null && seen.add(id)) out.add(id);
     }
   }
+  return out;
 }
 
 class AmmQuote {
@@ -249,15 +288,34 @@ class AmmService {
     return handle;
   }
 
+  /// The pool list from the active node, with token names from the public
+  /// layers. Starts resolving the tokens nothing knows yet, from the node
+  /// that just served the list.
   Future<AmmPoolSet> pools({bool forceRefresh = false}) async {
+    // Captured once: the list comes from exactly this node (no fallback),
+    // so it is the only one that has already been shown these token ids.
+    final node = _node;
     final raw = await api.ammPools(
-      nodeUrl: _node,
+      nodeUrl: node,
       forceRefresh: forceRefresh,
-      knownTokensJson: await AmmPoolCache.knownTokensJson(),
+      // Not seeded: the Rust side only echoes what it is given and pads the
+      // rest with an id placeholder at zero decimals, which is discarded.
+      knownTokensJson: null,
     );
-    final set = AmmPoolSet.fromJson((jsonDecode(raw) as Map).cast());
+    final discovered = AmmPoolSet.fromJson((jsonDecode(raw) as Map).cast());
+    await publicTokenCatalog.ensureLoaded();
+    final set = discovered.withTokens(publicPoolTokenMeta(discovered.pools));
     // Fire and forget: the write must not delay the picker.
-    AmmPoolCache.save(set, nodeUrl: _node).catchError((_) {});
+    AmmPoolCache.save(set, nodeUrl: node).catchError((_) {});
+    // With no node configured Rust picks its own default, and Argus cannot
+    // tell which node answered, so nothing is resolved.
+    if (node != null && node.isNotEmpty) {
+      unawaited(
+        publicTokenCatalog
+            .resolve(poolTokenIdsByDepth(set.pools), servedBy: node)
+            .catchError((_) {}),
+      );
+    }
     return set;
   }
 
