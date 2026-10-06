@@ -698,6 +698,77 @@ async fn dapp_requests_cannot_double_spend_or_spend_confirming_funds_while_waiti
     }
 }
 
+/// An ErgoPay request as a dApp would hand it over: a reduced transaction
+/// spending `input` to `to`, minus the miner fee.
+fn ergopay_request(input: &ErgoBox, to: &str) -> Vec<u8> {
+    use ergo_lib::chain::ergo_box::box_builder::ErgoBoxCandidateBuilder;
+    use ergo_lib::chain::transaction::unsigned::UnsignedTransaction;
+    use ergo_lib::chain::transaction::{DataInput, TxIoVec, UnsignedInput};
+    use ergo_lib::ergotree_ir::chain::context_extension::ContextExtension;
+    use ergo_lib::ergotree_ir::chain::ergo_box::box_value::BoxValue;
+    use ergo_lib::ergotree_ir::ergo_tree::ErgoTree;
+
+    let fee = 1_100_000u64;
+    let tree = |hex_tree: &str| ErgoTree::sigma_parse_bytes(&hex::decode(hex_tree).unwrap()).unwrap();
+    let paid = ErgoBoxCandidateBuilder::new(
+        BoxValue::try_from(*input.value.as_u64() - fee).unwrap(),
+        tree(&address_to_ergo_tree(to).unwrap()),
+        2000,
+    );
+    let fee_out = ErgoBoxCandidateBuilder::new(
+        BoxValue::try_from(fee).unwrap(),
+        ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS.script().unwrap(),
+        2000,
+    );
+    let unsigned = UnsignedTransaction::new(
+        TxIoVec::from_vec(vec![UnsignedInput::new(input.box_id(), ContextExtension::empty())])
+            .unwrap(),
+        None::<TxIoVec<DataInput>>,
+        TxIoVec::from_vec(vec![paid.build().unwrap(), fee_out.build().unwrap()]).unwrap(),
+    )
+    .unwrap();
+    let reduced = wallet_core::transaction::build_reduced_transaction(
+        unsigned,
+        vec![input.clone()],
+        vec![],
+        &wallet_net::client::make_state_context(2000),
+    )
+    .unwrap();
+    wallet_core::transaction::serialize_reduced(&reduced).unwrap()
+}
+
+#[tokio::test]
+async fn ergopay_requests_cannot_double_spend_or_spend_confirming_funds_while_waiting() {
+    let w = Sent::new(20);
+    let node = Node::start(w.chain.clone());
+    let url = Some(node.url.clone());
+    for allow in [true, false] {
+        let _policy = policy(allow);
+        let describe = |input: &ErgoBox| {
+            super::super::describe_reduced_transaction(
+                w.handle,
+                ergopay_request(input, &w.foreign),
+                url.clone(),
+            )
+        };
+        let error = describe(&w.spent).await.unwrap_err();
+        assert!(message(&error).contains("pending transaction already spends"), "{error}");
+        let summary: serde_json::Value =
+            serde_json::from_str(&describe(&w.free).await.unwrap()).unwrap();
+        assert!(summary.is_object());
+        let change = describe(&w.change).await;
+        match allow {
+            true => {
+                change.unwrap();
+            }
+            false => {
+                let error = change.unwrap_err();
+                assert!(message(&error).contains("still confirming"), "{error}");
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn stealth_coins_already_being_spent_are_never_broadcast_again() {
     let w = Sent::new(17);
