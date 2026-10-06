@@ -145,6 +145,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/contacts' => const ContactsScreen(),
               '/tx' => const TransactionDetailScreen(),
               '/utxos' => const UtxoManagementScreen(),
+              UtxoManagementScreen.cleanupRoute => const UtxoManagementScreen(openCleanup: true),
               '/stakes' => const StakeRecoveryScreen(),
               '/tokens' => const TokenToolsScreen(),
               '/discover' => const DiscoverScreen(),

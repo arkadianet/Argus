@@ -2738,6 +2738,9 @@ pub async fn prepare_restructure(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
+/// Storage rent per box and per prepared output; see the module docs.
+pub mod storage_rent;
+
 /// List all unspent boxes (UTXOs) for the given addresses. Returns a JSON array
 /// of `InputBoxInput`-compatible objects (same shape as the `input_boxes` field
 /// in `prepareSend`).

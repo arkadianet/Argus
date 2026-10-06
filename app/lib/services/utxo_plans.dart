@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../format.dart';
 import '../theme/argus_theme.dart';
+import 'app_fee.dart';
+import 'storage_rent.dart';
+import 'utxo_tools_controller.dart';
 import 'wallet_service.dart';
 
 export 'utxo_tools_controller.dart' show dustThresholdNano;
@@ -203,4 +206,194 @@ UtxoHealth utxoHealth(int boxCount) {
     rust,
     'Many small boxes make every send pick more inputs. Sweep dust or consolidate.',
   );
+}
+
+/// A one-transaction consolidation the UTXO screen proposes on its own.
+///
+/// Boxes come from one address only: they are already publicly tied to each
+/// other, so the cleanup links nothing new (merging across addresses would).
+/// Mixed boxes and boxes set aside for a pending mix never take part. Boxes
+/// that rent puts at risk or that fall due within [rentSoonDays] go first,
+/// then dust, then the oldest; moving a box into the new one also restarts
+/// its four-year rent clock.
+class CleanupSuggestion {
+  const CleanupSuggestion({
+    required this.address,
+    required this.boxes,
+    required this.atRiskCount,
+    required this.dueSoonCount,
+    required this.leftAtAddress,
+    required this.forRent,
+    this.feesNano = minerFeeNano + argusFeeNano,
+  });
+
+  final String address;
+
+  /// Inputs, most urgent first; at most [consolidationMaxInputs].
+  final List<InputBoxInput> boxes;
+
+  /// Inputs whose value would not cover their rent.
+  final int atRiskCount;
+
+  /// Inputs due now or within [rentSoonDays] that are not also at risk.
+  final int dueSoonCount;
+
+  /// Eligible boxes at [address] this transaction leaves for a later one.
+  final int leftAtAddress;
+
+  /// True when rent, not box count alone, is the reason for the suggestion.
+  final bool forRent;
+
+  /// Miner fee plus Argus fee, as the consolidation builder charges them.
+  final int feesNano;
+
+  List<String> get boxIds => [for (final b in boxes) b.boxId];
+
+  BigInt get totalNano =>
+      boxes.fold(BigInt.zero, (sum, b) => sum + b.valueNanoErg);
+
+  BigInt get afterFeesNano => totalNano - BigInt.from(feesNano);
+
+  /// Inputs whose rent clock the move restarts for a reason worth naming.
+  int get rentResetCount => atRiskCount + dueSoonCount;
+
+  /// Every token the inputs hold, summed and ordered by id as the
+  /// consolidation builder orders them.
+  Map<String, BigInt> get tokens {
+    final totals = <String, BigInt>{};
+    for (final b in boxes) {
+      for (final a in b.assets) {
+        totals[a.tokenId] = (totals[a.tokenId] ?? BigInt.zero) + a.amount;
+      }
+    }
+    final ids = totals.keys.toList()..sort();
+    return {for (final id in ids) id: totals[id]!};
+  }
+}
+
+/// The cleanup worth proposing for [boxes], or null when there is none.
+///
+/// An address qualifies when one of its boxes is flagged by [rent] (at risk
+/// or due soon) or when the wallet as a whole is fragmented (more than
+/// [fragmentedAbove] boxes, the home screen's threshold). A fragmented
+/// wallet merges up to [maxInputs] boxes at the address; a tidy one only
+/// moves its flagged boxes. Either way the address's largest ERG-only box
+/// (failing that, its largest box) joins, so the new box can pay its own
+/// rent. The address with the most flagged boxes wins, then the one with
+/// the most boxes. [exclude] removes boxes that must not move (mixed,
+/// reserved for a mix, or already being spent). [viable] lets the caller,
+/// which can measure the new box, turn down a candidate that could not be
+/// built or would not cover its rent; the next address is tried instead.
+CleanupSuggestion? suggestCleanup({
+  required List<InputBoxInput> boxes,
+  Map<String, BoxRent> rent = const {},
+  Set<String> exclude = const {},
+  int fragmentedAbove = utxoFragmentationThreshold,
+  int maxInputs = consolidationMaxInputs,
+  int feesNano = minerFeeNano + argusFeeNano,
+  bool Function(CleanupSuggestion candidate)? viable,
+}) {
+  if (maxInputs < 2) return null;
+  final fragmented = boxes.length > fragmentedAbove;
+  final byAddress = <String, List<InputBoxInput>>{};
+  for (final b in boxes) {
+    final address = b.address;
+    if (address == null || address.isEmpty || exclude.contains(b.boxId)) {
+      continue;
+    }
+    byAddress.putIfAbsent(address, () => []).add(b);
+  }
+
+  bool flagged(InputBoxInput b) => rent[b.boxId]?.flagged ?? false;
+  bool atRisk(InputBoxInput b) => rent[b.boxId]?.atRisk ?? false;
+  int rank(InputBoxInput b) {
+    if (flagged(b)) return 0;
+    if (b.valueNanoErg < BigInt.from(dustThresholdNano)) return 1;
+    return 2;
+  }
+
+  CleanupSuggestion? best;
+  var bestScore = (-1, -1);
+  final addresses = byAddress.keys.toList()..sort();
+  for (final address in addresses) {
+    final group = byAddress[address]!;
+    if (group.length < 2) continue;
+    final urgent = group.where(flagged).length;
+    if (urgent == 0 && !fragmented) continue;
+
+    final ordered = [...group]
+      ..sort((a, b) {
+        final byRank = rank(a).compareTo(rank(b));
+        return byRank != 0 ? byRank : compareUtxoAge(a, b);
+      });
+    final picks = fragmented
+        ? ordered.take(maxInputs).toList()
+        : ordered.where(flagged).take(maxInputs - 1).toList();
+    // The address's largest ERG-only box joins in, so boxes rescued from
+    // rent land in a box that can pay it; without one, its largest box.
+    final funder =
+        _largest(group.where((b) => b.assets.isEmpty)) ?? _largest(group);
+    if (funder != null && !picks.contains(funder)) {
+      if (picks.length >= maxInputs) picks.removeLast();
+      picks.add(funder);
+    }
+    // A lone flagged box needs a partner to be moved at all.
+    if (picks.length < 2) {
+      final partner = _largest(group.where((b) => !picks.contains(b)));
+      if (partner != null) picks.add(partner);
+    }
+    if (picks.length < 2) continue;
+    final total = picks.fold(BigInt.zero, (sum, b) => sum + b.valueNanoErg);
+    if (total < BigInt.from(feesNano + minBoxNano)) continue;
+
+    final score = (urgent, group.length);
+    if (score.$1 < bestScore.$1 ||
+        (score.$1 == bestScore.$1 && score.$2 <= bestScore.$2)) {
+      continue;
+    }
+    final candidate = CleanupSuggestion(
+      address: address,
+      boxes: List.unmodifiable(picks),
+      atRiskCount: picks.where(atRisk).length,
+      dueSoonCount: picks
+          .where((b) => !atRisk(b) && (rent[b.boxId]?.dueSoon ?? false))
+          .length,
+      leftAtAddress: group.length - picks.length,
+      forRent: urgent > 0,
+      feesNano: feesNano,
+    );
+    if (viable != null && !viable(candidate)) continue;
+    bestScore = score;
+    best = candidate;
+  }
+  return best;
+}
+
+/// Whether [s] is worth proposing once the new box is measured
+/// ([estimate], from the core's builder layout; null when it could not be).
+///
+/// The merged value must fund every box the tokens need: the builder
+/// refuses a consolidation below their floors. And a cleanup proposed for
+/// rent must leave a box that covers its own rent, or it only spends fees
+/// and gathers the tokens into one box a collector can still take whole.
+/// An unmeasured layout passes; the review then says the count is unknown.
+bool cleanupIsViable(CleanupSuggestion s, OutputRentEstimate? estimate) {
+  if (estimate == null) return true;
+  if (BigInt.from(estimate.valueNano) > s.afterFeesNano) return false;
+  return !(s.forRent && estimate.chargeable && !estimate.covered);
+}
+
+InputBoxInput? _largest(Iterable<InputBoxInput> boxes) {
+  InputBoxInput? best;
+  for (final b in boxes) {
+    if (best == null) {
+      best = b;
+      continue;
+    }
+    final byValue = b.valueNanoErg.compareTo(best.valueNanoErg);
+    if (byValue > 0 || (byValue == 0 && b.boxId.compareTo(best.boxId) < 0)) {
+      best = b;
+    }
+  }
+  return best;
 }

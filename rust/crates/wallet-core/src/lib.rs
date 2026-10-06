@@ -6,6 +6,7 @@ pub mod derivation;
 pub mod encryption;
 pub mod error;
 pub mod pin;
+pub mod rent;
 pub mod seed;
 pub mod spend;
 pub mod storage;

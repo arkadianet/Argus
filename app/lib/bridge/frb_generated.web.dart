@@ -8,6 +8,7 @@
 
 import 'api.dart';
 import 'api/mempool.dart';
+import 'api/storage_rent.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'frb_generated.dart';
