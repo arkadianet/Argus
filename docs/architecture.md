@@ -28,7 +28,6 @@ wallet/
 │   │       ├── ergo-tx/
 │   │       ├── ergo-node-client/
 │   │       ├── ergopay-core/
-│   │       ├── core2/            # Patch for yanked core2 0.4.0
 │   │       └── protocols/
 │   │           ├── amm/
 │   │           ├── sigmausd/

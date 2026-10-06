@@ -443,8 +443,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "core2"
-version = "0.4.0"
+name = "core3"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cbcb5224cf18d0beaecf52c52a58b248213de007fa72bc212d916224e26ceb8"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "cpufeatures"
@@ -811,12 +816,12 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 [[package]]
 name = "ergo-chain-types"
 version = "0.15.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea93b95cf9987129a03dd4ba#7f927613c5a72bf6ea93b95cf9987129a03dd4ba"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
 dependencies = [
  "base16",
  "base64",
  "bounded-integer",
- "core2",
+ "core3",
  "derive_more 2.1.1",
  "elliptic-curve",
  "k256",
@@ -834,7 +839,7 @@ dependencies = [
 [[package]]
 name = "ergo-lib"
 version = "0.28.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea93b95cf9987129a03dd4ba#7f927613c5a72bf6ea93b95cf9987129a03dd4ba"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
 dependencies = [
  "base16",
  "bitvec",
@@ -865,7 +870,7 @@ dependencies = [
 [[package]]
 name = "ergo-merkle-tree"
 version = "0.15.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea93b95cf9987129a03dd4ba#7f927613c5a72bf6ea93b95cf9987129a03dd4ba"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
 dependencies = [
  "base16",
  "blake2",
@@ -882,7 +887,7 @@ dependencies = [
 [[package]]
 name = "ergo-nipopow"
 version = "0.15.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea93b95cf9987129a03dd4ba#7f927613c5a72bf6ea93b95cf9987129a03dd4ba"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
 dependencies = [
  "base16",
  "bounded-integer",
@@ -979,13 +984,13 @@ dependencies = [
 [[package]]
 name = "ergotree-interpreter"
 version = "0.28.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea93b95cf9987129a03dd4ba#7f927613c5a72bf6ea93b95cf9987129a03dd4ba"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
 dependencies = [
  "base16",
  "blake2",
  "bounded-vec",
  "bytes",
- "core2",
+ "core3",
  "derive_more 2.1.1",
  "elliptic-curve",
  "ergo-chain-types",
@@ -1012,13 +1017,13 @@ dependencies = [
 [[package]]
 name = "ergotree-ir"
 version = "0.28.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea93b95cf9987129a03dd4ba#7f927613c5a72bf6ea93b95cf9987129a03dd4ba"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
 dependencies = [
  "base16",
  "bnum",
  "bounded-vec",
  "bs58",
- "core2",
+ "core3",
  "derive_more 2.1.1",
  "elliptic-curve",
  "ergo-chain-types",
@@ -1267,7 +1272,7 @@ dependencies = [
 [[package]]
 name = "gf2_192"
 version = "0.28.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea93b95cf9987129a03dd4ba#7f927613c5a72bf6ea93b95cf9987129a03dd4ba"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
 dependencies = [
  "derive_more 2.1.1",
  "thiserror 2.0.20",
@@ -2515,18 +2520,18 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "sigma-ser"
 version = "0.19.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea93b95cf9987129a03dd4ba#7f927613c5a72bf6ea93b95cf9987129a03dd4ba"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
 dependencies = [
  "bitvec",
  "bounded-vec",
- "core2",
+ "core3",
  "thiserror 2.0.20",
 ]
 
 [[package]]
 name = "sigma-util"
 version = "0.18.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea93b95cf9987129a03dd4ba#7f927613c5a72bf6ea93b95cf9987129a03dd4ba"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
 dependencies = [
  "blake2",
  "sha2 0.10.9",
@@ -3521,4 +3526,4 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[patch.unused]]
 name = "ergo-rest"
 version = "0.13.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=7f927613c5a72bf6ea93b95cf9987129a03dd4ba#7f927613c5a72bf6ea93b95cf9987129a03dd4ba"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"

@@ -5,7 +5,6 @@ members = [
     "crates/wallet-net",
     "crates/wallet-ffi",
     "crates/vendor/citadel-core",
-    "crates/vendor/core2",
     "crates/vendor/ergo-tx",
     "crates/vendor/ergo-node-client",
     "crates/vendor/ergopay-core",
@@ -29,14 +28,19 @@ repository = "https://github.com/arkadianet/argus"
 
 [workspace.dependencies]
 # ─── Core Ergo (pinned SHA) ──────────────────────────────────────────────
-ergo-lib = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergo-chain-types = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergotree-ir = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergotree-interpreter = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-sigma-ser = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergo-merkle-tree = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergo-nipopow = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergo-rest = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
+# A develop commit, not a crates.io release: the newest release (0.28.0, 2024)
+# lacks APIs Argus uses, and its ergo-chain-types requires url ~2.2, which
+# cannot resolve alongside reqwest. eccb8eac is the newest develop commit
+# still versioned 0.28.x, which ergo-node-interface requires; see
+# docs/dependency-list.md before moving it.
+ergo-lib = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergo-chain-types = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergotree-ir = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergotree-interpreter = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+sigma-ser = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergo-merkle-tree = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergo-nipopow = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergo-rest = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
 
 # ─── Node interface (via ergo-node-interface-rust) ───────────────────────
 ergo-node-interface = { git = "https://github.com/arkadianet/ergo-node-interface-rust", rev = "0264f6ffcb954da135960460d942f4c804ed65c9" }
@@ -97,12 +101,11 @@ num-traits = "0.2"
 
 # Patch ergo crates to the pinned SHA (mirrors Citadel's patch approach)
 [patch.crates-io]
-core2 = { path = "crates/vendor/core2" }
-ergo-lib = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergo-chain-types = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergotree-ir = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergotree-interpreter = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-sigma-ser = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergo-merkle-tree = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergo-nipopow = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
-ergo-rest = { git = "https://github.com/ergoplatform/sigma-rust", rev = "7f927613c5a72bf6ea93b95cf9987129a03dd4ba" }
+ergo-lib = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergo-chain-types = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergotree-ir = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergotree-interpreter = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+sigma-ser = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergo-merkle-tree = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergo-nipopow = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
+ergo-rest = { git = "https://github.com/ergoplatform/sigma-rust", rev = "eccb8eac97fecae3cd09b2240805ae112963a6c7" }
