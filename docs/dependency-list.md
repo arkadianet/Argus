@@ -6,7 +6,7 @@ Pinned SHAs and version rationale for every dependency.
 
 | Crate | Source | SHA / Ref | Rationale |
 |-------|--------|-----------|-----------|
-| `ergo-lib` | `github.com/ergoplatform/sigma-rust` | `eccb8eac97fecae3cd09b2240805ae112963a6c7` (develop, 2026-09-02) | Develop SHA, not a release; see below |
+| `ergo-lib` | `github.com/ergoplatform/sigma-rust` | `1633e01835d48e4d4b127f7478e602e129e80110` (develop head, 2026-09-15) | Unreleased 0.29.0; see below |
 | `ergo-chain-types` | sigma-rust | same SHA | Pinned with ergo-lib |
 | `ergotree-ir` | sigma-rust | same SHA | Pinned with ergo-lib |
 | `ergotree-interpreter` | sigma-rust | same SHA | Pinned with ergo-lib |
@@ -14,12 +14,17 @@ Pinned SHAs and version rationale for every dependency.
 | `ergo-merkle-tree` | sigma-rust | same SHA | Pinned with ergo-lib |
 | `ergo-nipopow` | sigma-rust | same SHA | Pinned with ergo-lib |
 | `ergo-rest` | sigma-rust | same SHA | Pinned with ergo-lib |
-| `ergo-node-interface` | `github.com/arkadianet/ergo-node-interface-rust` | `0264f6ffcb954da135960460d942f4c804ed65c9` | Rust Ergo node HTTP wrapper |
+
+The `[patch.crates-io]` entries for the same SHA no longer change anything:
+nothing from crates.io depends on sigma-rust since `ergo-node-interface` went
+(below). They stay so that any future crates.io dependent resolves to the pin
+instead of compiling a second sigma-rust.
 
 ### Why sigma-rust stays a Git dependency
 
 Checked on 2026-10-06. The newest crates.io release is still `ergo-lib` 0.28.0
-(2024-08-09), 191 commits before the previous pin. It cannot replace the pin:
+(2024-08-09), 191 commits before `7f927613`, the pin Argus started from. It
+cannot be used:
 
 - its `ergo-chain-types` 0.15.0 requires `url ~2.2`, while reqwest needs
   `url ^2.4`, so the workspace does not resolve;
@@ -28,21 +33,43 @@ Checked on 2026-10-06. The newest crates.io release is still `ergo-lib` 0.28.0
   `Wscalar::{to_bytes, from_bytes}`, `EcPoint: Copy`,
   `ergotree_ir::chain::context_extension`).
 
-The pin is the newest develop commit whose crates are still versioned 0.28.x
-(merge of PR #916). Its library code differs from the previous pin
-`7f927613` only by replacing the yanked `core2` with `core3 =0.1.2`, which let
-the vendored `core2` shim go.
+The pin is develop head, whose crates are versioned 0.29.0 ahead of a release.
+Compared with `eccb8eac`, the pin before it, it carries these fixes; the first
+three affect what Argus signs:
 
-Later develop commits (head `1633e018`, 2026-09-15) bump the crates to 0.29.0
-ahead of a release and fix signing-relevant issues: `ContextExtension`
-serialization order for five or more entries (the node otherwise rejects the
-signature), validation of reduced transactions before signing, and the
-ErgoTree version used during reduction. `ergo-node-interface` requires
-`ergo-lib = "0.28.0"`, and Cargo cannot patch a 0.29 crate into that
-requirement, so moving past this pin first needs the fork to depend on 0.29.
-A local trial with only that one-line change to the fork built the workspace
-and passed the same tests as this pin. Once `ergo-lib` 0.29.0 is on crates.io
-and the fork depends on it, switch to the release.
+- `ContextExtension` entries are serialized in the node's (Scala 2.12 HashMap)
+  order when an input has five or more of them; before, the bytes to sign
+  differed from the node's and it rejected the signature
+  (`wallet-core/tests/context_extension_order.rs` pins this through Argus's
+  EIP-12 conversion);
+- reduced transactions are validated (input counts, extensions) before JSON
+  acceptance, serialization, signing and deterministic commitments, and
+  deterministic signing refuses unsupported reductions instead of falling back
+  to random proofs;
+- reduction evaluates with the ErgoTree's own version, so version-3 trees
+  (protocol 6.0, active on mainnet: block version 4) reduce like the node;
+- header PoW checks reject a zero difficulty, and checked 256-bit unsigned
+  arithmetic is fixed.
+
+`eccb8eac` was the newest commit still versioned 0.28.x, which
+`ergo-node-interface` required. That dependency is gone (next section), so the
+pin follows develop. Switch to the crates.io release once 0.29.0 is published.
+
+### Node interface (formerly `ergo-node-interface`)
+
+Argus used the `arkadianet/ergo-node-interface-rust` fork (Git, `0264f6f`) for
+node REST calls. The part Argus uses is now `wallet_net::node_interface`, a
+port of that code onto `wallet_net::http`, so every node request uses the same
+rustls/ring/webpki-roots stack and there is a single reqwest version. The port
+keeps the fork's behaviour: endpoints, request headers, `Url::join`
+resolution, the 30 s timeout, the extraIndex probe and guard, parsing
+responses whatever their status, and its error messages. Before the fork was
+removed, every ported call was run through both implementations against the
+same responses (recorded mainnet headers, error bodies, unreachable nodes,
+probing) and against the four default mainnet nodes, with identical results.
+`wallet-net/src/node_interface_tests.rs` keeps those expectations, including
+state contexts built from recorded `/blocks/lastHeaders/10` responses in
+`wallet-net/tests/fixtures/`.
 
 ## Vendored Citadel crates (path deps)
 
@@ -102,10 +129,7 @@ rustls features use the platform verifier, which needs JNI setup on Android.
 provider and webpki-roots, the configuration reqwest 0.12's `rustls-tls` built.
 Create clients with `wallet_net::http::client_builder()` or `client()`, not
 `reqwest::Client::builder()`/`new()`, which panic without a crypto provider.
-
-`ergo-node-interface` (Git) still requires `reqwest` 0.12 (locked 0.12.28,
-the last 0.12 release) and `thiserror` 1 (1.0.69), so those versions remain in
-the build until the fork is updated.
+reqwest 0.13.5 is the only reqwest in `Cargo.lock`.
 
 ## Former patch: core2
 

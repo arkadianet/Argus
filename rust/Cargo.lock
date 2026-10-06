@@ -812,8 +812,8 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "ergo-chain-types"
-version = "0.15.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
+version = "0.16.0"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=1633e01835d48e4d4b127f7478e602e129e80110#1633e01835d48e4d4b127f7478e602e129e80110"
 dependencies = [
  "base16",
  "base64 0.22.1",
@@ -835,8 +835,8 @@ dependencies = [
 
 [[package]]
 name = "ergo-lib"
-version = "0.28.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
+version = "0.29.0"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=1633e01835d48e4d4b127f7478e602e129e80110#1633e01835d48e4d4b127f7478e602e129e80110"
 dependencies = [
  "base16",
  "bitvec",
@@ -866,8 +866,8 @@ dependencies = [
 
 [[package]]
 name = "ergo-merkle-tree"
-version = "0.15.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
+version = "0.16.0"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=1633e01835d48e4d4b127f7478e602e129e80110#1633e01835d48e4d4b127f7478e602e129e80110"
 dependencies = [
  "base16",
  "blake2 0.10.6",
@@ -883,8 +883,8 @@ dependencies = [
 
 [[package]]
 name = "ergo-nipopow"
-version = "0.15.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
+version = "0.16.0"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=1633e01835d48e4d4b127f7478e602e129e80110#1633e01835d48e4d4b127f7478e602e129e80110"
 dependencies = [
  "base16",
  "bounded-integer",
@@ -963,8 +963,8 @@ dependencies = [
 
 [[package]]
 name = "ergotree-interpreter"
-version = "0.28.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
+version = "0.29.0"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=1633e01835d48e4d4b127f7478e602e129e80110#1633e01835d48e4d4b127f7478e602e129e80110"
 dependencies = [
  "base16",
  "blake2 0.10.6",
@@ -996,8 +996,8 @@ dependencies = [
 
 [[package]]
 name = "ergotree-ir"
-version = "0.28.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
+version = "0.29.0"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=1633e01835d48e4d4b127f7478e602e129e80110#1633e01835d48e4d4b127f7478e602e129e80110"
 dependencies = [
  "base16",
  "bnum",
@@ -1241,8 +1241,8 @@ dependencies = [
 
 [[package]]
 name = "gf2_192"
-version = "0.28.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
+version = "0.29.0"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=1633e01835d48e4d4b127f7478e602e129e80110#1633e01835d48e4d4b127f7478e602e129e80110"
 dependencies = [
  "derive_more",
  "thiserror",
@@ -2580,8 +2580,8 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "sigma-ser"
-version = "0.19.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
+version = "0.20.0"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=1633e01835d48e4d4b127f7478e602e129e80110#1633e01835d48e4d4b127f7478e602e129e80110"
 dependencies = [
  "bitvec",
  "bounded-vec",
@@ -2591,8 +2591,8 @@ dependencies = [
 
 [[package]]
 name = "sigma-util"
-version = "0.18.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
+version = "0.19.0"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=1633e01835d48e4d4b127f7478e602e129e80110#1633e01835d48e4d4b127f7478e602e129e80110"
 dependencies = [
  "blake2 0.10.6",
  "sha2 0.10.9",
@@ -3564,5 +3564,5 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 
 [[patch.unused]]
 name = "ergo-rest"
-version = "0.13.0"
-source = "git+https://github.com/ergoplatform/sigma-rust?rev=eccb8eac97fecae3cd09b2240805ae112963a6c7#eccb8eac97fecae3cd09b2240805ae112963a6c7"
+version = "0.14.0"
+source = "git+https://github.com/ergoplatform/sigma-rust?rev=1633e01835d48e4d4b127f7478e602e129e80110#1633e01835d48e4d4b127f7478e602e129e80110"

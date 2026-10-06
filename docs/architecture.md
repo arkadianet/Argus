@@ -58,7 +58,7 @@ wallet/
 
 ### wallet-net (HTTP, no secrets)
 
-- Node connection via `ergo-node-interface` (NodeInterface wrapper)
+- Node connection via `wallet_net::node_interface` (ported from ergo-node-interface)
 - UTXO fetching (unspent boxes by address)
 - State context fetching (headers for transaction reduction)
 - Transaction submission (POST /transactions)
