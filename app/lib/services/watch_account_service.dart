@@ -37,6 +37,7 @@ class WatchAccountSnapshot {
     this.history,
     this.highestUsed, {
     this.pending,
+    this.tokenAddresses = const [],
   });
   final List<String> addresses;
   final String receiveAddress;
@@ -48,6 +49,10 @@ class WatchAccountSnapshot {
   /// How [balance] splits into confirmed and pending, summed address by
   /// address. Null when the node answered without a split.
   final PendingBalance? pending;
+
+  /// The scanned addresses that hold tokens, in scan order: what naming the
+  /// account's tokens has to read again, rather than every address.
+  final List<String> tokenAddresses;
 }
 
 /// Bound node pressure and retain submission order, including on failures.
@@ -86,6 +91,7 @@ Future<WatchAccountSnapshot> scanWatchAccount({
   final addresses = <String>[];
   final transactions = <String, Map<String, dynamic>>{};
   final tokens = <String, int>{};
+  final tokenAddresses = <String>[];
   for (var start = 0; start < maxAddresses; start += gap) {
     final count = (maxAddresses - start).clamp(0, gap);
     final batch = await derive(start, count);
@@ -116,6 +122,7 @@ Future<WatchAccountSnapshot> scanWatchAccount({
         // One address without a split leaves the account without one:
         // a partial sum would understate what is pending.
         pending = split == null ? null : pending?.plus(split);
+        if (assets.isNotEmpty) tokenAddresses.add(address);
         for (final asset in assets) {
           final id = asset['id'] as String;
           tokens[id] = (tokens[id] ?? 0) + (asset['amount'] as num).toInt();
@@ -145,6 +152,7 @@ Future<WatchAccountSnapshot> scanWatchAccount({
             sorted,
             lastUsed,
             pending: pending,
+            tokenAddresses: tokenAddresses,
           );
         }
       }
