@@ -804,14 +804,19 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     final rentParameters = _rent?.parameters;
     // Counted over the listed boxes, so the summary never vouches for a box
     // it has no figures for.
-    var atRisk = 0, dueSoon = 0, unmeasured = 0;
+    // A box worth no more than its rent is at risk when it holds tokens,
+    // which a collector would take along; an ERG-only one only holds the
+    // dust it would lose, so it is counted on its own, quietly.
+    var atRisk = 0, wholeErgOnly = 0, dueSoon = 0, unmeasured = 0;
     if (_rent != null) {
       for (final b in _boxes) {
         final r = _tools.rent[b.boxId];
         if (r == null) {
           unmeasured++;
-        } else if (r.atRisk) {
+        } else if (r.atRisk && b.assets.isNotEmpty) {
           atRisk++;
+        } else if (r.atRisk) {
+          wholeErgOnly++;
         } else if (r.dueSoon) {
           dueSoon++;
         }
@@ -942,6 +947,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                           RentSummaryLine(
                             parameters: _rent?.parameters,
                             atRisk: atRisk,
+                            wholeErgOnly: wholeErgOnly,
                             dueSoon: dueSoon,
                             unmeasured: unmeasured,
                             loading: _rentLoading,

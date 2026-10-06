@@ -350,14 +350,19 @@ void main() {
       return tester.widget<Text>(find.byType(Text)).data!;
     }
 
+    /// A box of 0.05 ERG, unless it can pay its rent.
     BoxRent at(int blocks, RentCharge charge, {int fee = 96250000}) => BoxRent(
       boxId: 'x',
-      valueNano: 0,
+      valueNano: charge == RentCharge.wholeBox ? 50000000 : 5000000000,
       creationHeight: 0,
       sizeBytes: 77,
       feeNano: fee,
       charge: charge,
-      chargeNano: 0,
+      chargeNano: switch (charge) {
+        RentCharge.wholeBox => 50000000,
+        RentCharge.fee => fee,
+        RentCharge.none => 0,
+      },
       dueHeight: 1900000 + blocks,
       blocksUntilDue: blocks,
       collectableNow: blocks <= 1,
@@ -374,17 +379,34 @@ void main() {
       );
     });
 
-    testWidgets('mentions tokens only when a box holds some', (tester) async {
+    testWidgets('warns of risk only for a box holding tokens', (tester) async {
       expect(
-        await line(tester, at(5000, RentCharge.wholeBox)),
+        await line(tester, at(5000, RentCharge.wholeBox), hasTokens: true),
         'At risk: it holds no more than its 0.09625 ERG rent. From block '
-        '1,905,000 (in ~7 days) it can be collected whole.',
+        '1,905,000 (in ~7 days) it can be collected whole, tokens included.',
       );
       expect(
         await line(tester, at(-10, RentCharge.wholeBox), hasTokens: true),
         'At risk: it holds no more than its 0.09625 ERG rent, so it can be '
         'collected now, tokens included.',
       );
+      expect(find.byIcon(Icons.warning_amber_rounded), findsOneWidget);
+    });
+
+    testWidgets('says plainly that rent would take ERG-only dust whole', (
+      tester,
+    ) async {
+      expect(
+        await line(tester, at(5000, RentCharge.wholeBox)),
+        'Rent would take this whole box (0.05 ERG), from block 1,905,000 '
+        '(in ~7 days).',
+      );
+      expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
+      expect(
+        await line(tester, at(-10, RentCharge.wholeBox)),
+        'Rent would take this whole box (0.05 ERG); it can be collected now.',
+      );
+      expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
     });
 
     testWidgets('says when the protocol cannot charge a box', (tester) async {

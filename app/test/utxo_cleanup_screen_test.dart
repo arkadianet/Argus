@@ -396,6 +396,71 @@ void main() {
     await tester.pump(const Duration(minutes: 2));
   });
 
+  testWidgets('ERG-only dust rent would take whole is said quietly', (
+    tester,
+  ) async {
+    final dust = listed(id('d'), value: 50000000, creation: 1500000);
+    api.listing = (_) => [...walletBoxes, dust];
+    api.rows = rowsFor([...walletBoxes, dust]);
+    await open(tester);
+    // Only the token box is "at risk"; the dust is counted on its own.
+    expect(
+      find.textContaining(
+        'Storage rent: 1 box at risk of collection · 1 due within 30 days. '
+        '1 ERG-only box is worth no more than its rent, which would take it '
+        'whole.',
+      ),
+      findsOneWidget,
+    );
+    await tester.scrollUntilVisible(
+      find.textContaining('Rent would take this whole box (0.05 ERG)'),
+      200,
+      scrollable: find.byType(Scrollable).first,
+    );
+    expect(
+      find.textContaining(
+        'Rent would take this whole box (0.05 ERG), from block 2,551,200 (~',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('At risk'), findsOneWidget, reason: 'box a');
+  });
+
+  testWidgets('a wallet of ERG-only dust is not alarming', (tester) async {
+    final dust = [
+      for (final c in ['1', '2', '3'])
+        listed(id(c), value: 50000000, creation: 1500000),
+    ];
+    api.listing = (_) => [
+      ...dust,
+      listed(id('c'), value: 40000000000, creation: 1800000),
+    ];
+    api.rows = rowsFor(api.listing('wallet'));
+    await open(tester);
+    expect(
+      find.textContaining(
+        'Storage rent: no box with tokens is at risk, and nothing else is '
+        'due within 30 days. 3 ERG-only boxes are worth no more than their '
+        'rent, which would take them whole.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.textContaining('at risk of collection'), findsNothing);
+    expect(find.byIcon(Icons.warning_amber_rounded), findsNothing);
+    final summary = tester.widget<Text>(
+      find.textContaining('no box with tokens is at risk'),
+    );
+    expect(
+      summary.textSpan!.toPlainText(),
+      startsWith('Storage rent: no box'),
+    );
+    expect(
+      (summary.textSpan! as TextSpan).children!.first.style?.color,
+      isNot(rustFor(tester.element(find.byType(UtxoManagementScreen)))),
+      reason: 'the warning colour is for tokens at risk',
+    );
+  });
+
   testWidgets('the cleanup route opens straight into the review', (
     tester,
   ) async {

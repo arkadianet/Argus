@@ -7,6 +7,12 @@ import '../../theme/argus_theme.dart';
 
 /// When a box's storage rent falls due, what it costs, and whether the
 /// box can pay it.
+///
+/// A box worth no more than its rent is flagged "at risk" only when it
+/// holds tokens, which a collector would take with it. An ERG-only box like
+/// that is just dust its rent would use up, said plainly and without the
+/// warning colour, so a wallet with many small boxes does not look
+/// alarming.
 class BoxRentLine extends StatelessWidget {
   const BoxRentLine({
     super.key,
@@ -31,24 +37,36 @@ class BoxRentLine extends StatelessWidget {
       blockSeconds: parameters.blockSeconds,
     );
     final block = 'block ${formatWithCommas(rent.dueHeight)}';
-    final whole = hasTokens ? 'whole, tokens included' : 'whole';
+    // What a collector takes from a box worth no more than its rent: all of
+    // it.
+    final whole = formatErg(rent.chargeNano);
     final (IconData icon, Color color, String text) = switch (rent) {
       BoxRent(charge: RentCharge.none) => (
         Icons.hourglass_empty,
         colors.muted,
         parameters.noChargeReason,
       ),
-      BoxRent(atRisk: true, collectableNow: true) => (
+      BoxRent(atRisk: true, collectableNow: true) when hasTokens => (
         Icons.warning_amber_rounded,
         rustFor(context),
         'At risk: it holds no more than its $fee rent, so it can be '
-            'collected now${hasTokens ? ', tokens included' : ''}.',
+            'collected now, tokens included.',
       ),
-      BoxRent(atRisk: true) => (
+      BoxRent(atRisk: true) when hasTokens => (
         Icons.warning_amber_rounded,
         rustFor(context),
         'At risk: it holds no more than its $fee rent. From $block '
-            '($when) it can be collected $whole.',
+            '($when) it can be collected whole, tokens included.',
+      ),
+      BoxRent(atRisk: true, collectableNow: true) => (
+        Icons.hourglass_bottom,
+        colors.muted,
+        'Rent would take this whole box ($whole); it can be collected now.',
+      ),
+      BoxRent(atRisk: true) => (
+        Icons.hourglass_bottom,
+        colors.muted,
+        'Rent would take this whole box ($whole), from $block ($when).',
       ),
       BoxRent(collectableNow: true) => (
         Icons.schedule,
@@ -192,12 +210,15 @@ class CleanupSuggestionCard extends StatelessWidget {
 }
 
 /// One line on storage rent across the listed boxes: how many are at risk
-/// or due soon, how many have no figures, and the rate they are judged at.
+/// or due soon, how many ERG-only boxes rent would take whole, how many
+/// have no figures, and the rate they are judged at. Only the first two
+/// are a warning.
 class RentSummaryLine extends StatelessWidget {
   const RentSummaryLine({
     super.key,
     required this.parameters,
     required this.atRisk,
+    this.wholeErgOnly = 0,
     required this.dueSoon,
     required this.unmeasured,
     required this.loading,
@@ -207,8 +228,13 @@ class RentSummaryLine extends StatelessWidget {
   /// Null until a report arrives, or after one failed.
   final RentParameters? parameters;
 
-  /// Listed boxes that cannot pay their rent.
+  /// Listed boxes holding tokens that cannot pay their rent: a collector
+  /// would take the tokens too.
   final int atRisk;
+
+  /// Listed ERG-only boxes that cannot pay their rent: dust rent would use
+  /// up whole. Counted apart from [atRisk] and not a warning.
+  final int wholeErgOnly;
 
   /// Listed boxes due within [rentSoonDays] that can pay it.
   final int dueSoon;
@@ -253,17 +279,37 @@ class RentSummaryLine extends StatelessWidget {
         ? ''
         : ' $unmeasured ${unmeasured == 1 ? 'box' : 'boxes'} could not be measured.';
     final rate = 'Rate ${parameters.rateLabel}.$missing';
-    return Text(
-      parts.isEmpty
-          ? 'Storage rent: nothing due within $rentSoonDays days, and every '
-                '${unmeasured == 0 ? '' : 'measured '}box covers its rent. $rate'
-          : 'Storage rent: ${parts.join(' · ')}. $rate',
-      style: parts.isEmpty
-          ? style
-          : style?.copyWith(
-              color: rustFor(context),
-              fontWeight: FontWeight.w500,
-            ),
+    final dust = wholeErgOnly == 0
+        ? ''
+        : wholeErgOnly == 1
+        ? '1 ERG-only box is worth no more than its rent, which would take '
+              'it whole. '
+        : '$wholeErgOnly ERG-only boxes are worth no more than their rent, '
+              'which would take them whole. ';
+    final measured = unmeasured == 0 ? '' : 'measured ';
+    final lead = parts.isNotEmpty
+        ? 'Storage rent: ${parts.join(' · ')}.'
+        : wholeErgOnly == 0
+        ? 'Storage rent: nothing due within $rentSoonDays days, and every '
+              '${measured}box covers its rent.'
+        : 'Storage rent: no ${measured}box with tokens is at risk, and '
+              'nothing else is due within $rentSoonDays days.';
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(
+            text: lead,
+            style: parts.isEmpty
+                ? null
+                : TextStyle(
+                    color: rustFor(context),
+                    fontWeight: FontWeight.w500,
+                  ),
+          ),
+          TextSpan(text: ' $dust$rate'),
+        ],
+      ),
+      style: style,
     );
   }
 }
