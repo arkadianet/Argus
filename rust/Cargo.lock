@@ -3549,6 +3549,7 @@ dependencies = [
  "rustls",
  "serde",
  "serde_json",
+ "sigma-ser",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
