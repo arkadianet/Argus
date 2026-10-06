@@ -22,7 +22,10 @@ PortfolioTotal portfolioTotal(Iterable<int?> balances) {
 }
 
 String portfolioSubtitle({required int wallets, required int watched, required int unknown}) {
-  final parts = <String>['$wallets ${wallets == 1 ? 'wallet' : 'wallets'}'];
+  final parts = <String>[
+    // "0 wallets" says nothing a watch-only overview needs to hear.
+    if (wallets > 0 || watched == 0) '$wallets ${wallets == 1 ? 'wallet' : 'wallets'}',
+  ];
   if (watched > 0) parts.add('$watched watched');
   if (unknown > 0) parts.add('$unknown not loaded');
   return parts.join(' · ');

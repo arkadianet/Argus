@@ -14,9 +14,14 @@ const watchAccountExpected =
     'Expected an Ergo Wallet App extended public key: 156 hex characters starting 0488b21e (mainnet), depth 4 external chain /0 or depth 3 account 0. Base58 xpub and testnet are not supported.';
 
 class WatchAccount {
-  WatchAccount(this.key, {this.highestUsed = -1});
+  WatchAccount(this.key, {this.highestUsed = -1, this.label});
   final String key;
   int highestUsed;
+
+  /// The user's name for this account, shown in the wallet list. Kept with
+  /// the account rather than in the address book: an extended key is not a
+  /// payment address and must never be offered as a recipient.
+  String? label;
   WatchAccountSnapshot? snapshot;
   String? error;
   bool busy = false;
@@ -174,10 +179,12 @@ class WatchAccountService extends ChangeNotifier {
     accounts.clear();
     if (raw != null) {
       for (final row in jsonDecode(raw) as List) {
+        final label = row['label'];
         accounts.add(
           WatchAccount(
             row['key'] as String,
             highestUsed: row['highestUsed'] as int,
+            label: label is String && label.trim().isNotEmpty ? label : null,
           ),
         );
       }
@@ -199,6 +206,21 @@ class WatchAccountService extends ChangeNotifier {
     }
     unawaited(refresh(account));
     return true;
+  }
+
+  /// Renames [account]; an empty label clears it. Restores the previous
+  /// name when the write fails, as add and remove do.
+  Future<void> setLabel(WatchAccount account, String label) async {
+    if (!accounts.contains(account)) return;
+    final previous = account.label;
+    final trimmed = label.trim();
+    account.label = trimmed.isEmpty ? null : trimmed;
+    try {
+      await _save();
+    } catch (_) {
+      account.label = previous;
+      rethrow;
+    }
   }
 
   Future<void> remove(WatchAccount account) async {
@@ -223,6 +245,7 @@ class WatchAccountService extends ChangeNotifier {
             'kind': 'extendedPublicKey',
             'key': a.key,
             'highestUsed': a.highestUsed,
+            if (a.label != null) 'label': a.label,
           },
       ]),
     );

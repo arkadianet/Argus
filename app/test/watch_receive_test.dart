@@ -5,7 +5,8 @@ import 'package:argus_wallet/services/stealth_service.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/watch_only_service.dart';
 import 'package:argus_wallet/ui/receive_screen.dart';
-import 'package:argus_wallet/ui/wallets_overview_screen.dart';
+import 'package:argus_wallet/services/network_controller.dart';
+import 'package:argus_wallet/ui/dashboard_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -57,16 +58,22 @@ void main() {
       tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
     });
     expect(walletService.isUnlocked, isFalse);
+    networkController.probing = true;
+    addTearDown(() => networkController.probing = false);
     await tester.pumpWidget(MaterialApp(
       builder: (context, child) => WalletArgsScope(
         args: const WalletRouteArgs(senderAddress: 'other', receiveAddress: 'other', changeAddress: 'other'),
         child: child!,
       ),
-      home: WalletOverviewScreen(initializeWalletService: () async {}),
+      home: DashboardScreen(initializeWalletService: () async {}),
       routes: {'/receive': (_) => const ReceiveScreen()},
     ));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('Receive'));
+    // The watched address opens its own page from the overview; its Receive
+    // must not inherit the signing wallet's scope.
+    await tester.tap(find.byKey(const ValueKey('overview-row-watchedAddress-$watched')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('watch-action-receive')));
     await tester.pumpAndSettle();
     expect(find.byType(ReceiveScreen), findsOneWidget);
     expect(tester.widget<QrImageView>(find.byType(QrImageView)).semanticsLabel, watched);

@@ -26,6 +26,11 @@ captured content. The wallet locks when the app backgrounds.
    into the prover.
 2. **Unlock**: Flutter unwraps the wrap key with the PIN (or a biometric copy)
    and calls `wallet_restore`. Rust decrypts and reloads EIP-3 children.
+   Only the user's action unlocks: the app opens on the wallet overview with
+   nothing unlocked, opening a seed wallet asks for its key once, and a
+   cancelled prompt waits for an explicit Unlock or the PIN. Nothing prompts
+   on launch or on resume; a biometric sheet itself pauses and resumes the
+   activity, so a prompt on resume reopens the sheet it just closed.
 3. **Lock**: The handle is removed from the process map and secret keys are dropped.
 
 ## Signing
