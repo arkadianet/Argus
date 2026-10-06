@@ -8,6 +8,7 @@ import 'package:argus_wallet/services/oracle_pool.dart';
 import 'package:argus_wallet/services/sigmausd_service.dart';
 import 'package:argus_wallet/services/token_pricer.dart';
 import 'package:argus_wallet/services/token_pricing.dart';
+import 'package:argus_wallet/services/verified_tokens.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -43,6 +44,11 @@ class _Fakes {
   int readingCalls = 0;
   Completer<void>? poolGate;
 
+  /// The LP token's decimals as the token lookup knows them (from the
+  /// wallet's own descriptor when it holds the token); null when nothing
+  /// knows its scale.
+  int? lpDecimals = 0;
+
   /// Blocks behind the tip of each single-rate pool's newest box; a feed
   /// left out has no box. SigmaUSD quotes 0.50 USD (2 ERG per dollar).
   Map<OracleFeed, int> readingAges = {OracleFeed.sigmaUsd: 1};
@@ -58,6 +64,7 @@ class _Fakes {
 
   late final PricerDeps deps = PricerDeps(
     clock: () => now,
+    decimalsOf: (id) => id == lpToken ? lpDecimals : knownToken(id)?.decimals,
     oracleReading: (node, feed) async {
       readingCalls++;
       if (readingsFail) throw Exception('pool box unreadable');
@@ -305,6 +312,19 @@ void main() {
     expect(p.priceOf(lpToken)!.usd, closeTo(1.0, 1e-12));
     expect(p.priceOf(lpToken)!.via, 'Spectrum LP share');
     expect(p.usdOf(lpToken, 10, 0), closeTo(10, 1e-9));
+  });
+
+  test('an LP token whose scale nothing knows is left unpriced, not guessed', () async {
+    // The pool quote is per base unit; without decimals there is no price
+    // per token, and a guessed zero could be off by any power of ten.
+    final f = _Fakes()..lpDecimals = null;
+    final p = TokenPricer(f.deps);
+    await p.refresh();
+    expect(p.result.ergUsd, 0.5);
+    expect(p.priceOf(lpToken), isNull);
+    final v = holdingsValue(ergNano: 0, tokens: [(id: lpToken, amount: 10, decimals: 0)], result: p.result);
+    expect(v.unpriced, 1);
+    expect(v.usd, 0);
   });
 
   test('a failed pool pricing keeps the other sources and says why', () async {

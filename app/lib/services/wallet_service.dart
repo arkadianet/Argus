@@ -1634,6 +1634,8 @@ class WalletService with WidgetsBindingObserver {
 
     // Declared outside the try so the finally can advance the cursor.
     var attempted = 0;
+    // Whether this pass taught the lookup anything, for its listeners.
+    var learned = false;
     try {
       if (_metadataUnsupported) return resolvedNow;
       final wanted = [
@@ -1691,6 +1693,7 @@ class WalletService with WidgetsBindingObserver {
           if (m['id'] != id) continue;
           consecutiveNotFound = 0;
           _rememberDescriptor(id, m, servedBy);
+          learned = true;
           // The index answered but the issuance box did not, so the
           // registers are missing. Keep what came back — a name beats an id
           // — but leave the token eligible so a later pass can complete it
@@ -1758,6 +1761,9 @@ class WalletService with WidgetsBindingObserver {
       if (_tokenMetaDirty && _currentWalletId == walletId) {
         await persistTokenMeta();
       }
+      // Holdings republish through the sync; everything else that reads
+      // the lookup by id (activity rows, prices) hears it here, once a pass.
+      if (learned && owns()) metadataChanges.value++;
       // That await is itself a window: a wipe landing in it would leave the
       // already-selected map free to reach the caller and repopulate the
       // display that was just cleared. Emptying it here is visible to the

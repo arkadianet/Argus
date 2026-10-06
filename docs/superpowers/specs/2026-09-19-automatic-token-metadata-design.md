@@ -237,9 +237,16 @@ what it is seeded with, padded with placeholders. Dart no longer seeds it
 and discards the map; removing it needs a native rebuild and can ride along
 with the next FFI change.
 
-Pricing (`token_pricer.dart`) scales pool reserves by `AmmPoolSet.tokens`,
-falling back to the curated registry. It used to receive the placeholders'
-zero for every unseeded token, which priced a token with decimals per base
-unit; it now receives real decimals or none. A held token the catalog has
-not reached yet still falls through to the registry or zero; reading the
-one lookup (`tokenDecimals`) there at display time would close that gap.
+Pricing (`token_pricer.dart`) scales every price by the one lookup
+(`tokenDecimals`: this wallet's descriptors, the catalog, the registry, the
+legacy table and this session's explicit loads), read when the prices are
+worked out. It used to take `AmmPoolSet.tokens` (once the placeholders'
+zero for every unseeded token) and then zero, which priced a held token
+the catalog had not reached per base unit. A token no layer can scale now
+gets no price: it is counted as unpriced and left out of totals, never
+guessed. Each price carries the decimals it was converted at, and holdings
+are valued by their base units at that scale, so a holding published
+before its scale was learned, or another wallet's older snapshot, is not
+valued at a wrong one. When the lookup learns a scale (a name pass, the
+catalog, an explicit load all bump `metadataChanges`), the prices are
+worked out again from the same quotes, without another read.
