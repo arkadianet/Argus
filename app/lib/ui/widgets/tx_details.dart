@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'dart:convert';
 
 import '../../format.dart';
+import '../../services/token_metadata.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
 
@@ -66,15 +67,15 @@ class TxDetailsView extends StatelessWidget {
 
   final Map<String, dynamic> details;
 
+  // Named and scaled by the one token lookup; an amount nothing can scale
+  // says it is raw units rather than reading as whole tokens.
   String _tokens(List? tokens) {
     if (tokens == null || tokens.isEmpty) return '';
     final parts = <String>[];
     for (final t in tokens.cast<Map>()) {
       final id = t['id']?.toString() ?? '';
       final amount = (t['amount'] as num?)?.toInt() ?? 0;
-      final meta = walletService.cachedTokenMeta(id);
-      final name = meta?.name ?? shorten(id, head: 6, tail: 4);
-      parts.add('${formatTokenAmount(amount, meta?.decimals ?? 0)} $name');
+      parts.add(tokenAmountText(BigInt.from(amount), id));
     }
     return parts.join(', ');
   }

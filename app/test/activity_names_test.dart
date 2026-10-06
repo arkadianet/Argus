@@ -4,6 +4,7 @@ import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/theme/argus_theme.dart';
 import 'package:argus_wallet/ui/transaction_detail_screen.dart';
 import 'package:argus_wallet/ui/widgets/activity_tile.dart';
+import 'package:argus_wallet/ui/widgets/tx_details.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -92,6 +93,41 @@ void main() {
       ),
     );
     expect(find.textContaining('COMET'), findsNothing);
+  });
+
+  testWidgets('confirm-sheet details name and scale the tokens moved', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: argusTheme(watchful: false),
+        home: Scaffold(
+          body: SingleChildScrollView(
+            child: TxDetailsView(
+              details: {
+                'inputs': const [],
+                'outputs': [
+                  {
+                    'kind': 'recipient',
+                    'address': _contract,
+                    'value_nano_erg': 1000000,
+                    'tokens': [
+                      {'id': _comet, 'amount': 69},
+                      {'id': _unknown, 'amount': 5000},
+                    ],
+                  },
+                ],
+                'fee_nano_erg': 1100000,
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(
+      find.textContaining('69 COMET, 5,000 raw units of e91cbc48…'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('the transaction screen names and scales its tokens', (
