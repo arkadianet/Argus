@@ -115,6 +115,15 @@ class TokenPricer extends ChangeNotifier {
 
   TokenPrice? priceOf(String tokenId) => result[tokenId];
 
+  /// "Oracle pools · ERG via SigmaUSD oracle" for the settings row. "stale"
+  /// goes before the details: the row is cut to two lines, and at large
+  /// text sizes only the start survives.
+  String get sourceLine {
+    final via = result.ergVia;
+    if (via == null) return source.label;
+    return '${source.label}${stale ? ' · stale' : ''} · ERG via $via';
+  }
+
   /// False when the display currency is not USD and the cross rate is
   /// unknown, in which case no fiat text should be shown.
   bool displayRateKnown = true;

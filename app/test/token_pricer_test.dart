@@ -249,6 +249,7 @@ void main() {
     expect(p.result.ergVia, 'SigmaUSD oracle');
     expect(p.priceOf(rsBtc)!.via, 'AVL oracle, 6 h old', reason: 'the major says its own age');
     expect(p.priceOf(rsBtc)!.countsInTotal, isFalse);
+    expect(p.sourceLine, 'Oracle pools · ERG via SigmaUSD oracle');
   });
 
   test('with every ERG source stopped, the rate is shown stale with its age', () async {
@@ -260,6 +261,19 @@ void main() {
     expect(p.stale, isTrue);
     expect(p.result.ergUsd, 0.5);
     expect(p.result.ergVia, 'SigmaUSD oracle, 5 h old');
+    // The settings row is cut to two lines; "stale" leads so it survives.
+    expect(p.sourceLine, 'Oracle pools · stale · ERG via SigmaUSD oracle, 5 h old');
+  });
+
+  test('the Oracle source says what it reads', () {
+    final blurb = PriceSource.oracle.blurb;
+    expect(PriceSource.oracle.label, 'Oracle pools');
+    expect(blurb, contains('ERG from the SigmaUSD oracle pool'));
+    expect(blurb, contains('gold from the Dexy gold oracle'));
+    expect(blurb, contains('AVL multi-oracle while it is current'));
+    expect(blurb, contains('never as current'));
+    final p = TokenPricer(_Fakes().deps);
+    expect(p.sourceLine, 'Oracle pools', reason: 'no rate yet, no source details');
   });
 
   test('gold is read under every source, the dollar pools only under the Oracle source', () async {
