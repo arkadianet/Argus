@@ -2,10 +2,13 @@ import 'package:argus_wallet/services/address_holdings.dart';
 import 'package:argus_wallet/services/wallet_database_service.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/ui/home/address_breakdown.dart';
+import 'package:argus_wallet/ui/home/home_models.dart';
 import 'package:argus_wallet/ui/home/overview_model.dart';
-import 'package:argus_wallet/ui/home/wallet_sections.dart';
+import 'package:argus_wallet/ui/home/wallet_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/home_finders.dart';
 
 // A4 on screen: the pinned address stays the identity, the balance is the
 // whole wallet, and a quiet line leads to where the rest sits.
@@ -32,6 +35,14 @@ void main() {
     ], identity: 'pinned');
     expect([for (final r in rows.listed) r.address], ['pinned', 'zero', 'late', 'unknown']);
     expect(rows.emptyOthers, 1);
+    // From More, every address is listed so any of them can be named.
+    final all = breakdownRows([
+      h('late', 1, index: 9),
+      h('empty', 0, index: 1),
+      h('pinned', 5, index: 275),
+    ], identity: 'pinned', listEmpty: true);
+    expect([for (final r in all.listed) r.address], ['pinned', 'late', 'empty']);
+    expect(all.emptyOthers, 0);
   });
 
   test('the overview row says what a locked wallet keeps elsewhere', () {
@@ -75,7 +86,9 @@ void main() {
     expect(row.elsewhere, isNull);
   });
 
-  Future<void> card(WidgetTester tester, {required bool hidden}) async {
+  /// The wallet page's panel for a wallet pinned to [vanity] that keeps
+  /// some of its money on index 0, as the ledger builds it.
+  Future<void> page(WidgetTester tester, {required bool hidden}) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -93,14 +106,20 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: Builder(
-            builder: (context) => WalletBalanceCard(
-              label: 'BALANCE',
-              balanceNano: 12514000000,
-              hidden: hidden,
-              onToggleHidden: () {},
-              identity: const WalletIdentityLine(address: vanity, pinnedIndex: 275),
-              elsewhere: fundsElsewhere(holdings, identity: vanity),
-              onElsewhere: () => showAddressBreakdownSheet(
+            builder: (context) => WalletPageView(
+              data: WalletPageData(
+                wallet: WalletSummary(
+                  ref: const WalletRef.seed('w9'),
+                  name: '9evoke9',
+                  nanoErg: 12514000000,
+                  address: vanity,
+                  pinnedIndex: 275,
+                  otherAddresses: fundsElsewhere(holdings, identity: vanity),
+                ),
+                currency: const FiatCurrency(symbol: r'$', code: 'USD'),
+                hidden: hidden,
+              ),
+              onOtherAddresses: () => showAddressBreakdownSheet(
                 context,
                 walletName: '9evoke9',
                 holdings: holdings,
@@ -117,33 +136,33 @@ void main() {
   testWidgets('the line leads to a per-address breakdown with the pinned one marked', (
     tester,
   ) async {
-    await card(tester, hidden: false);
-    expect(find.text('12.514'), findsOneWidget, reason: 'the whole wallet');
+    await page(tester, hidden: false);
+    expect(plainOf(tester, find.byKey(const Key('wallet-balance'))), '12.51 ERG', reason: 'the whole wallet');
     expect(find.text('#275'), findsOneWidget);
-    await tester.tap(find.text('incl. 3.2 ERG · 4 tokens on 1 other address'));
+    await tester.tap(textPlain('incl. 3.2 ERG · 4 tokens on 1 other address'));
     await tester.pumpAndSettle();
-    expect(find.text('Where 9evoke9 holds funds'), findsOneWidget);
+    expect(find.textContaining('9EVOKE9'), findsOneWidget, reason: 'the sheet names the wallet');
     final pinned = find.byKey(const ValueKey('holding-$vanity'));
     final first = find.byKey(const ValueKey('holding-$zero'));
     expect(find.descendant(of: pinned, matching: find.text('#275')), findsOneWidget);
     expect(find.descendant(of: pinned, matching: find.text('Shown as this wallet')), findsOneWidget);
-    expect(find.descendant(of: pinned, matching: find.text('9.314 ERG')), findsOneWidget);
-    expect(find.descendant(of: pinned, matching: find.text('1 token')), findsOneWidget);
+    expect(find.descendant(of: pinned, matching: textPlain('9.31 ERG')), findsOneWidget);
+    expect(find.descendant(of: pinned, matching: textPlain('1 token')), findsOneWidget);
     expect(find.descendant(of: first, matching: find.text('#0')), findsOneWidget);
-    expect(find.descendant(of: first, matching: find.text('3.2 ERG')), findsOneWidget);
-    expect(find.descendant(of: first, matching: find.text('4 tokens')), findsOneWidget);
+    expect(find.descendant(of: first, matching: textPlain('3.2 ERG')), findsOneWidget);
+    expect(find.descendant(of: first, matching: textPlain('4 tokens')), findsOneWidget);
     expect(find.descendant(of: first, matching: find.text('Shown as this wallet')), findsNothing);
     expect(find.text('1 other known address holds nothing.'), findsOneWidget);
     expect(tester.getTopLeft(pinned).dy, lessThan(tester.getTopLeft(first).dy));
   });
 
   testWidgets('with balances hidden the line and the breakdown show no amounts', (tester) async {
-    await card(tester, hidden: true);
-    expect(find.text('••••••'), findsOneWidget);
-    await tester.tap(find.text('incl. funds on 1 other address'));
+    await page(tester, hidden: true);
+    expect(plainOf(tester, find.byKey(const Key('wallet-balance'))), '•••••• ERG');
+    await tester.tap(textPlain('incl. funds on 1 other address'));
     await tester.pumpAndSettle();
-    expect(find.text('•••• ERG'), findsNWidgets(2));
-    expect(find.textContaining('3.2'), findsNothing);
-    expect(find.textContaining('tokens'), findsNothing);
+    expect(textPlain('•••• ERG'), findsNWidgets(2));
+    expect(textPlainContaining('3.2'), findsNothing);
+    expect(textPlainContaining('tokens'), findsNothing);
   });
 }

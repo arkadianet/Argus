@@ -15,6 +15,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/home_finders.dart';
 import 'support/home_harness.dart';
 
 // What the mempool does to a balance shows wherever the balance does: on
@@ -255,7 +256,7 @@ void main() {
       expect(
         find.descendant(
           of: locked,
-          matching: find.text('−1 ERG pending · 5 confirmed'),
+          matching: textPlain('−1 ERG pending · 5 confirmed'),
         ),
         findsOneWidget,
       );
@@ -265,7 +266,7 @@ void main() {
       expect(
         find.descendant(
           of: row,
-          matching: find.text('+1 ERG pending · 2 confirmed'),
+          matching: textPlain('+1 ERG pending · 2 confirmed'),
         ),
         findsOneWidget,
       );
@@ -274,7 +275,7 @@ void main() {
       expect(
         find.descendant(
           of: find.byKey(const Key('overview-total-pending')),
-          matching: find.text('Pending · 7 confirmed'),
+          matching: textPlain('Pending · 7 confirmed'),
         ),
         findsOneWidget,
       );
@@ -283,8 +284,8 @@ void main() {
       await tester.runAsync(() => privacyService.setHideBalances(true));
       addTearDown(() => privacyService.setHideBalances(false));
       await tester.pumpAndSettle();
-      expect(find.text('•••• ERG pending'), findsNWidgets(3));
-      expect(find.textContaining('confirmed'), findsNothing);
+      expect(textPlain('•••• ERG pending'), findsNWidgets(3));
+      expect(textPlainContaining('confirmed'), findsNothing);
       await disposeHome(tester);
     },
   );
@@ -314,7 +315,7 @@ void main() {
     expect(
       find.descendant(
         of: find.byKey(const Key('wallet-balance-pending')),
-        matching: find.text('+1 ERG pending · 2 confirmed'),
+        matching: textPlain('+1 ERG pending · 2 confirmed'),
       ),
       findsOneWidget,
     );
@@ -340,11 +341,11 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('overview-row-seed-pend-live')));
     await tester.pumpAndSettle();
     expect(walletService.isUnlocked, isTrue);
-    expect(tester.widget<Text>(find.byKey(const Key('wallet-balance'))).data, '10');
+    expect(plainOf(tester, find.byKey(const Key('wallet-balance'))), '10 ERG');
     expect(
       find.descendant(
         of: find.byKey(const Key('wallet-balance-pending')),
-        matching: find.text('−2 ERG pending · 12 confirmed'),
+        matching: textPlain('−2 ERG pending · 12 confirmed'),
       ),
       findsOneWidget,
     );

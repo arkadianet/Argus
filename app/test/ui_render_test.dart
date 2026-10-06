@@ -5,17 +5,21 @@ import 'package:argus_wallet/services/stealth_service.dart';
 import 'package:argus_wallet/services/wallet_database_service.dart';
 import 'package:argus_wallet/services/watch_account_service.dart';
 import 'package:argus_wallet/services/watch_only_service.dart';
+import 'package:argus_wallet/theme/argus_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/home_finders.dart';
 import 'support/home_harness.dart';
 import 'support/render_harness.dart';
 
-// Opt-in screenshots of the overview and wallet pages (A1–A4), for a person
-// to look at: ARGUS_RENDER=1 flutter test test/ui_render_test.dart writes
-// them to ui-renders/. Without the variable each scenario still runs as a
-// layout check at phone size and at large text, where an overflow fails it.
+// Opt-in screenshots of the overview and wallet pages (A1–A4) as the app
+// wires them, for a person to look at: ARGUS_RENDER=1 flutter test
+// test/ui_render_test.dart writes them to ui-renders/, and the redesigned
+// screens in Harbor and the default dark palette to ui-renders/wired/.
+// Without the variable each scenario still runs as a layout check at phone
+// size and at large text, where an overflow fails it.
 
 const vanity = '9evoke9Rk4VQ7pMfXa1nG2sT8wLcYe3HdJ5uBq6ZhNv0xKmPoW';
 const zero = '9fRAxbQ2mTe8LwZk5Ny7cVh3PdG6uJs1BqX4aKoHnYtMv9WEeR';
@@ -195,11 +199,11 @@ void main() {
         FakeKeystore(wallets: ['w-evoke', 'w-savings']),
       );
       await pumpHome(tester, textScale: scale);
-      expect(find.text('ALL WALLETS'), findsOneWidget);
-      expect(find.textContaining('on 1 other address'), findsOneWidget);
+      expect(textPlainContaining('TOTAL BALANCE'), findsOneWidget);
+      expect(textPlainContaining('on another address'), findsOneWidget);
       await renderPng(tester, 'overview$tag');
       await tester.scrollUntilVisible(
-        find.byKey(const Key('overview-watch-xpub')),
+        find.byKey(const Key('overview-add-wallet')),
         300,
         scrollable: find.byType(Scrollable).first,
       );
@@ -248,17 +252,23 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const Key('wallet-balance')), findsOneWidget);
       await renderPng(tester, 'wallet-unlocked$tag');
+      await tester.ensureVisible(find.byKey(const Key('funds-elsewhere')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('funds-elsewhere')));
       await tester.pumpAndSettle();
       await renderPng(tester, 'wallet-address-breakdown$tag');
       await tester.tapAt(const Offset(20, 20));
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
-        find.text('Discover'),
+        find.text('RECENT ACTIVITY'),
         400,
         scrollable: find.byType(Scrollable).first,
       );
       await renderPng(tester, 'wallet-unlocked-lower$tag');
+      await tester.tap(find.widgetWithText(NavigationDestination, 'Discover'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('discover-ageusd')), findsOneWidget);
+      await renderPng(tester, 'wallet-discover-tab$tag');
       await tester.tap(find.widgetWithText(NavigationDestination, 'Settings'));
       await tester.pumpAndSettle();
       await renderPng(tester, 'wallet-settings-tab$tag');
@@ -294,7 +304,7 @@ void main() {
       await tester.pumpAndSettle();
       await renderPng(tester, 'watched-address$tag');
       await tester.scrollUntilVisible(
-        find.text('Recent activity'),
+        find.text('RECENT ACTIVITY'),
         300,
         scrollable: find.byType(Scrollable).first,
       );
@@ -328,7 +338,7 @@ void main() {
       await tester.pumpAndSettle();
       await renderPng(tester, 'watched-account$tag');
       await tester.scrollUntilVisible(
-        find.text('First address'),
+        find.text('FIRST ADDRESS'),
         300,
         scrollable: find.byType(Scrollable).first,
       );
@@ -342,9 +352,58 @@ void main() {
     await privacyService.setHideBalances(true);
     addTearDown(() => privacyService.setHideBalances(false));
     await pumpHome(tester, dark: true);
-    expect(find.text('••••••'), findsOneWidget);
-    expect(find.text('incl. funds on 1 other address'), findsOneWidget);
+    expect(plainOf(tester, find.byKey(const Key('overview-total'))), '•••••• ERG');
+    expect(textPlain('Funds on another address'), findsOneWidget);
     await renderPng(tester, 'overview-hidden-dark');
     await disposeHome(tester);
   });
+
+  // The redesigned home as the app wires it, from the same mock node: the
+  // overview, an unlocked wallet and its address breakdown, the locked page
+  // after a cancelled fingerprint prompt, and a watched address, in Harbor
+  // (teal) and the default dark palette. Written to ui-renders/wired/.
+  for (final (palette, look) in [(harborPalette, 'teal'), (watchfulPalette, 'dark')]) {
+    testWidgets('wired screens, $look', (tester) async {
+      final keystore = FakeKeystore(wallets: ['w-evoke', 'w-savings']);
+      await seedWallets(tester, keystore);
+      await pumpHome(tester, palette: palette);
+      expect(tester.takeException(), isNull);
+      await renderPng(tester, 'wired/overview-$look-1x');
+
+      // A cancelled prompt: the locked page, with Unlock and Use PIN.
+      await tester.tap(find.byKey(const ValueKey('overview-row-seed-w-evoke')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('gate-unlock')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await renderPng(tester, 'wired/locked-$look-1x');
+
+      // Unlocked from the gate: the wallet page.
+      keystore.biometricResult = 'wrap-key';
+      await tester.tap(find.byKey(const Key('gate-unlock')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('wallet-balance')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await renderPng(tester, 'wired/wallet-$look-1x');
+      await tester.tap(find.byKey(const Key('funds-elsewhere')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('holding-$vanity')), findsOneWidget);
+      await renderPng(tester, 'wired/breakdown-$look-1x');
+      await tester.tapAt(const Offset(20, 20));
+      await tester.pumpAndSettle();
+
+      // Back to every wallet, and into the watched address.
+      await tester.tap(find.byTooltip('All wallets'));
+      await tester.pumpAndSettle();
+      final row = find.byKey(const ValueKey('overview-row-watchedAddress-$watchedAddress'));
+      await tester.scrollUntilVisible(row, 300, scrollable: find.byType(Scrollable).first);
+      await tester.ensureVisible(row);
+      await tester.pumpAndSettle();
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('watch-action-send')), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await renderPng(tester, 'wired/watched-$look-1x');
+      await disposeHome(tester);
+    });
+  }
 }

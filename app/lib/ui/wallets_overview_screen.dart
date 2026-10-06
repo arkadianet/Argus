@@ -1,32 +1,18 @@
 import 'package:flutter/material.dart';
 
 import '../format.dart';
+import '../services/erg_price_history.dart';
+import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
 import '../services/public_wallet_sync.dart';
 import '../services/token_pricer.dart';
-import '../services/network_controller.dart';
-import '../theme/argus_theme.dart';
+import '../services/wallet_service.dart';
+import 'home/erg_price_feed.dart';
+import 'home/home_data.dart';
+import 'home/home_models.dart';
 import 'home/overview_model.dart';
-import 'home/overview_sections.dart';
-import 'home/value_lines.dart';
-import 'offline_banner.dart';
-
-/// "2 wallets · 3 watch-only" headline for the overview summary card.
-String overviewHeadline({required int wallets, required int watchOnly, int accounts = 0}) {
-  if (accounts > 0) {
-    final accountText = '$accounts watched ${accounts == 1 ? 'account' : 'accounts'}';
-    if (wallets == 0 && watchOnly == 0) return accountText;
-    return '${overviewHeadline(wallets: wallets, watchOnly: watchOnly)} · $accountText';
-  }
-  if (wallets == 0) {
-    return '$watchOnly watch-only ${watchOnly == 1 ? 'address' : 'addresses'}';
-  }
-  final w = '$wallets ${wallets == 1 ? 'wallet' : 'wallets'}';
-  return watchOnly == 0 ? w : '$w · $watchOnly watch-only';
-}
-
-String overviewTotalLine({required int known, required int total}) =>
-    known == 0 ? 'Total balance unavailable' : 'Visible total  ${formatErg(total)}';
+import 'home/overview_screen.dart';
+import 'home/wallet_tools_sheet.dart';
 
 /// The launch screen: every wallet on this device — seed wallets, watched
 /// addresses and watched accounts — with its balance, and the total across
@@ -36,7 +22,8 @@ String overviewTotalLine({required int known, required int total}) =>
 ///
 /// This is the only wallet list in the app. Creating, restoring and
 /// watching start here; renaming and removing live in each wallet's own
-/// settings.
+/// settings. The screen itself is [OverviewScreen]; this reads the overview
+/// model, the pricer and the network into its figures.
 class WalletsOverviewScreen extends StatelessWidget {
   const WalletsOverviewScreen({
     super.key,
@@ -47,7 +34,8 @@ class WalletsOverviewScreen extends StatelessWidget {
     required this.onWatchAddress,
     required this.onWatchAccount,
     required this.onSettings,
-    this.onLock,
+    this.onNetwork,
+    this.priceFeed,
     this.notice,
     this.noticeIsError = false,
   });
@@ -60,138 +48,123 @@ class WalletsOverviewScreen extends StatelessWidget {
   final VoidCallback onWatchAccount;
   final VoidCallback onSettings;
 
-  /// Locks the unlocked wallet; null when none is unlocked.
-  final VoidCallback? onLock;
+  /// The network line, while a node answers: its settings.
+  final VoidCallback? onNetwork;
+
+  /// ERG's day of prices for the strip under the total.
+  final ErgPriceFeed? priceFeed;
 
   /// A parked link waiting for an unlock, or a startup error.
   final String? notice;
   final bool noticeIsError;
 
+  void _add(AddWalletChoice choice) => switch (choice) {
+        AddWalletChoice.create => onCreate(),
+        AddWalletChoice.restore => onRestore(),
+        AddWalletChoice.watchAddress => onWatchAddress(),
+        AddWalletChoice.watchAccount => onWatchAccount(),
+      };
+
+  Future<void> _refresh() async {
+    await Future.wait<void>([model.refresh(), ?priceFeed?.refresh()]);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: Text('Argus', style: Theme.of(context).textTheme.headlineSmall),
-        actions: [
-          if (onLock != null)
-            IconButton(
-              icon: const Icon(Icons.lock_open_outlined),
-              tooltip: 'Lock wallet',
-              onPressed: onLock,
-            ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: 'Settings',
-            onPressed: onSettings,
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          const WarningStrip(),
-          Expanded(
-            child: ListenableBuilder(
-              listenable: Listenable.merge([
-                model,
-                privacyService,
-                tokenPricer,
-                networkController,
-              ]),
-              builder: (context, _) => RefreshIndicator(
-                onRefresh: model.refresh,
-                child: _body(context),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return ListenableBuilder(
+      listenable: Listenable.merge([
+        model,
+        privacyService,
+        tokenPricer,
+        networkController,
+        walletService.metadataChanges,
+        ?priceFeed,
+      ]),
+      builder: (context, _) {
+        final hidden = privacyService.hideBalances;
+        final data = overviewData(model, hidden: hidden, history: priceFeed?.history);
+        final offline = networkOffline();
+        return OverviewScreen(
+          data: data,
+          onOpenWallet: onOpen,
+          onReorder: model.reorder,
+          onAdd: _add,
+          onSettings: onSettings,
+          onToggleHidden: () => privacyService.setHideBalances(!hidden),
+          // With no node the line looks again; otherwise it opens the
+          // network settings.
+          onNetwork: offline ? networkController.probe : onNetwork,
+          networkAction: offline ? 'Retry' : null,
+          onRefresh: _refresh,
+          footnote: data.wallets.isEmpty
+              ? null
+              : [
+                  if (data.wallets.length > 1) 'Long-press a wallet to change the order.',
+                  lockedWalletsExplainer,
+                ].join(' '),
+          notice: notice,
+          noticeIsError: noticeIsError,
+        );
+      },
+    );
+  }
+}
+
+/// The overview's figures for the model's current rows.
+///
+/// The total is the sum of what the rows show; a row whose balance is
+/// unknown is left out of it and counted as not loaded, never added as
+/// zero. What is pending is split against each figure it sits under
+/// ([PendingBalance.under]), so the total's line counts every other
+/// wallet's funds, and every stealth and mixing pocket, as confirmed.
+OverviewData overviewData(WalletsOverviewModel model, {required bool hidden, ErgPriceHistory? history}) {
+  final entries = model.entries();
+  final totals = overviewTotals(entries);
+  final now = DateTime.now();
+  WalletSummary summary(OverviewEntry e) {
+    final value = holdingsFiat(e.balanceNano, e.tokens);
+    return WalletSummary(
+      ref: e.ref,
+      name: e.name,
+      nanoErg: e.balanceNano,
+      loading: e.loading,
+      unavailable: e.unavailable,
+      fiatValue: value.fiat,
+      tokenCount: e.tokensKnown ? e.tokens.where((t) => t.amount > 0).map((t) => t.id).toSet().length : null,
+      publicTokensOnly: e.publicTokensOnly && !e.watched,
+      pockets: [if (e.stealthNano > 0) PocketBalance(pocket: Pocket.stealth, nanoErg: e.stealthNano)],
+      // A locked wallet cannot rescan for stealth funds, so that figure is
+      // as old as its last scan.
+      pocketsAsOf: e.state == OverviewRowState.locked && e.stealthAsOf != null ? formatSyncAge(e.stealthAsOf) : null,
+      pending: e.pending,
+      otherAddresses: e.elsewhere,
+      unlocked: e.state == OverviewRowState.unlocked,
+      asOf: e.asOf == null ? null : formatSyncAge(now.subtract(e.asOf!)),
+      address: e.address,
     );
   }
 
-  Widget _body(BuildContext context) {
-    final hidden = privacyService.hideBalances;
-    final actions = OverviewAddActions(
-      onCreate: onCreate,
-      onRestore: onRestore,
-      onWatchAddress: onWatchAddress,
-      onWatchAccount: onWatchAccount,
-    );
-    final padding = EdgeInsets.fromLTRB(16, 8, 16, 40 + MediaQuery.paddingOf(context).bottom);
-    final noticeCard = notice == null
-        ? null
-        : Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: OverviewNotice(message: notice!, error: noticeIsError),
-          );
-    if (model.isEmpty) {
-      return ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: padding,
-        children: [
-          const OfflineBanner(),
-          ?noticeCard,
-          OverviewWelcome(actions: actions),
-        ],
-      );
-    }
-    final entries = model.entries();
-    final seeds = entries.where((e) => !e.watched).toList();
-    final watched = entries.where((e) => e.watched).toList();
-    final totals = overviewTotals(entries);
-    Widget row(OverviewEntry e) => OverviewWalletRow(
-          key: ValueKey('overview-row-${e.ref.kind.name}-${e.ref.id}'),
-          entry: e,
-          hidden: hidden,
-          valueText: rowValueText(ergNano: e.balanceNano, tokens: e.tokens, hidden: hidden),
-          onTap: () => onOpen(e.ref),
-        );
-    return ListView(
-      physics: const AlwaysScrollableScrollPhysics(),
-      padding: padding,
-      children: [
-        const OfflineBanner(),
-        ?noticeCard,
-        OverviewTotalCard(
-          totals: totals,
-          hidden: hidden,
-          loading: model.refreshing,
-          valueLine: totals.total.known == 0
-              ? null
-              : headlineValueLine(
-                  ergNano: totals.total.totalNano,
-                  tokens: totals.tokens,
-                  hidden: hidden,
-                ),
-          onToggleHidden: () => privacyService.setHideBalances(!hidden),
-        ),
-        if (seeds.isNotEmpty) ...[
-          const SizedBox(height: 24),
-          OverviewGroup(
-            title: 'Wallets',
-            scope: 'On this device',
-            rows: [for (final e in seeds) row(e)],
-            onReorder: model.reorder,
-          ),
-        ],
-        if (watched.isNotEmpty) ...[
-          const SizedBox(height: 24),
-          OverviewGroup(
-            title: 'Watched',
-            scope: 'No keys',
-            rows: [for (final e in watched) row(e)],
-          ),
-        ],
-        const SizedBox(height: 24),
-        actions,
-        const SizedBox(height: 20),
-        Text(
-          [
-            if (seeds.length > 1) 'Long-press a wallet to change the order.',
-            lockedWalletsExplainer,
-          ].join(' '),
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-      ],
-    );
-  }
+  final known = totals.total.known > 0;
+  final value = known ? holdingsFiat(totals.total.totalNano, totals.tokens) : (fiat: null, unpriced: 0);
+  return OverviewData(
+    wallets: [
+      for (final e in entries)
+        if (!e.watched) summary(e),
+    ],
+    watched: [
+      for (final e in entries)
+        if (e.watched) summary(e),
+    ],
+    currency: homeCurrency(),
+    network: overviewNetwork(),
+    totalNano: known ? totals.total.totalNano : null,
+    loading: !known && model.refreshing,
+    notLoaded: totals.total.unknown,
+    totalFiat: value.fiat,
+    unpricedCount: value.unpriced,
+    pricesNote: pricesNote(),
+    pending: totals.pending,
+    price: ergPriceView(history),
+    hidden: hidden,
+  );
 }

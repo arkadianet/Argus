@@ -4,17 +4,18 @@ import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/watch_account_service.dart';
 import 'package:argus_wallet/services/watch_only_service.dart';
 import 'package:argus_wallet/ui/cold_signing_screen.dart';
+import 'package:argus_wallet/ui/home/home_rows.dart';
 import 'package:argus_wallet/ui/home/watched_wallet.dart';
 import 'package:argus_wallet/ui/receive_screen.dart';
 import 'package:argus_wallet/ui/send_screen.dart';
 import 'package:argus_wallet/ui/transactions_screen.dart';
 import 'package:argus_wallet/ui/widgets/activity_tile.dart';
-import 'package:argus_wallet/ui/widgets/asset_tile.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/home_finders.dart';
 import 'support/home_harness.dart';
 
 const watched = '9hY16vzHmmfyVBwKeFGHvb2bMFsG94A1u7To1QWtUokACyFVENQ';
@@ -68,9 +69,16 @@ void main() {
       expect(find.widgetWithText(NavigationDestination, label), findsOneWidget);
     }
     expect(find.widgetWithText(NavigationDestination, 'Swap'), findsNothing);
+    expect(find.widgetWithText(NavigationDestination, 'Discover'), findsNothing);
     expect(find.text(watchAccountLimitations), findsOneWidget);
-    await tester.scrollUntilVisible(find.text('Recent activity'), 300);
-    expect(find.text('Assets'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('RECENT ACTIVITY'),
+      300,
+      scrollable: find.descendant(of: find.byKey(const Key('wallet-list')), matching: find.byType(Scrollable)).first,
+    );
+    expect(textPlainContaining('ASSETS'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('watch-action-receive')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('watch-action-receive')));
     await tester.pumpAndSettle();
     expect(api.watchScans, scans + 1, reason: 'Receive keeps its fresh-address scan');
@@ -89,7 +97,7 @@ void main() {
     tester,
   ) async {
     final scans = await openAccount(tester);
-    expect(find.text('Send with offline signer'), findsOneWidget);
+    expect(find.bySemanticsLabel('Send with offline signer'), findsOneWidget);
     expect(find.text('Send'), findsNothing);
     await tester.tap(find.byKey(const Key('watch-action-send')));
     await tester.pumpAndSettle();
@@ -113,10 +121,10 @@ void main() {
     await openAccount(tester);
     expect(account.snapshot, isNull);
     expect(find.textContaining('Account refresh unavailable'), findsWidgets);
-    final receive = tester.widget<FilledButton>(
+    final receive = tester.widget<InkWell>(
       find.byKey(const Key('watch-action-receive')),
     );
-    expect(receive.onPressed, isNull);
+    expect(receive.onTap, isNull);
     await disposeHome(tester);
   });
 
@@ -147,9 +155,13 @@ void main() {
     await tester.ensureVisible(row);
     await tester.tap(row);
     await tester.pumpAndSettle();
-    expect(find.byType(AssetTile), findsNWidgets(2), reason: 'ERG and the one token');
-    await tester.scrollUntilVisible(find.byType(ActivityTile), 300);
-    expect(find.byType(ActivityTile), findsOneWidget);
+    expect(find.byType(HomeAssetRow), findsNWidgets(2), reason: 'ERG and the one token');
+    await tester.scrollUntilVisible(
+      find.byType(HomeActivityRow),
+      300,
+      scrollable: find.descendant(of: find.byKey(const Key('wallet-list')), matching: find.byType(Scrollable)).first,
+    );
+    expect(find.byType(HomeActivityRow), findsOneWidget);
     // The Activity tab reads this address's own history.
     await tester.tap(find.widgetWithText(NavigationDestination, 'Activity'));
     await tester.pumpAndSettle();
@@ -180,12 +192,9 @@ void main() {
     await tester.ensureVisible(row);
     await tester.tap(row);
     await tester.pumpAndSettle();
-    // A formatted figure in the balance card, not "25421.629296273 ERG".
-    expect(
-      tester.widget<Text>(find.byKey(const Key('wallet-balance'))).data,
-      '25421.6292',
-    );
-    expect(find.text('Send with offline signer'), findsOneWidget);
+    // A summary figure on the panel, not "25421.629296273 ERG".
+    expect(plainOf(tester, find.byKey(const Key('wallet-balance'))), '25,421.62 ERG');
+    expect(find.bySemanticsLabel('Send with offline signer'), findsOneWidget);
     expect(find.textContaining('change returns to this same address'), findsOneWidget);
     await tester.tap(find.byKey(const Key('watch-action-send')));
     await tester.pumpAndSettle();

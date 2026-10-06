@@ -12,6 +12,27 @@ enum DiscoverFeature { dexy, ageusd, spectrum, liquidity, duckpools, sigmafi, ro
 /// explainer but appears on no card and in no list.
 bool discoverAvailable(DiscoverFeature f, {bool dexy = dexyEnabled}) => f != DiscoverFeature.dexy || dexy;
 
+/// The protocols the Discover tab lists, in its order.
+const discoverProtocols = [
+  DiscoverFeature.dexy,
+  DiscoverFeature.ageusd,
+  DiscoverFeature.spectrum,
+  DiscoverFeature.liquidity,
+  DiscoverFeature.duckpools,
+  DiscoverFeature.sigmafi,
+  DiscoverFeature.rosen,
+  DiscoverFeature.dapps,
+];
+
+/// The tools that act on the wallet's own coins, listed after them.
+const discoverTools = [
+  DiscoverFeature.mix,
+  DiscoverFeature.tokens,
+  DiscoverFeature.utxos,
+  DiscoverFeature.stakes,
+  DiscoverFeature.arbitrage,
+];
+
 /// What a feature is, what you can do with it, and what to watch for.
 class DiscoverExplainer {
   const DiscoverExplainer({

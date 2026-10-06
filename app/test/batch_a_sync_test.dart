@@ -1,6 +1,6 @@
 import 'package:argus_wallet/services/stealth_service.dart';
 import 'package:argus_wallet/services/wallet_database_service.dart';
-import 'package:argus_wallet/ui/dashboard_screen.dart';
+import 'package:argus_wallet/ui/home/wallet_ledger.dart';
 import 'dart:async';
 
 import 'package:argus_wallet/services/wallet_service.dart';
@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/home_finders.dart';
 import 'wallet_sync_controller_test.dart' show FakeGateway;
 
 class GatedGateway extends FakeGateway {
@@ -327,7 +328,7 @@ void main() {
     expect(c.lastSyncedAt, DateTime(2026));
   });
 
-  testWidgets('BATCH A: status strip shows successful age during refresh', (
+  testWidgets('BATCH A: status line shows successful age during refresh', (
     tester,
   ) async {
     final c = WalletSyncController(GatedGateway())
@@ -336,19 +337,28 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: SyncStatusLine.wallet(
+          body: WalletLedger(
             sync: c,
-            online: true,
-            statusColor: Colors.green,
-            height: 100,
-            fragmented: false,
+            wallet: null,
+            actions: WalletLedgerActions(
+              go: (_) {},
+              swap: (_) {},
+              showActivity: () {},
+              showSettings: () {},
+              viewAssets: () {},
+              openTx: (_) {},
+              openToken: (_) {},
+              labelAddress: (_) {},
+              lock: () {},
+            ),
           ),
         ),
       ),
     );
-    expect(find.text('Syncing…'), findsOneWidget);
-    expect(find.text('5m ago'), findsOneWidget);
-    expect(find.text('Synced'), findsNothing);
+    final status = find.byKey(const Key('wallet-status'));
+    expect(find.descendant(of: status, matching: find.textContaining('Syncing…')), findsOneWidget);
+    expect(find.descendant(of: status, matching: textPlainContaining('5m ago')), findsOneWidget);
+    expect(find.textContaining('Synced'), findsNothing);
   });
 
   testWidgets('BATCH A: Assets follows holdings and clears them on reset', (

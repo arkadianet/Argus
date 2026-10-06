@@ -10,6 +10,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'support/home_finders.dart';
+
 class OverviewApi extends RustLibApi {
   late Completer<List<String>> derive;
   int balances = 0;
@@ -63,10 +65,7 @@ void main() {
     expect(api.balances, 1);
     expect(watchAccountService.accounts.single.busy, isTrue);
     expect(find.byKey(const Key('overview-total')), findsOneWidget);
-    expect(
-      tester.widget<Text>(find.byKey(const Key('overview-total'))).data,
-      '7',
-    );
+    expect(plainOf(tester, find.byKey(const Key('overview-total'))), '7 ERG');
     expect(find.text('Balance unavailable'), findsNothing);
     // End the pending scan via incomplete derivation, avoiding extra network calls.
     api.derive.complete([]);

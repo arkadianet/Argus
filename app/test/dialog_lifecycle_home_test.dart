@@ -26,8 +26,8 @@ void main() {
   final api = DialogApi();
   setUpAll(() async {
     RustLib.initMock(api: api);
-    // The wallet page is laid out for the app's fonts; the test font's
-    // square glyphs overflow its cards.
+    // The home is laid out for the app's fonts, as on a phone; the test
+    // font's square glyphs overflow it.
     await loadAppFonts();
   });
 
@@ -98,21 +98,13 @@ void main() {
     await disposeHome(tester);
   });
 
-  testWidgets('Address label (wallet page): Cancel, then Save', (
-    tester,
-  ) async {
+  testWidgets('Address label (wallet page, More, Addresses): Cancel, then '
+      'Save', (tester) async {
     // A PIN and no biometric key: the gate asks for the PIN.
     DialogKeystore().install(tester);
-    api.discovery = {
-      'addresses': [
-        {'address': 'usedaddr7', 'balance_nano_erg': 1000000000},
-      ],
-      'next_unused_index': 1,
-    };
-    addTearDown(
-      () => api.discovery = {'addresses': [], 'next_unused_index': 0},
+    await tester.runAsync(
+      () => saveWallet(dialogWallet, name: 'Daily', address0: 'addr0'),
     );
-    await tester.runAsync(() => saveWallet(dialogWallet, name: 'Daily'));
     await pumpHome(tester);
     await openWallet(tester);
     await tester.enterText(find.byType(TextField), api.goodPin);
@@ -120,24 +112,23 @@ void main() {
     await tester.pumpAndSettle();
     expect(walletService.isUnlocked, isTrue);
 
-    final row = find.text('usedaddr7');
-    await tester.scrollUntilVisible(
-      row,
-      300,
-      scrollable: find.byType(Scrollable).first,
-    );
+    await tester.tap(find.byKey(const Key('wallet-action-more')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('wallet-tool-addresses')));
+    await tester.pumpAndSettle();
+    final row = find.byKey(const ValueKey('holding-addr0'));
+
     await tester.tap(row);
     await tester.pumpAndSettle();
     await tester.enterText(dialogField(), 'Savings');
     await answer(tester, 'Cancel');
-    expect(addressLabelService.labelFor('usedaddr7'), isNull);
+    expect(addressLabelService.labelFor('addr0'), isNull);
 
     await tester.tap(row);
     await tester.pumpAndSettle();
     await tester.enterText(dialogField(), 'Savings');
     await answer(tester, 'Save');
-    expect(addressLabelService.labelFor('usedaddr7'), 'Savings');
-    expect(find.text('Savings'), findsOneWidget);
+    expect(addressLabelService.labelFor('addr0'), 'Savings');
     await disposeHome(tester);
   });
 }
