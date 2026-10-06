@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import 'address_holdings.dart';
 import 'network_controller.dart';
 import 'wallet_database_service.dart';
 import 'wallet_service.dart';
@@ -75,11 +76,17 @@ class PublicWalletSync extends ChangeNotifier {
       (_lastAttempt == null ||
           (now ?? DateTime.now()).difference(_lastAttempt!) >= interval);
 
+  /// [recordedAddresses] are addresses the wallet list itself keeps for a
+  /// wallet (index 0, and the pinned address), queried even when no
+  /// snapshot recorded them: without them a pinned wallet that has no
+  /// snapshot yet is read at its pinned address alone, and what index 0
+  /// holds goes missing from its total.
   Future<void> tick({
     required Map<String, String?> wallets,
     required WalletSyncController controller,
     required String? activeId,
     required bool Function() unlocked,
+    Map<String, Iterable<String>> recordedAddresses = const {},
     DateTime? now,
   }) async {
     final at = now ?? DateTime.now();
@@ -119,15 +126,34 @@ class PublicWalletSync extends ChangeNotifier {
             if (old['primary_address'] is String)
               old['primary_address'] as String,
             if (entry.value != null) entry.value!,
+            ...?recordedAddresses[entry.key],
           }..remove('');
           if (addresses.isEmpty) continue;
           var nano = 0;
           final amounts = <String, int>{};
           final transactions = <String, Map<String, dynamic>>{};
+          final holdings = <AddressHolding>[];
+          final frontier = ((old['frontier_addresses'] as List?) ?? const [])
+              .cast<String>();
+          final used = [
+            for (final row in (old['used_addresses'] as List? ?? const []))
+              if (row is Map) row.cast<String, dynamic>(),
+          ];
           for (final address in addresses) {
             if (!valid()) return;
             final balance = await gateway.balance(address);
             nano += (balance['balance_nano_erg'] as num).toInt();
+            holdings.add(
+              AddressHolding.fromBalance(
+                address,
+                balance,
+                index: recordedAddressIndex(
+                  address,
+                  frontier: frontier,
+                  used: used,
+                ),
+              ),
+            );
             for (final token in balance['tokens'] as List? ?? const []) {
               final id = token['id'] as String;
               amounts[id] =
@@ -168,6 +194,7 @@ class PublicWalletSync extends ChangeNotifier {
             'balance_nano_erg': nano,
             'tokens': tokens,
             'transactions': rows.take(5).toList(),
+            'address_holdings': [for (final h in holdings) h.toJson()],
             'public_only': true,
             'public_refreshed_at': at.millisecondsSinceEpoch,
             'last_sync_timestamp': at.millisecondsSinceEpoch,
