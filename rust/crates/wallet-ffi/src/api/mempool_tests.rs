@@ -540,6 +540,50 @@ async fn waiting_names_the_confirming_funds_and_allowing_chains_on_change() {
     assert_eq!(total_in, total_out);
 }
 
+#[tokio::test]
+async fn waiting_explains_an_empty_wallet_in_multi_send_and_the_utxo_tools() {
+    let _policy = policy(false);
+    let mut w = Sent::new(19);
+    // Nothing confirmed is left: the only confirmed box is the one the
+    // pending send spends, and its change is still confirming.
+    w.chain.unspent.insert(w.address.clone(), vec![w.spent.clone()]);
+    let node = Node::start(w.chain.clone());
+    let url = Some(node.url.clone());
+
+    let recipients = serde_json::json!([{
+        "address": w.foreign,
+        "amount_nano_erg": 100_000_000,
+    }])
+    .to_string();
+    let error = super::super::prepare_send_multi(
+        w.handle,
+        w.address.clone(),
+        vec![w.address.clone()],
+        w.address.clone(),
+        recipients,
+        url.clone(),
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(message(&error).starts_with("0.6989 ERG is still confirming"), "{error}");
+
+    let error = super::super::prepare_consolidate(
+        w.handle,
+        vec![w.address.clone()],
+        vec![],
+        w.address.clone(),
+        url.clone(),
+        None,
+    )
+    .await
+    .unwrap_err();
+    assert!(message(&error).starts_with("0.6989 ERG is still confirming"), "{error}");
+}
+
 // ─── What the sync shows ─────────────────────────────────────────────────
 
 #[tokio::test]
