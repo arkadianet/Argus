@@ -180,7 +180,11 @@ void main() {
     await walletService.lock();
   });
 
-  Future<void> open(WidgetTester tester, {bool openCleanup = false}) async {
+  Future<void> open(
+    WidgetTester tester, {
+    bool openCleanup = false,
+    List<String> addresses = const ['wallet'],
+  }) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
@@ -189,11 +193,11 @@ void main() {
       MaterialApp(
         theme: argusTheme(watchful: true),
         home: WalletArgsScope(
-          args: const WalletRouteArgs(
+          args: WalletRouteArgs(
             senderAddress: 'wallet',
             receiveAddress: 'wallet',
             changeAddress: 'wallet',
-            historyAddresses: ['wallet'],
+            historyAddresses: addresses,
           ),
           child: UtxoManagementScreen(openCleanup: openCleanup),
         ),
@@ -314,6 +318,42 @@ void main() {
       expect(find.text('Nothing to clean up right now'), findsOneWidget);
       expect(find.text('Suggested cleanup'), findsNothing);
     }, () => node(walletBoxes.skip(1).toList()));
+  });
+
+  testWidgets('a wallet fragmented across addresses is told why', (
+    tester,
+  ) async {
+    api.rows = [];
+    await http.runWithClient(
+      () async {
+        await open(
+          tester,
+          openCleanup: true,
+          addresses: [for (var i = 0; i < 81; i++) 'addr$i'],
+        );
+        expect(
+          find.textContaining('spread over many addresses'),
+          findsOneWidget,
+        );
+        expect(find.text('Suggested cleanup'), findsNothing);
+      },
+      // One box at each of 81 addresses: fragmented, but nothing to merge
+      // without linking addresses.
+      () => MockClient((request) async {
+        final address = jsonDecode(request.body) as String;
+        return http.Response(
+          jsonEncode([
+            {
+              'boxId': address.padLeft(64, '0'),
+              'value': 1000000000,
+              'creationHeight': 1800000,
+              'assets': [],
+            },
+          ]),
+          200,
+        );
+      }),
+    );
   });
 
   testWidgets('an unreadable node leaves the boxes usable', (tester) async {

@@ -208,7 +208,14 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     _cleanupOffered = true;
     final suggestion = _suggestion;
     if (suggestion == null) {
-      _snack('Nothing to clean up right now');
+      // Fragmented, yet no single address has two boxes to merge: say why
+      // rather than contradict the home screen.
+      _snack(
+        _boxes.length > utxoFragmentationThreshold
+            ? 'Your boxes are spread over many addresses, and merging them '
+                  'would link those addresses. Consolidate does it anyway.'
+            : 'Nothing to clean up right now',
+      );
       return;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
