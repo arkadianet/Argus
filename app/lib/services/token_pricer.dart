@@ -6,9 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../bridge/api/pricing.dart' as pricing_api;
 import 'amm_service.dart';
-import 'dexy_service.dart';
 import 'erg_price_history.dart';
 import 'network_controller.dart';
+import 'oracle_feeds.dart';
 import 'oracle_pool.dart';
 import 'sigmausd_service.dart';
 import 'token_pricing.dart';
@@ -25,12 +25,13 @@ class PricerDeps {
     required this.pools,
     required this.poolPrices,
     required this.sigRsvPriceNano,
-    required this.dexyGoldRateNano,
     required this.onRate,
+    Future<OracleReading?> Function(String node, OracleFeed feed)? oracleReading,
     BoxPage? boxPage,
     Future<Map<String, dynamic>> Function(String fiat, int days)? coingeckoChart,
     DateTime Function()? clock,
-  })  : boxPage = boxPage ?? fetchBoxPage,
+  })  : oracleReading = oracleReading ?? ((node, feed) => fetchOracleReading(node, feed)),
+        boxPage = boxPage ?? fetchBoxPage,
         coingeckoChart = coingeckoChart ?? ((fiat, days) => fetchCoingeckoChart(fiat, days)),
         clock = clock ?? DateTime.now;
 
@@ -47,7 +48,9 @@ class PricerDeps {
   /// computed by the Rust pricing core.
   final Future<PoolPriceBook> Function(AmmPoolSet set) poolPrices;
   final Future<int?> Function() sigRsvPriceNano;
-  final Future<int?> Function() dexyGoldRateNano;
+
+  /// The newest box of a single-rate oracle pool on the node.
+  final Future<OracleReading?> Function(String node, OracleFeed feed) oracleReading;
 
   /// Publishes the ERG rate in the display currency (null when unknown).
   final void Function(double? fiatPerErg, double? usdPerErg) onRate;
@@ -175,7 +178,7 @@ class TokenPricer extends ChangeNotifier {
       final pools = pooled?.$1;
       final book = pooled?.$2 ?? PoolPriceBook.empty;
       final sigRsv = results[3] as int?;
-      final gold = results[4] as int?;
+      final readings = (results[4] as Map<OracleFeed, OracleReading>?) ?? const {};
 
       final geckoUsd = <String, double>{
         for (final e in gecko.entries)
@@ -185,10 +188,11 @@ class TokenPricer extends ChangeNotifier {
         PricingInputs(
           source: src,
           oracle: oracle,
+          oracles: readings,
+          tipHeight: _deps.tipHeight(),
           coingeckoUsd: geckoUsd,
           poolPrices: book,
           sigRsvPriceNano: sigRsv,
-          dexyGoldRateNano: gold,
           decimalsOf: (id) =>
               pools?.tokens[id]?.decimals ?? knownToken(id)?.decimals ?? 0,
           nameOf: (id) => knownToken(id)?.ticker ?? pools?.tokens[id]?.name,
@@ -213,10 +217,9 @@ class TokenPricer extends ChangeNotifier {
           ergo['usd']! > 0) {
         fiatPerUsd = ergo[fiat]! / ergo['usd']!;
       }
-      stale =
-          pricesAreOld ||
-          (src == PriceSource.oracle &&
-              (oracle?.isStale(_deps.tipHeight()) ?? false));
+      // Stale only when the ERG rate itself has no current source: a
+      // stopped feed for one token is said on that token's row instead.
+      stale = pricesAreOld || result.ergStale;
       lastError = errors.isEmpty ? null : errors.join('; ');
       if (result.ergUsd != null) {
         asOf = now;
@@ -244,7 +247,23 @@ class TokenPricer extends ChangeNotifier {
         return (set, await _deps.poolPrices(set));
       }),
       attempt('sigmausd', _deps.sigRsvPriceNano),
-      attempt('dexy', _deps.dexyGoldRateNano),
+      attempt('oracle pools', () async {
+        if (node == null) return null;
+        // Gold prices DexyGold under every source; the dollar pools only
+        // matter to the Oracle source.
+        final feeds = src == PriceSource.oracle ? OracleFeed.values : const [OracleFeed.dexyGold];
+        final got = await Future.wait([
+          for (final f in feeds)
+            _deps.oracleReading(node, f).catchError((Object e) {
+              errors.add('${f.label}: $e');
+              return null;
+            }),
+        ]);
+        return <OracleFeed, OracleReading>{
+          for (var i = 0; i < feeds.length; i++)
+            if (got[i] case final r?) feeds[i]: r,
+        };
+      }),
     ];
     try {
       await Future.wait([
@@ -274,8 +293,8 @@ class TokenPricer extends ChangeNotifier {
   /// ERG's price over [window] in the display currency, from the source
   /// picked in Display settings, with its 24-hour change.
   ///
-  /// - Oracle pool: the operators' posted vectors, read back through the
-  ///   node's box history (needs the extra index).
+  /// - Oracle pools: the SigmaUSD oracle pool's past boxes, the rate that
+  ///   source prices ERG at (needs the node's extra index).
   /// - Spectrum pools: the deepest ERG/SigUSD pool's past boxes from the
   ///   node (needs the extra index).
   /// - CoinGecko: its market chart in the display currency, from the host
@@ -300,7 +319,7 @@ class TokenPricer extends ChangeNotifier {
     }
 
     final label = switch (src) {
-      PriceSource.oracle => 'Oracle pool',
+      PriceSource.oracle => 'SigmaUSD oracle',
       PriceSource.spectrum => 'Spectrum ERG/SigUSD',
       PriceSource.coingecko => 'CoinGecko',
     };
@@ -343,17 +362,20 @@ class TokenPricer extends ChangeNotifier {
     if (fiat != 'usd' && !displayRateKnown) {
       throw HistoryUnavailable('The ${fiat.toUpperCase()} rate is not known yet.');
     }
+    // The Oracle source's ERG rate is the SigmaUSD oracle pool's, so its
+    // history is that pool's past boxes; the Spectrum source's is the
+    // ERG/SigUSD pool's.
     final oracle = src == PriceSource.oracle;
     final boxes = await sampleHistory(
       page: _deps.boxPage,
       node: node,
-      tokenId: oracle ? OraclePool.oracleToken : (_sigUsdPoolId ?? ergSigUsdPoolNft),
+      tokenId: oracle ? OracleFeed.sigmaUsd.nft : (_sigUsdPoolId ?? ergSigUsdPoolNft),
       tip: tip,
       // Every window is at least a day, so the 24-hour change is covered.
       windowBlocks: window.blocks,
     );
     final byHeight = oracle
-        ? oracleHistoryFromBoxes(boxes)
+        ? oracleRateHistory(boxes)
         : poolHistoryFromBoxes(boxes, sigUsdId: SigmaUsdTokens.sigUsd);
     if (byHeight.isEmpty) throw HistoryUnavailable('This node has no price history for $label yet.');
     final points = pointsFromHeights(byHeight, tip: tip, now: now, scale: fiat == 'usd' ? 1.0 : fiatPerUsd);
@@ -364,7 +386,7 @@ class TokenPricer extends ChangeNotifier {
       currency: fiat,
       change24hPct: changeOver(points, const Duration(hours: 24), now),
       approximateTimes: true,
-      stale: oracle && tip - byHeight.last.$1 > OraclePool.staleAfterBlocks,
+      stale: oracle && tip - byHeight.last.$1 > OracleFeed.sigmaUsd.staleAfterBlocks,
     );
   }
 }
@@ -423,7 +445,5 @@ final tokenPricer = TokenPricer(PricerDeps(
   poolPrices: rustPoolPrices,
   sigRsvPriceNano: () async =>
       networkController.activeUrl == null ? null : (await sigmaUsdService.state()).sigRsvPriceNano,
-  dexyGoldRateNano: () async =>
-      networkController.activeUrl == null ? null : (await dexService.state(DexyVariant.gold)).oracleRateNano,
   onRate: (fiatPerErg, usdPerErg) => networkController.setErgRate(fiatPerErg: fiatPerErg, usdPerErg: usdPerErg),
 ));

@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:argus_wallet/services/erg_price_history.dart';
-import 'package:argus_wallet/services/oracle_pool.dart';
 import 'package:argus_wallet/services/sigmausd_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -48,16 +47,21 @@ void main() {
     expect(poolHistoryFromBoxes([odd, {'value': 1, 'assets': []}], sigUsdId: SigmaUsdTokens.sigUsd), isEmpty);
   });
 
-  test('oracle history is the per-epoch median the live price uses', () {
-    final boxes = _load('oracle_operator_boxes.json');
-    final pool = _load('oracle_pool_box.json').first;
-    final live = aggregateOracle(poolBox: pool, oracleBoxes: boxes)!;
-    final history = oracleHistoryFromBoxes(boxes);
-    expect(history, isNotEmpty);
-    expect(history.last.$2, live['ERG_USD'], reason: 'newest epoch, same median');
+  test('recorded SigmaUSD pool boxes become its rate history, oldest first', () {
+    final history = oracleRateHistory(_load('sigmausd_oracle_pool_history.json'));
+    expect(history, hasLength(16));
+    expect(history.first.$1, 1888702);
+    expect(history.last.$1, 1888755);
+    // R4 3,123,969,090 nanoERG per dollar at the newest box.
+    expect(history.last.$2, closeTo(0.32011, 0.00001));
     for (var i = 1; i < history.length; i++) {
       expect(history[i].$1, greaterThanOrEqualTo(history[i - 1].$1));
+      expect(history[i].$2, inInclusiveRange(0.25, 0.40));
     }
+  });
+
+  test('boxes without a rate are not read as history', () {
+    expect(oracleRateHistory([{'additionalRegisters': {'R4': '04ca0f'}, 'inclusionHeight': 5}]), isEmpty);
   });
 
   test('heights become times at two minutes a block', () {

@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'package:argus_wallet/services/amm_service.dart';
 import 'package:argus_wallet/services/erg_price_history.dart';
+import 'package:argus_wallet/services/oracle_feeds.dart';
 import 'package:argus_wallet/services/oracle_pool.dart';
 import 'package:argus_wallet/services/sigmausd_service.dart';
 import 'package:argus_wallet/services/token_pricer.dart';
@@ -36,7 +39,13 @@ class _Fakes {
   double? rate;
   double? usdRate;
   bool oracleFails = false;
+  bool readingsFail = false;
+  int readingCalls = 0;
   Completer<void>? poolGate;
+
+  /// Blocks behind the tip of each single-rate pool's newest box; a feed
+  /// left out has no box. SigmaUSD quotes 0.50 USD (2 ERG per dollar).
+  Map<OracleFeed, int> readingAges = {OracleFeed.sigmaUsd: 1};
   DateTime now = DateTime.utc(2026, 10, 6, 12);
 
   /// The node's box history, newest first; null makes it fail like a node
@@ -49,6 +58,13 @@ class _Fakes {
 
   late final PricerDeps deps = PricerDeps(
     clock: () => now,
+    oracleReading: (node, feed) async {
+      readingCalls++;
+      if (readingsFail) throw Exception('pool box unreadable');
+      final age = readingAges[feed];
+      if (age == null) return null;
+      return OracleReading(rate: 2000000000, height: (tip ?? 1000) - age);
+    },
     boxPage: (node, token, offset, limit) async {
       boxPageCalls++;
       lastBoxToken = token;
@@ -114,7 +130,6 @@ class _Fakes {
       );
     },
     sigRsvPriceNano: () async => 4000000,
-    dexyGoldRateNano: () async => null,
     onRate: (f, u) {
       rate = f;
       usdRate = u;
@@ -205,21 +220,56 @@ void main() {
     expect(f.oracleCalls, 0);
   });
 
-  test('a failed oracle fetch leaves no rate and records the error', () async {
+  test('the ERG rate comes from the SigmaUSD pool, and survives the AVL oracle failing', () async {
     final f = _Fakes()..oracleFails = true;
+    final p = TokenPricer(f.deps);
+    await p.refresh();
+    expect(p.result.ergUsd, 0.5);
+    expect(p.result.ergVia, 'SigmaUSD oracle');
+    expect(p.lastError, contains('oracle'));
+  });
+
+  test('when no oracle answers there is no rate and the errors are recorded', () async {
+    final f = _Fakes()
+      ..oracleFails = true
+      ..readingsFail = true;
     final p = TokenPricer(f.deps);
     await p.refresh();
     expect(p.result.ergUsd, isNull);
     expect(f.rate, isNull);
-    expect(p.lastError, contains('oracle'));
+    expect(p.lastError, contains('SigmaUSD oracle'));
   });
 
-  test('stale oracle is flagged but still priced', () async {
+  test('a stopped AVL oracle no longer flags a current ERG rate as stale', () async {
+    // The AVL pool box (height 990) is 200 blocks old; SigmaUSD is current.
     final f = _Fakes()..tip = 990 + 200;
+    final p = TokenPricer(f.deps);
+    await p.refresh();
+    expect(p.stale, isFalse);
+    expect(p.result.ergVia, 'SigmaUSD oracle');
+    expect(p.priceOf(rsBtc)!.via, 'AVL oracle, 6 h old', reason: 'the major says its own age');
+    expect(p.priceOf(rsBtc)!.countsInTotal, isFalse);
+  });
+
+  test('with every ERG source stopped, the rate is shown stale with its age', () async {
+    final f = _Fakes()
+      ..tip = 990 + 200
+      ..readingAges = {OracleFeed.sigmaUsd: 150};
     final p = TokenPricer(f.deps);
     await p.refresh();
     expect(p.stale, isTrue);
     expect(p.result.ergUsd, 0.5);
+    expect(p.result.ergVia, 'SigmaUSD oracle, 5 h old');
+  });
+
+  test('gold is read under every source, the dollar pools only under the Oracle source', () async {
+    final f = _Fakes();
+    final p = TokenPricer(f.deps);
+    await p.refresh();
+    expect(f.readingCalls, OracleFeed.values.length);
+    final g = _Fakes();
+    await TokenPricer(g.deps).setSource(PriceSource.spectrum);
+    expect(g.readingCalls, 1);
   });
 
   test('refresh is throttled unless forced', () async {
@@ -254,7 +304,7 @@ void main() {
       pools: f.deps.pools,
       poolPrices: (_) async => throw Exception('bridge down'),
       sigRsvPriceNano: f.deps.sigRsvPriceNano,
-      dexyGoldRateNano: f.deps.dexyGoldRateNano,
+      oracleReading: f.deps.oracleReading,
       onRate: f.deps.onRate,
     );
     final p = TokenPricer(deps);
@@ -278,6 +328,20 @@ void main() {
       expect(h.change24hPct, closeTo(28, 1e-6));
       expect(h.points.first.at, f.now.subtract(const Duration(hours: 24)));
       expect(h.points.last.price, closeTo(0.32, 1e-9));
+    });
+
+    test('Oracle source reads the SigmaUSD pool past boxes', () async {
+      final raw = jsonDecode(File('test/fixtures/sigmausd_oracle_pool_history.json').readAsStringSync()) as Map;
+      final f = _Fakes()
+        ..tip = 1888757
+        ..boxHistory = [for (final b in raw['items'] as List) (b as Map).cast<String, dynamic>()];
+      final h = await TokenPricer(f.deps).ergPriceHistory(PriceWindow.day);
+      expect(f.lastBoxToken, OracleFeed.sigmaUsd.nft);
+      expect(h.available, isTrue);
+      expect(h.sourceLabel, 'SigmaUSD oracle');
+      expect(h.points.last.price, closeTo(0.32011, 0.00001));
+      expect(h.stale, isFalse);
+      expect(h.change24hPct, isNull, reason: 'sixteen recorded boxes do not reach back a day');
     });
 
     test('is cached for the refresh period, with no polling', () async {
@@ -331,7 +395,7 @@ void main() {
         pools: f.deps.pools,
         poolPrices: f.deps.poolPrices,
         sigRsvPriceNano: f.deps.sigRsvPriceNano,
-        dexyGoldRateNano: f.deps.dexyGoldRateNano,
+        oracleReading: f.deps.oracleReading,
         onRate: f.deps.onRate,
         clock: () => f.now,
         boxPage: f.deps.boxPage,

@@ -3,8 +3,7 @@ import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 
-import 'oracle_pool.dart';
-import 'sigma_registers.dart';
+import 'oracle_feeds.dart';
 
 /// How far back an ERG price chart reaches.
 enum PriceWindow {
@@ -96,34 +95,13 @@ typedef HeightPrice = (int height, double usd);
 int? _height(Map<String, dynamic> box) =>
     (box['inclusionHeight'] as num?)?.toInt() ?? (box['creationHeight'] as num?)?.toInt();
 
-double? _median(List<double> values) {
-  if (values.isEmpty) return null;
-  final v = [...values]..sort();
-  final mid = v.length ~/ 2;
-  return v.length.isOdd ? v[mid] : (v[mid - 1] + v[mid]) / 2;
-}
-
-/// ERG/USD per epoch from oracle operator boxes: the median of the ERG_USD
-/// entry across the vectors posted for each epoch, at the epoch's newest
-/// height. The same aggregation [aggregateOracle] applies to the latest
-/// epoch.
-List<HeightPrice> oracleHistoryFromBoxes(List<Map<String, dynamic>> boxes) {
-  final feed = OraclePool.feeds.indexOf('ERG_USD');
-  final byEpoch = <int, List<double>>{};
-  final heightOf = <int, int>{};
-  for (final b in boxes) {
-    final regs = (b['additionalRegisters'] as Map?)?.cast<String, dynamic>() ?? const {};
-    final epoch = decodeSigmaInt(regs['R5'] as String? ?? '');
-    final vector = decodeSigmaLongColl(regs['R6'] as String? ?? '');
-    final height = _height(b);
-    if (epoch == null || vector == null || height == null || vector.length <= feed) continue;
-    final micro = vector[feed];
-    if (micro <= 0) continue;
-    byEpoch.putIfAbsent(epoch, () => []).add(micro / OraclePool.priceScale);
-    heightOf[epoch] = math.max(heightOf[epoch] ?? 0, height);
-  }
+/// ERG/USD at each historical box of a single-rate oracle pool quoting
+/// nanoERG per dollar (the SigmaUSD pool): R4 at the box's height. Boxes
+/// without a positive `Long` in R4 are skipped.
+List<HeightPrice> oracleRateHistory(List<Map<String, dynamic>> boxes) {
   final out = <HeightPrice>[
-    for (final e in byEpoch.entries) (heightOf[e.key]!, _median(e.value)!),
+    for (final b in boxes)
+      if (readingFromBox(b) case final r?) (r.height, usdPerErg(r)),
   ]..sort((a, b) => a.$1.compareTo(b.$1));
   return out;
 }

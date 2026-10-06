@@ -1,3 +1,4 @@
+import 'package:argus_wallet/services/oracle_feeds.dart';
 import 'package:argus_wallet/services/oracle_pool.dart';
 import 'package:argus_wallet/services/sigmausd_service.dart';
 import 'package:argus_wallet/services/token_pricing.dart';
@@ -28,12 +29,13 @@ int decimals(String id) => switch (id) {
 
 void main() {
   _rowValueTests();
-  test('oracle source: ERG from the ERG_USD feed, rsBTC from BTC_USD', () {
+  test('oracle source with only a current AVL oracle: ERG and rsBTC from it', () {
     final r = priceTokens(PricingInputs(source: PriceSource.oracle, oracle: oracle, decimalsOf: decimals));
     expect(r.ergUsd, 0.25);
-    expect(r.ergVia, 'Oracle pool');
+    expect(r.ergVia, 'AVL oracle');
+    expect(r.ergStale, isFalse);
     expect(r[rsBtc]!.usd, 80000);
-    expect(r[rsBtc]!.via, 'Oracle pool');
+    expect(r[rsBtc]!.via, 'AVL oracle');
   });
 
   test('spectrum source: ERG from the SigUSD pool quote, wrapped majors only via their own pool', () {
@@ -81,7 +83,8 @@ void main() {
         coingeckoUsd: const {'ergo': 0.25},
         poolPrices: PoolPriceBook(tokens: {SigmaUsdTokens.sigUsd: direct(40000000), DexyIds.use: direct(1)}),
         sigRsvPriceNano: 4000000, // 0.004 ERG
-        dexyGoldRateNano: 400000000000, // 400 ERG per mg
+        // 400 ERG per mg of gold; the pool quotes per kilogram.
+        oracles: {OracleFeed.dexyGold: const OracleReading(rate: 400000000000 * 1000000, height: 100)},
         decimalsOf: decimals,
       ));
       expect(r[SigmaUsdTokens.sigUsd]!.usd, 1, reason: s.name);
@@ -200,6 +203,126 @@ void main() {
     expect(v.priced, 2);
     expect(v.excluded, 1);
     expect(v.unpriced, 1);
+  });
+
+  group('oracle freshness', () {
+    // Heights as on 2026-10-06: the AVL pool last refreshed at 1,872,818,
+    // the SigmaUSD pool two blocks before the tip.
+    const tip = 1888757;
+    final staleAvl = OracleSnapshot(epoch: 14780, poolHeight: 1872818, operators: 4, usd: {
+      'ERG_USD': 0.288,
+      'BTC_USD': 80000,
+      'XAU_USD': 4000,
+    });
+    const sigmaUsd = OracleReading(rate: 3123969090, height: tip - 2); // $0.3201
+    const goldPerKg = 417524904977633; // nanoERG per kilogram
+
+    PricingResult price({
+      Map<OracleFeed, OracleReading> oracles = const {},
+      OracleSnapshot? avl,
+      PoolPriceBook book = PoolPriceBook.empty,
+    }) =>
+        priceTokens(PricingInputs(
+          source: PriceSource.oracle,
+          oracle: avl,
+          oracles: oracles,
+          tipHeight: tip,
+          poolPrices: book,
+          decimalsOf: decimals,
+        ));
+
+    test('a current SigmaUSD pool prices ERG even when the AVL oracle stopped', () {
+      final r = price(oracles: {OracleFeed.sigmaUsd: sigmaUsd}, avl: staleAvl);
+      expect(r.ergUsd, closeTo(0.32011, 0.00001));
+      expect(r.ergVia, 'SigmaUSD oracle');
+      expect(r.ergStale, isFalse, reason: 'a weeks-old AVL feed must not flag a current ERG rate');
+    });
+
+    test('when every ERG source is stale, the freshest is shown as stale with its age', () {
+      final r = price(
+        oracles: {OracleFeed.sigmaUsd: const OracleReading(rate: 3123969090, height: tip - 90)},
+        avl: staleAvl,
+      );
+      expect(r.ergUsd, closeTo(0.32011, 0.00001), reason: '3 hours beats 22 days');
+      expect(r.ergStale, isTrue);
+      expect(r.ergStaleAge, '3 h');
+      expect(r.ergVia, 'SigmaUSD oracle, 3 h old');
+      final onlyAvl = price(avl: staleAvl);
+      expect(onlyAvl.ergUsd, 0.288);
+      expect(onlyAvl.ergVia, 'AVL oracle, 22 days old');
+    });
+
+    test('a stale SigmaUSD pool gives way to a current Dexy USD pool', () {
+      final r = price(oracles: {
+        OracleFeed.sigmaUsd: const OracleReading(rate: 3000000000, height: tip - 500),
+        OracleFeed.dexyUsd: const OracleReading(rate: 3123845338, height: tip - 4),
+      });
+      expect(r.ergVia, 'Dexy USD oracle');
+      expect(r.ergUsd, closeTo(0.32012, 0.00001));
+      expect(r.ergStale, isFalse);
+    });
+
+    test('wrapped majors fall back from a stopped AVL oracle to their pools, else show its age', () {
+      final withPool = price(
+        oracles: {OracleFeed.sigmaUsd: sigmaUsd},
+        avl: staleAvl,
+        book: PoolPriceBook(tokens: {rsBtc: direct(800000, depthErg: 800)}),
+      );
+      expect(withPool[rsBtc]!.via, 'Spectrum pool');
+      expect(withPool[rsBtc]!.countsInTotal, isTrue);
+
+      final noPool = price(oracles: {OracleFeed.sigmaUsd: sigmaUsd}, avl: staleAvl);
+      final btc = noPool[rsBtc]!;
+      expect(btc.usd, 80000);
+      expect(btc.via, 'AVL oracle, 22 days old');
+      expect(btc.staleAge, '22 days');
+      expect(btc.countsInTotal, isFalse, reason: 'a weeks-old price never counts');
+      expect(btc.excludedBecause, 'stale');
+      final v = holdingsValue(ergNano: 0, tokens: [(id: rsBtc, amount: 100000000, decimals: 8)], result: noPool);
+      expect(v.usd, 0);
+      expect(v.excluded, 1);
+    });
+
+    test('gold comes from the fresher of the Dexy gold oracle and the AVL oracle', () {
+      // Dexy gold current, AVL stopped: Dexy, converted per milligram.
+      final dexy = price(
+        oracles: {OracleFeed.sigmaUsd: sigmaUsd, OracleFeed.dexyGold: const OracleReading(rate: goldPerKg, height: tip - 7)},
+        avl: staleAvl,
+      );
+      final gold = dexy[DexyIds.gold]!;
+      expect(gold.via, 'Dexy gold oracle');
+      expect(gold.usd, closeTo(goldPerKg / 1e6 / 1e9 * 0.3201, 0.0001));
+      expect(gold.countsInTotal, isTrue);
+
+      // Both current, AVL fresher: the AVL ounce price per milligram.
+      final freshAvl = OracleSnapshot(epoch: 1, poolHeight: tip - 2, operators: 4, usd: {'XAU_USD': 4000});
+      final avlWins = price(
+        oracles: {OracleFeed.sigmaUsd: sigmaUsd, OracleFeed.dexyGold: const OracleReading(rate: goldPerKg, height: tip - 30)},
+        avl: freshAvl,
+      );
+      expect(avlWins[DexyIds.gold]!.via, 'AVL oracle');
+      expect(avlWins[DexyIds.gold]!.usd, closeTo(4000 / mgPerTroyOunce, 1e-9));
+
+      // Both stopped: the younger, with its age, out of totals.
+      final stale = price(
+        oracles: {OracleFeed.sigmaUsd: sigmaUsd, OracleFeed.dexyGold: const OracleReading(rate: goldPerKg, height: tip - 720)},
+        avl: staleAvl,
+      );
+      expect(stale[DexyIds.gold]!.via, 'Dexy gold oracle, 24 h old');
+      expect(stale[DexyIds.gold]!.countsInTotal, isFalse);
+    });
+
+    test('ages are told from the boxes seen even before the node height is known', () {
+      final r = priceTokens(PricingInputs(
+        source: PriceSource.oracle,
+        oracles: {
+          OracleFeed.sigmaUsd: const OracleReading(rate: 3000000000, height: 1000000 - 400),
+          OracleFeed.dexyUsd: const OracleReading(rate: 3123845338, height: 1000000),
+        },
+        decimalsOf: decimals,
+      ));
+      expect(r.ergVia, 'Dexy USD oracle', reason: 'the SigmaUSD box is 400 blocks behind another box');
+    });
   });
 
   test('coingeckoIdsFor requests majors only for the CoinGecko source', () {
