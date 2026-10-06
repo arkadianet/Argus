@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../format.dart';
 import '../services/amm_service.dart';
 import '../services/liquidity_math.dart';
+import '../services/token_metadata.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
@@ -77,6 +78,11 @@ class PoolCreationStore {
 }
 
 /// A Spectrum pool as the Liquidity screen sees it.
+///
+/// Names and decimals come from the one token lookup, the same as the asset
+/// list's, so a pool token the wallet holds or the catalog has resolved is
+/// named however it was learned. [tokens] — the pool set's own map, which
+/// holds only what the public layers know — is the fallback.
 class LiquidityPool {
   LiquidityPool(this.raw, this.tokens);
   final Map<String, dynamic> raw;
@@ -93,8 +99,44 @@ class LiquidityPool {
   String get yTokenId => (raw['token_y'] as Map)['token_id'] as String;
   BigInt get yReserves => BigInt.parse('${(raw['token_y'] as Map)['amount']}');
 
-  String name(String? tokenId) => tokenId == null ? 'ERG' : (tokens[tokenId]?.name ?? shorten(tokenId, head: 6, tail: 4));
-  int decimals(String? tokenId) => tokenId == null ? 9 : (tokens[tokenId]?.decimals ?? 0);
+  String name(String? tokenId) {
+    if (tokenId == null) return 'ERG';
+    final pooled = tokens[tokenId];
+    if (tokenMetaFor(tokenId) == null && pooled != null) return pooled.name;
+    return tokenLabel(tokenId);
+  }
+
+  /// Null when nothing knows the token's decimals: its amounts are raw
+  /// units, and are shown and entered as such.
+  int? scale(String? tokenId) => tokenId == null
+      ? 9
+      : (tokenDecimals(tokenId) ?? tokens[tokenId]?.decimals);
+
+  /// For parsing and formatting: zero, i.e. raw units, when unknown.
+  int decimals(String? tokenId) => scale(tokenId) ?? 0;
+
+  /// [units] of one side: "1,234.5 SigUSD", or "1,234,500 raw units of
+  /// 03faf2cb…" when nothing knows the token's decimals.
+  String amount(BigInt units, String? tokenId) {
+    final d = scale(tokenId);
+    return d == null
+        ? '${formatUnits(units, 0)} $rawUnitsLabel of ${name(tokenId)}'
+        : '${formatUnits(units, d)} ${name(tokenId)}';
+  }
+
+  /// [units] without the name, for text that already says which side.
+  String number(BigInt units, String? tokenId) {
+    final d = scale(tokenId);
+    return d == null
+        ? '${formatUnits(units, 0)} $rawUnitsLabel'
+        : formatUnits(units, d);
+  }
+
+  /// What an amount field for one side is called.
+  String fieldLabel(String? tokenId) => scale(tokenId) == null
+      ? '${name(tokenId)} ($rawUnitsLabel)'
+      : name(tokenId);
+
   String get pairLabel => '${name(xTokenId)} / ${name(yTokenId)}';
   double get feePercent {
     final n = (raw['fee_num'] as num?)?.toInt() ?? 997;
@@ -123,7 +165,19 @@ class _LiquidityScreenState extends State<LiquidityScreen> with TxReceiptOwner {
   @override
   void initState() {
     super.initState();
+    // Pool tokens are named as the catalog resolves them, after the list.
+    walletService.metadataChanges.addListener(_metadataChanged);
     _loadPools();
+  }
+
+  void _metadataChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    walletService.metadataChanges.removeListener(_metadataChanged);
+    super.dispose();
   }
 
   Future<void> _loadPools({bool force = false}) async {
@@ -206,20 +260,12 @@ class _LiquidityScreenState extends State<LiquidityScreen> with TxReceiptOwner {
         rows: [
           ConfirmTxRow(
             'Deposit ${pool.name(pool.xTokenId)}',
-            _fmt(
-              prepared['x_deposited'],
-              pool.decimals(pool.xTokenId),
-              pool.name(pool.xTokenId),
-            ),
+            pool.amount(_units(prepared['x_deposited']), pool.xTokenId),
             bold: true,
           ),
           ConfirmTxRow(
             'Deposit ${pool.name(pool.yTokenId)}',
-            _fmt(
-              prepared['y_deposited'],
-              pool.decimals(pool.yTokenId),
-              pool.name(pool.yTokenId),
-            ),
+            pool.amount(_units(prepared['y_deposited']), pool.yTokenId),
             bold: true,
           ),
           ConfirmTxRow('LP tokens received', '${prepared['lp_reward']}'),
@@ -271,20 +317,12 @@ class _LiquidityScreenState extends State<LiquidityScreen> with TxReceiptOwner {
           ),
           ConfirmTxRow(
             'You receive',
-            _fmt(
-              prepared['x_received'],
-              pool.decimals(pool.xTokenId),
-              pool.name(pool.xTokenId),
-            ),
+            pool.amount(_units(prepared['x_received']), pool.xTokenId),
             bold: true,
           ),
           ConfirmTxRow(
             'And',
-            _fmt(
-              prepared['y_received'],
-              pool.decimals(pool.yTokenId),
-              pool.name(pool.yTokenId),
-            ),
+            pool.amount(_units(prepared['y_received']), pool.yTokenId),
             bold: true,
           ),
           ConfirmTxRow(
@@ -300,7 +338,7 @@ class _LiquidityScreenState extends State<LiquidityScreen> with TxReceiptOwner {
     }
   }
 
-  static String _fmt(Object? units, int decimals, String name) => '${formatTokenAmountGrouped((units as num).toInt(), decimals)} $name';
+  static BigInt _units(Object? units) => BigInt.from((units as num).toInt());
 
   @override
   Widget build(BuildContext context) {
@@ -366,7 +404,7 @@ class _LiquidityScreenState extends State<LiquidityScreen> with TxReceiptOwner {
                 ],
               ),
             ),
-            _CreateTab(key: ValueKey(walletService.activeWalletId), args: args, tokens: _pools.isEmpty ? const {} : _pools.first.tokens),
+            _CreateTab(key: ValueKey(walletService.activeWalletId), args: args),
           ],
         ),
       ),
@@ -386,11 +424,16 @@ class _PoolCard extends StatelessWidget {
     final theme = Theme.of(context);
     final muted = ArgusColors.of(context).muted;
     final p = pool;
+    // Values wrap under a narrow label rather than overflow: a raw amount
+    // with a short id can be wider than the card.
     Widget row(String label, String value) => Padding(
           padding: const EdgeInsets.symmetric(vertical: 2),
-          child: Row(children: [
-            Expanded(child: Text(label, style: TextStyle(color: muted, fontSize: 12.5))),
-            Text(value, style: monoStyle(context, size: 12.5)),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(label, style: TextStyle(color: muted, fontSize: 12.5)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(value, textAlign: TextAlign.end, style: monoStyle(context, size: 12.5)),
+            ),
           ]),
         );
     final shareBps = held > 0 ? poolShareBps(BigInt.from(held), p.lpCirculating) : 0;
@@ -407,9 +450,9 @@ class _PoolCard extends StatelessWidget {
           const SizedBox(height: 8),
           if (held > 0) ...[
             row('Your share', '${(shareBps / 100).toStringAsFixed(2)}% · $held LP'),
-            row('Worth', '${formatTokenAmountGrouped(xo.toInt(), p.decimals(p.xTokenId))} ${p.name(p.xTokenId)} + ${formatTokenAmountGrouped(yo.toInt(), p.decimals(p.yTokenId))} ${p.name(p.yTokenId)}'),
+            row('Worth', '${p.amount(xo, p.xTokenId)} + ${p.amount(yo, p.yTokenId)}'),
           ],
-          row('Reserves', '${formatTokenAmountGrouped(p.xReserves.toInt(), p.decimals(p.xTokenId))} ${p.name(p.xTokenId)} · ${formatTokenAmountGrouped(p.yReserves.toInt(), p.decimals(p.yTokenId))} ${p.name(p.yTokenId)}'),
+          row('Reserves', '${p.amount(p.xReserves, p.xTokenId)} · ${p.amount(p.yReserves, p.yTokenId)}'),
           const SizedBox(height: 10),
           Wrap(spacing: 8, children: [
             FilledButton.tonal(style: inlineButtonStyle, onPressed: onAdd, child: const Text('Add')),
@@ -489,7 +532,7 @@ class _AddSheetState extends State<_AddSheet> {
             controller: _x,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(labelText: p.name(p.xTokenId), helperText: 'You hold ${formatTokenAmountGrouped(_held(p.xTokenId), p.decimals(p.xTokenId))}'),
+            decoration: InputDecoration(labelText: p.fieldLabel(p.xTokenId), helperText: 'You hold ${p.number(BigInt.from(_held(p.xTokenId)), p.xTokenId)}'),
             onTap: () => _editingX = true,
             onChanged: (_) {
               _editingX = true;
@@ -501,7 +544,7 @@ class _AddSheetState extends State<_AddSheet> {
             key: const Key('lp-y'),
             controller: _y,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(labelText: p.name(p.yTokenId), helperText: 'You hold ${formatTokenAmountGrouped(_held(p.yTokenId), p.decimals(p.yTokenId))}'),
+            decoration: InputDecoration(labelText: p.fieldLabel(p.yTokenId), helperText: 'You hold ${p.number(BigInt.from(_held(p.yTokenId)), p.yTokenId)}'),
             onTap: () => _editingX = false,
             onChanged: (_) {
               _editingX = false;
@@ -553,7 +596,7 @@ class _RemoveSheetState extends State<_RemoveSheet> {
           const SizedBox(height: 8),
           Text('${(_fraction * 100).round()}% · $lp of ${widget.held} LP', style: TextStyle(color: muted)),
           Slider(key: const Key('lp-remove-slider'), value: _fraction, min: 0.01, max: 1, divisions: 99, onChanged: (v) => setState(() => _fraction = v)),
-          Text('You receive about ${formatTokenAmountGrouped(xo.toInt(), p.decimals(p.xTokenId))} ${p.name(p.xTokenId)} and ${formatTokenAmountGrouped(yo.toInt(), p.decimals(p.yTokenId))} ${p.name(p.yTokenId)}.',
+          Text('You receive about ${p.amount(xo, p.xTokenId)} and ${p.amount(yo, p.yTokenId)}.',
               style: TextStyle(color: muted, fontSize: 12.5)),
           const SizedBox(height: 16),
           FilledButton(key: const Key('lp-remove-continue'), onPressed: lp <= 0 ? null : () => Navigator.pop(context, lp), child: const Text('Continue')),
@@ -566,9 +609,8 @@ class _RemoveSheetState extends State<_RemoveSheet> {
 /// Create a pool in two transactions; the second waits for the first to
 /// confirm, so what it needs is remembered on this device in between.
 class _CreateTab extends StatefulWidget {
-  const _CreateTab({super.key, required this.args, required this.tokens});
+  const _CreateTab({super.key, required this.args});
   final WalletRouteArgs args;
-  final Map<String, AmmTokenMeta> tokens;
 
   @override
   State<_CreateTab> createState() => _CreateTabState();
@@ -650,8 +692,24 @@ class _CreateTabState extends State<_CreateTab>
     }
   }
 
-  int _decimals(String? id) => id == null ? 9 : (widget.tokens[id]?.decimals ?? widget.args.tokens.where((t) => t.id == id).firstOrNull?.decimals ?? 0);
-  String _name(String? id) => id == null ? 'ERG' : (widget.args.tokens.where((t) => t.id == id).firstOrNull?.label ?? widget.tokens[id]?.name ?? shorten(id, head: 6, tail: 4));
+  TokenBalance? _heldToken(String? id) =>
+      id == null ? null : widget.args.tokens.where((t) => t.id == id).firstOrNull;
+
+  /// The pool's starting reserves are typed and confirmed in this scale, so
+  /// it has to be the real one: a pool list's zero-decimal placeholder once
+  /// won here, and "150" of a two-decimal token meant 1.50 on chain.
+  int? _scale(String? id) => id == null ? 9 : tokenDecimals(id, held: _heldToken(id));
+  int _decimals(String? id) => _scale(id) ?? 0;
+  String _name(String? id) => id == null ? 'ERG' : tokenLabel(id, held: _heldToken(id));
+
+  /// An amount of one side, labelled raw units when the scale is unknown.
+  String _amount(int units, String? id) => _scale(id) == null
+      ? '${formatUnits(BigInt.from(units), 0)} $rawUnitsLabel of ${_name(id)}'
+      : '${formatUnits(BigInt.from(units), _decimals(id))} ${_name(id)}';
+
+  String _fieldLabel(String? id) => _scale(id) == null
+      ? '${_name(id)} to put in ($rawUnitsLabel)'
+      : '${_name(id)} to put in';
 
   Future<void> _bootstrap() async {
     final y = _yTokenId;
@@ -684,7 +742,7 @@ class _CreateTabState extends State<_CreateTab>
             'step 2 turns that box into the pool. Argus remembers step 2 for you.',
         rows: [
           ConfirmTxRow('Pair', '${_name(_xTokenId)} / ${_name(y)}', bold: true),
-          ConfirmTxRow('First reserves', '${formatTokenAmountGrouped(xUnits, _decimals(_xTokenId))} ${_name(_xTokenId)} + ${formatTokenAmountGrouped(yUnits, _decimals(y))} ${_name(y)}'),
+          ConfirmTxRow('First reserves', '${_amount(xUnits, _xTokenId)} + ${_amount(yUnits, y)}'),
           ConfirmTxRow('Swap fee', '${_feePercent.toStringAsFixed(2)}%'),
           ConfirmTxRow('Your LP share', '${prepared['user_lp_share']} of ${prepared['lp_minted']}'),
           ConfirmTxRow('LP token id', shorten(prepared['lp_token_id'] as String, head: 10, tail: 8)),
@@ -855,7 +913,7 @@ class _CreateTabState extends State<_CreateTab>
           decoration: const InputDecoration(labelText: 'First asset'),
           items: [
             const DropdownMenuItem(value: null, child: Text('ERG')),
-            for (final t in held) DropdownMenuItem(value: t.id, child: Text(t.label, overflow: TextOverflow.ellipsis)),
+            for (final t in held) DropdownMenuItem(value: t.id, child: Text(_name(t.id), overflow: TextOverflow.ellipsis)),
           ],
           onChanged: (v) => setState(() => _xTokenId = v),
         ),
@@ -864,13 +922,13 @@ class _CreateTabState extends State<_CreateTab>
           key: const Key('pool-y'),
           initialValue: _yTokenId,
           decoration: const InputDecoration(labelText: 'Second asset (a token)'),
-          items: [for (final t in held) DropdownMenuItem(value: t.id, child: Text(t.label, overflow: TextOverflow.ellipsis))],
+          items: [for (final t in held) DropdownMenuItem(value: t.id, child: Text(_name(t.id), overflow: TextOverflow.ellipsis))],
           onChanged: (v) => setState(() => _yTokenId = v),
         ),
         const SizedBox(height: 12),
-        TextField(key: const Key('pool-x-amount'), controller: _x, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: '${_name(_xTokenId)} to put in'), onChanged: (_) => setState(() {})),
+        TextField(key: const Key('pool-x-amount'), controller: _x, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: _fieldLabel(_xTokenId)), onChanged: (_) => setState(() {})),
         const SizedBox(height: 12),
-        TextField(key: const Key('pool-y-amount'), controller: _y, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: '${_name(_yTokenId)} to put in'), onChanged: (_) => setState(() {})),
+        TextField(key: const Key('pool-y-amount'), controller: _y, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: _fieldLabel(_yTokenId)), onChanged: (_) => setState(() {})),
         const SizedBox(height: 12),
         Text('Swap fee ${_feePercent.toStringAsFixed(2)}%', style: TextStyle(color: muted)),
         Slider(key: const Key('pool-fee'), value: _feePercent, min: 0.1, max: 5, divisions: 49, onChanged: (v) => setState(() => _feePercent = v)),

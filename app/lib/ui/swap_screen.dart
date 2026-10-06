@@ -11,6 +11,7 @@ import '../format.dart';
 import '../services/amm_service.dart';
 import '../services/swap_rounding.dart';
 import '../services/route_display.dart';
+import '../services/token_metadata.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
@@ -94,11 +95,35 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
           ? _args.changeAddress
           : _args.receiveAddress;
 
-  String _symbol(String? tokenId) =>
-      tokenId == null ? 'ERG' : (_set?.tokens[tokenId]?.name ?? tokenId);
+  /// The wallet's own holding of [tokenId], if any: its published name is
+  /// the fallback when no layer of the lookup knows the token.
+  TokenBalance? _held(String? tokenId) {
+    if (tokenId == null) return null;
+    for (final t in _args.tokens) {
+      if (t.id == tokenId) return t;
+    }
+    return null;
+  }
 
-  int _decimals(String? tokenId) =>
-      tokenId == null ? 9 : (_set?.tokens[tokenId]?.decimals ?? 0);
+  /// What the asset is called, from the one token lookup — the same name
+  /// the asset list shows, whether or not the token is held.
+  String _symbol(String? tokenId) => tokenId == null
+      ? 'ERG'
+      : tokenLabel(tokenId, held: _held(tokenId));
+
+  /// Decimals for parsing and formatting; zero for a token whose scale no
+  /// layer knows, whose amounts are then raw units (see [_unit]).
+  int _decimals(String? tokenId) => tokenId == null
+      ? 9
+      : (tokenDecimals(tokenId, held: _held(tokenId)) ?? 0);
+
+  /// What follows an amount of the asset: its name, or — when its decimals
+  /// are unknown — "raw units of" it, so base units are never passed off as
+  /// whole tokens.
+  String _unit(String? tokenId) => tokenId == null ||
+          tokenDecimals(tokenId, held: _held(tokenId)) != null
+      ? _symbol(tokenId)
+      : '$rawUnitsLabel of ${_symbol(tokenId)}';
 
   /// Wallet balance for an asset; null = ERG spendable.
   BigInt? _balanceFor(String? tokenId) {
@@ -205,12 +230,19 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
   @override
   void initState() {
     super.initState();
+    // Names resolve after the pool list lands; show each as it arrives.
+    walletService.metadataChanges.addListener(_metadataChanged);
     _loadPools();
     _poolRefresh = Timer.periodic(poolRefreshEvery, (_) => _loadPools());
   }
 
+  void _metadataChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
+    walletService.metadataChanges.removeListener(_metadataChanged);
     _poolRefresh?.cancel();
     _quoteDebounce?.cancel();
     _amountCtrl.dispose();
@@ -378,16 +410,16 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
         preparationId: build.preparationId,
         title: 'Swap ${_symbol(_fromToken)} → ${_symbol(_toToken)}',
         rows: [
-          swapInputRow(build, symbol: _symbol(_fromToken), decimals: _decimals(_fromToken)),
+          swapInputRow(build, symbol: _unit(_fromToken), decimals: _decimals(_fromToken)),
           ConfirmTxRow(
             'You receive',
             '${formatTokenAmount(build.outputAmount, _decimals(_toToken))} '
-            '${_symbol(_toToken)}',
+            '${_unit(_toToken)}',
           ),
           ConfirmTxRow(
             'Minimum received',
             '${formatTokenAmount(build.minOutput, _decimals(_toToken))} '
-            '${_symbol(_toToken)}',
+            '${_unit(_toToken)}',
           ),
           ConfirmTxRow(
             'Price impact',
@@ -556,7 +588,7 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
         TextFormField(
           controller: _amountCtrl,
           decoration: InputDecoration(
-            labelText: 'You pay (${_symbol(_fromToken)})',
+            labelText: 'You pay (${_unit(_fromToken)})',
             helperText: fromBal == null
                 ? null
                 : 'Balance ${_fmtAmount(fromBal, _decimals(_fromToken))}',
@@ -578,7 +610,7 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
         TextFormField(
           controller: _toAmountCtrl,
           decoration: InputDecoration(
-            labelText: 'You want (${_symbol(_toToken)})',
+            labelText: 'You want (${_unit(_toToken)})',
             helperText: 'Optional — we derive what to pay',
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
@@ -608,14 +640,14 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
         else ...[
           Text(swapQuoteLabel(
             _quote!,
-            outputSymbol: _symbol(_toToken),
+            outputSymbol: _unit(_toToken),
             outputDecimals: _decimals(_toToken),
           )),
           const SizedBox(height: 4),
           Text(
             'Minimum received '
             '${formatTokenAmount(_quote!.minOutput, _decimals(_toToken))} '
-            '${_symbol(_toToken)}',
+            '${_unit(_toToken)}',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           if (impactWarning(_quote!.priceImpactPct) case final warning?)
@@ -656,8 +688,8 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
 
   /// "1 ERG buys 1 DexyGold; 0.5397 ERG buys the same. Pay that instead"
   Widget _roundingNote(BuildContext context, SwapRounding r) {
-    final from = _symbol(_fromToken);
-    final to = _symbol(_toToken);
+    final from = _unit(_fromToken);
+    final to = _unit(_toToken);
     final exact = _fmtAmount(BigInt.from(r.exactInput), _decimals(_fromToken));
     final left = _fmtAmount(BigInt.from(r.leftover), _decimals(_fromToken));
     return Row(
@@ -678,7 +710,13 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
   Widget _depthCard(Map<String, dynamic> pool, int poolCount) {
     final sides = poolSides(pool);
     String side((String?, BigInt) s) =>
-        '${_fmtAmount(s.$2, _decimals(s.$1))} ${_symbol(s.$1)}';
+        '${_fmtAmount(s.$2, _decimals(s.$1))} ${_unit(s.$1)}';
+    // The rate is per one unit of what is paid: a whole token when its
+    // decimals are known, one raw unit when they are not.
+    final perOne = _fromToken == null ||
+            tokenDecimals(_fromToken!, held: _held(_fromToken)) != null
+        ? '1 ${_symbol(_fromToken)}'
+        : '1 raw unit of ${_symbol(_fromToken)}';
     final rIn = sides.firstWhere((s) => s.$1 == _fromToken).$2;
     final rOut = sides.firstWhere((s) => s.$1 == _toToken).$2;
     // Rate per one whole FROM unit, expressed in TO raw units so the TO
@@ -705,9 +743,9 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
                   style: Theme.of(context).textTheme.bodySmall),
               Flexible(
                 child: Text(
-                  '1 ${_symbol(_fromToken)} ≈ '
+                  '$perOne ≈ '
                   '${_fmtAmount(rate > BigInt.zero ? rate : BigInt.zero, _decimals(_toToken))} '
-                  '${_symbol(_toToken)}'
+                  '${_unit(_toToken)}'
                   '${verifiedIn ? '' : ' · unverified token'}',
                   overflow: TextOverflow.ellipsis,
                 ),
@@ -829,37 +867,55 @@ class SwapAssetPickerSheetState extends State<SwapAssetPickerSheet> {
   String _query = '';
 
   @override
+  void initState() {
+    super.initState();
+    walletService.metadataChanges.addListener(_metadataChanged);
+  }
+
+  void _metadataChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    walletService.metadataChanges.removeListener(_metadataChanged);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final tokens = widget.set?.tokens ?? const {};
-    final poolIds = <String>{for (final id in tokens.keys) id};
+    // Which tokens the pools trade comes from the pools themselves: the
+    // token map holds only the ones something has named.
+    final poolIds = widget.set?.tokenIds ?? const <String>{};
+    final held = {for (final t in widget.heldTokens) t.id: t};
 
     final verified =
         verifiedTokenLabels().keys.where(poolIds.contains).toList();
     final rest = poolIds.where((id) => !verified.contains(id)).toList()..sort();
 
-    String symbol(String? id) =>
-        id == null ? 'ERG' : (tokens[id]?.name ?? id);
-
-    /// What the row actually shows. A holding with no pool entry has no name
-    /// in `tokens`, so it falls back to the label the holding carries — and
-    /// search has to look at the same text, or a token visible by name
-    /// disappears when that name is typed.
-    String displayName(String? id) {
-      if (id == null) return 'ERG';
-      final meta = tokens[id];
-      if (meta != null) return meta.name;
-      for (final t in widget.heldTokens) {
-        if (t.id == id) return t.label;
-      }
-      return id;
-    }
+    /// What the row shows: the one token lookup's name, the same the asset
+    /// list uses, with the holding's own label as the fallback. Search
+    /// looks at the same text, or a token visible by name would disappear
+    /// when that name is typed.
+    String displayName(String? id) =>
+        id == null ? 'ERG' : tokenLabel(id, held: held[id]);
 
     bool matches(String? id) {
       if (_query.isEmpty) return true;
       final q = _query.toLowerCase();
       return displayName(id).toLowerCase().contains(q) ||
-          symbol(id).toLowerCase().contains(q) ||
           (id?.toLowerCase().contains(q) ?? false);
+    }
+
+    /// A balance in the token's own scale, or labelled as raw units when no
+    /// layer knows its decimals.
+    String balanceText(String? id, BigInt balance) {
+      final units = balance <= BigInt.from(0x7FFFFFFFFFFFFFFF) ? balance : BigInt.zero;
+      if (id == null) return formatTokenAmount(units.toInt(), 9);
+      final decimals = tokenDecimals(id, held: held[id]);
+      return decimals == null
+          ? '${formatUnits(units, 0)} $rawUnitsLabel'
+          : formatTokenAmount(units.toInt(), decimals);
     }
 
     final showErg = matches(null);
@@ -902,11 +958,7 @@ class SwapAssetPickerSheetState extends State<SwapAssetPickerSheet> {
         subtitle: noPool
             ? const Text('No Spectrum pool')
             : balance != null
-            ? Text(formatTokenAmount(
-                balance <= BigInt.from(0x7FFFFFFFFFFFFFFF)
-                    ? balance.toInt()
-                    : 0,
-                id == null ? 9 : (tokens[id]?.decimals ?? 0)))
+            ? Text(balanceText(id, balance))
             : (isVerified ? const Text('Verified') : null),
         trailing: isVerified
             ? Icon(Icons.verified_outlined, size: 18, color: moss)
