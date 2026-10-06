@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Background mixing: lets the user exempt Argus from battery optimisation from inside the app. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+    <!-- Opt-in update check: lets Argus hand a downloaded, signature-checked APK
+         to the system installer. Android still asks the user to allow it for
+         Argus, and nothing is installed without the installer's own prompt. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <application
         android:label="Argus"
         android:name="${applicationName}"
@@ -42,6 +46,17 @@
                 <data android:scheme="ergopay"/>
             </intent-filter>
         </activity>
+        <!-- Shares the verified update APK (cache/updates only) with the system
+             installer. Not exported: access is granted per intent. -->
+        <provider
+            android:name=".UpdateFileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_file_paths" />
+        </provider>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

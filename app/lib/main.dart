@@ -12,6 +12,7 @@ import 'services/token_pricer.dart';
 import 'services/session_lock.dart';
 import 'services/spend_policy.dart';
 import 'services/stealth_service.dart';
+import 'services/update_service.dart';
 import 'services/watch_only_service.dart';
 import 'services/wallet_service.dart';
 import 'services/wallet_sync_controller.dart';
@@ -63,6 +64,8 @@ Future<void> main() async {
   networkController.priceRefresher = tokenPricer.refresh;
   await MixBackground.init();
   runApp(const ArgusApp());
+  // Off until the user turns it on in About; then at most one request a day.
+  updateService.checkOnStart().catchError((_) {});
 }
 
 class ArgusApp extends StatefulWidget {

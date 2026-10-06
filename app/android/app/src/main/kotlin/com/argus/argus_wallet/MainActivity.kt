@@ -27,6 +27,7 @@ class MainActivity : FlutterFragmentActivity() {
         SecureStorageHandler.registerWith(flutterEngine, this)
         DeepLinkHandler.registerWith(flutterEngine, intent)
         BatteryHandler.registerWith(flutterEngine, this)
+        UpdateHandler.registerWith(flutterEngine, this)
     }
 
     override fun onNewIntent(intent: Intent) {
