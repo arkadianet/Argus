@@ -120,10 +120,12 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
   /// What follows an amount of the asset: its name, or — when its decimals
   /// are unknown — "raw units of" it, so base units are never passed off as
   /// whole tokens.
-  String _unit(String? tokenId) => tokenId == null ||
-          tokenDecimals(tokenId, held: _held(tokenId)) != null
+  String _unit(String? tokenId) => _scaleKnown(tokenId)
       ? _symbol(tokenId)
       : '$rawUnitsLabel of ${_symbol(tokenId)}';
+
+  bool _scaleKnown(String? tokenId) =>
+      tokenId == null || tokenDecimals(tokenId, held: _held(tokenId)) != null;
 
   /// Wallet balance for an asset; null = ERG spendable.
   BigInt? _balanceFor(String? tokenId) {
@@ -589,9 +591,13 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
           controller: _amountCtrl,
           decoration: InputDecoration(
             labelText: 'You pay (${_unit(_fromToken)})',
+            // The helper wraps where the label cannot, so the raw-units
+            // notice survives large text.
             helperText: fromBal == null
                 ? null
-                : 'Balance ${_fmtAmount(fromBal, _decimals(_fromToken))}',
+                : 'Balance ${_fmtAmount(fromBal, _decimals(_fromToken))}'
+                    '${_scaleKnown(_fromToken) ? '' : ' $rawUnitsLabel'}',
+            helperMaxLines: 2,
             suffixIcon: TextButton(
               onPressed:
                   fromBal == null || fromBal <= BigInt.zero ? null : _applyMax,
@@ -611,7 +617,10 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
           controller: _toAmountCtrl,
           decoration: InputDecoration(
             labelText: 'You want (${_unit(_toToken)})',
-            helperText: 'Optional — we derive what to pay',
+            helperText: _scaleKnown(_toToken)
+                ? 'Optional — we derive what to pay'
+                : 'In raw units. Optional — we derive what to pay',
+            helperMaxLines: 3,
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true),
           onChanged: (text) {
@@ -717,8 +726,7 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
         '${_fmtAmount(s.$2, _decimals(s.$1))} ${_unit(s.$1)}';
     // The rate is per one unit of what is paid: a whole token when its
     // decimals are known, one raw unit when they are not.
-    final perOne = _fromToken == null ||
-            tokenDecimals(_fromToken!, held: _held(_fromToken)) != null
+    final perOne = _scaleKnown(_fromToken)
         ? '1 ${_symbol(_fromToken)}'
         : '1 raw unit of ${_symbol(_fromToken)}';
     final rIn = sides.firstWhere((s) => s.$1 == _fromToken).$2;

@@ -700,9 +700,16 @@ class _CreateTabState extends State<_CreateTab>
   String _amount(int units, String? id) =>
       unitsWithLabel(BigInt.from(units), _scale(id), _name(id));
 
-  String _fieldLabel(String? id) => _scale(id) == null
-      ? '${_name(id)} to put in ($rawUnitsLabel)'
-      : '${_name(id)} to put in';
+  /// A field for one side's amount. The raw-units notice is in the helper
+  /// line, which wraps, so large text cannot cut it off the way it cuts a
+  /// label.
+  InputDecoration _fieldDecoration(String? id) => InputDecoration(
+    labelText: '${_name(id)} to put in',
+    helperText: _scale(id) == null
+        ? 'In raw units: nothing knows this token\'s decimals'
+        : null,
+    helperMaxLines: 3,
+  );
 
   Future<void> _bootstrap() async {
     final y = _yTokenId;
@@ -919,9 +926,9 @@ class _CreateTabState extends State<_CreateTab>
           onChanged: (v) => setState(() => _yTokenId = v),
         ),
         const SizedBox(height: 12),
-        TextField(key: const Key('pool-x-amount'), controller: _x, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: _fieldLabel(_xTokenId)), onChanged: (_) => setState(() {})),
+        TextField(key: const Key('pool-x-amount'), controller: _x, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: _fieldDecoration(_xTokenId), onChanged: (_) => setState(() {})),
         const SizedBox(height: 12),
-        TextField(key: const Key('pool-y-amount'), controller: _y, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: _fieldLabel(_yTokenId)), onChanged: (_) => setState(() {})),
+        TextField(key: const Key('pool-y-amount'), controller: _y, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: _fieldDecoration(_yTokenId), onChanged: (_) => setState(() {})),
         const SizedBox(height: 12),
         Text('Swap fee ${_feePercent.toStringAsFixed(2)}%', style: TextStyle(color: muted)),
         Slider(key: const Key('pool-fee'), value: _feePercent, min: 0.1, max: 5, divisions: 49, onChanged: (v) => setState(() => _feePercent = v)),
