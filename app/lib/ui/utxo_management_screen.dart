@@ -1072,11 +1072,16 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
         '$atRisk ${atRisk == 1 ? 'box' : 'boxes'} at risk of collection',
       if (soon > 0) '$soon due within $rentSoonDays days',
     ];
+    final missing = report.unmeasured;
+    final unmeasured = missing == 0
+        ? ''
+        : ' $missing ${missing == 1 ? 'box' : 'boxes'} could not be measured.';
     return Text(
       parts.isEmpty
-          ? 'Storage rent: nothing due within $rentSoonDays days, and every box covers its rent. '
-              'Rate ${report.parameters.rateLabel}.'
-          : 'Storage rent: ${parts.join(' · ')}. Rate ${report.parameters.rateLabel}.',
+          ? 'Storage rent: nothing due within $rentSoonDays days, and every '
+              '${missing == 0 ? '' : 'measured '}box covers its rent. '
+              'Rate ${report.parameters.rateLabel}.$unmeasured'
+          : 'Storage rent: ${parts.join(' · ')}. Rate ${report.parameters.rateLabel}.$unmeasured',
       style: parts.isEmpty
           ? style
           : style?.copyWith(color: rustFor(context), fontWeight: FontWeight.w500),

@@ -145,7 +145,11 @@ class BoxRent {
 
 /// Rent for every box the node listed, keyed by box id.
 class RentReport {
-  const RentReport({required this.parameters, required this.boxes});
+  const RentReport({
+    required this.parameters,
+    required this.boxes,
+    this.unmeasured = 0,
+  });
 
   factory RentReport.fromJson(Map<String, dynamic> json) {
     final boxes = <String, BoxRent>{};
@@ -157,11 +161,16 @@ class RentReport {
     return RentReport(
       parameters: RentParameters.fromJson(json),
       boxes: Map.unmodifiable(boxes),
+      unmeasured: _int(json['unmeasured']),
     );
   }
 
   final RentParameters parameters;
   final Map<String, BoxRent> boxes;
+
+  /// Boxes the node listed that the core could not parse, so has no
+  /// figures for.
+  final int unmeasured;
 
   int get atRiskCount => boxes.values.where((b) => b.atRisk).length;
   int get dueSoonCount => boxes.values.where((b) => b.dueSoon).length;

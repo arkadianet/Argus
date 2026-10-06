@@ -42,6 +42,8 @@ class UtxoToolsController extends ChangeNotifier {
 
   void setRent(Map<String, BoxRent> rent) {
     _rent = Map.unmodifiable(rent);
+    // Without a report the Rent chip is gone, so its filter must not linger.
+    if (rent.isEmpty && filter == UtxoFilter.rent) filter = UtxoFilter.all;
     notifyListeners();
   }
 

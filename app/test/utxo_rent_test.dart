@@ -223,5 +223,9 @@ void main() {
     tools.setFilter(UtxoFilter.rent);
     expect(tools.filtered.map((b) => b.boxId), ['a', 'c']);
     expect(tools.rentFlaggedCount, 2);
+    // A failed refresh hides the Rent chip, so its filter cannot linger.
+    tools.setRent(const {});
+    expect(tools.filter, UtxoFilter.all);
+    expect(tools.filtered, hasLength(3));
   });
 }

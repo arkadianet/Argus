@@ -76,7 +76,8 @@ pub async fn rent_parameters(node_url: Option<String>) -> Result<String, String>
 /// Rent position of every confirmed unspent box at `addresses`, judged at
 /// the node's tip: the [`rent_parameters`] fields plus `boxes`, one entry
 /// per box with its exact serialized size, the node's fee, what a collector
-/// could take (`charge`: `fee`, `whole_box` or `none`) and when.
+/// could take (`charge`: `fee`, `whole_box` or `none`) and when, and
+/// `unmeasured`, the boxes the node listed that the core could not parse.
 #[flutter_rust_bridge::frb]
 pub async fn box_rent_report(
     addresses: Vec<String>,
@@ -84,23 +85,31 @@ pub async fn box_rent_report(
 ) -> Result<String, String> {
     let client = node_client(node_url).await?;
     let basis = basis(&client).await?;
-    let per_address: Vec<Vec<ErgoBox>> = stream::iter(addresses.iter().filter(|a| !a.is_empty()))
-        .map(|address| unspent_at(&client, address))
+    // Owned addresses and a client per future keep the stream `Send`, as
+    // the bridge's async runtime requires.
+    let wanted: Vec<String> = addresses.into_iter().filter(|a| !a.is_empty()).collect();
+    let per_address: Vec<Listing> = stream::iter(wanted)
+        .map(|address| {
+            let client = client.clone();
+            async move { unspent_at(&client, &address).await }
+        })
         .buffered(ADDRESS_CONCURRENCY)
         .try_collect()
         .await?;
     let mut seen = HashSet::new();
     let mut rows = Vec::new();
-    for ergo_box in per_address.into_iter().flatten() {
-        if rows.len() >= MAX_BOXES {
-            break;
-        }
-        if seen.insert(ergo_box.box_id()) {
-            rows.push(report_row(&ergo_box, &basis)?);
+    let mut unmeasured = 0;
+    for listing in per_address {
+        unmeasured += listing.unmeasured;
+        for ergo_box in listing.boxes {
+            if rows.len() < MAX_BOXES && seen.insert(ergo_box.box_id()) {
+                rows.push(report_row(&ergo_box, &basis)?);
+            }
         }
     }
     let mut out = basis.json();
     out["boxes"] = serde_json::Value::Array(rows);
+    out["unmeasured"] = unmeasured.into();
     Ok(out.to_string())
 }
 
@@ -136,19 +145,39 @@ pub fn output_rent_estimate(
     .to_string())
 }
 
-/// Every confirmed unspent box at `address`, page by page.
-async fn unspent_at(client: &ErgoNodeClient, address: &str) -> Result<Vec<ErgoBox>, String> {
-    let mut all = Vec::new();
+/// One address's confirmed unspent boxes.
+struct Listing {
+    boxes: Vec<ErgoBox>,
+    /// Boxes the node listed that ergo-lib could not parse, so could not be
+    /// measured. Reported rather than dropped silently.
+    unmeasured: usize,
+}
+
+/// Every confirmed unspent box at `address`, page by page. Pages are read
+/// as raw JSON so a box the core cannot parse still counts toward the page
+/// and cannot end the listing early.
+async fn unspent_at(client: &ErgoNodeClient, address: &str) -> Result<Listing, String> {
+    let tree = address_to_ergo_tree(address)
+        .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
+    let mut listing = Listing {
+        boxes: Vec::new(),
+        unmeasured: 0,
+    };
     let mut offset = 0u64;
     loop {
         let page = client
-            .unspent_boxes_by_address(address, offset, PAGE)
+            .unspent_boxes_by_ergo_tree(&tree, offset, PAGE)
             .await
             .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
         let n = page.len();
-        all.extend(page);
-        if n < PAGE as usize || all.len() >= MAX_BOXES {
-            return Ok(all);
+        for item in page {
+            match serde_json::from_value::<ErgoBox>(item) {
+                Ok(b) => listing.boxes.push(b),
+                Err(_) => listing.unmeasured += 1,
+            }
+        }
+        if n < PAGE as usize || listing.boxes.len() + listing.unmeasured >= MAX_BOXES {
+            return Ok(listing);
         }
         offset += PAGE;
     }
@@ -206,6 +235,10 @@ mod tests {
 
     const P2PK: &str = crate::api::ARGUS_FEE_ADDRESS;
 
+    /// A mainnet oracle box as the node returns it (438 bytes; see
+    /// `wallet_core::rent` tests).
+    const ORACLE_BOX: &str = r#"{"boxId":"79b67d3adc64450e2b3c836d4a0d4f375205e09aa16e45325f922a2af9fe6608","value":10000000,"ergoTree":"100a040004000580dac409040004000e20f7f008ad8fcaad4490d8e78ab6d3f11efe7213a13f7b243795818b155e1acc920402040204020402d804d601b2a5e4e3000400d602db63087201d603db6308a7d604e4c6a70407ea02d1ededed93b27202730000b2720373010093c27201c2a7e6c67201040792c172017302eb02cd7204d1ededededed938cb2db6308b2a4730300730400017305938cb27202730600018cb2720373070001918cb27202730800028cb272037309000293e4c672010407720492c17201c1a7efe6c672010561","assets":[{"tokenId":"e5abaf1f0a9442123104cdf4d2d56ddd8065803e842bc6d433e712601133a9bc","amount":1},{"tokenId":"05965018a4525add81bdf6feb6dc4621dcef6789802fa53cebe39505a3b8588d","amount":15835}],"creationHeight":1865321,"additionalRegisters":{"R4":"0703bda2691a9f1a2adf122741390847e7dae2c75bd2eb3a0dc896388d4ec3e9577b","R5":"04fada01","R6":"1115a0d98ad91280eee7c2de04e0b19cb205f6f30af68c1bea378c10a0e5b901f8b406e0efcade39e0a389f08f03c0d0b44080baae06e0ca995bc099ab57c0fae30280dfd41196b4208a83dcae22f2b05100"},"transactionId":"441dc8526ac98cca5d83af1ba6166d56c4f47126a90ac5720881f9680f74a267","index":3}"#;
+
     fn estimate(address: &str, value: i64, tokens: &str) -> serde_json::Value {
         serde_json::from_str(
             &output_rent_estimate(address.into(), value, tokens.into(), 1_600_000, 1_250_000)
@@ -252,7 +285,7 @@ mod tests {
 
     #[test]
     fn report_rows_carry_size_fee_and_due_height() {
-        let json = r#"{"boxId":"79b67d3adc64450e2b3c836d4a0d4f375205e09aa16e45325f922a2af9fe6608","value":10000000,"ergoTree":"100a040004000580dac409040004000e20f7f008ad8fcaad4490d8e78ab6d3f11efe7213a13f7b243795818b155e1acc920402040204020402d804d601b2a5e4e3000400d602db63087201d603db6308a7d604e4c6a70407ea02d1ededed93b27202730000b2720373010093c27201c2a7e6c67201040792c172017302eb02cd7204d1ededededed938cb2db6308b2a4730300730400017305938cb27202730600018cb2720373070001918cb27202730800028cb272037309000293e4c672010407720492c17201c1a7efe6c672010561","assets":[{"tokenId":"e5abaf1f0a9442123104cdf4d2d56ddd8065803e842bc6d433e712601133a9bc","amount":1},{"tokenId":"05965018a4525add81bdf6feb6dc4621dcef6789802fa53cebe39505a3b8588d","amount":15835}],"creationHeight":1865321,"additionalRegisters":{"R4":"0703bda2691a9f1a2adf122741390847e7dae2c75bd2eb3a0dc896388d4ec3e9577b","R5":"04fada01","R6":"1115a0d98ad91280eee7c2de04e0b19cb205f6f30af68c1bea378c10a0e5b901f8b406e0efcade39e0a389f08f03c0d0b44080baae06e0ca995bc099ab57c0fae30280dfd41196b4208a83dcae22f2b05100"},"transactionId":"441dc8526ac98cca5d83af1ba6166d56c4f47126a90ac5720881f9680f74a267","index":3}"#;
+        let json = ORACLE_BOX;
         let ergo_box: ErgoBox = serde_json::from_str(json).unwrap();
         let basis = Basis::from(RentParameters {
             height: 2_916_520,
@@ -273,5 +306,67 @@ mod tests {
         assert_eq!(row["due_height"], 2_916_521);
         assert_eq!(row["blocks_until_due"], 1);
         assert_eq!(row["collectable_now"], true);
+    }
+
+    /// A node that answers `/info` and pages unspent boxes: 100 entries it
+    /// cannot parse on the first page, the oracle box on the second.
+    fn replay_node() -> (String, std::sync::Arc<std::sync::atomic::AtomicBool>) {
+        use std::io::{Read, Write};
+        use std::sync::atomic::Ordering;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stopped = stop.clone();
+        std::thread::spawn(move || {
+            while !stopped.load(Ordering::Relaxed) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    continue;
+                };
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                    .unwrap();
+                let mut buffer = [0; 8192];
+                let n = stream.read(&mut buffer).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..n]);
+                let reply = if request.contains("/blockchain/box/unspent/byErgoTree") {
+                    if request.contains("offset=0&") {
+                        let junk = serde_json::json!({"boxId": "00".repeat(32), "value": 1});
+                        serde_json::Value::Array(vec![junk; 100]).to_string()
+                    } else {
+                        format!("[{ORACLE_BOX}]")
+                    }
+                } else {
+                    r#"{"fullHeight":2916520,"headersHeight":2916520,"parameters":{"storageFeeFactor":1250000}}"#.to_string()
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        (url, stop)
+    }
+
+    #[tokio::test]
+    async fn report_pages_past_unparseable_boxes_and_counts_them() {
+        let (url, stop) = replay_node();
+        let raw = box_rent_report(vec![P2PK.into(), String::new()], Some(url))
+            .await
+            .unwrap();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let report: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(report["height"], 2_916_520);
+        assert_eq!(report["storage_fee_factor"], 1_250_000);
+        assert_eq!(report["factor_from_node"], true);
+        assert_eq!(report["unmeasured"], 100);
+        let boxes = report["boxes"].as_array().unwrap();
+        assert_eq!(boxes.len(), 1);
+        assert_eq!(boxes[0]["size_bytes"], 438);
+        assert_eq!(boxes[0]["charge"], "whole_box");
+        assert_eq!(boxes[0]["collectable_now"], true);
     }
 }

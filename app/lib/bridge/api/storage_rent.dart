@@ -7,7 +7,7 @@ import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `basis`, `json`, `parse_tokens`, `recipient_tree`, `report_row`, `unspent_at`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Basis`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Basis`, `Listing`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
 
 /// The chain tip and the storage fee factor to judge rent by, from the
@@ -20,7 +20,8 @@ Future<String> rentParameters({String? nodeUrl}) =>
 /// Rent position of every confirmed unspent box at `addresses`, judged at
 /// the node's tip: the [`rent_parameters`] fields plus `boxes`, one entry
 /// per box with its exact serialized size, the node's fee, what a collector
-/// could take (`charge`: `fee`, `whole_box` or `none`) and when.
+/// could take (`charge`: `fee`, `whole_box` or `none`) and when, and
+/// `unmeasured`, the boxes the node listed that the core could not parse.
 Future<String> boxRentReport({
   required List<String> addresses,
   String? nodeUrl,

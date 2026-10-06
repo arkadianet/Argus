@@ -36,6 +36,7 @@ class RentApi extends RustLibApi {
     'height': 1600000,
     'storage_fee_factor': 1250000,
     'factor_from_node': true,
+    'unmeasured': 2,
     'boxes': [
       row('old', value: 1000000, blocksUntilDue: -5, charge: 'whole_box'),
       row('soon', value: 5000000000, blocksUntilDue: 21600, charge: 'fee'),
@@ -137,6 +138,7 @@ void main() {
       expect(report.boxes['huge']!.flagged, isFalse);
       expect(report.atRiskCount, 1);
       expect(report.dueSoonCount, 2);
+      expect(report.unmeasured, 2);
     });
 
     test('rate and overflow follow the factor', () {
