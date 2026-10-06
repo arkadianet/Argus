@@ -125,6 +125,7 @@ void main() {
     test('report rows classify risk and urgency', () async {
       final report = await StorageRentService().report(['a'], nodeUrl: 'n');
       expect(report.parameters.height, 1600000);
+      expect(report.parameters.blockSeconds, 120);
       expect(report.parameters.factorFromNode, isTrue);
       final old = report.boxes['old']!;
       expect(old.atRisk, isTrue);
@@ -176,6 +177,8 @@ void main() {
       expect(rentWhen(rentSoonBlocks, now: now), 'in ~30 days');
       // 1,051,200 blocks of 2 minutes: four 365-day years ahead.
       expect(rentWhen(rentPeriodBlocks, now: now), '~Oct 2030');
+      // Dated by the core's block interval when it gives one.
+      expect(rentWhen(21600, now: now, blockSeconds: 60), 'in ~15 days');
     });
   });
 

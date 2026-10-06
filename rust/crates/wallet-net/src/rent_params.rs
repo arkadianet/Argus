@@ -37,6 +37,10 @@ pub fn parse_rent_parameters(info: &serde_json::Value) -> Result<RentParameters,
 }
 
 /// `GET {node_url}/info`, parsed as [`RentParameters`].
+///
+/// `ErgoNodeClient::parameters` reads the same endpoint for transaction
+/// reduction but keeps only the voted parameters; rent needs the tip from
+/// the same response, so both come from this one read.
 pub async fn fetch_rent_parameters(node_url: &str) -> Result<RentParameters, String> {
     let url = format!("{}/info", node_url.trim_end_matches('/'));
     let client = reqwest::Client::builder()

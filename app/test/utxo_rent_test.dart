@@ -214,6 +214,97 @@ void main() {
     });
   });
 
+  group('cleanup viability', () {
+    const parameters = RentParameters(
+      height: 1900000,
+      storageFeeFactor: 1250000,
+      factorFromNode: true,
+    );
+    OutputRentEstimate measured(int value, {required bool covered}) =>
+        OutputRentEstimate(
+          valueNano: value,
+          dueHeight: 2951200,
+          suggestedNano: 150000000,
+          boxes: [
+            OutputBoxRent(
+              valueNano: value,
+              tokenCount: 4,
+              sizeBytes: 209,
+              feeNano: 261250000,
+              charge: covered ? RentCharge.fee : RentCharge.wholeBox,
+            ),
+          ],
+          parameters: parameters,
+        );
+    final nfts = [
+      for (var i = 0; i < 4; i++)
+        box(
+          'n$i',
+          nano: 1000000,
+          assets: [InputAsset(tokenId: 'nft$i', amount: BigInt.one)],
+        ),
+    ];
+    final atRisk = {
+      for (final b in nfts) b.boxId: rent(b.boxId, charge: RentCharge.wholeBox),
+    };
+
+    test('a rent cleanup must leave a box that covers its rent', () {
+      // Four 0.001 ERG NFT boxes and nothing to fund them: merging would
+      // spend fees and gather every NFT into one box still taken whole.
+      final s = suggestCleanup(boxes: nfts, rent: atRisk)!;
+      expect(s.forRent, isTrue);
+      expect(cleanupIsViable(s, measured(1800000, covered: false)), isFalse);
+      expect(
+        suggestCleanup(
+          boxes: nfts,
+          rent: atRisk,
+          viable: (c) => cleanupIsViable(c, measured(1800000, covered: false)),
+        ),
+        isNull,
+      );
+      expect(cleanupIsViable(s, measured(1800000, covered: true)), isTrue);
+      expect(cleanupIsViable(s, null), isTrue);
+    });
+
+    test('the merged value must fund every box the tokens need', () {
+      final s = suggestCleanup(boxes: nfts, rent: atRisk)!;
+      expect(s.afterFeesNano, BigInt.from(1800000));
+      // The builder would raise the layout to 2 mERG of floors.
+      expect(cleanupIsViable(s, measured(2000000, covered: true)), isFalse);
+    });
+
+    test('a cleanup for box count alone may leave rent to the review', () {
+      final boxes = [
+        for (var i = 0; i < 81; i++) box('d$i', nano: 2000000, height: i + 1),
+      ];
+      final s = suggestCleanup(boxes: boxes)!;
+      expect(s.forRent, isFalse);
+      expect(cleanupIsViable(s, measured(1, covered: false)), isTrue);
+    });
+
+    test('a turned-down address gives way to the next', () {
+      final boxes = [
+        box('a1', address: 'A', nano: 1000000, assets: nfts.first.assets),
+        box('a2', address: 'A', nano: 1000000, assets: nfts.last.assets),
+        box('a3', address: 'A', nano: 2000000),
+        box('b1', address: 'B', nano: 1000000, assets: nfts[1].assets),
+        box('b2', address: 'B', nano: 9000000000),
+      ];
+      final rents = {
+        for (final id in ['a1', 'a2', 'b1'])
+          id: rent(id, charge: RentCharge.wholeBox),
+      };
+      expect(suggestCleanup(boxes: boxes, rent: rents)!.address, 'A');
+      final s = suggestCleanup(
+        boxes: boxes,
+        rent: rents,
+        viable: (c) => c.address != 'A',
+      )!;
+      expect(s.address, 'B');
+      expect(s.boxIds, ['b1', 'b2']);
+    });
+  });
+
   test('the rent filter keeps flagged boxes only', () {
     final tools = UtxoToolsController()
       ..setBoxes([box('a'), box('b'), box('c')]);
@@ -286,12 +377,12 @@ void main() {
     testWidgets('mentions tokens only when a box holds some', (tester) async {
       expect(
         await line(tester, at(5000, RentCharge.wholeBox)),
-        'At risk: its 0.09625 ERG rent is more than it holds. From block '
+        'At risk: it holds no more than its 0.09625 ERG rent. From block '
         '1,905,000 (in ~7 days) it can be collected whole.',
       );
       expect(
         await line(tester, at(-10, RentCharge.wholeBox), hasTokens: true),
-        'At risk: its 0.09625 ERG rent is more than it holds, so it can be '
+        'At risk: it holds no more than its 0.09625 ERG rent, so it can be '
         'collected now, tokens included.',
       );
     });

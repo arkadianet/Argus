@@ -159,12 +159,13 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     _maybeOpenCleanup();
   }
 
-  /// Boxes a cleanup must leave where they are: mixed coins, funding set
-  /// aside for a pending mix, and boxes already spent from this screen.
-  Set<String> get _heldBack {
-    final ids = <String>{...mixService.mixedBoxIds, ..._movingIds};
+  /// Boxes a cleanup must leave where they are: [mixed] coins, funding
+  /// set aside for a pending mix ([reservedJson]), and boxes already spent
+  /// from this screen.
+  Set<String> _heldBack(List<String> mixed, String reservedJson) {
+    final ids = <String>{...mixed, ..._movingIds};
     try {
-      for (final r in jsonDecode(mixService.reservedFundingJson()) as List) {
+      for (final r in jsonDecode(reservedJson) as List) {
         for (final id in (r as Map)['box_ids'] as List? ?? const []) {
           ids.add(id.toString());
         }
@@ -175,11 +176,45 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     return ids;
   }
 
-  CleanupSuggestion? get _suggestion => suggestCleanup(
-    boxes: _boxes,
-    rent: _tools.rent,
-    exclude: _heldBack,
-  );
+  ({CleanupSuggestion? suggestion, OutputRentEstimate? estimate})? _cleanupMemo;
+  Object? _cleanupMemoKey;
+
+  /// The suggested cleanup and the new box it makes. Worked out once per
+  /// change to the boxes, their rent or what is held back, not per build:
+  /// a selection tap must not regroup 2,000 boxes and call the core.
+  ({CleanupSuggestion? suggestion, OutputRentEstimate? estimate}) get _cleanup {
+    final mixed = mixService.mixedBoxIds;
+    final reserved = mixService.reservedFundingJson();
+    final parameters = _rentParameters;
+    final key = (
+      _tools.boxes,
+      _tools.rent,
+      mixed.join(','),
+      reserved,
+      (_movingIds.toList()..sort()).join(','),
+      parameters?.height,
+      parameters?.storageFeeFactor,
+      parameters?.factorFromNode,
+    );
+    final memo = _cleanupMemo;
+    if (memo != null && key == _cleanupMemoKey) return memo;
+    final measured = <CleanupSuggestion, OutputRentEstimate?>{};
+    OutputRentEstimate? measure(CleanupSuggestion s) =>
+        measured.putIfAbsent(s, () => _cleanupEstimate(s, parameters));
+    final suggestion = suggestCleanup(
+      boxes: _boxes,
+      rent: _tools.rent,
+      exclude: _heldBack(mixed, reserved),
+      viable: (s) => cleanupIsViable(s, measure(s)),
+    );
+    final next = (
+      suggestion: suggestion,
+      estimate: suggestion == null ? null : measure(suggestion),
+    );
+    _cleanupMemo = next;
+    _cleanupMemoKey = key;
+    return next;
+  }
 
   /// Rent parameters to judge a new box by: the report's, or the launch
   /// factor at the dashboard's height when the report could not be read.
@@ -192,8 +227,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
 
   /// The boxes a cleanup creates and their rent, laid out by the same rules
   /// the consolidation builder uses.
-  OutputRentEstimate? _cleanupEstimate(CleanupSuggestion s) {
-    final parameters = _rentParameters;
+  OutputRentEstimate? _cleanupEstimate(
+    CleanupSuggestion s,
+    RentParameters? parameters,
+  ) {
     if (parameters == null || s.afterFeesNano <= BigInt.zero) return null;
     return storageRent.estimateOutput(
       address: s.address,
@@ -206,7 +243,8 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
   void _maybeOpenCleanup() {
     if (!widget.openCleanup || _cleanupOffered || !mounted) return;
     _cleanupOffered = true;
-    final suggestion = _suggestion;
+    final cleanup = _cleanup;
+    final suggestion = cleanup.suggestion;
     if (suggestion == null) {
       // Fragmented, yet no single address has two boxes to merge: say why
       // rather than contradict the home screen.
@@ -219,7 +257,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
       return;
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && !_busy) _openCleanupFlow(suggestion);
+      if (mounted && !_busy) _openCleanupFlow(suggestion, cleanup.estimate);
     });
   }
 
@@ -401,15 +439,17 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
   /// Reviews and runs [s]: one consolidation at one address, back into the
   /// same address. Fee, resulting boxes and the new box's rent are shown
   /// before anything is signed.
-  Future<void> _openCleanupFlow(CleanupSuggestion s) async {
-    final estimate = _cleanupEstimate(s);
+  Future<void> _openCleanupFlow(
+    CleanupSuggestion s,
+    OutputRentEstimate? estimate,
+  ) async {
     final parameters = _rentParameters;
     final tokenTypes = s.tokens.length;
     final resulting = estimate?.boxes.length ?? 1;
     final newRent = estimate != null && estimate.chargeable && parameters != null
-        ? '${formatErg(estimate.first.feeNano, maxFrac: 5)}, due '
-            '${rentWhen(estimate.dueHeight - parameters.height)}'
-            '${estimate.covered ? '' : ' (more than it holds)'}'
+        ? '${formatErg(estimate.first.feeNano)}, due '
+            '${rentWhen(estimate.dueHeight - parameters.height, blockSeconds: parameters.blockSeconds)}'
+            '${estimate.covered ? '' : '; it holds no more than that'}'
         : null;
     final confirmed = await showConfirmTransactionSheet(
       context,
@@ -748,9 +788,25 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     final healthColor = health.color;
     final dustCount = _boxes.where((b) => b.valueNanoErg < BigInt.from(dustThresholdNano)).length;
     final ready = !_loading && _error == null;
-    final suggestion = ready ? _suggestion : null;
+    final cleanup = ready ? _cleanup : null;
+    final suggestion = cleanup?.suggestion;
     final filtered = ready ? _filteredBoxes : const <InputBoxInput>[];
     final rentParameters = _rent?.parameters;
+    // Counted over the listed boxes, not the report's own listing, so the
+    // summary never vouches for a box it has no figures for.
+    var atRisk = 0, dueSoon = 0, unmeasured = 0;
+    if (_rent != null) {
+      for (final b in _boxes) {
+        final r = _tools.rent[b.boxId];
+        if (r == null) {
+          unmeasured++;
+        } else if (r.atRisk) {
+          atRisk++;
+        } else if (r.dueSoon) {
+          dueSoon++;
+        }
+      }
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -802,10 +858,12 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                           padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                           child: CleanupSuggestionCard(
                             suggestion: suggestion,
-                            resultingBoxes: _cleanupEstimate(suggestion)?.boxes.length,
+                            resultingBoxes: cleanup?.estimate?.boxes.length,
                             fragmented: _boxes.length > utxoFragmentationThreshold,
                             highlight: widget.openCleanup,
-                            onReview: _busy ? null : () => _openCleanupFlow(suggestion),
+                            onReview: _busy
+                                ? null
+                                : () => _openCleanupFlow(suggestion, cleanup?.estimate),
                           ),
                         ),
                       ),
@@ -872,7 +930,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                           ),
                           const SizedBox(height: 6),
                           RentSummaryLine(
-                            report: _rent,
+                            parameters: _rent?.parameters,
+                            atRisk: atRisk,
+                            dueSoon: dueSoon,
+                            unmeasured: unmeasured,
                             loading: _rentLoading,
                             failed: _rentFailed,
                           ),

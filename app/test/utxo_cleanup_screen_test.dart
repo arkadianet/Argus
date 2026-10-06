@@ -223,7 +223,9 @@ void main() {
       expect(find.textContaining('0.00125 ERG per byte'), findsOneWidget);
       // At risk: 0.001 ERG cannot pay 0.1375 ERG; due at 1,500,000 + 1,051,200.
       await tester.scrollUntilVisible(
-        find.textContaining('At risk: its 0.1375 ERG rent'),
+        find.textContaining(
+          'At risk: it holds no more than its 0.1375 ERG rent',
+        ),
         200,
         scrollable: find.byType(Scrollable).first,
       );
@@ -354,6 +356,37 @@ void main() {
         );
       }),
     );
+  });
+
+  testWidgets('no cleanup is offered that would leave the tokens at risk', (
+    tester,
+  ) async {
+    // Four NFT boxes of 0.001 ERG and nothing to fund them: the merged box
+    // would hold 0.0018 ERG, still taken whole once due.
+    final nfts = [
+      for (final c in ['1', '2', '3', '4'])
+        {
+          'boxId': id(c),
+          'value': 1000000,
+          'creationHeight': 1500000,
+          'assets': [
+            {'tokenId': 'f$c'.padRight(64, '0'), 'amount': 1},
+          ],
+        },
+    ];
+    api.rows = [
+      for (final c in ['1', '2', '3', '4'])
+        rentRow(id(c), value: 1000000, creation: 1500000),
+    ];
+    await http.runWithClient(() async {
+      await open(tester, openCleanup: true);
+      expect(find.text('Suggested cleanup'), findsNothing);
+      expect(find.text('Nothing to clean up right now'), findsOneWidget);
+      expect(
+        find.textContaining('Storage rent: 4 boxes at risk of collection.'),
+        findsOneWidget,
+      );
+    }, () => node(nfts));
   });
 
   testWidgets('an unreadable node leaves the boxes usable', (tester) async {

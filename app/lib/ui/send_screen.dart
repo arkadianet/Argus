@@ -207,6 +207,11 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
   /// neither the node nor the dashboard knows a height).
   RentParameters? _rentParameters;
 
+  /// Rent estimates by input. Every keystroke rebuilds the form, and a
+  /// stealth recipient costs a key derivation per estimate, so each input
+  /// is asked of the core once.
+  final _rentEstimates = <String, OutputRentEstimate?>{};
+
 
 
   @override
@@ -906,11 +911,25 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
     final text = erg.text.trim();
     final value = text.isEmpty ? minBoxNano : parseErgToNano(text);
     if (value == null) return null;
-    final estimate = storageRent.estimateOutput(
-      address: sizeFor,
-      valueNano: value,
-      tokens: tokens,
-      parameters: parameters,
+    final key = [
+      sizeFor,
+      value,
+      jsonEncode(tokens),
+      parameters.height,
+      parameters.storageFeeFactor,
+      parameters.factorFromNode,
+    ].join('|');
+    if (_rentEstimates.length >= 64 && !_rentEstimates.containsKey(key)) {
+      _rentEstimates.remove(_rentEstimates.keys.first);
+    }
+    final estimate = _rentEstimates.putIfAbsent(
+      key,
+      () => storageRent.estimateOutput(
+        address: sizeFor,
+        valueNano: value,
+        tokens: tokens,
+        parameters: parameters,
+      ),
     );
     if (estimate == null) return null;
     final suggested = estimate.suggestedNano;

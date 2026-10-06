@@ -277,10 +277,13 @@ class CleanupSuggestion {
 /// or due soon) or when the wallet as a whole is fragmented (more than
 /// [fragmentedAbove] boxes, the home screen's threshold). A fragmented
 /// wallet merges up to [maxInputs] boxes at the address; a tidy one only
-/// moves its flagged boxes, plus the address's largest ERG-only box so the
-/// new box can pay its own rent. The address with the most flagged boxes
-/// wins, then the one with the most boxes. [exclude] removes boxes that must
-/// not move (mixed, reserved for a mix, or already being spent).
+/// moves its flagged boxes. Either way the address's largest ERG-only box
+/// (failing that, its largest box) joins, so the new box can pay its own
+/// rent. The address with the most flagged boxes wins, then the one with
+/// the most boxes. [exclude] removes boxes that must not move (mixed,
+/// reserved for a mix, or already being spent). [viable] lets the caller,
+/// which can measure the new box, turn down a candidate that could not be
+/// built or would not cover its rent; the next address is tried instead.
 CleanupSuggestion? suggestCleanup({
   required List<InputBoxInput> boxes,
   Map<String, BoxRent> rent = const {},
@@ -288,6 +291,7 @@ CleanupSuggestion? suggestCleanup({
   int fragmentedAbove = utxoFragmentationThreshold,
   int maxInputs = consolidationMaxInputs,
   int feesNano = minerFeeNano + argusFeeNano,
+  bool Function(CleanupSuggestion candidate)? viable,
 }) {
   if (maxInputs < 2) return null;
   final fragmented = boxes.length > fragmentedAbove;
@@ -326,8 +330,9 @@ CleanupSuggestion? suggestCleanup({
         ? ordered.take(maxInputs).toList()
         : ordered.where(flagged).take(maxInputs - 1).toList();
     // The address's largest ERG-only box joins in, so boxes rescued from
-    // rent land in a box that can pay it.
-    final funder = _largest(group.where((b) => b.assets.isEmpty));
+    // rent land in a box that can pay it; without one, its largest box.
+    final funder =
+        _largest(group.where((b) => b.assets.isEmpty)) ?? _largest(group);
     if (funder != null && !picks.contains(funder)) {
       if (picks.length >= maxInputs) picks.removeLast();
       picks.add(funder);
@@ -342,23 +347,40 @@ CleanupSuggestion? suggestCleanup({
     if (total < BigInt.from(feesNano + minBoxNano)) continue;
 
     final score = (urgent, group.length);
-    if (score.$1 > bestScore.$1 ||
-        (score.$1 == bestScore.$1 && score.$2 > bestScore.$2)) {
-      bestScore = score;
-      best = CleanupSuggestion(
-        address: address,
-        boxes: List.unmodifiable(picks),
-        atRiskCount: picks.where(atRisk).length,
-        dueSoonCount: picks
-            .where((b) => !atRisk(b) && (rent[b.boxId]?.dueSoon ?? false))
-            .length,
-        leftAtAddress: group.length - picks.length,
-        forRent: urgent > 0,
-        feesNano: feesNano,
-      );
+    if (score.$1 < bestScore.$1 ||
+        (score.$1 == bestScore.$1 && score.$2 <= bestScore.$2)) {
+      continue;
     }
+    final candidate = CleanupSuggestion(
+      address: address,
+      boxes: List.unmodifiable(picks),
+      atRiskCount: picks.where(atRisk).length,
+      dueSoonCount: picks
+          .where((b) => !atRisk(b) && (rent[b.boxId]?.dueSoon ?? false))
+          .length,
+      leftAtAddress: group.length - picks.length,
+      forRent: urgent > 0,
+      feesNano: feesNano,
+    );
+    if (viable != null && !viable(candidate)) continue;
+    bestScore = score;
+    best = candidate;
   }
   return best;
+}
+
+/// Whether [s] is worth proposing once the new box is measured
+/// ([estimate], from the core's builder layout; null when it could not be).
+///
+/// The merged value must fund every box the tokens need: the builder
+/// refuses a consolidation below their floors. And a cleanup proposed for
+/// rent must leave a box that covers its own rent, or it only spends fees
+/// and gathers the tokens into one box a collector can still take whole.
+/// An unmeasured layout passes; the review then says the count is unknown.
+bool cleanupIsViable(CleanupSuggestion s, OutputRentEstimate? estimate) {
+  if (estimate == null) return true;
+  if (BigInt.from(estimate.valueNano) > s.afterFeesNano) return false;
+  return !(s.forRent && estimate.chargeable && !estimate.covered);
 }
 
 InputBoxInput? _largest(Iterable<InputBoxInput> boxes) {

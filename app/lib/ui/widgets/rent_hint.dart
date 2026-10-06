@@ -28,8 +28,8 @@ class RentHint extends StatelessWidget {
       final rate = estimate.parameters.factorFromNode
           ? ''
           : ' at the default rate';
-      // Exact at five places: whole 0.00125 ERG steps at the launch factor.
-      final fee = formatErg(first.feeNano, maxFrac: 5);
+      // Unrounded: a voted factor can make any nanoERG amount.
+      final fee = formatErg(first.feeNano);
       text = [
         'Ergo charges storage rent on boxes left unmoved for 4 years: about '
             '$fee$rate for this ${first.sizeBytes}-byte box.',

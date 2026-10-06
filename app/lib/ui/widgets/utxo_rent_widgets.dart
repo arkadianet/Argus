@@ -24,10 +24,12 @@ class BoxRentLine extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = ArgusColors.of(context);
-    // Five places show a fee exactly: factor × bytes is a whole number of
-    // 0.00125 ERG steps at the launch factor.
-    final fee = formatErg(rent.feeNano, maxFrac: 5);
-    final when = rentWhen(rent.blocksUntilDue);
+    // Unrounded: a voted factor can make any nanoERG amount.
+    final fee = formatErg(rent.feeNano);
+    final when = rentWhen(
+      rent.blocksUntilDue,
+      blockSeconds: parameters.blockSeconds,
+    );
     final block = 'block ${formatWithCommas(rent.dueHeight)}';
     final whole = hasTokens ? 'whole, tokens included' : 'whole';
     final (IconData icon, Color color, String text) = switch (rent) {
@@ -39,13 +41,13 @@ class BoxRentLine extends StatelessWidget {
       BoxRent(atRisk: true, collectableNow: true) => (
         Icons.warning_amber_rounded,
         rustFor(context),
-        'At risk: its $fee rent is more than it holds, so it can be '
+        'At risk: it holds no more than its $fee rent, so it can be '
             'collected now${hasTokens ? ', tokens included' : ''}.',
       ),
       BoxRent(atRisk: true) => (
         Icons.warning_amber_rounded,
         rustFor(context),
-        'At risk: its $fee rent is more than it holds. From $block '
+        'At risk: it holds no more than its $fee rent. From $block '
             '($when) it can be collected $whole.',
       ),
       BoxRent(collectableNow: true) => (
@@ -190,25 +192,38 @@ class CleanupSuggestionCard extends StatelessWidget {
 }
 
 /// One line on storage rent across the listed boxes: how many are at risk
-/// or due soon, and the rate they are judged at.
+/// or due soon, how many have no figures, and the rate they are judged at.
 class RentSummaryLine extends StatelessWidget {
   const RentSummaryLine({
     super.key,
-    required this.report,
+    required this.parameters,
+    required this.atRisk,
+    required this.dueSoon,
+    required this.unmeasured,
     required this.loading,
     required this.failed,
   });
 
   /// Null until a report arrives, or after one failed.
-  final RentReport? report;
+  final RentParameters? parameters;
+
+  /// Listed boxes that cannot pay their rent.
+  final int atRisk;
+
+  /// Listed boxes due within [rentSoonDays] that can pay it.
+  final int dueSoon;
+
+  /// Listed boxes the report has no figures for: unparseable, or listed
+  /// differently between the two reads.
+  final int unmeasured;
   final bool loading;
   final bool failed;
 
   @override
   Widget build(BuildContext context) {
     final style = Theme.of(context).textTheme.bodySmall;
-    final report = this.report;
-    if (report == null) {
+    final parameters = this.parameters;
+    if (parameters == null) {
       if (loading) {
         return Row(
           children: [
@@ -229,24 +244,19 @@ class RentSummaryLine extends StatelessWidget {
         style: style,
       );
     }
-    final atRisk = report.atRiskCount;
-    final soon = report.boxes.values
-        .where((b) => b.dueSoon && !b.atRisk)
-        .length;
     final parts = [
       if (atRisk > 0)
         '$atRisk ${atRisk == 1 ? 'box' : 'boxes'} at risk of collection',
-      if (soon > 0) '$soon due within $rentSoonDays days',
+      if (dueSoon > 0) '$dueSoon due within $rentSoonDays days',
     ];
-    final missing = report.unmeasured;
-    final unmeasured = missing == 0
+    final missing = unmeasured == 0
         ? ''
-        : ' $missing ${missing == 1 ? 'box' : 'boxes'} could not be measured.';
-    final rate = 'Rate ${report.parameters.rateLabel}.$unmeasured';
+        : ' $unmeasured ${unmeasured == 1 ? 'box' : 'boxes'} could not be measured.';
+    final rate = 'Rate ${parameters.rateLabel}.$missing';
     return Text(
       parts.isEmpty
           ? 'Storage rent: nothing due within $rentSoonDays days, and every '
-                '${missing == 0 ? '' : 'measured '}box covers its rent. $rate'
+                '${unmeasured == 0 ? '' : 'measured '}box covers its rent. $rate'
           : 'Storage rent: ${parts.join(' · ')}. $rate',
       style: parts.isEmpty
           ? style

@@ -15,14 +15,15 @@ import '../bridge/api/storage_rent.dart' as ffi;
 import '../format.dart';
 
 /// Blocks a box may sit untouched before rent can be charged: four years of
-/// 2-minute blocks. Fixed by the protocol.
+/// 2-minute blocks. Fixed by the protocol; the core reports it too.
 const rentPeriodBlocks = 1051200;
 
 /// `storageFeeFactor` at launch, nanoERG per byte per period. Stands in only
 /// when the node cannot be read, and the UI then says "default rate".
 const fallbackStorageFeeFactor = 1250000;
 
-/// Target block interval, for turning blocks into approximate dates.
+/// Target block interval, for turning blocks into approximate dates when
+/// the core has not said otherwise ([RentParameters.blockSeconds]).
 const targetBlockSeconds = 120;
 
 /// How far ahead rent counts as due soon: such boxes are highlighted and
@@ -58,17 +59,22 @@ class RentParameters {
     required this.height,
     required this.storageFeeFactor,
     required this.factorFromNode,
+    this.blockSeconds = targetBlockSeconds,
   });
 
   /// The launch factor at [height], for when the node cannot be read.
   const RentParameters.fallback({required this.height})
     : storageFeeFactor = fallbackStorageFeeFactor,
-      factorFromNode = false;
+      factorFromNode = false,
+      blockSeconds = targetBlockSeconds;
 
   factory RentParameters.fromJson(Map<String, dynamic> json) => RentParameters(
     height: _int(json['height']),
     storageFeeFactor: _int(json['storage_fee_factor']),
     factorFromNode: json['factor_from_node'] == true,
+    blockSeconds: json['target_block_secs'] is num
+        ? (json['target_block_secs'] as num).toInt()
+        : targetBlockSeconds,
   );
 
   final int height;
@@ -76,6 +82,9 @@ class RentParameters {
 
   /// False when the launch factor stands in for one the node did not give.
   final bool factorFromNode;
+
+  /// Block interval the core dates rent by.
+  final int blockSeconds;
 
   /// Largest box the fee can be computed for before the node's 32-bit
   /// product overflows (1,717 bytes at the launch factor).
@@ -358,9 +367,12 @@ class StorageRentService {
 
 final storageRent = StorageRentService();
 
-/// Approximate time [blocks] from [now] at the target block interval.
-DateTime approxTimeIn(int blocks, {DateTime? now}) =>
-    (now ?? DateTime.now()).add(Duration(seconds: blocks * targetBlockSeconds));
+/// Approximate time [blocks] from [now] at [blockSeconds] a block.
+DateTime approxTimeIn(
+  int blocks, {
+  DateTime? now,
+  int blockSeconds = targetBlockSeconds,
+}) => (now ?? DateTime.now()).add(Duration(seconds: blocks * blockSeconds));
 
 const _months = [
   'Jan',
@@ -378,13 +390,17 @@ const _months = [
 ];
 
 /// When rent falls due, in words: "now", "in ~12 days", "~Mar 2030".
-String rentWhen(int blocksUntilDue, {DateTime? now}) {
+String rentWhen(
+  int blocksUntilDue, {
+  DateTime? now,
+  int blockSeconds = targetBlockSeconds,
+}) {
   if (blocksUntilDue <= 1) return 'now';
-  final seconds = blocksUntilDue * targetBlockSeconds;
+  final seconds = blocksUntilDue * blockSeconds;
   final days = (seconds / 86400).ceil();
   if (days <= 1) return 'within a day';
   if (days <= 60) return 'in ~$days days';
-  final at = approxTimeIn(blocksUntilDue, now: now);
+  final at = approxTimeIn(blocksUntilDue, now: now, blockSeconds: blockSeconds);
   return '~${_months[at.month - 1]} ${at.year}';
 }
 
