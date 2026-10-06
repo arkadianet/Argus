@@ -26,7 +26,10 @@ In scope:
 
 Out of scope, deliberately:
 
-- Multi-hop routing (`router/graph.rs`, `arb_chain.rs`)
+- Multi-hop routing (`router/graph.rs`, `arb_chain.rs`). Update 2026-10-06:
+  circular arbitrage now runs chained legs, built on Argus's own
+  `wallet-amm` and this builder; see
+  `2026-10-06-onchain-pricing-and-arbitrage-design.md`.
 - LP deposit / redeem / pool setup / refund
 - Pending-order handling (`find_pending_orders`, `find_mempool_swaps`)
 - Reusing the swap engine for the Send screen's "buy & send" auto-buy
