@@ -6,9 +6,9 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `basis`, `json`, `parse_tokens`, `recipient_tree`, `report_row`, `unspent_at`
-// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Basis`, `Listing`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `from`
+// These functions are ignored because they are not marked as `pub`: `basis`, `json`, `parse_listing`, `parse_tokens`, `recipient_tree`, `report_json`, `report_row`
+// These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `Basis`, `ListedBox`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `fmt`, `from`
 
 /// The chain tip and the storage fee factor to judge rent by, from the
 /// node's `/info`: `{height, storage_fee_factor, factor_from_node,
@@ -17,18 +17,23 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 Future<String> rentParameters({String? nodeUrl}) =>
     RustLib.instance.api.crateApiStorageRentRentParameters(nodeUrl: nodeUrl);
 
-/// Rent position of every confirmed unspent box at `addresses`, judged at
-/// the node's tip: the [`rent_parameters`] fields plus `boxes`, one entry
-/// per box with its exact serialized size, the node's fee, what a collector
-/// could take (`charge`: `fee`, `whole_box` or `none`) and when, and
-/// `unmeasured`, the boxes the node listed that the core could not parse.
-Future<String> boxRentReport({
-  required List<String> addresses,
-  String? nodeUrl,
-}) => RustLib.instance.api.crateApiStorageRentBoxRentReport(
-  addresses: addresses,
-  nodeUrl: nodeUrl,
-);
+/// Rent position of the boxes the wallet lists, judged at the node's tip:
+/// the [`rent_parameters`] fields plus `boxes`, one row per box with its
+/// exact serialized size, the node's fee, what a collector could take
+/// (`charge`: `fee`, `whole_box` or `none`) and when, and `unmeasured`, the
+/// listed boxes that came without a size.
+///
+/// `boxes_json` is the listing the UTXO tools already hold
+/// ([`super::mempool::list_spendable_boxes`]): `box_id`, `value_nano_erg`,
+/// `creation_height` and `size_bytes` per box. The boxes are read once,
+/// through the mempool-aware gathering, so a box a pending transaction
+/// already spends is never judged or offered for cleanup, and the only
+/// read here is `/info`.
+Future<String> boxRentReport({required String boxesJson, String? nodeUrl}) =>
+    RustLib.instance.api.crateApiStorageRentBoxRentReport(
+      boxesJson: boxesJson,
+      nodeUrl: nodeUrl,
+    );
 
 /// What a recipient output carrying `tokens_json` (`[{"token_id", "amount"}]`)
 /// will owe in rent if it is created at `height` with `value_nano` and never

@@ -50,9 +50,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
   /// Bumped per box load, so a slow rent report cannot land on newer boxes.
   int _loadGeneration = 0;
 
-  /// Boxes this screen has already spent. The node lists confirmed boxes
-  /// only, so they stay listed until the transaction is mined; a cleanup
-  /// must not propose them again.
+  /// Boxes this screen has already spent. The listing leaves out boxes a
+  /// pending transaction spends, from this screen or any other, but only
+  /// once the node lists that transaction; until a reload shows it gone, a
+  /// cleanup must not propose them again.
   final Set<String> _movingIds = {};
 
   /// [UtxoManagementScreen.openCleanup] is honoured once per visit.
@@ -114,7 +115,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
       _tools.setBoxes(boxes);
       _movingIds.retainAll(boxes.map((b) => b.boxId));
       setState(() => _loading = false);
-      _loadRent(addresses, generation);
+      _loadRent(boxes, generation);
       final ids = {for (final b in boxes) for (final a in b.assets) a.tokenId};
       if (ids.isNotEmpty) {
         // Cache only; see mix_screen.
@@ -132,10 +133,11 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     }
   }
 
-  /// Rent for the listed boxes, read separately so a slow or failing node
-  /// read never holds up the list. The report is a second listing of the
-  /// same addresses from the same node, measured in the wallet core.
-  Future<void> _loadRent(List<String> addresses, int generation) async {
+  /// Rent for the listed boxes, judged after the list is up so a slow or
+  /// failing node read never holds it up. The boxes are not read again: the
+  /// listing already measured each one, so only the node's tip and rate are
+  /// asked for.
+  Future<void> _loadRent(List<InputBoxInput> boxes, int generation) async {
     setState(() {
       _rentLoading = true;
       _rentFailed = false;
@@ -143,7 +145,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     RentReport? report;
     try {
       report = await storageRent.report(
-        addresses,
+        boxes,
         nodeUrl: networkController.activeUrl,
       );
     } catch (_) {
@@ -160,10 +162,18 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
   }
 
   /// Boxes a cleanup must leave where they are: [mixed] coins, funding
-  /// set aside for a pending mix ([reservedJson]), and boxes already spent
-  /// from this screen.
+  /// set aside for a pending mix ([reservedJson]), boxes already spent
+  /// from this screen, and boxes still confirming. The listing offers
+  /// those only while Settings allows spending unconfirmed funds, and a
+  /// housekeeping move the app proposes on its own should not hang on a
+  /// transaction that may yet be dropped.
   Set<String> _heldBack(List<String> mixed, String reservedJson) {
-    final ids = <String>{...mixed, ..._movingIds};
+    final ids = <String>{
+      ...mixed,
+      ..._movingIds,
+      for (final b in _boxes)
+        if (!b.confirmed) b.boxId,
+    };
     try {
       for (final r in jsonDecode(reservedJson) as List) {
         for (final id in (r as Map)['box_ids'] as List? ?? const []) {
@@ -792,8 +802,8 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     final suggestion = cleanup?.suggestion;
     final filtered = ready ? _filteredBoxes : const <InputBoxInput>[];
     final rentParameters = _rent?.parameters;
-    // Counted over the listed boxes, not the report's own listing, so the
-    // summary never vouches for a box it has no figures for.
+    // Counted over the listed boxes, so the summary never vouches for a box
+    // it has no figures for.
     var atRisk = 0, dueSoon = 0, unmeasured = 0;
     if (_rent != null) {
       for (final b in _boxes) {

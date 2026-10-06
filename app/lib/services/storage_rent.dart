@@ -13,6 +13,7 @@ import 'dart:convert';
 
 import '../bridge/api/storage_rent.dart' as ffi;
 import '../format.dart';
+import 'wallet_service.dart' show InputBoxInput;
 
 /// Blocks a box may sit untouched before rent can be charged: four years of
 /// 2-minute blocks. Fixed by the protocol; the core reports it too.
@@ -320,10 +321,26 @@ class StorageRentService {
     }
   }
 
-  /// Rent for every confirmed box at [addresses]. Throws when the node
-  /// cannot be read; there is no meaningful fallback for box sizes.
-  Future<RentReport> report(List<String> addresses, {String? nodeUrl}) async {
-    final raw = await ffi.boxRentReport(addresses: addresses, nodeUrl: nodeUrl);
+  /// Rent for [boxes], the wallet's own listing
+  /// ([WalletService.listUnspentBoxes], which measures each box): the boxes
+  /// are not read again, only the node's tip and rate. Throws when the node
+  /// cannot be read. A box without a size is reported as unmeasured.
+  Future<RentReport> report(
+    List<InputBoxInput> boxes, {
+    String? nodeUrl,
+  }) async {
+    final raw = await ffi.boxRentReport(
+      boxesJson: jsonEncode([
+        for (final b in boxes)
+          {
+            'box_id': b.boxId,
+            'value_nano_erg': b.valueNanoErg.toString(),
+            'creation_height': b.creationHeight,
+            'size_bytes': b.sizeBytes,
+          },
+      ]),
+      nodeUrl: nodeUrl,
+    );
     final report = RentReport.fromJson(jsonDecode(raw) as Map<String, dynamic>);
     _remember(report.parameters, nodeUrl);
     return report;

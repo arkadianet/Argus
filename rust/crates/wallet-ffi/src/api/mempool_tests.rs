@@ -431,6 +431,16 @@ async fn every_gathering_path_skips_the_spent_box_and_follows_the_policy() {
             for b in listing.as_array().unwrap() {
                 assert_eq!(b["address"], w.address.as_str());
                 assert_eq!(b["confirmed"], b["box_id"] != change.as_str());
+                // Each box carries the size storage rent is charged on, so
+                // the rent report needs no second listing.
+                let listed = [&w.free, &w.change]
+                    .into_iter()
+                    .find(|x| x.box_id().to_string() == b["box_id"].as_str().unwrap())
+                    .unwrap();
+                assert_eq!(
+                    b["size_bytes"].as_u64().unwrap() as usize,
+                    wallet_core::rent::box_size(listed).unwrap()
+                );
             }
         }
         assert!(!expected.contains(&spent));

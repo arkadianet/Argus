@@ -508,14 +508,14 @@ fn wire__crate__api__storage_rent__box_rent_report_impl(
             };
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
-            let api_addresses = <Vec<String>>::sse_decode(&mut deserializer);
+            let api_boxes_json = <String>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| async move {
                 transform_result_sse::<_, String>(
                     (move || async move {
                         let output_ok =
-                            crate::api::storage_rent::box_rent_report(api_addresses, api_node_url)
+                            crate::api::storage_rent::box_rent_report(api_boxes_json, api_node_url)
                                 .await?;
                         Ok(output_ok)
                     })()

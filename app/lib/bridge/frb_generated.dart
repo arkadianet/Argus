@@ -164,7 +164,7 @@ abstract class RustLibApi extends BaseApi {
   String crateApiAppFeeInfo();
 
   Future<String> crateApiStorageRentBoxRentReport({
-    required List<String> addresses,
+    required String boxesJson,
     String? nodeUrl,
   });
 
@@ -1440,14 +1440,14 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @override
   Future<String> crateApiStorageRentBoxRentReport({
-    required List<String> addresses,
+    required String boxesJson,
     String? nodeUrl,
   }) {
     return handler.executeNormal(
       NormalTask(
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_String(addresses, serializer);
+          sse_encode_String(boxesJson, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
@@ -1461,7 +1461,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiStorageRentBoxRentReportConstMeta,
-        argValues: [addresses, nodeUrl],
+        argValues: [boxesJson, nodeUrl],
         apiImpl: this,
       ),
     );
@@ -1470,7 +1470,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiStorageRentBoxRentReportConstMeta =>
       const TaskConstMeta(
         debugName: "box_rent_report",
-        argNames: ["addresses", "nodeUrl"],
+        argNames: ["boxesJson", "nodeUrl"],
       );
 
   @override

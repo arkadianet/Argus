@@ -23,7 +23,7 @@ Sources: arkadianet/ergo (Rust node with consensus parity to the Scala reference
 
 ## Rent per box (E2)
 
-`box_rent_report` lists the confirmed unspent boxes at the wallet's addresses (the node's unspent-box index the screen already reads, queried by script, a second time) and returns each box's size, fee, charge (`fee`, `whole_box` or `none`), due height and blocks to go. Boxes ergo-lib cannot parse are counted as unmeasured and named in the summary rather than dropped. Each card shows the fee, the due block and an approximate date at 2-minute blocks. **Due soon** means collectable now or within 30 days (21,600 blocks); **at risk** means the value does not exceed the fee, whenever it falls due. Boxes the protocol cannot charge say so. The summary card counts both over the listed boxes (never over the report's own listing), names the rate and any listed box without figures, and a "Rent" filter keeps the flagged boxes. A failed report leaves the list and the tools working.
+The UTXO screen reads the wallet's boxes once, through the mempool-aware listing every spend uses (`list_spendable_boxes`, see the mempool design): a box a pending transaction already spends is never listed, and each listed box carries its exact serialized size, measured in the core from the parsed box. `box_rent_report` judges that listing: it reads only `/info` and returns each box's size, fee, charge (`fee`, `whole_box` or `none`), due height and blocks to go. (Before the mempool work this report listed the boxes from the node a second time.) A listed box without a size is counted as unmeasured and named in the summary rather than dropped. Each card shows the fee, the due block and an approximate date at 2-minute blocks. **Due soon** means collectable now or within 30 days (21,600 blocks); **at risk** means the value does not exceed the fee, whenever it falls due. Boxes the protocol cannot charge say so. The summary card counts both over the listed boxes, names the rate and any listed box without figures, and a "Rent" filter keeps the flagged boxes. A failed report leaves the list and the tools working.
 
 ## Send hint (E1)
 
@@ -34,7 +34,7 @@ For each recipient carrying tokens, `output_rent_estimate` raises the amount to 
 A single consolidation transaction, proposed only when it helps:
 
 - **One address.** Boxes at one address are already publicly linked; merging across addresses would link them, which coin control warns about and the cold-signing design calls a privacy regression. The new box goes back to the same address.
-- **Never moved:** mixed boxes, funding reserved for a pending mix, and boxes this screen has already spent but the node still lists.
+- **Never moved:** mixed boxes, funding reserved for a pending mix, boxes a pending transaction spends (the listing leaves them out; boxes this screen spent are also held back until a reload shows them gone), and boxes still confirming. The listing offers those only while Settings allows spending unconfirmed funds, and a move the app proposes on its own should not hang on a transaction that may yet be dropped.
 - **When.** An address with an at-risk or due-soon box qualifies; so does any address once the wallet is fragmented (more than 80 boxes, the home screen's threshold). The address with the most flagged boxes wins, then the largest.
 - **Which boxes.** Fragmented: up to 100 (the existing per-transaction cap), flagged first, then dust, then oldest. Tidy: only the flagged boxes. Either way the address's largest ERG-only box (failing that, its largest box) joins, so rescued boxes land in one that can pay its rent.
 - **Only if it works.** The core lays the new box out as the consolidation builder will and measures it. A candidate is dropped, and the next address tried, when the merged value cannot fund the token boxes' floors (the builder would refuse it), or when it was proposed for rent and the new box still would not cover its own rent: merging four 0.001 ERG NFT boxes would only spend fees and gather the NFTs into one box a collector still takes whole.
@@ -44,6 +44,6 @@ Entry point for the home indicator: `UtxoManagementScreen(openCleanup: true)`, r
 
 ## Limits
 
-- The node lists confirmed boxes. A box spent by a pending transaction from another screen can still be proposed until mined; preparing then fails, and nothing is signed.
+- A pending transaction is left out of the listing only once the node lists it in its mempool; boxes this screen spent are held back meanwhile, and a box spent elsewhere in that moment would fail at preparation, before anything is signed.
 - The output index is assumed below 128 (a one-byte VLQ); a 128th output would be one byte larger.
 - The overflow rule is reported as consensus applies it today. A protocol fix would make 1,718–3,435-byte boxes chargeable at the full per-byte rate.

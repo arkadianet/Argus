@@ -112,8 +112,11 @@ pub(crate) async fn gather_watched(
 /// spendable under the user's policy — or confirmed boxes only, when
 /// `confirmed_only` — with mix reservations and mixed boxes still listed,
 /// as the node lists them; the spend itself applies those rules. Each entry
-/// carries its address and whether it is confirmed. Boxes a pending
-/// transaction already spends are never listed.
+/// carries its address, whether it is confirmed, and its exact serialized
+/// `size_bytes`, so storage rent is judged from this listing
+/// ([`super::storage_rent::box_rent_report`]) without reading the boxes a
+/// second time. Boxes a pending transaction already spends are never
+/// listed.
 #[flutter_rust_bridge::frb]
 pub async fn list_spendable_boxes(
     handle_id: u64,
@@ -128,11 +131,13 @@ pub async fn list_spendable_boxes(
 }
 
 fn listing_json(spendable: &Spendable) -> serde_json::Value {
+    // `inputs` and `boxes` are kept paired, one entry per box.
     serde_json::Value::Array(
         spendable
             .inputs
             .iter()
-            .map(|b| {
+            .zip(&spendable.boxes)
+            .map(|(b, ergo_box)| {
                 serde_json::json!({
                     "box_id": b.box_id,
                     "value_nano_erg": b.value,
@@ -143,6 +148,11 @@ fn listing_json(spendable: &Spendable) -> serde_json::Value {
                     })).collect::<Vec<_>>(),
                     "address": ergo_tx::address::ergo_tree_to_address(&b.ergo_tree).ok(),
                     "confirmed": !spendable.unconfirmed.contains(&b.box_id),
+                    // The bytes the node hashes for the id: exact, as for
+                    // the rent report's own reads before. Null only if the
+                    // box cannot be serialized, which rent then reports as
+                    // unmeasured.
+                    "size_bytes": wallet_core::rent::box_size(ergo_box).ok(),
                 })
             })
             .collect(),

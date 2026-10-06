@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:argus_wallet/bridge/frb_generated.dart';
 import 'package:argus_wallet/services/storage_rent.dart';
+import 'package:argus_wallet/services/wallet_service.dart' show InputBoxInput;
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart'
     show PlatformInt64;
 import 'package:flutter_test/flutter_test.dart';
@@ -28,22 +29,28 @@ class RentApi extends RustLibApi {
     });
   }
 
+  /// The listing the last report was asked to judge.
+  List<dynamic>? lastBoxes;
+
   @override
   Future<String> crateApiStorageRentBoxRentReport({
-    required List<String> addresses,
+    required String boxesJson,
     String? nodeUrl,
-  }) async => jsonEncode({
-    'height': 1600000,
-    'storage_fee_factor': 1250000,
-    'factor_from_node': true,
-    'unmeasured': 2,
-    'boxes': [
-      row('old', value: 1000000, blocksUntilDue: -5, charge: 'whole_box'),
-      row('soon', value: 5000000000, blocksUntilDue: 21600, charge: 'fee'),
-      row('later', value: 5000000000, blocksUntilDue: 21601, charge: 'fee'),
-      row('huge', value: 1000000, blocksUntilDue: 3, charge: 'none'),
-    ],
-  });
+  }) async {
+    lastBoxes = jsonDecode(boxesJson) as List;
+    return jsonEncode({
+      'height': 1600000,
+      'storage_fee_factor': 1250000,
+      'factor_from_node': true,
+      'unmeasured': 2,
+      'boxes': [
+        row('old', value: 1000000, blocksUntilDue: -5, charge: 'whole_box'),
+        row('soon', value: 5000000000, blocksUntilDue: 21600, charge: 'fee'),
+        row('later', value: 5000000000, blocksUntilDue: 21601, charge: 'fee'),
+        row('huge', value: 1000000, blocksUntilDue: 3, charge: 'none'),
+      ],
+    });
+  }
 
   @override
   String crateApiStorageRentOutputRentEstimate({
@@ -122,8 +129,42 @@ void main() {
       expect(rentPeriodBlocks, 4 * 365 * 24 * 30);
     });
 
+    test('the report judges the listed boxes, as listed', () async {
+      await StorageRentService().report([
+        InputBoxInput(
+          boxId: 'a',
+          valueNanoErg: BigInt.parse('18446744073709551615'),
+          creationHeight: 1500000,
+          assets: const [],
+          sizeBytes: 110,
+        ),
+        InputBoxInput(
+          boxId: 'b',
+          valueNanoErg: BigInt.one,
+          creationHeight: 1,
+          assets: const [],
+        ),
+      ], nodeUrl: 'n');
+      // Amounts go as strings, so no u64 loses precision on the way; a box
+      // the listing could not measure goes without a size.
+      expect(api.lastBoxes, [
+        {
+          'box_id': 'a',
+          'value_nano_erg': '18446744073709551615',
+          'creation_height': 1500000,
+          'size_bytes': 110,
+        },
+        {
+          'box_id': 'b',
+          'value_nano_erg': '1',
+          'creation_height': 1,
+          'size_bytes': null,
+        },
+      ]);
+    });
+
     test('report rows classify risk and urgency', () async {
-      final report = await StorageRentService().report(['a'], nodeUrl: 'n');
+      final report = await StorageRentService().report(const [], nodeUrl: 'n');
       expect(report.parameters.height, 1600000);
       expect(report.parameters.blockSeconds, 120);
       expect(report.parameters.factorFromNode, isTrue);

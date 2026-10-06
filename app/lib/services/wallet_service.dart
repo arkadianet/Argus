@@ -538,6 +538,11 @@ class InputBoxInput {
   /// unconfirmed funds may be spent.
   final bool confirmed;
 
+  /// The box's exact serialized size, which storage rent is charged on.
+  /// Set by the wallet's own listing ([WalletService.listUnspentBoxes]);
+  /// null elsewhere.
+  final int? sizeBytes;
+
   InputBoxInput({
     required this.boxId,
     required this.valueNanoErg,
@@ -545,6 +550,7 @@ class InputBoxInput {
     required this.assets,
     this.address,
     this.confirmed = true,
+    this.sizeBytes,
   });
 
   factory InputBoxInput.fromJson(Map<String, dynamic> json) {
@@ -612,6 +618,7 @@ class InputBoxInput {
       assets: assets,
       address: address ?? (json['address'] as String?),
       confirmed: json['confirmed'] != false,
+      sizeBytes: (json['size_bytes'] as num?)?.toInt(),
     );
   }
 }

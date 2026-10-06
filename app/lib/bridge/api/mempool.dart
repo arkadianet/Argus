@@ -24,8 +24,11 @@ bool spendUnconfirmed() =>
 /// spendable under the user's policy — or confirmed boxes only, when
 /// `confirmed_only` — with mix reservations and mixed boxes still listed,
 /// as the node lists them; the spend itself applies those rules. Each entry
-/// carries its address and whether it is confirmed. Boxes a pending
-/// transaction already spends are never listed.
+/// carries its address, whether it is confirmed, and its exact serialized
+/// `size_bytes`, so storage rent is judged from this listing
+/// ([`super::storage_rent::box_rent_report`]) without reading the boxes a
+/// second time. Boxes a pending transaction already spends are never
+/// listed.
 Future<String> listSpendableBoxes({
   required BigInt handleId,
   required List<String> addresses,
