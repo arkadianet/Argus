@@ -114,6 +114,23 @@ class PendingBalance {
     );
   }
 
+  /// The same pending movements under a figure that also counts funds this
+  /// split never valued — a wallet's stealth and mixing pockets, the other
+  /// wallets in a total — all of which are in blocks. [confirmedNano]
+  /// becomes [shownNano] less the pending delta, so "+2.5 ERG pending ·
+  /// X confirmed" adds up to the figure the line sits under. Unchanged when
+  /// [shownNano] is this split's own [netNano].
+  PendingBalance under(int shownNano) {
+    final confirmed = shownNano - pendingDeltaNano;
+    return PendingBalance(
+      confirmedNano: confirmed < 0 ? 0 : confirmed,
+      pendingInNano: pendingInNano,
+      pendingOutNano: pendingOutNano,
+      tokens: tokens,
+      transactions: transactions,
+    );
+  }
+
   /// Two sets added together, for an account read address by address. A
   /// payment between two of its addresses shows on both sides, as it does
   /// within one wallet.

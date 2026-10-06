@@ -254,6 +254,9 @@ class WalletLedger extends StatelessWidget {
               hidden: hidden,
             ),
       breakdownLine: pocketBreakdown(pockets, hidden: hidden),
+      // The stealth and mixing pockets in the headline are in blocks, so
+      // the split counts them as confirmed and adds up to the headline.
+      pending: headline == null ? null : sync.pending?.under(headline),
       identity: identity == null
           ? null
           : WalletIdentityLine(

@@ -58,8 +58,15 @@ Status: implemented (see *Status, 2026-10-06* below); three decisions changed
   switch; the public refresh of locked wallets stores it with pending
   activity rows.
 - **Display.** `PendingBalanceLine` ("+2.5 ERG pending · 105.21 confirmed")
-  under the dashboard portfolio total, on the Assets screen and under each
-  watched account.
+  on the Assets screen and, since the home screen became an overview of
+  every wallet (roadmap/structure), under the overview total, on every
+  overview row, and under the balance of each wallet page, seed or watched.
+  The unlocked wallet's split is the sync controller's `pending`; another
+  seed wallet's is the one saved with its snapshot (`lastKnownPending`); a
+  watched address's is its `get_balance` `summary`; a watched account's is
+  its scan's sum. The line splits the figure it sits under
+  (`PendingBalance.under`): stealth and mixing pockets, and the other
+  wallets in the total, are in blocks, so they count as confirmed.
 
 ### Decisions changed
 
@@ -76,9 +83,8 @@ Status: implemented (see *Status, 2026-10-06* below); three decisions changed
 
 ### Not done
 
-- Watched single addresses show their activity, pending first, from
-  Settings → Watch-only; where the home screens show their balance, the
-  pending line is not wired yet (`get_balance` returns the `summary` for it).
+- A locked wallet's pending line is as old as its snapshot (the row says
+  "as of …"); it is read again only by the public refresh.
 - Watched accounts sum per-address splits, so a chain of spends across two of
   their addresses can count the middle box twice in the pending line (their
   history screen is valued correctly). Read once across the account to fix.

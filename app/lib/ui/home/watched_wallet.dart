@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../../format.dart';
 import '../../services/network_controller.dart';
+import '../../services/pending_balance.dart';
 import '../../services/privacy_service.dart';
 import '../../services/token_pricer.dart';
 import '../../services/wallet_service.dart';
@@ -32,6 +33,7 @@ class WatchedWalletSource extends ChangeNotifier {
     : account = null {
     if (cached != null) {
       balanceNano = cached.nanoErg;
+      pending = cached.pending;
       _raw = [
         for (final t in cached.tokens) {'id': t.id, 'amount': t.amount},
       ];
@@ -44,6 +46,11 @@ class WatchedWalletSource extends ChangeNotifier {
   final WatchAccount? account;
 
   int? balanceNano;
+
+  /// How [balanceNano] splits into confirmed and pending: the address's
+  /// `get_balance` summary, or the account's last scan summed address by
+  /// address. Null when the read had none.
+  PendingBalance? pending;
   List<TokenBalance> tokens = const [];
   List<Map<String, dynamic>> recent = const [];
 
@@ -150,6 +157,7 @@ class WatchedWalletSource extends ChangeNotifier {
           );
           if (generation != _generation) return;
           balanceNano = (balance['balance_nano_erg'] as num?)?.toInt() ?? 0;
+          pending = PendingBalance.fromJson(balance['summary']);
           _raw = [
             for (final t in (balance['tokens'] as List? ?? const []))
               if (t is Map) t.cast<String, dynamic>(),
@@ -199,11 +207,13 @@ class WatchedWalletSource extends ChangeNotifier {
       final generation = ++_generation;
       if (snapshot == null) {
         balanceNano = null;
+        pending = null;
         tokens = const [];
         recent = const [];
         activityLoaded = false;
       } else {
         balanceNano = snapshot.balance;
+        pending = snapshot.pending;
         recent = snapshot.history.take(5).toList();
         activityLoaded = true;
         updatedAt = DateTime.now();
@@ -527,6 +537,10 @@ class _WatchedWalletPageState extends State<WatchedWalletPage> {
                         tokens: values,
                         hidden: hidden,
                       ),
+                pending: switch (s.balanceNano) {
+                  final shown? => s.pending?.under(shown),
+                  null => null,
+                },
                 identity: identity == null
                     ? null
                     : WalletIdentityLine(address: identity),

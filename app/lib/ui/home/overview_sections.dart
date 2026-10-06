@@ -4,6 +4,7 @@ import '../../format.dart';
 import '../../services/portfolio.dart';
 import '../../theme/argus_theme.dart';
 import '../widgets/erg_rate_line.dart';
+import '../widgets/pending_balance_line.dart';
 import '../widgets/soft_card.dart';
 import 'address_breakdown.dart';
 import 'overview_model.dart';
@@ -72,6 +73,14 @@ class OverviewTotalCard extends StatelessWidget {
                   [if (valueLine != null) valueLine!, subtitle].join('  ·  '),
                   style: TextStyle(fontSize: 14, color: muted),
                 ),
+                if (totals.pending?.hasPending ?? false) ...[
+                  const SizedBox(height: 2),
+                  PendingBalanceLine(
+                    key: const Key('overview-total-pending'),
+                    pending: totals.pending,
+                    hidden: hidden,
+                  ),
+                ],
                 const SizedBox(height: 2),
                 const ErgRateLine(),
               ],
@@ -310,6 +319,15 @@ class OverviewWalletRow extends StatelessWidget {
                       funds: e.elsewhere!,
                       hidden: hidden,
                       fontSize: 12,
+                    ),
+                  ],
+                  if (e.balanceNano != null &&
+                      (e.pending?.hasPending ?? false)) ...[
+                    const SizedBox(height: 2),
+                    PendingBalanceLine(
+                      pending: e.pending,
+                      hidden: hidden,
+                      style: small,
                     ),
                   ],
                 ],

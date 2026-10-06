@@ -2,11 +2,13 @@ import 'package:flutter/material.dart';
 
 import '../../format.dart';
 import '../../services/address_holdings.dart';
+import '../../services/pending_balance.dart';
 import '../../services/wallet_sync_controller.dart';
 import '../../theme/argus_theme.dart';
 import '../widgets/discover_sheet.dart';
 import '../widgets/empty_state.dart';
 import '../widgets/erg_rate_line.dart';
+import '../widgets/pending_balance_line.dart';
 import '../widgets/soft_card.dart';
 import '../widgets/activity_tile.dart';
 import 'address_breakdown.dart';
@@ -211,6 +213,7 @@ class WalletBalanceCard extends StatelessWidget {
     this.loading = false,
     this.valueLine,
     this.breakdownLine,
+    this.pending,
     this.identity,
     this.elsewhere,
     this.onElsewhere,
@@ -231,6 +234,10 @@ class WalletBalanceCard extends StatelessWidget {
 
   /// "1.012 public · 1 stealth", when there is more than one pocket.
   final String? breakdownLine;
+
+  /// What is still in the mempool, split against [balanceNano]: "+2.5 ERG
+  /// pending · 105.21 confirmed". Nothing shows while nothing is pending.
+  final PendingBalance? pending;
   final WalletIdentityLine? identity;
 
   /// Funds on other addresses of this wallet, and what tapping that line does.
@@ -284,6 +291,15 @@ class WalletBalanceCard extends StatelessWidget {
                       Text(
                         breakdownLine!,
                         style: TextStyle(fontSize: 13, color: muted),
+                      ),
+                    ],
+                    if (balanceNano != null &&
+                        (pending?.hasPending ?? false)) ...[
+                      const SizedBox(height: 2),
+                      PendingBalanceLine(
+                        key: const Key('wallet-balance-pending'),
+                        pending: pending,
+                        hidden: hidden,
                       ),
                     ],
                   ],

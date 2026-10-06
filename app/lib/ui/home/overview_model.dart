@@ -6,6 +6,7 @@ import '../../services/address_holdings.dart';
 import '../../services/address_label_service.dart';
 import '../../services/mix_service.dart';
 import '../../services/network_controller.dart';
+import '../../services/pending_balance.dart';
 import '../../services/portfolio.dart';
 import '../../services/public_wallet_sync.dart';
 import '../../services/wallet_database_service.dart';
@@ -79,6 +80,7 @@ class OverviewEntry {
     this.stealthAsOf,
     this.elsewhere,
     this.unavailable,
+    this.pending,
   });
 
   final WalletRef ref;
@@ -115,6 +117,12 @@ class OverviewEntry {
   /// Why [balanceNano] is null, when the row should say so.
   final String? unavailable;
 
+  /// What transactions still in the mempool do to [balanceNano], split
+  /// against it (see [PendingBalance.under]). Null when nothing valued it:
+  /// no read since pending summaries, or one that could not value the
+  /// mempool.
+  final PendingBalance? pending;
+
   bool get watched => ref.watched;
 }
 
@@ -125,6 +133,7 @@ class OverviewTotals {
     required this.wallets,
     required this.watched,
     required this.tokens,
+    this.pending,
   });
   final PortfolioTotal total;
   final int wallets;
@@ -132,27 +141,55 @@ class OverviewTotals {
 
   /// Every counted row's tokens, for the fiat valuation of the total.
   final List<({String id, int amount, int decimals})> tokens;
+
+  /// What is pending across the counted rows, split against the total; null
+  /// when no row has a split.
+  final PendingBalance? pending;
 }
 
-OverviewTotals overviewTotals(List<OverviewEntry> entries) => OverviewTotals(
-  total: portfolioTotal([for (final e in entries) e.balanceNano]),
-  wallets: entries.where((e) => !e.watched).length,
-  watched: entries.where((e) => e.watched).length,
-  tokens: [
-    for (final e in entries)
-      if (e.balanceNano != null) ...e.tokens,
-  ],
-);
+OverviewTotals overviewTotals(List<OverviewEntry> entries) {
+  final total = portfolioTotal([for (final e in entries) e.balanceNano]);
+  PendingBalance? pending;
+  for (final e in entries) {
+    final split = e.pending;
+    if (e.balanceNano == null || split == null) continue;
+    pending = pending == null ? split : pending.plus(split);
+  }
+  return OverviewTotals(
+    total: total,
+    wallets: entries.where((e) => !e.watched).length,
+    watched: entries.where((e) => e.watched).length,
+    tokens: [
+      for (final e in entries)
+        if (e.balanceNano != null) ...e.tokens,
+    ],
+    // Rows without a split add nothing pending: as far as anything here
+    // knows, their figures are in blocks.
+    pending: pending?.under(total.totalNano),
+  );
+}
 
 /// What a watched address held at its last read.
 class WatchedHoldings {
-  const WatchedHoldings({required this.nanoErg, this.tokens = const []});
+  const WatchedHoldings({
+    required this.nanoErg,
+    this.tokens = const [],
+    this.pending,
+  });
   final int nanoErg;
   final List<({String id, int amount})> tokens;
 
+  /// How [nanoErg] splits into confirmed and pending: `get_balance`'s
+  /// `summary`. Null when the answer had none.
+  final PendingBalance? pending;
+
   factory WatchedHoldings.fromBalance(Map<String, dynamic> balance) {
     final holding = AddressHolding.fromBalance('', balance);
-    return WatchedHoldings(nanoErg: holding.nanoErg, tokens: holding.tokens);
+    return WatchedHoldings(
+      nanoErg: holding.nanoErg,
+      tokens: holding.tokens,
+      pending: PendingBalance.fromJson(balance['summary']),
+    );
   }
 }
 
@@ -167,6 +204,7 @@ class ActiveWalletFigures {
     required this.mixNano,
     required this.tokens,
     required this.holdings,
+    this.pending,
   });
 
   /// The controller's view, when it owns [walletId]; null otherwise.
@@ -189,6 +227,7 @@ class ActiveWalletFigures {
           (id: t.id, amount: t.amount, decimals: t.decimals),
       ],
       holdings: sync.addressHoldings,
+      pending: sync.pending,
     );
   }
 
@@ -205,6 +244,10 @@ class ActiveWalletFigures {
   final List<({String id, int amount, int decimals})> tokens;
   final List<AddressHolding> holdings;
 
+  /// The sync's split of [balanceNano], this app's unseen broadcasts
+  /// included.
+  final PendingBalance? pending;
+
   /// What the wallet is worth, as its page shows it.
   int? get totalNano =>
       balanceNano == null ? null : balanceNano! + stealthNano + mixNano;
@@ -215,6 +258,7 @@ class ActiveWalletFigures {
 List<OverviewEntry> buildOverviewEntries({
   required List<WalletInfo> wallets,
   required Map<String, LastKnownBalance> lastKnown,
+  Map<String, PendingBalance> lastPending = const {},
   required String? unlockedWalletId,
   ActiveWalletFigures? active,
   List<String> watchedAddresses = const [],
@@ -234,6 +278,7 @@ List<OverviewEntry> buildOverviewEntries({
         _lockedEntry(
           w,
           lastKnown[w.walletId],
+          lastPending[w.walletId],
           unlocked: w.walletId == unlockedWalletId,
         ),
     for (final a in watchedAddresses)
@@ -263,6 +308,10 @@ OverviewEntry _activeEntry(WalletInfo w, ActiveWalletFigures active) {
     tokensKnown: active.balanceNano != null,
     publicTokensOnly: active.stealthUnknown,
     stealthNano: active.stealthNano,
+    pending: switch (active.totalNano) {
+      final shown? => active.pending?.under(shown),
+      null => null,
+    },
     elsewhere: fundsElsewhere(
       withWalletIndexes(
         active.holdings,
@@ -277,7 +326,8 @@ OverviewEntry _activeEntry(WalletInfo w, ActiveWalletFigures active) {
 
 OverviewEntry _lockedEntry(
   WalletInfo w,
-  LastKnownBalance? known, {
+  LastKnownBalance? known,
+  PendingBalance? pending, {
   required bool unlocked,
 }) {
   final identity = w.displayAddress;
@@ -295,6 +345,10 @@ OverviewEntry _lockedEntry(
     asOf: known?.age,
     stealthNano: known?.stealthNano ?? 0,
     stealthAsOf: known?.stealthScannedAt,
+    // Saved with the figure, so exactly as old as it is.
+    pending: known == null
+        ? null
+        : pending?.under(known.balanceNano + known.stealthNano),
     elsewhere: known == null
         ? null
         : fundsElsewhere(
@@ -336,6 +390,7 @@ OverviewEntry _watchedAddressEntry(
   tokensKnown: holdings != null,
   asOf: asOf,
   unavailable: failed ? 'Balance unavailable' : null,
+  pending: holdings?.pending?.under(holdings.nanoErg),
 );
 
 OverviewEntry _accountEntry(
@@ -360,6 +415,7 @@ OverviewEntry _accountEntry(
     unavailable: snapshot == null && !account.busy
         ? (account.error ?? 'Balance unavailable')
         : null,
+    pending: snapshot?.pending?.under(snapshot.balance),
   );
 }
 
@@ -386,6 +442,7 @@ class WalletsOverviewModel extends ChangeNotifier {
   List<WalletInfo> get wallets => _wallets;
 
   final Map<String, LastKnownBalance> _lastKnown = {};
+  final Map<String, PendingBalance> _lastPending = {};
   final Map<String, WatchedHoldings?> _watched = {};
   final Map<String, DateTime> _watchedReadAt = {};
   final Set<String> _watchedStale = {};
@@ -410,6 +467,9 @@ class WalletsOverviewModel extends ChangeNotifier {
   }
 
   LastKnownBalance? lastKnown(String walletId) => _lastKnown[walletId];
+
+  /// The pending split saved with [lastKnown]'s snapshot, if any.
+  PendingBalance? lastPending(String walletId) => _lastPending[walletId];
 
   /// What the watched [address] held at its last successful read; null when
   /// it has not been read or every read failed.
@@ -462,6 +522,7 @@ class WalletsOverviewModel extends ChangeNotifier {
     return buildOverviewEntries(
       wallets: _wallets,
       lastKnown: _lastKnown,
+      lastPending: _lastPending,
       unlockedWalletId: unlocked,
       active: ActiveWalletFigures.of(
         walletSyncController,
@@ -486,24 +547,33 @@ class WalletsOverviewModel extends ChangeNotifier {
   Future<void> loadWallets() async {
     final generation = ++_loadGeneration;
     final wallets = await walletService.listWallets();
-    final known = await _snapshots(wallets);
+    final snapshots = await _snapshots(wallets);
     if (generation != _loadGeneration || _disposed) return;
     _wallets = wallets;
-    _lastKnown
-      ..clear()
-      ..addAll(known);
+    _remember(snapshots);
     notifyListeners();
   }
 
-  static Future<Map<String, LastKnownBalance>> _snapshots(
-    List<WalletInfo> wallets,
-  ) async {
+  /// Every wallet's last figures, and the pending split saved with them.
+  static Future<_Snapshots> _snapshots(List<WalletInfo> wallets) async {
     final known = <String, LastKnownBalance>{};
+    final pending = <String, PendingBalance>{};
     for (final w in wallets) {
       final k = await WalletDatabaseService.lastKnownBalance(w.walletId);
       if (k != null) known[w.walletId] = k;
+      final p = await lastKnownPending(w.walletId);
+      if (p != null) pending[w.walletId] = p;
     }
-    return known;
+    return (known: known, pending: pending);
+  }
+
+  void _remember(_Snapshots snapshots) {
+    _lastKnown
+      ..clear()
+      ..addAll(snapshots.known);
+    _lastPending
+      ..clear()
+      ..addAll(snapshots.pending);
   }
 
   /// Saves the order the user dragged the seed wallets into.
@@ -589,11 +659,9 @@ class WalletsOverviewModel extends ChangeNotifier {
 
   Future<void> _reloadSnapshots() async {
     final generation = _loadGeneration;
-    final known = await _snapshots(_wallets);
+    final snapshots = await _snapshots(_wallets);
     if (generation != _loadGeneration || _disposed) return;
-    _lastKnown
-      ..clear()
-      ..addAll(known);
+    _remember(snapshots);
     notifyListeners();
   }
 
@@ -655,3 +723,8 @@ class WalletsOverviewModel extends ChangeNotifier {
     notifyListeners();
   }
 }
+
+typedef _Snapshots = ({
+  Map<String, LastKnownBalance> known,
+  Map<String, PendingBalance> pending,
+});
