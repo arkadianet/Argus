@@ -17,6 +17,7 @@ import 'services/wallet_sync_controller.dart';
 import 'theme/argus_theme.dart';
 import 'theme/theme_controller.dart';
 import 'ui/ageusd_screen.dart';
+import 'ui/arbitrage_screen.dart';
 import 'ui/contacts_screen.dart';
 import 'ui/create_wallet_screen.dart';
 import 'ui/dashboard_screen.dart';
@@ -155,6 +156,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
               '/dexy' => const DexyScreen(),
               '/ageusd' => const AgeUsdScreen(),
               '/swap' => const SwapHubScreen(),
+              '/arbitrage' => const ArbitrageScreen(),
               _ => null,
             };
             if (page == null) return null;

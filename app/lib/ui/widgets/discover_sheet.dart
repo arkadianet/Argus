@@ -6,7 +6,7 @@ import '../../theme/argus_theme.dart';
 import '../swap_hub_screen.dart';
 
 /// Everything the Discover row and page can open.
-enum DiscoverFeature { dexy, ageusd, spectrum, liquidity, duckpools, sigmafi, rosen, dapps, mix, tokens, utxos, stakes }
+enum DiscoverFeature { dexy, ageusd, spectrum, liquidity, duckpools, sigmafi, rosen, dapps, mix, tokens, utxos, stakes, arbitrage }
 
 /// Whether a feature is offered right now: a paused protocol keeps its
 /// explainer but appears on no card and in no list.
@@ -245,6 +245,25 @@ const discoverExplainers = <DiscoverFeature, DiscoverExplainer>{
       'Scanning is free; recovery will pay miner and contract costs plus a flat 0.0011 ERG Argus fee per transaction',
     ],
     go: 'Open stake recovery',
+  ),
+  DiscoverFeature.arbitrage: DiscoverExplainer(
+    title: 'Arbitrage',
+    blurb: 'Find Spectrum pools that disagree on a price, and trade the gap.',
+    icon: Icons.sync_alt,
+    route: '/arbitrage',
+    what: 'When two Spectrum pools price a token differently, buying it where it is cheap and selling it where it is dear returns more ERG than it took. Argus scans the pools on your node while the screen is open and shows each round trip with every fee already taken off.',
+    can: [
+      'See each route, the amount to put in and the expected profit after pool, miner and Argus fees',
+      'Set the minimum profit worth your attention',
+      'Review the whole chain of transactions before signing it',
+      'Sell a token left behind by a failed leg straight back to ERG',
+    ],
+    risks: [
+      'Bots take most gaps within a block; quotes go stale in seconds',
+      'Each leg is its own transaction: if a pool is traded first, a later leg fails and you keep the token',
+      'Selling a stranded token back usually costs a little ERG',
+    ],
+    go: 'Open arbitrage',
   ),
   DiscoverFeature.utxos: DiscoverExplainer(
     title: 'UTXO management',
