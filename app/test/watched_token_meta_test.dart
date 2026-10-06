@@ -40,6 +40,15 @@ class WatchedApi extends RustLibApi {
   final asked = <({String id, String provider})>[];
   final syncReads = <List<String>>[];
 
+  /// Answers, as the native parser shapes them, for tokens beyond the two.
+  final answers = <String, Map<String, dynamic>>{};
+
+  /// The next this many lookups fail to be answered (a node not answering).
+  int failNext = 0;
+
+  /// Lookups that are never answered.
+  final failing = <String>{};
+
   static final _described = {
     _alpha: ('Alpha', 6),
     _beta: ('Beta', 3),
@@ -74,6 +83,12 @@ class WatchedApi extends RustLibApi {
     required bool providerIsNode,
   }) async {
     asked.add((id: tokenId, provider: providerUrl));
+    if (failing.contains(tokenId) || failNext > 0) {
+      if (failNext > 0) failNext--;
+      throw 'RETRYABLE: error sending request';
+    }
+    final answer = answers[tokenId];
+    if (answer != null) return jsonEncode(answer);
     final known = _described[tokenId];
     if (known == null) throw '{"code":"NOT_FOUND","message":"404 not found"}';
     return jsonEncode({
@@ -139,6 +154,9 @@ void main() {
       ..balances.clear()
       ..asked.clear()
       ..syncReads.clear()
+      ..answers.clear()
+      ..failing.clear()
+      ..failNext = 0
       ..servedBy = _served;
     await watchOnlyService.load();
     watchAccountService.accounts.clear();
@@ -325,5 +343,151 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 20));
     expect(api.asked, isEmpty);
     expect(tokenName(_alpha), isNull);
+  });
+
+  group('decimals as the node records them', () {
+    final pigeon = '16' * 32;
+    final bare = 'b0' * 32;
+    final odd = '0d' * 32;
+
+    Map<String, dynamic> answer(String id, String name, {int? decimals, required String evidence, required String state, Map<String, String>? registers}) => {
+      'id': id,
+      'name': name,
+      'decimals': ?decimals,
+      'decimalsEvidence': evidence,
+      'supplyEvidence': 'originalEmission',
+      'emissionAmount': 1,
+      'declaredAssetKind': 'picture',
+      'metadataState': state,
+      'mediaState': 'notLoaded',
+      'issuanceTransactionId': 'aa' * 32,
+      if (registers != null) 'rawRegisters': jsonEncode(registers),
+    };
+
+    test('a watched NFT with an integer R6, or none, shows whole units', () async {
+      // Carrier Pigeon on node.kadia.io: R6 = Int 0, record 0 decimals.
+      api.answers[pigeon] = answer(pigeon, 'Carrier Pigeon', decimals: 0, evidence: 'invalid', state: 'invalid', registers: {
+        'R4': '0e0e4361727269657220506967656f6e',
+        'R6': '0400',
+        'R7': '0e020101',
+      });
+      // No R6 and a record silent on decimals.
+      api.answers[bare] = answer(bare, 'Bare', evidence: 'unknown', state: 'partial', registers: {'R4': '0e0442617265'});
+      // R6 = "A".
+      api.answers[odd] = answer(odd, 'Odd', decimals: 0, evidence: 'invalid', state: 'invalid', registers: {'R4': '0e034f6464', 'R6': '0e0141'});
+      api.balances[_watched] = {
+        'balance_nano_erg': 0,
+        'tokens': [
+          for (final id in [pigeon, bare, odd]) {'id': id, 'amount': 1},
+        ],
+      };
+      await walletService.getBalance(_watched, nodeUrl: _preferred);
+      await _until(() => api.asked.length == 3 && tokenName(odd) != null);
+
+      String shown(String id) => holdingAmountText(walletService.displayMetadata(TokenBalance(id: id, amount: 1)));
+      expect(shown(pigeon), '1');
+      expect(tokenName(pigeon), 'Carrier Pigeon');
+      expect(shown(bare), '1');
+      expect(shown(odd), '1 raw unit', reason: 'a malformed R6 is not a scale');
+      expect(walletService.displayTokenMeta(odd)!.decimalsEvidence, DecimalsEvidence.invalid);
+
+      // Read in full, the malformed one is not worth another pass.
+      await walletService.getBalance(_watched, nodeUrl: _preferred);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(api.syncReads, hasLength(1));
+      expect(api.asked, hasLength(3));
+    });
+  });
+
+  test('a watched token whose decimals could not be read stays in raw units', () async {
+    final unread = 'e0' * 32;
+    // A record silent on decimals, and an issuance box that did not answer.
+    api.answers[unread] = {
+      'id': unread,
+      'name': 'Unread',
+      'decimalsEvidence': 'unknown',
+      'supplyEvidence': 'unknown',
+      'declaredAssetKind': 'none',
+      'metadataState': 'partial',
+      'mediaState': 'unknown',
+      'incomplete': true,
+    };
+    api.balances[_watched] = {
+      'balance_nano_erg': 0,
+      'tokens': [
+        {'id': unread, 'amount': 5},
+      ],
+    };
+    await walletService.getBalance(_watched, nodeUrl: _preferred);
+    await _until(() => tokenName(unread) != null);
+    final shown = walletService.displayMetadata(TokenBalance(id: unread, amount: 5));
+    expect(shown.name, 'Unread');
+    expect(holdingAmountText(shown), '5 raw units', reason: 'named, but no zero is guessed');
+    expect(tokenDecimals(unread), isNull);
+  });
+
+  group('every holding is named', () {
+    late Duration followUp;
+    late Duration idle;
+    setUp(() {
+      followUp = WalletService.watchedFollowUpDelay;
+      idle = WalletService.watchedIdleDelay;
+      WalletService.watchedFollowUpDelay = const Duration(milliseconds: 1);
+      WalletService.watchedIdleDelay = const Duration(milliseconds: 1);
+    });
+    tearDown(() {
+      WalletService.watchedFollowUpDelay = followUp;
+      WalletService.watchedIdleDelay = idle;
+    });
+
+    List<String> hold(int n) {
+      final ids = [for (var i = 0; i < n; i++) 'f${i.toRadixString(16).padLeft(3, '0')}' * 16];
+      for (final id in ids) {
+        api.answers[id] = {
+          'id': id,
+          'name': 'T$id'.substring(0, 6),
+          'decimals': 0,
+          'decimalsEvidence': 'valid',
+          'supplyEvidence': 'unknown',
+          'declaredAssetKind': 'none',
+          'metadataState': 'complete',
+          'mediaState': 'absent',
+        };
+      }
+      api.balances[_watched] = {
+        'balance_nano_erg': 0,
+        'tokens': [
+          for (final id in ids) {'id': id, 'amount': 1},
+        ],
+      };
+      return ids;
+    }
+
+    test('past the per-pass cap, without waiting for another balance read', () async {
+      final ids = hold(WalletService.maxTokenMetaPerSync + 5);
+      await walletService.getBalance(_watched, nodeUrl: _preferred);
+      await _until(() => ids.every((id) => tokenName(id) != null));
+      expect(api.asked.map((a) => a.id).toSet(), ids.toSet());
+      expect(api.asked, hasLength(ids.length), reason: 'each asked once');
+      expect(api.syncReads, hasLength(2), reason: 'the second pass reads the balances again');
+    });
+
+    test('after a pass a node stopped answering cut short', () async {
+      final ids = hold(3);
+      api.failNext = 3;
+      await walletService.getBalance(_watched, nodeUrl: _preferred);
+      await _until(() => ids.every((id) => tokenName(id) != null));
+      expect(api.asked, hasLength(6), reason: 'three unanswered, then three answered');
+    });
+
+    test('but a token that never answers is not asked for ever', () async {
+      final ids = hold(1);
+      api.failing.add(ids.single);
+      await walletService.getBalance(_watched, nodeUrl: _preferred);
+      await _until(() => api.asked.length == 1 + WalletService.maxWatchedIdlePasses);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(api.asked, hasLength(1 + WalletService.maxWatchedIdlePasses));
+      expect(tokenName(ids.single), isNull);
+    });
   });
 }

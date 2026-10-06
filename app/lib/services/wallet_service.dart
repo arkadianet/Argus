@@ -12,6 +12,7 @@ import 'app_fee.dart';
 import 'network_controller.dart';
 import 'privacy_service.dart';
 import 'token_catalog.dart';
+import 'token_decimals.dart';
 import 'token_descriptor_store.dart';
 import 'token_evidence.dart';
 export 'token_evidence.dart';
@@ -159,7 +160,7 @@ class TokenBalance {
       (declaredAssetKind != DeclaredAssetKind.none ||
           (supplyEvidence == SupplyEvidence.originalEmission &&
               emissionAmount == 1 &&
-              decimalsEvidence == DecimalsEvidence.valid &&
+              decimalsEvidence.readFromToken &&
               decimals == 0));
 
   String get classification {
@@ -172,7 +173,7 @@ class TokenBalance {
     final single =
         supplyEvidence == SupplyEvidence.originalEmission &&
         emissionAmount == 1 &&
-        decimalsEvidence == DecimalsEvidence.valid &&
+        decimalsEvidence.readFromToken &&
         decimals == 0;
     if (declaredAssetKind != DeclaredAssetKind.none) {
       if (single) return 'Single-unit artwork · ${declaredAssetKind.name}';
@@ -862,6 +863,25 @@ class WalletService with WidgetsBindingObserver {
   /// Watched wallets with a pass running: one at a time per wallet.
   final Set<String> _watchedPasses = {};
 
+  /// A watched wallet's next pass, when its last one left tokens unnamed.
+  final Map<String, Timer> _watchedFollowUps = {};
+
+  /// Passes in a row, per watched wallet, that named nothing new.
+  final Map<String, int> _watchedIdlePasses = {};
+
+  /// How soon a pass follows one that named something but not everything
+  /// (the per-pass cap, or a run of failures cut it short).
+  @visibleForTesting
+  static Duration watchedFollowUpDelay = const Duration(seconds: 2);
+
+  /// How long, times the number of idle passes so far, a pass waits after
+  /// one that named nothing (the node not answering, the job held
+  /// elsewhere). After [maxWatchedIdlePasses] of those, follow-ups stop and
+  /// the wallet's next balance read starts again.
+  @visibleForTesting
+  static Duration watchedIdleDelay = const Duration(seconds: 15);
+  static const maxWatchedIdlePasses = 3;
+
   /// Bumped when a watched wallet stops being watched or the caches are
   /// wiped, so a pass or a load already running cannot write back.
   final Map<String, int> _watchedGenerations = {};
@@ -899,9 +919,16 @@ class WalletService with WidgetsBindingObserver {
     final had = _watchedTables.remove(key)?.isNotEmpty ?? false;
     _watchedMisses.removeWhere((k, _) => k.startsWith('$key|'));
     _watchedCursors.remove(key);
+    _watchedFollowUps.remove(key)?.cancel();
+    _watchedIdlePasses.remove(key);
     await TokenDescriptorStore.clear(_watchedTableId(key));
     if (had) metadataChanges.value++;
   }
+
+  /// Whether [key]'s own table already holds everything one lookup can say
+  /// about [id], scale or no scale: asking again would say it again.
+  bool watchedSettled(String key, String id) =>
+      _watchedTables[key]?[id]?.incomplete == false;
 
   /// Whether a node already answered that [id] does not exist, for the
   /// watched wallet [key]: asking again this session would only repeat it.
@@ -927,7 +954,7 @@ class WalletService with WidgetsBindingObserver {
   /// has no need to ask about it.
   bool _publiclyScaled(String id) {
     final m = publicTokenMeta(id) ?? _legacyTokenMeta[id];
-    return m != null && m.decimalsEvidence != DecimalsEvidence.invalid;
+    return m != null && m.decimalsEvidence.knowsScale;
   }
 
   /// How long a watched wallet's pass waits for the single metadata job
@@ -965,7 +992,9 @@ class WalletService with WidgetsBindingObserver {
   /// address at a time. Ids the public layers already scale are skipped.
   /// What the node answers goes to [key]'s own table. At most
   /// [maxTokenMetaPerSync] requests a pass, in the single metadata job,
-  /// while the app is in front; the screens repaint as names arrive.
+  /// while the app is in front; the screens repaint as names arrive, and
+  /// what a pass leaves unnamed is asked in the passes that follow it
+  /// ([_followWatchedPass]).
   Future<void> resolveWatchedHoldings(
     String key,
     List<String> addresses, {
@@ -976,6 +1005,8 @@ class WalletService with WidgetsBindingObserver {
         if (a.isNotEmpty) a,
     }.toList();
     if (targets.isEmpty || !_inForeground || !_watchedPasses.add(key)) return;
+    // This pass is the one a follow-up was waiting to run.
+    _watchedFollowUps.remove(key)?.cancel();
     final generation = _watchedGenerations[key] ?? 0;
     final wipes = _watchedWipes;
     bool current() =>
@@ -983,6 +1014,10 @@ class WalletService with WidgetsBindingObserver {
         wipes == _watchedWipes &&
         (_watchedGenerations[key] ?? 0) == generation;
     var learned = false;
+    // Unnamed tokens the pass set out to ask about, and how many of them it
+    // left so: the difference is what it settled.
+    var unsettled = 0;
+    var left = 0;
     try {
       await loadWatchedTokenTable(key);
       if (!current()) return;
@@ -1011,6 +1046,8 @@ class WalletService with WidgetsBindingObserver {
             id,
       ]..sort();
       if (wanted.isEmpty) return;
+      unsettled = wanted.length;
+      left = wanted.length;
       // Backgrounding cancels a request in flight, as it does the wallet's.
       _observeLifecycle();
       final cursor = _watchedCursors[key] ?? 0;
@@ -1074,6 +1111,10 @@ class WalletService with WidgetsBindingObserver {
         }
       } finally {
         _watchedCursors[key] = cursor + (attempted == 0 ? 1 : attempted);
+        final table = _watchedTables[key] ?? const <String, CachedDescriptor>{};
+        left = wanted
+            .where((id) => (table[id]?.incomplete ?? true) && !misses.contains(id))
+            .length;
       }
     } finally {
       _watchedPasses.remove(key);
@@ -1081,7 +1122,40 @@ class WalletService with WidgetsBindingObserver {
       if (learned && table != null && current()) {
         await TokenDescriptorStore.save(_watchedTableId(key), Map.of(table));
       }
+      if (left > 0 && current()) {
+        _followWatchedPass(key, targets, nodeUrl, settled: unsettled - left);
+      } else {
+        _watchedIdlePasses.remove(key);
+      }
     }
+  }
+
+  /// Another pass for a watched wallet whose last one left tokens unnamed,
+  /// so they do not wait for its next balance read: the per-pass cap, a
+  /// node that stopped answering, or the single metadata job busy elsewhere
+  /// must not leave a holding unnamed for good. Soon after a pass that
+  /// settled something; after one that settled nothing, later each time,
+  /// and not after [maxWatchedIdlePasses] of those in a row. A token stays
+  /// unnamed only when its node says it does not exist, or keeps failing.
+  void _followWatchedPass(
+    String key,
+    List<String> addresses,
+    String? nodeUrl, {
+    required int settled,
+  }) {
+    _watchedFollowUps.remove(key)?.cancel();
+    final idle = settled > 0 ? 0 : (_watchedIdlePasses[key] ?? 0) + 1;
+    if (idle > maxWatchedIdlePasses) {
+      _watchedIdlePasses.remove(key);
+      return;
+    }
+    _watchedIdlePasses[key] = idle;
+    final delay = idle == 0 ? watchedFollowUpDelay : watchedIdleDelay * idle;
+    _watchedFollowUps[key] = Timer(delay, () {
+      _watchedFollowUps.remove(key);
+      if (!_inForeground) return;
+      unawaited(resolveWatchedHoldings(key, addresses, nodeUrl: nodeUrl));
+    });
   }
 
   void clearSessionMetadata() {
@@ -1123,6 +1197,11 @@ class WalletService with WidgetsBindingObserver {
       _watchedTables.clear();
       _watchedMisses.clear();
       _watchedCursors.clear();
+      for (final timer in _watchedFollowUps.values) {
+        timer.cancel();
+      }
+      _watchedFollowUps.clear();
+      _watchedIdlePasses.clear();
       // A queued write would otherwise recreate what this just cleared.
       _pendingFlush.clear();
       _tokenMetaDirty = false;
@@ -1188,18 +1267,19 @@ class WalletService with WidgetsBindingObserver {
         throw StateError('Metadata exceeds wallet limits');
       final m = jsonDecode(raw) as Map<String, dynamic>;
       if (m['id'] != holding.id) throw StateError('Metadata conflict');
+      final declared = declaredDecimals(m);
       final previous = _descriptors[key];
       final conflict = previous != null && (
         (previous.issuanceBoxId != null && m['boxId'] != null && previous.issuanceBoxId != m['boxId']) ||
         (previous.emissionAmount != null && m['emissionAmount'] != null && previous.emissionAmount != m['emissionAmount']) ||
-        (previous.decimalsEvidence == DecimalsEvidence.valid && m['decimalsEvidence'] == 'valid' && previous.decimals != m['decimals']));
+        (previous.decimalsEvidence.readFromToken && declared.evidence.readFromToken && previous.decimals != declared.decimals));
       final result = TokenBalance(
         id: holding.id,
         amount: holding.amount,
         stealthAmount: holding.stealthAmount,
         name: m['name'] as String?,
         description: m['description'] as String?,
-        decimals: (m['decimals'] as num?)?.toInt() ?? 0,
+        decimals: declared.decimals,
         emissionAmount: (m['emissionAmount'] as num?)?.toInt(),
         iconUrl: m['iconUrl'] as String?,
         source: provider,
@@ -1209,15 +1289,11 @@ class WalletService with WidgetsBindingObserver {
         supplyEvidence: SupplyEvidence.values.byName(
           m['supplyEvidence'] as String,
         ),
-        decimalsEvidence: DecimalsEvidence.values.byName(
-          m['decimalsEvidence'] as String,
-        ),
+        decimalsEvidence: declared.evidence,
         declaredAssetKind: DeclaredAssetKind.values.byName(
           m['declaredAssetKind'] as String,
         ),
-        metadataState: conflict ? MetadataState.conflict : MetadataState.values.byName(
-          m['metadataState'] as String,
-        ),
+        metadataState: conflict ? MetadataState.conflict : declared.metadataState,
         mediaState: MediaState.values.byName(m['mediaState'] as String),
       );
       // 1,000 × 16 KiB bounds this memory-only cache to 16 MiB serialized.
@@ -1367,6 +1443,7 @@ class WalletService with WidgetsBindingObserver {
           decimals: (v['decimals'] as num?)?.toInt() ?? 0,
           emissionAmount: (v['emissionAmount'] as num?)?.toInt(),
           iconUrl: v['iconUrl'] as String?,
+          decimalsEvidence: DecimalsEvidence.listed,
           metadataState: MetadataState.partial,
         );
         _tokenMeta[entry.key] = _legacyTokenMeta[entry.key]!;
@@ -1801,12 +1878,13 @@ class WalletService with WidgetsBindingObserver {
     final curated = knownToken(id);
     if (curated == null) return null;
     // The ticker is the on-chain name the registry was checked against.
-    // Evidence stays unknown: this is the app's list, not an issuance read.
+    // The scale is the app's list's, not an issuance read.
     return TokenBalance(
       id: id,
       amount: 0,
       name: curated.ticker,
       decimals: curated.decimals,
+      decimalsEvidence: DecimalsEvidence.listed,
       metadataState: MetadataState.partial,
       source: curatedTokenSource,
     );

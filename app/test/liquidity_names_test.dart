@@ -62,7 +62,7 @@ void main() {
     tester,
   ) async {
     publicTokenCatalog.debugSeed([
-      CachedDescriptor(id: _known, name: 'Pooled', decimals: 6),
+      CachedDescriptor(id: _known, name: 'Pooled', decimals: 6, decimalsEvidence: DecimalsEvidence.valid),
     ]);
     await show(tester);
 
@@ -87,6 +87,22 @@ void main() {
       reason: 'base units are not passed off as whole tokens',
     );
     expect(tester.takeException(), isNull, reason: 'and the row wraps');
+  });
+
+  testWidgets('a pool token named but not scaled stays in raw units', (
+    tester,
+  ) async {
+    // The node named it, but its decimals could not be read: no zero is
+    // guessed for them.
+    publicTokenCatalog.debugSeed([
+      CachedDescriptor(id: _unknown, name: 'Unread', decimals: 0, source: 'https://node.example'),
+    ]);
+    await show(tester);
+    expect(find.text('ERG / Unread'), findsOneWidget);
+    expect(
+      find.text('1,000 ERG · 349,670,571,986 raw units of Unread'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('a scale learned under typed pool reserves keeps their units', (
@@ -124,7 +140,7 @@ void main() {
     await tester.pump();
 
     publicTokenCatalog.debugSeed([
-      CachedDescriptor(id: _unknown, name: 'Named', decimals: 2),
+      CachedDescriptor(id: _unknown, name: 'Named', decimals: 2, decimalsEvidence: DecimalsEvidence.valid),
     ]);
     await tester.pump();
     expect(find.text('1.5'), findsOneWidget,
@@ -138,7 +154,7 @@ void main() {
     await show(tester);
     expect(find.text('ERG / aaaaaaaa…'), findsOneWidget);
     publicTokenCatalog.debugSeed([
-      CachedDescriptor(id: _known, name: 'Pooled', decimals: 6),
+      CachedDescriptor(id: _known, name: 'Pooled', decimals: 6, decimalsEvidence: DecimalsEvidence.valid),
     ]);
     walletService.metadataChanges.value++;
     await tester.pump();

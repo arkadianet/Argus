@@ -156,6 +156,7 @@ class PublicTokenCatalog {
           id: id,
           name: name,
           decimals: decimals,
+          decimalsEvidence: DecimalsEvidence.listed,
           metadataState: MetadataState.partial,
           incomplete: true,
         );

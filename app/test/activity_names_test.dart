@@ -54,7 +54,7 @@ void main() {
     tester,
   ) async {
     publicTokenCatalog.debugSeed([
-      CachedDescriptor(id: _pooled, name: 'Pooled', decimals: 2),
+      CachedDescriptor(id: _pooled, name: 'Pooled', decimals: 2, decimalsEvidence: DecimalsEvidence.valid),
     ]);
     await row(tester, _sent([
       {'token_id': _unknown, 'amount': 5},
@@ -73,7 +73,7 @@ void main() {
     ]));
     expect(find.textContaining('150 raw units of aaaaaaaa…'), findsOneWidget);
     publicTokenCatalog.debugSeed([
-      CachedDescriptor(id: _pooled, name: 'Pooled', decimals: 2),
+      CachedDescriptor(id: _pooled, name: 'Pooled', decimals: 2, decimalsEvidence: DecimalsEvidence.valid),
     ]);
     await tester.pump();
     expect(find.textContaining('1.5 Pooled + 1.8162 ERG'), findsOneWidget);

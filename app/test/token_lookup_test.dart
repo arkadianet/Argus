@@ -176,8 +176,8 @@ void main() {
     await svc.restoreWallet('mock', walletId: 'layers');
     await resolveForWallet(svc, 'layers');
     publicTokenCatalog.debugSeed([
-      CachedDescriptor(id: _held, name: 'Catalog name', decimals: 9),
-      CachedDescriptor(id: _deep, name: 'Pooled', decimals: 4),
+      CachedDescriptor(id: _held, name: 'Catalog name', decimals: 9, decimalsEvidence: DecimalsEvidence.valid),
+      CachedDescriptor(id: _deep, name: 'Pooled', decimals: 4, decimalsEvidence: DecimalsEvidence.valid),
     ]);
 
     expect(svc.cachedTokenMeta(_held)?.name, 'Name ab',
@@ -252,7 +252,7 @@ void main() {
   test('a holding published without a record is filled from the lookup',
       () async {
     publicTokenCatalog.debugSeed([
-      CachedDescriptor(id: _deep, name: 'Pooled', decimals: 4),
+      CachedDescriptor(id: _deep, name: 'Pooled', decimals: 4, decimalsEvidence: DecimalsEvidence.valid),
     ]);
     final shown = walletService.displayMetadata(
       TokenBalance(id: _deep, amount: 12345, stealthAmount: 5),
@@ -464,7 +464,7 @@ void main() {
 
     test('a known scale is applied', () {
       publicTokenCatalog.debugSeed([
-        CachedDescriptor(id: _deep, name: 'Pooled', decimals: 4),
+        CachedDescriptor(id: _deep, name: 'Pooled', decimals: 4, decimalsEvidence: DecimalsEvidence.valid),
       ]);
       expect(tokenAmountText(BigInt.from(12345678), _deep), '1,234.5678 Pooled');
       expect(tokenDecimals(_deep), 4);
@@ -504,7 +504,7 @@ void main() {
 
     test('issuer text is sanitised before it is shown', () {
       publicTokenCatalog.debugSeed([
-        CachedDescriptor(id: _deep, name: 'Ev\u202eil\u0001', decimals: 0),
+        CachedDescriptor(id: _deep, name: 'Ev\u202eil\u0001', decimals: 0, decimalsEvidence: DecimalsEvidence.valid),
       ]);
       expect(tokenLabel(_deep), 'Evil');
     });

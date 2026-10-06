@@ -113,10 +113,15 @@ class WatchedTokenMeta {
   }
 
   /// A token nothing can scale yet that no node has already said does not
-  /// exist: without one, a pass would read the balances again for nothing
-  /// at every refresh.
+  /// exist and this wallet has not already read in full (a malformed R6
+  /// stays unscaled, and asking again would only say so again): without
+  /// one, a pass would read the balances again for nothing at every
+  /// refresh.
   bool _worthAPass(String key, Iterable<String> ids) => ids.any(
-    (id) => tokenDecimals(id) == null && !_wallet.watchedMissed(key, id),
+    (id) =>
+        tokenDecimals(id) == null &&
+        !_wallet.watchedMissed(key, id) &&
+        !_wallet.watchedSettled(key, id),
   );
 }
 

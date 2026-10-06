@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:argus_wallet/services/amm_service.dart';
 import 'package:argus_wallet/services/token_catalog.dart';
 import 'package:argus_wallet/services/token_descriptor_store.dart';
+import 'package:argus_wallet/services/token_evidence.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -57,7 +58,7 @@ void main() {
         reason: 'a placeholder is not a name, and its zero is not a scale');
 
     publicTokenCatalog.debugSeed([
-      const CachedDescriptor(id: _tok, name: 'Real', decimals: 6),
+      const CachedDescriptor(id: _tok, name: 'Real', decimals: 6, decimalsEvidence: DecimalsEvidence.valid),
     ]);
     final after = await AmmPoolCache.load();
     expect(after!.set.tokens[_tok]?.name, 'Real',
@@ -67,7 +68,7 @@ void main() {
 
   test('a saved pool list carries no token names of its own', () async {
     publicTokenCatalog.debugSeed([
-      const CachedDescriptor(id: _tok, name: 'Real', decimals: 6),
+      const CachedDescriptor(id: _tok, name: 'Real', decimals: 6, decimalsEvidence: DecimalsEvidence.valid),
     ]);
     await AmmPoolCache.save(
       AmmPoolSet(

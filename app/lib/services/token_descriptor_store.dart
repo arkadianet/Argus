@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'token_decimals.dart';
 import 'token_evidence.dart';
 
 /// Per-wallet cache of resolved token descriptors.
@@ -27,6 +28,11 @@ class TokenDescriptorStore {
 
   /// Bounds one wallet's table. Matches the legacy cache's ceiling.
   static const maxEntries = 1000;
+
+  /// The reading of an inspection's decimals ([declaredDecimals]) a row was
+  /// stored under. Rows from earlier builds counted an integer R6 as
+  /// malformed and a missing R6 as unknown; [decode] has them read again.
+  static const decimalsRule = 2;
 
   /// Bumped by a full wipe. A write already in flight when a wipe or a
   /// deletion ran must not land afterwards: the caller's queue can be
@@ -55,11 +61,30 @@ class TokenDescriptorStore {
     'mediaState': d.mediaState.name,
     'source': d.source,
     if (d.incomplete) 'incomplete': true,
+    'decimalsRule': decimalsRule,
   };
 
   static CachedDescriptor? decode(String id, Object? raw) {
     if (raw is! Map) return null;
     try {
+      final source = raw['source'] as String?;
+      var decimalsEvidence = byName(
+        DecimalsEvidence.values,
+        raw['decimalsEvidence'],
+        DecimalsEvidence.unknown,
+      );
+      var incomplete = raw['incomplete'] == true;
+      if (raw['decimalsRule'] != decimalsRule &&
+          !decimalsEvidence.knowsScale) {
+        if (source == null && decimalsEvidence == DecimalsEvidence.unknown) {
+          // No provenance: a name and scale from the old pool table, which
+          // never recorded evidence.
+          decimalsEvidence = DecimalsEvidence.listed;
+        } else {
+          // Read under the earlier rule: asked again.
+          incomplete = true;
+        }
+      }
       return CachedDescriptor(
         id: id,
         name: raw['name'] as String?,
@@ -71,11 +96,7 @@ class TokenDescriptorStore {
           raw['supplyEvidence'],
           SupplyEvidence.unknown,
         ),
-        decimalsEvidence: byName(
-          DecimalsEvidence.values,
-          raw['decimalsEvidence'],
-          DecimalsEvidence.unknown,
-        ),
+        decimalsEvidence: decimalsEvidence,
         declaredAssetKind: byName(
           DeclaredAssetKind.values,
           raw['declaredAssetKind'],
@@ -91,8 +112,8 @@ class TokenDescriptorStore {
           raw['mediaState'],
           MediaState.unknown,
         ),
-        source: raw['source'] as String?,
-        incomplete: raw['incomplete'] == true,
+        source: source,
+        incomplete: incomplete,
       );
     } catch (_) {
       // One unreadable row costs a refetch, not the whole table.
@@ -220,46 +241,42 @@ abstract final class DescriptorLookupFailure {
 /// holding can never be reconstructed from the cache alone.
 class CachedDescriptor {
   /// Reads one `inspect_token_metadata` answer. [source] is the endpoint
-  /// that gave it, recorded so provenance survives a restart.
+  /// that gave it, recorded so provenance survives a restart. Its decimals
+  /// are read under the wallet's rule ([declaredDecimals]).
   factory CachedDescriptor.fromInspection(
     Map<String, dynamic> m, {
     required String source,
-  }) => CachedDescriptor(
-    id: m['id'] as String,
-    name: m['name'] as String?,
-    decimals: (m['decimals'] as num?)?.toInt() ?? 0,
-    emissionAmount: (m['emissionAmount'] as num?)?.toInt(),
-    iconUrl: m['iconUrl'] as String?,
-    supplyEvidence: TokenDescriptorStore.byName(
-      SupplyEvidence.values,
-      m['supplyEvidence'],
-      SupplyEvidence.unknown,
-    ),
-    decimalsEvidence: TokenDescriptorStore.byName(
-      DecimalsEvidence.values,
-      m['decimalsEvidence'],
-      DecimalsEvidence.unknown,
-    ),
-    declaredAssetKind: TokenDescriptorStore.byName(
-      DeclaredAssetKind.values,
-      m['declaredAssetKind'],
-      DeclaredAssetKind.none,
-    ),
-    metadataState: TokenDescriptorStore.byName(
-      MetadataState.values,
-      m['metadataState'],
-      MetadataState.partial,
-    ),
-    mediaState: TokenDescriptorStore.byName(
-      MediaState.values,
-      m['mediaState'],
-      MediaState.unknown,
-    ),
-    source: source,
-    // Persisted, so a restart can still tell that the issuance registers
-    // were never read and ask for them again.
-    incomplete: m['incomplete'] == true,
-  );
+  }) {
+    final declared = declaredDecimals(m);
+    return CachedDescriptor(
+      id: m['id'] as String,
+      name: m['name'] as String?,
+      decimals: declared.decimals,
+      emissionAmount: (m['emissionAmount'] as num?)?.toInt(),
+      iconUrl: m['iconUrl'] as String?,
+      supplyEvidence: TokenDescriptorStore.byName(
+        SupplyEvidence.values,
+        m['supplyEvidence'],
+        SupplyEvidence.unknown,
+      ),
+      decimalsEvidence: declared.evidence,
+      declaredAssetKind: TokenDescriptorStore.byName(
+        DeclaredAssetKind.values,
+        m['declaredAssetKind'],
+        DeclaredAssetKind.none,
+      ),
+      metadataState: declared.metadataState,
+      mediaState: TokenDescriptorStore.byName(
+        MediaState.values,
+        m['mediaState'],
+        MediaState.unknown,
+      ),
+      source: source,
+      // Persisted, so a restart can still tell that the issuance registers
+      // were never read and ask for them again.
+      incomplete: m['incomplete'] == true,
+    );
+  }
 
   const CachedDescriptor({
     required this.id,

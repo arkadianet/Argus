@@ -41,15 +41,22 @@ String? tokenName(String id, {TokenBalance? held}) {
   return name == null || name.isEmpty ? null : name;
 }
 
-/// Whether [t]'s scale came from metadata rather than being the zero a
-/// holding is built with when nothing knew its token. A token issued with
-/// no decimals has a known zero; a malformed declaration is not known.
-bool hasKnownScale(TokenBalance t) =>
-    t.decimalsEvidence != DecimalsEvidence.invalid &&
-    (t.decimalsEvidence == DecimalsEvidence.valid ||
-        t.metadataState != MetadataState.unavailable ||
-        t.name != null ||
-        t.decimals > 0);
+/// Whether [t]'s scale is known rather than the zero a holding is built
+/// with when nothing knew its token. Declared decimals, an issuance box
+/// with no R6 (a known zero) and the app's lists know it; a malformed R6
+/// does not, and neither does an inspection that could not read the
+/// decimals ([DecimalsEvidence]).
+bool hasKnownScale(TokenBalance t) => switch (t.decimalsEvidence) {
+  DecimalsEvidence.valid ||
+  DecimalsEvidence.absent ||
+  DecimalsEvidence.listed => true,
+  DecimalsEvidence.invalid => false,
+  // No evidence at all. A holding restored from a snapshot still carries
+  // the scale it was published with, though not what backed it.
+  DecimalsEvidence.unknown =>
+    t.metadataState == MetadataState.unavailable &&
+        (t.name != null || t.decimals > 0),
+};
 
 /// Decimals for [id], or null when no layer knows them. Amounts of such a
 /// token are base units and are shown and entered as raw units.

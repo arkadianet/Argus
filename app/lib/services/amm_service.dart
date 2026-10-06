@@ -148,9 +148,10 @@ Map<String, AmmTokenMeta> publicPoolTokenMeta(
     for (final id in poolTokenIds(pool)) {
       if (out.containsKey(id)) continue;
       final known = walletService.publicTokenMeta(id);
-      if (known == null || known.decimalsEvidence == DecimalsEvidence.invalid) {
-        continue;
-      }
+      // A token whose scale is not known is left out rather than given a
+      // zero: priced or bootstrapped at zero decimals, "150" of a
+      // two-decimal token would mean 1.50.
+      if (known == null || !known.decimalsEvidence.knowsScale) continue;
       out[id] = AmmTokenMeta(name: known.label, decimals: known.decimals);
     }
   }

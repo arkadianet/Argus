@@ -495,7 +495,12 @@ class _TokenDetailBody extends StatelessWidget {
                 ),
                 Text(
                   scaled
-                      ? 'Decimals: ${token.decimals} · ${token.decimalsEvidence.name} evidence'
+                      ? 'Decimals: ${token.decimals} · ${switch (token.decimalsEvidence) {
+                          DecimalsEvidence.valid => 'declared by the issuer',
+                          DecimalsEvidence.absent => 'none declared, so whole units',
+                          DecimalsEvidence.listed => 'from a token list',
+                          DecimalsEvidence.unknown || DecimalsEvidence.invalid => 'as last shown',
+                        }}'
                       : 'Decimals unknown · amounts are shown in raw units',
                 ),
                 Text('Declared artwork kind: ${token.declaredAssetKind.name}'),
