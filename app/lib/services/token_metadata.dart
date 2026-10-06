@@ -27,6 +27,14 @@ TokenBalance? tokenMetaFor(String id, {TokenBalance? held}) {
 String tokenLabel(String id, {TokenBalance? held}) =>
     tokenMetaFor(id, held: held)?.label ?? held?.label ?? shortTokenId(id);
 
+/// [tokenLabel] for text that will be saved. It leaves out this session's
+/// explicitly loaded descriptors, which are memory-only by design: a name
+/// learned that way must not outlive the session inside a stored record.
+String storedTokenLabel(String id, {TokenBalance? held}) =>
+    walletService.cachedTokenMeta(id)?.label ??
+    held?.label ??
+    shortTokenId(id);
+
 /// The sanitised issuer name, or null when nothing has named the token.
 String? tokenName(String id, {TokenBalance? held}) {
   final name = (tokenMetaFor(id, held: held)?.name ?? held?.name)?.trim();
@@ -58,6 +66,19 @@ String holdingAmountText(TokenBalance t, {int? units}) {
   return hasKnownScale(t)
       ? formatUnits(amount, t.decimals)
       : rawUnitsText(amount);
+}
+
+/// [text], typed as an amount at [was] decimals, rewritten at [now] so it
+/// still stands for the same base units: "150" typed as raw units becomes
+/// "1.5" once the token turns out to have two decimals. The lookup can
+/// learn a scale while a figure sits in a field, and the same text would
+/// otherwise silently mean a different amount. Null when [text] does not
+/// parse at [was]; the caller clears the field rather than guess.
+String? rescaleAmountText(String text, int was, int now) {
+  final units = parseDecimalToBase(text, was);
+  return units == null
+      ? null
+      : formatUnits(BigInt.from(units), now, grouped: false);
 }
 
 /// [units] of token [id]: "1,234.5 SigUSD", or — when no layer knows the

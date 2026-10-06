@@ -89,6 +89,49 @@ void main() {
     expect(tester.takeException(), isNull, reason: 'and the row wraps');
   });
 
+  testWidgets('a scale learned under typed pool reserves keeps their units', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: WalletArgsScope(
+          args: WalletRouteArgs(
+            senderAddress: 'a',
+            receiveAddress: 'a',
+            changeAddress: 'a',
+            tokens: [TokenBalance(id: _unknown, amount: 5000)],
+          ),
+          child: LiquidityScreen(
+            readPools: (_) async =>
+                const AmmPoolSet(truncated: false, pools: [], tokens: {}),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Create a pool'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('pool-y')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('6d6d6d6d…').last);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('In raw units'), findsOneWidget);
+    await tester.enterText(find.byKey(const Key('pool-y-amount')), '150');
+    await tester.pump();
+
+    publicTokenCatalog.debugSeed([
+      CachedDescriptor(id: _unknown, name: 'Named', decimals: 2),
+    ]);
+    await tester.pump();
+    expect(find.text('1.5'), findsOneWidget,
+        reason: 'the reserves typed are the reserves confirmed');
+    expect(find.textContaining('In raw units'), findsNothing);
+  });
+
   testWidgets('a name learned while the screen is open shows at once', (
     tester,
   ) async {

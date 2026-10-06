@@ -238,8 +238,36 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
     _poolRefresh = Timer.periodic(poolRefreshEvery, (_) => _loadPools());
   }
 
+  /// Decimals the selected tokens had when their figures were typed or last
+  /// rescaled. The catalog and the wallet's sync learn scales in the
+  /// background; when one changes under a typed figure, the figure is
+  /// rewritten to keep the base units it stood for, and the quote, made for
+  /// the old reading, is dropped and asked again.
+  int _fromScaleSeen = 9;
+  int _toScaleSeen = 9;
+
   void _metadataChanged() {
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    final from = _decimals(_fromToken);
+    final to = _decimals(_toToken);
+    if (from == _fromScaleSeen && to == _toScaleSeen) {
+      setState(() {});
+      return;
+    }
+    _rescaleField(_amountCtrl, _fromScaleSeen, from);
+    _rescaleField(_toAmountCtrl, _toScaleSeen, to);
+    _fromScaleSeen = from;
+    _toScaleSeen = to;
+    setState(() {
+      _quote = null;
+      _rounding = null;
+    });
+    _scheduleQuote();
+  }
+
+  void _rescaleField(TextEditingController field, int was, int now) {
+    if (was == now || field.text.trim().isEmpty) return;
+    field.text = rescaleAmountText(field.text, was, now) ?? '';
   }
 
   @override
@@ -305,6 +333,8 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
   /// whereas repeated presses of Swap on the same pair are not.
   void _onPairChanged() {
     _movedRetried = false;
+    _fromScaleSeen = _decimals(_fromToken);
+    _toScaleSeen = _decimals(_toToken);
     _scheduleQuote();
   }
 
@@ -324,15 +354,18 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
       return;
     }
     final gen = ++_quoteGeneration;
+    final from = _fromToken;
+    final to = _toToken;
     try {
       final q = await ammService.quote(
-        fromToken: _fromToken,
-        toToken: _toToken,
+        fromToken: from,
+        toToken: to,
         amount: amount,
       );
       if (!mounted || gen != _quoteGeneration) return;
       setState(() {
         _quote = q;
+        _quotedFor = (from: from, to: to, amount: amount);
         _quoteError = null;
         _rounding = _lastEdited == 'from' ? _roundingFor(q, amount) : null;
         // Mirror the quoted output into the want field so both sides always
@@ -354,6 +387,11 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
 
   /// Why the last quote attempt produced nothing, shown under the fields.
   String? _quoteError;
+
+  /// What [_quote] was made for. A swap is built only for exactly that,
+  /// never from a quote the fields have since moved away from — a figure
+  /// rescaled when a token's decimals became known, say.
+  ({String? from, String? to, int amount})? _quotedFor;
 
   /// Set when the typed input over-pays for a floored output.
   SwapRounding? _rounding;
@@ -394,6 +432,12 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
     final quote = _quote;
     final amount = _parsedAmount;
     if (quote == null || amount == null || amount <= 0 || _busy) return;
+    if (_quotedFor != (from: _fromToken, to: _toToken, amount: amount)) {
+      // The fields no longer say what was quoted: quote what they say now.
+      setState(() => _quote = null);
+      _scheduleQuote();
+      return;
+    }
     setState(() => _busy = true);
     try {
       final build = await ammService.buildSwap(

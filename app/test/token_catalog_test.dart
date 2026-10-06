@@ -6,6 +6,9 @@ import 'package:argus_wallet/services/token_descriptor_store.dart';
 import 'package:argus_wallet/services/token_evidence.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
+
+import 'support/failing_preferences.dart';
 
 const _node = 'https://pools.example';
 String _id(String seed) => seed * (64 ~/ seed.length);
@@ -178,6 +181,23 @@ void main() {
         prefs.getString(PublicTokenCatalog.storageKey)!,
       ) as Map;
       expect(stored.keys, [named]);
+    });
+
+    test('the old table stays until its names are safely written', () async {
+      final named = _id('ab');
+      SharedPreferences.setMockInitialValues({});
+      SharedPreferencesStorePlatform.instance = FailingPreferences({
+        'flutter.${PublicTokenCatalog.legacyAmmKey}': jsonEncode({
+          named: {'name': 'Real', 'decimals': 6},
+        }),
+      });
+      final migrated = PublicTokenCatalog(inspect: node.inspect);
+      await migrated.ensureLoaded();
+
+      expect(migrated.lookup(named)?.name, 'Real', reason: 'shown at once');
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString(PublicTokenCatalog.legacyAmmKey), isNotNull,
+          reason: 'a failed write must leave it to migrate again');
     });
 
     test('a migrated name is shown, then upgraded after unknown tokens',

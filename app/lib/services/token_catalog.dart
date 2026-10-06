@@ -118,10 +118,10 @@ class PublicTokenCatalog {
       _entries.putIfAbsent(e.key, () => e.value);
     }
     if (legacy != null && prefs != null) {
-      // Written before the old key is removed, so a crash in between costs
-      // nothing.
-      await _persist(generation);
-      if (generation == _generation) await prefs.remove(legacyAmmKey);
+      // The old key goes only once the names are safely in the new table: a
+      // failed write or a crash in between leaves it to migrate again.
+      final saved = await _persist(generation);
+      if (saved && generation == _generation) await prefs.remove(legacyAmmKey);
     }
     if (loaded.isNotEmpty) _changed();
   }
@@ -294,7 +294,9 @@ class PublicTokenCatalog {
     _entries[d.id] = d;
   }
 
-  Future<void> _persist(int generation) async {
+  /// True once the table is written. A table that cannot be written is
+  /// rebuilt by later passes, so failure is reported, not thrown.
+  Future<bool> _persist(int generation) async {
     // Serialized before suspending: a pass may add entries meanwhile.
     final payload = jsonEncode({
       for (final e in _entries.entries)
@@ -302,10 +304,10 @@ class PublicTokenCatalog {
     });
     try {
       final prefs = await SharedPreferences.getInstance();
-      if (generation != _generation) return;
-      await prefs.setString(storageKey, payload);
+      if (generation != _generation) return false;
+      return await prefs.setString(storageKey, payload);
     } catch (_) {
-      // A table that cannot be written is rebuilt by later passes.
+      return false;
     }
   }
 

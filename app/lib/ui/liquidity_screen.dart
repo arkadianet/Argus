@@ -120,17 +120,6 @@ class LiquidityPool {
   String amount(BigInt units, String? tokenId) =>
       unitsWithLabel(units, scale(tokenId), name(tokenId));
 
-  /// [units] without the name, for text that already says which side.
-  String number(BigInt units, String? tokenId) {
-    final d = scale(tokenId);
-    return d == null ? rawUnitsText(units) : formatUnits(units, d);
-  }
-
-  /// What an amount field for one side is called.
-  String fieldLabel(String? tokenId) => scale(tokenId) == null
-      ? '${name(tokenId)} ($rawUnitsLabel)'
-      : name(tokenId);
-
   String get pairLabel => '${name(xTokenId)} / ${name(yTokenId)}';
   double get feePercent {
     final n = (raw['fee_num'] as num?)?.toInt() ?? 997;
@@ -484,10 +473,23 @@ class _AddSheetState extends State<_AddSheet> {
       ? (widget.args.spendableNano ?? 0)
       : widget.args.tokens.where((t) => t.id == tokenId).fold(0, (a, t) => a + t.amount);
 
+  // The scale each side is typed in, fixed while the sheet is open. A name
+  // may still arrive meanwhile; a newly learned scale must not change what
+  // a figure already typed stands for. Null means raw units.
+  late final int? _xScale = widget.pool.scale(widget.pool.xTokenId);
+  late final int? _yScale = widget.pool.scale(widget.pool.yTokenId);
+
+  String _label(String? id, int? scale) => scale == null
+      ? '${widget.pool.name(id)} ($rawUnitsLabel)'
+      : widget.pool.name(id);
+
+  String _number(int units, int? scale) => scale == null
+      ? rawUnitsText(BigInt.from(units))
+      : formatUnits(BigInt.from(units), scale);
+
   (int?, int?) get _units {
-    final p = widget.pool;
-    final x = parseDecimalToBase(_x.text, p.decimals(p.xTokenId));
-    final y = parseDecimalToBase(_y.text, p.decimals(p.yTokenId));
+    final x = parseDecimalToBase(_x.text, _xScale ?? 0);
+    final y = parseDecimalToBase(_y.text, _yScale ?? 0);
     return (x, y);
   }
 
@@ -495,11 +497,11 @@ class _AddSheetState extends State<_AddSheet> {
     final p = widget.pool;
     setState(() {
       if (_editingX) {
-        final x = parseDecimalToBase(_x.text, p.decimals(p.xTokenId));
-        _y.text = x == null ? '' : formatTokenAmount(depositCounterpart(p.xReserves, p.yReserves, BigInt.from(x)).toInt(), p.decimals(p.yTokenId));
+        final x = parseDecimalToBase(_x.text, _xScale ?? 0);
+        _y.text = x == null ? '' : formatTokenAmount(depositCounterpart(p.xReserves, p.yReserves, BigInt.from(x)).toInt(), _yScale ?? 0);
       } else {
-        final y = parseDecimalToBase(_y.text, p.decimals(p.yTokenId));
-        _x.text = y == null ? '' : formatTokenAmount(depositCounterpart(p.yReserves, p.xReserves, BigInt.from(y)).toInt(), p.decimals(p.xTokenId));
+        final y = parseDecimalToBase(_y.text, _yScale ?? 0);
+        _x.text = y == null ? '' : formatTokenAmount(depositCounterpart(p.yReserves, p.xReserves, BigInt.from(y)).toInt(), _xScale ?? 0);
       }
     });
   }
@@ -526,7 +528,7 @@ class _AddSheetState extends State<_AddSheet> {
             controller: _x,
             autofocus: true,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(labelText: p.fieldLabel(p.xTokenId), helperText: 'You hold ${p.number(BigInt.from(_held(p.xTokenId)), p.xTokenId)}'),
+            decoration: InputDecoration(labelText: _label(p.xTokenId, _xScale), helperText: 'You hold ${_number(_held(p.xTokenId), _xScale)}'),
             onTap: () => _editingX = true,
             onChanged: (_) {
               _editingX = true;
@@ -538,7 +540,7 @@ class _AddSheetState extends State<_AddSheet> {
             key: const Key('lp-y'),
             controller: _y,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: InputDecoration(labelText: p.fieldLabel(p.yTokenId), helperText: 'You hold ${p.number(BigInt.from(_held(p.yTokenId)), p.yTokenId)}'),
+            decoration: InputDecoration(labelText: _label(p.yTokenId, _yScale), helperText: 'You hold ${_number(_held(p.yTokenId), _yScale)}'),
             onTap: () => _editingX = false,
             onChanged: (_) {
               _editingX = false;
@@ -631,14 +633,38 @@ class _CreateTabState extends State<_CreateTab>
   @override
   void initState() {
     super.initState();
+    walletService.metadataChanges.addListener(_metadataChanged);
     _loadPending();
   }
 
   @override
   void dispose() {
+    walletService.metadataChanges.removeListener(_metadataChanged);
     _x.dispose();
     _y.dispose();
     super.dispose();
+  }
+
+  /// The scale each side's figure was typed in: ERG's until a token is
+  /// picked, then that token's. A scale learned while a figure sits in its
+  /// field rewrites the figure to keep the base units it stood for, so the
+  /// reserves confirmed are the reserves typed.
+  int _xScaleSeen = 9;
+  int _yScaleSeen = 9;
+
+  void _metadataChanged() {
+    if (!mounted) return;
+    final x = _decimals(_xTokenId);
+    final y = _decimals(_yTokenId);
+    if (x != _xScaleSeen && _x.text.trim().isNotEmpty) {
+      _x.text = rescaleAmountText(_x.text, _xScaleSeen, x) ?? '';
+    }
+    if (y != _yScaleSeen && _y.text.trim().isNotEmpty) {
+      _y.text = rescaleAmountText(_y.text, _yScaleSeen, y) ?? '';
+    }
+    _xScaleSeen = x;
+    _yScaleSeen = y;
+    setState(() {});
   }
 
   Future<void> _loadPending() async {
@@ -695,6 +721,11 @@ class _CreateTabState extends State<_CreateTab>
   int? _scale(String? id) => id == null ? 9 : tokenDecimals(id, held: _heldToken(id));
   int _decimals(String? id) => _scale(id) ?? 0;
   String _name(String? id) => id == null ? 'ERG' : tokenLabel(id, held: _heldToken(id));
+
+  /// [_name] for the saved progress record, which outlives the session: it
+  /// must not carry a name only an explicit, memory-only load supplied.
+  String _storedName(String? id) =>
+      id == null ? 'ERG' : storedTokenLabel(id, held: _heldToken(id));
 
   /// An amount of one side, labelled raw units when the scale is unknown.
   String _amount(int units, String? id) =>
@@ -764,7 +795,7 @@ class _CreateTabState extends State<_CreateTab>
         'fee_num': feeNumFor(_feePercent),
         'lp_token_id': prepared['lp_token_id'],
         'user_lp_share': prepared['user_lp_share'],
-        'pair': '${_name(_xTokenId)} / ${_name(y)}',
+        'pair': '${_storedName(_xTokenId)} / ${_storedName(y)}',
         'created_at': DateTime.now().millisecondsSinceEpoch,
         'sent': false,
       };
@@ -915,7 +946,10 @@ class _CreateTabState extends State<_CreateTab>
             const DropdownMenuItem(value: null, child: Text('ERG')),
             for (final t in held) DropdownMenuItem(value: t.id, child: Text(_name(t.id), overflow: TextOverflow.ellipsis)),
           ],
-          onChanged: (v) => setState(() => _xTokenId = v),
+          onChanged: (v) => setState(() {
+            _xTokenId = v;
+            _xScaleSeen = _decimals(v);
+          }),
         ),
         const SizedBox(height: 12),
         DropdownButtonFormField<String>(
@@ -923,7 +957,10 @@ class _CreateTabState extends State<_CreateTab>
           initialValue: _yTokenId,
           decoration: const InputDecoration(labelText: 'Second asset (a token)'),
           items: [for (final t in held) DropdownMenuItem(value: t.id, child: Text(_name(t.id), overflow: TextOverflow.ellipsis))],
-          onChanged: (v) => setState(() => _yTokenId = v),
+          onChanged: (v) => setState(() {
+            _yTokenId = v;
+            _yScaleSeen = _decimals(v);
+          }),
         ),
         const SizedBox(height: 12),
         TextField(key: const Key('pool-x-amount'), controller: _x, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: _fieldDecoration(_xTokenId), onChanged: (_) => setState(() {})),

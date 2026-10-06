@@ -874,6 +874,11 @@ class WalletService with WidgetsBindingObserver {
     required String provider,
     bool providerIsNode = false,
   }) async {
+    // Captured before any wait. Cancelling, closing the sheet, backgrounding
+    // or switching wallet while this waits behind a catalog lookup bumps the
+    // epoch, and must stop the request before anything is sent.
+    final epoch = _descriptorEpoch;
+    final key = _descriptorKey(holding.id);
     // A public-catalog lookup gives way to a person's request: wait out the
     // one it has in flight and take the job before the catalog can start
     // another. Everything below is then checked as of now. Handing the job
@@ -881,6 +886,9 @@ class WalletService with WidgetsBindingObserver {
     // code runs without suspending, so nothing else can take it.
     final fromCatalog = _catalogJob != null && await _takeJobFromCatalog();
     if (fromCatalog) _metadataBusy = false;
+    if (epoch != _descriptorEpoch || key != _descriptorKey(holding.id)) {
+      throw StateError('Metadata request cancelled');
+    }
     if (!isUnlocked ||
         privacyService.hideBalances ||
         networkController.activeUrl == null) {
@@ -889,13 +897,8 @@ class WalletService with WidgetsBindingObserver {
     if (provider != (providerIsNode ? networkController.activeUrl : networkController.explorer))
       throw StateError('Metadata provider changed');
     if (_metadataBusy) throw MetadataBusyException();
-    if (!_observingMetadata) {
-      WidgetsBinding.instance.addObserver(this);
-      _observingMetadata = true;
-    }
+    _observeLifecycle();
     _metadataBusy = true;
-    final epoch = _descriptorEpoch;
-    final key = _descriptorKey(holding.id);
     try {
       final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
         tokenId: holding.id,
@@ -975,6 +978,9 @@ class WalletService with WidgetsBindingObserver {
         !_inForeground) {
       return null;
     }
+    // Backgrounding cancels a request already in flight, as it does an
+    // explicit one, rather than letting it finish out of sight.
+    _observeLifecycle();
     _metadataBusy = true;
     final done = Completer<void>();
     _catalogJob = done.future;
@@ -988,6 +994,19 @@ class WalletService with WidgetsBindingObserver {
       _metadataBusy = false;
       _catalogJob = null;
       done.complete();
+    }
+  }
+
+  /// Lifecycle changes clear session metadata and cancel the metadata job in
+  /// flight ([didChangeAppLifecycleState]). Registered by the first request
+  /// of either kind.
+  void _observeLifecycle() {
+    if (_observingMetadata) return;
+    try {
+      WidgetsBinding.instance.addObserver(this);
+      _observingMetadata = true;
+    } catch (_) {
+      // No binding (a plain unit test): nothing to observe.
     }
   }
 

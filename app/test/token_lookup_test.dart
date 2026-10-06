@@ -11,6 +11,7 @@ import 'package:argus_wallet/services/token_metadata.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart' show AppLifecycleState;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -46,8 +47,10 @@ class LookupApi extends RustLibApi {
   @override
   Future<void> crateApiWalletLock({required BigInt handleId}) async {}
 
+  int cancels = 0;
+
   @override
-  void crateApiCancelTokenMetadata() {}
+  void crateApiCancelTokenMetadata() => cancels++;
 
   @override
   Future<String> crateApiInspectTokenMetadata({
@@ -144,6 +147,10 @@ void main() {
 
   tearDown(() async {
     networkController.activeUrl = null;
+    // A test that backgrounds the app must not leave the next one there.
+    TestWidgetsFlutterBinding.instance.handleAppLifecycleStateChanged(
+      AppLifecycleState.resumed,
+    );
     if (walletService.isUnlocked) await walletService.lock();
   });
 
@@ -358,6 +365,71 @@ void main() {
     expect(api.maxInFlight, 1);
     expect(walletService.cachedTokenMeta(_held)?.name, 'Name ab',
         reason: 'the wallet resolves whichever pass reaches the job first');
+  });
+
+  test('an explicit request cancelled while it waits is never sent',
+      () async {
+    await walletService.restoreWallet('mock', walletId: 'cancelled');
+    final gate = Completer<void>();
+    api.gate = gate;
+    final catalogPass = publicTokenCatalog.resolve([_deep], servedBy: _node);
+    await _until(() => api.asked.isNotEmpty);
+
+    final load = walletService.loadMetadata(
+      TokenBalance(id: _held, amount: 1),
+      provider: _node,
+      providerIsNode: true,
+    );
+    final outcome = expectLater(load, throwsStateError);
+    await Future<void>.delayed(Duration.zero);
+    // "Cancel metadata request", closing the sheet or backgrounding.
+    walletService.clearSessionMetadata();
+    gate.complete();
+    await outcome;
+    await catalogPass;
+
+    expect(api.asked.map((a) => a.id), [_deep],
+        reason: 'a request the person cancelled must never reach a provider');
+  });
+
+  test('backgrounding cancels a catalog lookup in flight', () async {
+    // A service that has made no explicit request, so only the catalog's
+    // own lookup can have asked to hear about backgrounding.
+    final svc = WalletService();
+    await svc.restoreWallet('mock', walletId: 'background');
+    addTearDown(() {
+      TestWidgetsFlutterBinding.instance.removeObserver(svc);
+      return svc.lock('background');
+    });
+    final catalog = PublicTokenCatalog(inspect: svc.inspectForCatalog);
+    final gate = Completer<void>();
+    api.gate = gate;
+    final before = api.cancels;
+    final pass = catalog.resolve([_deep, _shallow], servedBy: _node);
+    await _until(() => api.asked.isNotEmpty);
+
+    TestWidgetsFlutterBinding.instance.handleAppLifecycleStateChanged(
+      AppLifecycleState.paused,
+    );
+    expect(api.cancels, before + 1,
+        reason: 'not left to finish out of sight');
+    gate.complete();
+    await pass;
+    expect(api.asked.map((a) => a.id), [_deep],
+        reason: 'and nothing further is asked in the background');
+  });
+
+  test('a name only an explicit load supplied is never stored', () async {
+    await walletService.restoreWallet('mock', walletId: 'stored');
+    final loaded = await walletService.loadMetadata(
+      TokenBalance(id: _held, amount: 1),
+      provider: _node,
+      providerIsNode: true,
+    );
+    expect(loaded.name, 'Name ab');
+    expect(tokenLabel(_held), 'Name ab', reason: 'shown for this session');
+    expect(storedTokenLabel(_held), 'abababab…',
+        reason: 'memory-only by design, so never written into a record');
   });
 
   test('an explicit request waits out a catalog lookup', () async {
