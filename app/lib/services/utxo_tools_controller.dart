@@ -1,8 +1,11 @@
 import 'package:flutter/foundation.dart';
 
+import 'storage_rent.dart';
 import 'wallet_service.dart';
 
-enum UtxoFilter { all, ergOnly, withTokens, dust }
+/// `rent` keeps boxes rent puts at risk or that fall due within
+/// [rentSoonDays].
+enum UtxoFilter { all, ergOnly, withTokens, dust, rent }
 
 /// Boxes below this are "dust" for the UTXO tools filter.
 const dustThresholdNano = 100000000;
@@ -11,11 +14,20 @@ const dustThresholdNano = 100000000;
 /// Pure state: loading and transaction flows stay in the screen.
 class UtxoToolsController extends ChangeNotifier {
   List<InputBoxInput> _boxes = const [];
+  Map<String, BoxRent> _rent = const {};
   final Set<String> _selected = {};
   UtxoFilter filter = UtxoFilter.all;
   String _search = '';
 
   List<InputBoxInput> get boxes => _boxes;
+
+  /// Rent per box id, once the report has arrived; empty until then.
+  Map<String, BoxRent> get rent => _rent;
+
+  /// Boxes rent puts at risk or that fall due soon.
+  int get rentFlaggedCount =>
+      _boxes.where((b) => _rent[b.boxId]?.flagged ?? false).length;
+
   Set<String> get selectedIds => Set.unmodifiable(_selected);
   String get search => _search;
 
@@ -25,6 +37,11 @@ class UtxoToolsController extends ChangeNotifier {
     final ordered = [...boxes]..sort(compareUtxoAge);
     _boxes = List.unmodifiable(ordered);
     _selected.retainAll(boxes.map((b) => b.boxId));
+    notifyListeners();
+  }
+
+  void setRent(Map<String, BoxRent> rent) {
+    _rent = Map.unmodifiable(rent);
     notifyListeners();
   }
 
@@ -51,6 +68,8 @@ class UtxoToolsController extends ChangeNotifier {
         if (box.assets.isEmpty) return false;
       case UtxoFilter.dust:
         if (box.valueNanoErg >= BigInt.from(dustThresholdNano)) return false;
+      case UtxoFilter.rent:
+        if (!(_rent[box.boxId]?.flagged ?? false)) return false;
     }
     if (_search.isEmpty) return true;
     return box.boxId.toLowerCase().contains(_search) ||

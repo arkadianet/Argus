@@ -7,7 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../format.dart';
+import '../services/mix_service.dart';
 import '../services/network_controller.dart';
+import '../services/storage_rent.dart';
 import '../services/utxo_plans.dart';
 import '../services/utxo_tools_controller.dart';
 import '../services/wallet_service.dart';
@@ -17,7 +19,15 @@ import 'separate_tokens_sheet.dart';
 import 'widgets/soft_card.dart';
 
 class UtxoManagementScreen extends StatefulWidget {
-  const UtxoManagementScreen({super.key});
+  const UtxoManagementScreen({super.key, this.openCleanup = false});
+
+  /// Opens straight into the suggested cleanup's review; what the home
+  /// screen's UTXO indicator links to.
+  static const cleanupRoute = '/utxos/cleanup';
+
+  /// Review the suggested cleanup as soon as boxes and rent have loaded, or
+  /// say there is nothing to clean up.
+  final bool openCleanup;
 
   @override
   State<UtxoManagementScreen> createState() => _UtxoManagementScreenState();
@@ -30,6 +40,22 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
   final _tools = UtxoToolsController();
   final TextEditingController _searchCtrl = TextEditingController();
   bool _busy = false;
+
+  /// Rent for the listed boxes, from the user's node; null until it arrives.
+  RentReport? _rent;
+  bool _rentLoading = false;
+  bool _rentFailed = false;
+
+  /// Bumped per box load, so a slow rent report cannot land on newer boxes.
+  int _loadGeneration = 0;
+
+  /// Boxes this screen has already spent. The node lists confirmed boxes
+  /// only, so they stay listed until the transaction is mined; a cleanup
+  /// must not propose them again.
+  final Set<String> _movingIds = {};
+
+  /// [UtxoManagementScreen.openCleanup] is honoured once per visit.
+  bool _cleanupOffered = false;
 
   List<String>? _consolidationIds;
   int _consolidationPlanned = 0;
@@ -66,6 +92,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
 
   Future<void> _loadBoxes({bool propagateError = false}) async {
     if (!mounted) return;
+    final generation = ++_loadGeneration;
     setState(() {
       _loading = true;
       _error = null;
@@ -84,7 +111,9 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
       );
       if (!mounted) return;
       _tools.setBoxes(boxes);
+      _movingIds.retainAll(boxes.map((b) => b.boxId));
       setState(() => _loading = false);
+      _loadRent(addresses, generation);
       final ids = {for (final b in boxes) for (final a in b.assets) a.tokenId};
       if (ids.isNotEmpty) {
         // Cache only; see mix_screen.
@@ -100,6 +129,90 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
       });
       if (propagateError) rethrow;
     }
+  }
+
+  /// Rent for the listed boxes, read separately so a slow or failing node
+  /// read never holds up the list. The report is a second listing of the
+  /// same addresses from the same node, measured in the wallet core.
+  Future<void> _loadRent(List<String> addresses, int generation) async {
+    setState(() {
+      _rentLoading = true;
+      _rentFailed = false;
+    });
+    RentReport? report;
+    try {
+      report = await storageRent.report(
+        addresses,
+        nodeUrl: networkController.activeUrl,
+      );
+    } catch (_) {
+      report = null;
+    }
+    if (!mounted || generation != _loadGeneration) return;
+    setState(() {
+      _rentLoading = false;
+      _rentFailed = report == null;
+      _rent = report;
+    });
+    _tools.setRent(report?.boxes ?? const {});
+    _maybeOpenCleanup();
+  }
+
+  /// Boxes a cleanup must leave where they are: mixed coins, funding set
+  /// aside for a pending mix, and boxes already spent from this screen.
+  Set<String> get _heldBack {
+    final ids = <String>{...mixService.mixedBoxIds, ..._movingIds};
+    try {
+      for (final r in jsonDecode(mixService.reservedFundingJson()) as List) {
+        for (final id in (r as Map)['box_ids'] as List? ?? const []) {
+          ids.add(id.toString());
+        }
+      }
+    } catch (_) {
+      // No pending mix records to honour.
+    }
+    return ids;
+  }
+
+  CleanupSuggestion? get _suggestion => suggestCleanup(
+    boxes: _boxes,
+    rent: _tools.rent,
+    exclude: _heldBack,
+  );
+
+  /// Rent parameters to judge a new box by: the report's, or the launch
+  /// factor at the dashboard's height when the report could not be read.
+  RentParameters? get _rentParameters {
+    final fromReport = _rent?.parameters;
+    if (fromReport != null) return fromReport;
+    final height = networkController.height;
+    return height == null ? null : RentParameters.fallback(height: height);
+  }
+
+  /// The boxes a cleanup creates and their rent, laid out by the same rules
+  /// the consolidation builder uses.
+  OutputRentEstimate? _cleanupEstimate(CleanupSuggestion s) {
+    final parameters = _rentParameters;
+    if (parameters == null || s.afterFeesNano <= BigInt.zero) return null;
+    return storageRent.estimateOutput(
+      address: s.address,
+      valueNano: s.afterFeesNano.toInt(),
+      tokens: {for (final e in s.tokens.entries) e.key: e.value.toInt()},
+      parameters: parameters,
+    );
+  }
+
+  void _maybeOpenCleanup() {
+    if (!widget.openCleanup || _cleanupOffered || !mounted) return;
+    _cleanupOffered = true;
+    final suggestion = _suggestion;
+    if (suggestion == null) {
+      _snack('Nothing to clean up right now');
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_busy) _openCleanupFlow(suggestion);
+    });
   }
 
   /// The wallet's addresses from the live route context; falls back to a
@@ -208,6 +321,7 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
           preparationId: preview.preparationId,
         );
         submitted.add(txId);
+        _movingIds.addAll(chunk);
       }
     } catch (e) {
       failure = e;
@@ -275,6 +389,88 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     }
     await _openConsolidateFlow();
   }
+
+  /// Reviews and runs [s]: one consolidation at one address, back into the
+  /// same address. Fee, resulting boxes and the new box's rent are shown
+  /// before anything is signed.
+  Future<void> _openCleanupFlow(CleanupSuggestion s) async {
+    final estimate = _cleanupEstimate(s);
+    final parameters = _rentParameters;
+    final tokenTypes = s.tokens.length;
+    final resulting = estimate?.boxes.length ?? 1;
+    final newRent = estimate != null && estimate.chargeable && parameters != null
+        ? '${formatErg(estimate.first.feeNano, maxFrac: 5)}, due '
+            '${rentWhen(estimate.dueHeight - parameters.height)}'
+            '${estimate.covered ? '' : ' (more than it holds)'}'
+        : null;
+    final confirmed = await showConfirmTransactionSheet(
+      context,
+      title: 'Suggested cleanup',
+      rows: [
+        ConfirmTxRow(
+          'Boxes merged',
+          s.leftAtAddress > 0
+              ? '${s.boxes.length} of ${s.boxes.length + s.leftAtAddress} at this address'
+              : '${s.boxes.length}',
+        ),
+        ConfirmTxRow('Address', shorten(s.address, head: 8, tail: 6)),
+        ConfirmTxRow(
+          'Resulting boxes',
+          estimate == null && tokenTypes > 0 ? '1 or more' : '$resulting',
+          bold: true,
+        ),
+        if (s.rentResetCount > 0)
+          ConfirmTxRow('Rent clocks restarted', _rentResetLabel(s)),
+        if (tokenTypes > 0) ConfirmTxRow('Token types carried', '$tokenTypes'),
+        ConfirmTxRow('Total value in', formatNanoErg(s.totalNano)),
+        ConfirmTxRow('Miner fee', formatErg(minerFeeNano)),
+        ConfirmTxRow('Argus fee', formatErg(argusFeeNano)),
+        ConfirmTxRow('Value after fees', formatNanoErg(s.afterFeesNano), bold: true),
+        if (newRent != null) ConfirmTxRow('New box rent', newRent),
+      ],
+      detail:
+          'Every listed box is spent into ${resulting == 1 ? 'one new box' : '$resulting new boxes'} '
+          'at this address, holding all their ERG and tokens. A moved box '
+          'starts a new 4-year storage-rent clock. Only boxes from this one '
+          'address are merged, so no addresses are linked.',
+    );
+    if (!confirmed || !mounted) return;
+
+    setState(() => _busy = true);
+    try {
+      final preview = await walletService.prepareConsolidate(
+        spendAddresses: [s.address],
+        selectedBoxIds: s.boxIds,
+        changeAddress: s.address,
+        nodeUrl: networkController.activeUrl,
+      );
+      final txId = await walletService.sendErg(
+        preparationId: preview.preparationId,
+      );
+      _movingIds.addAll(s.boxIds);
+      final warning = await txBookkeeping(() async {
+        if (!mounted) return;
+        _tools.clearSelection();
+        await Future.delayed(const Duration(seconds: 1));
+        if (mounted) await _loadBoxes(propagateError: true);
+      });
+      showTxResultSheet(
+        receiptContext,
+        txId: txId,
+        warning: warning,
+        headline: 'Cleanup submitted',
+      );
+    } catch (e) {
+      if (mounted) showTxFailureSheet(context, e);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  String _rentResetLabel(CleanupSuggestion s) => [
+    if (s.atRiskCount > 0) '${s.atRiskCount} at risk',
+    if (s.dueSoonCount > 0) '${s.dueSoonCount} due within $rentSoonDays days',
+  ].join(' · ');
 
   Future<void> _openSplitFlow() async {
     final addrs = await _getWalletAddresses();
@@ -543,6 +739,10 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
     final healthLabel = health.label;
     final healthColor = health.color;
     final dustCount = _boxes.where((b) => b.valueNanoErg < BigInt.from(dustThresholdNano)).length;
+    final ready = !_loading && _error == null;
+    final suggestion = ready ? _suggestion : null;
+    final filtered = ready ? _filteredBoxes : const <InputBoxInput>[];
+    final rentParameters = _rent?.parameters;
 
     return Scaffold(
       appBar: AppBar(
@@ -584,10 +784,26 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                     ),
                   ),
                 )
-              : Column(
-                  children: [
+              // One scroll for cards and boxes, so large text never squeezes
+              // the list out of the screen.
+              : CustomScrollView(
+                  slivers: [
+                    if (suggestion != null)
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                          child: CleanupSuggestionCard(
+                            suggestion: suggestion,
+                            resultingBoxes: _cleanupEstimate(suggestion)?.boxes.length,
+                            fragmented: _boxes.length > utxoFragmentationThreshold,
+                            highlight: widget.openCleanup,
+                            onReview: _busy ? null : () => _openCleanupFlow(suggestion),
+                          ),
+                        ),
+                      ),
                     // Overview Summary Card
-                    Padding(
+                    SliverToBoxAdapter(
+                      child: Padding(
                       padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
                       child: SoftCard(
                       padding: const EdgeInsets.all(16),
@@ -596,7 +812,8 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                         children: [
                           Row(
                             children: [
-                              Column(
+                              Expanded(
+                                child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
@@ -612,7 +829,8 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                                   ),
                                 ],
                               ),
-                              const Spacer(),
+                              ),
+                              const SizedBox(width: 8),
                               Container(
                             padding: const EdgeInsets.symmetric(
                               horizontal: 10,
@@ -644,40 +862,41 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                             'Oldest boxes first. Automatic sends prefer older eligible boxes to reduce storage-rent risk; privacy rules and your manual selection still apply.',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
+                          const SizedBox(height: 6),
+                          _rentSummary(context),
                           const SizedBox(height: 14),
                           const Hairline(),
                           const SizedBox(height: 12),
-                          // Quick Actions Row
-                          Row(
+                          // Quick actions. They wrap instead of sharing a
+                          // row: at 390 dp a third of the card cannot hold
+                          // "Consolidate" without breaking the word.
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
                             children: [
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  icon: const Icon(Icons.merge_type, size: 16),
-                                  label: const Text('Consolidate'),
-                              onPressed: _busy || _boxes.length < 2
-                                  ? null
-                                  : _openConsolidateFlow,
-                                ),
+                              OutlinedButton.icon(
+                                style: inlineButtonStyle,
+                                icon: const Icon(Icons.merge_type, size: 16),
+                                label: const Text('Consolidate'),
+                                onPressed: _busy || _boxes.length < 2
+                                    ? null
+                                    : _openConsolidateFlow,
                               ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  icon: const Icon(Icons.call_split, size: 16),
-                                  label: const Text('Split'),
-                              onPressed: _busy || _boxes.isEmpty
-                                  ? null
-                                  : _openSplitFlow,
-                                ),
+                              OutlinedButton.icon(
+                                style: inlineButtonStyle,
+                                icon: const Icon(Icons.call_split, size: 16),
+                                label: const Text('Split'),
+                                onPressed: _busy || _boxes.isEmpty
+                                    ? null
+                                    : _openSplitFlow,
                               ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: OutlinedButton.icon(
-                                  icon: const Icon(Icons.tune, size: 16),
-                                  label: const Text('Restructure'),
-                              onPressed: _busy || _boxes.isEmpty
-                                  ? null
-                                  : _openRestructureFlow,
-                                ),
+                              OutlinedButton.icon(
+                                style: inlineButtonStyle,
+                                icon: const Icon(Icons.tune, size: 16),
+                                label: const Text('Restructure'),
+                                onPressed: _busy || _boxes.isEmpty
+                                    ? null
+                                    : _openRestructureFlow,
                               ),
                             ],
                           ),
@@ -704,9 +923,11 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                       ),
                     ),
                     ),
+                    ),
 
                     // Filter & Search
-                    Padding(
+                    SliverToBoxAdapter(
+                      child: Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: TextField(
                         controller: _searchCtrl,
@@ -723,11 +944,13 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                         ),
                       ),
                     ),
+                    ),
 
-                    const SizedBox(height: 8),
+                    const SliverToBoxAdapter(child: SizedBox(height: 8)),
 
                     // Filter Chips & Selection Controls
-                    SingleChildScrollView(
+                    SliverToBoxAdapter(
+                      child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(
@@ -748,6 +971,13 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                         UtxoFilter.dust,
                         'Dust (${_boxes.where((b) => b.valueNanoErg < BigInt.from(dustThresholdNano)).length})',
                       ),
+                          if (_rent != null) ...[
+                            const SizedBox(width: 6),
+                            _filterChip(
+                              UtxoFilter.rent,
+                              'Rent (${_tools.rentFlaggedCount})',
+                            ),
+                          ],
                           const SizedBox(width: 12),
                           if (_selectedBoxIds.isNotEmpty) ...[
                             TextButton(
@@ -763,32 +993,41 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
                         ],
                       ),
                     ),
+                    ),
 
-                    const SizedBox(height: 6),
+                    const SliverToBoxAdapter(child: SizedBox(height: 6)),
 
                     // Boxes List
-                    Expanded(
-                      child: _filteredBoxes.isEmpty
-                          ? const Center(child: Text('No UTXOs match criteria'))
-                          : ListView.builder(
-                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
-                              itemCount: _filteredBoxes.length,
-                              itemBuilder: (ctx, i) {
-                                final box = _filteredBoxes[i];
+                    if (filtered.isEmpty)
+                      const SliverToBoxAdapter(
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(16, 32, 16, 80),
+                          child: Center(child: Text('No UTXOs match criteria')),
+                        ),
+                      )
+                    else
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 80),
+                        sliver: SliverList.builder(
+                          itemCount: filtered.length,
+                          itemBuilder: (ctx, i) {
+                            final box = filtered[i];
                             final isSelected = _selectedBoxIds.contains(
                               box.boxId,
                             );
-                                return _UtxoCard(
-                                  box: box,
-                                  isSelected: isSelected,
-                                  onToggle: () => _tools.toggle(box.boxId),
-                                  onSeparateTokens: _busy || box.assets.length < 2
-                                      ? null
-                                      : () => _openSeparateTokensFlow(sourceBoxId: box.boxId),
-                                );
-                              },
-                            ),
-                    ),
+                            return _UtxoCard(
+                              box: box,
+                              isSelected: isSelected,
+                              rent: _tools.rent[box.boxId],
+                              rentParameters: rentParameters,
+                              onToggle: () => _tools.toggle(box.boxId),
+                              onSeparateTokens: _busy || box.assets.length < 2
+                                  ? null
+                                  : () => _openSeparateTokensFlow(sourceBoxId: box.boxId),
+                            );
+                          },
+                        ),
+                      ),
                   ],
                 ),
       bottomSheet: _selectedBoxIds.isNotEmpty
@@ -798,6 +1037,49 @@ class _UtxoManagementScreenState extends State<UtxoManagementScreen>
               onSplit: _busy ? null : _openSplitFlow,
             )
           : null,
+    );
+  }
+
+  /// One line on storage rent across the listed boxes.
+  Widget _rentSummary(BuildContext context) {
+    final style = Theme.of(context).textTheme.bodySmall;
+    final report = _rent;
+    if (report == null) {
+      if (_rentLoading) {
+        return Row(
+          children: [
+            const SizedBox(
+              width: 12,
+              height: 12,
+              child: CircularProgressIndicator(strokeWidth: 1.5),
+            ),
+            const SizedBox(width: 8),
+            Expanded(child: Text('Checking storage rent…', style: style)),
+          ],
+        );
+      }
+      return Text(
+        _rentFailed
+            ? 'Storage rent unavailable: your node could not be read. Refresh to try again.'
+            : 'Storage rent not checked yet.',
+        style: style,
+      );
+    }
+    final atRisk = report.atRiskCount;
+    final soon = report.boxes.values.where((b) => b.dueSoon && !b.atRisk).length;
+    final parts = [
+      if (atRisk > 0)
+        '$atRisk ${atRisk == 1 ? 'box' : 'boxes'} at risk of collection',
+      if (soon > 0) '$soon due within $rentSoonDays days',
+    ];
+    return Text(
+      parts.isEmpty
+          ? 'Storage rent: nothing due within $rentSoonDays days, and every box covers its rent. '
+              'Rate ${report.parameters.rateLabel}.'
+          : 'Storage rent: ${parts.join(' · ')}. Rate ${report.parameters.rateLabel}.',
+      style: parts.isEmpty
+          ? style
+          : style?.copyWith(color: rustFor(context), fontWeight: FontWeight.w500),
     );
   }
 
@@ -827,12 +1109,16 @@ class _UtxoCard extends StatelessWidget {
     required this.box,
     required this.isSelected,
     required this.onToggle,
+    this.rent,
+    this.rentParameters,
     this.onSeparateTokens,
   });
 
   final InputBoxInput box;
   final bool isSelected;
   final VoidCallback onToggle;
+  final BoxRent? rent;
+  final RentParameters? rentParameters;
   final VoidCallback? onSeparateTokens;
 
   @override
@@ -875,9 +1161,15 @@ class _UtxoCard extends StatelessWidget {
                         const SizedBox(height: 2),
                         Row(
                           children: [
-                            Text(
-                              shorten(box.boxId, head: 8, tail: 6),
-                              style: monoStyle(context, size: 11),
+                            // Gives way at large text sizes rather than
+                            // pushing the copy button off the card.
+                            Flexible(
+                              child: Text(
+                                shorten(box.boxId, head: 8, tail: 6),
+                                style: monoStyle(context, size: 11),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                             IconButton(
                               icon: const Icon(Icons.copy, size: 13),
@@ -935,6 +1227,10 @@ class _UtxoCard extends StatelessWidget {
                   }).toList(),
                 ),
               ],
+              if (rent != null && rentParameters != null) ...[
+                const SizedBox(height: 8),
+                BoxRentLine(rent: rent!, parameters: rentParameters!),
+              ],
               if (box.assets.length >= 2)
                 TextButton.icon(
                   icon: const Icon(Icons.account_tree_outlined, size: 16),
@@ -946,6 +1242,178 @@ class _UtxoCard extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// When a box's storage rent falls due, what it costs, and whether the
+/// box can pay it.
+class BoxRentLine extends StatelessWidget {
+  const BoxRentLine({super.key, required this.rent, required this.parameters});
+
+  final BoxRent rent;
+  final RentParameters parameters;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = ArgusColors.of(context);
+    // Five places show a fee exactly: factor × bytes is a whole number of
+    // 0.00125 ERG steps at the launch factor.
+    final fee = formatErg(rent.feeNano, maxFrac: 5);
+    final when = rentWhen(rent.blocksUntilDue);
+    final block = 'block ${formatWithCommas(rent.dueHeight)}';
+    final (IconData icon, Color color, String text) = switch (rent) {
+      BoxRent(charge: RentCharge.none) => (
+        Icons.hourglass_empty,
+        colors.muted,
+        'No storage rent can be charged on a box over '
+            '${formatWithCommas(parameters.overflowBytes)} bytes under current rules.',
+      ),
+      BoxRent(atRisk: true, collectableNow: true) => (
+        Icons.warning_amber_rounded,
+        rustFor(context),
+        'At risk: its $fee rent is more than it holds, so it can be '
+            'collected now, tokens included.',
+      ),
+      BoxRent(atRisk: true) => (
+        Icons.warning_amber_rounded,
+        rustFor(context),
+        'At risk: its $fee rent is more than it holds. From $block '
+            '($when) it can be collected whole, tokens included.',
+      ),
+      BoxRent(collectableNow: true) => (
+        Icons.schedule,
+        colors.accentText,
+        'Storage rent of $fee can be charged now (due $block).',
+      ),
+      BoxRent(dueSoon: true) => (
+        Icons.schedule,
+        colors.accentText,
+        'Storage rent of $fee due $when ($block).',
+      ),
+      _ => (
+        Icons.hourglass_bottom,
+        colors.muted,
+        'Storage rent of $fee due $when ($block).',
+      ),
+    };
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 1),
+          child: Icon(icon, size: 14, color: color),
+        ),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(text, style: TextStyle(fontSize: 12, color: color)),
+        ),
+      ],
+    );
+  }
+}
+
+/// The cleanup the screen proposes, at the top of the list.
+class CleanupSuggestionCard extends StatelessWidget {
+  const CleanupSuggestionCard({
+    super.key,
+    required this.suggestion,
+    required this.resultingBoxes,
+    required this.fragmented,
+    this.highlight = false,
+    this.onReview,
+  });
+
+  final CleanupSuggestion suggestion;
+
+  /// Boxes the cleanup creates, or null when the layout is unknown.
+  final int? resultingBoxes;
+
+  /// The wallet has more boxes than the home screen calls tidy.
+  final bool fragmented;
+
+  /// Opened from the home screen to show this suggestion.
+  final bool highlight;
+  final VoidCallback? onReview;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = ArgusColors.of(context);
+    final s = suggestion;
+    final n = s.boxes.length;
+    final into = switch (resultingBoxes) {
+      1 => 'into one',
+      final int count => 'into $count',
+      null => s.tokens.isEmpty ? 'into one' : 'into one or more',
+    };
+    final of = s.leftAtAddress > 0 ? ' of ${n + s.leftAtAddress}' : '';
+    final reasons = <String>[
+      if (s.forRent) _rentReason(s),
+      if (fragmented) 'Fewer boxes keep every send small and cheap.',
+      if (!s.forRent)
+        'Moving old boxes also restarts their 4-year storage-rent clock.',
+    ];
+    final bodySmall = Theme.of(context).textTheme.bodySmall;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(cardRadius),
+        border: Border.all(
+          color: highlight ? accentOf(context) : colors.cardBorder,
+          width: highlight ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.auto_fix_high_outlined, size: 18, color: accentOf(context)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Suggested cleanup',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Merge $n$of boxes at ${shorten(s.address, head: 6, tail: 4)} $into.',
+            style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500),
+          ),
+          for (final reason in reasons) ...[
+            const SizedBox(height: 4),
+            Text(reason, style: bodySmall),
+          ],
+          const SizedBox(height: 4),
+          Text(
+            'Fee ${formatErg(s.feesNano)}. Only this address\'s boxes move, so no addresses are linked.',
+            style: bodySmall?.copyWith(color: colors.muted),
+          ),
+          const SizedBox(height: 12),
+          FilledButton.icon(
+            icon: const Icon(Icons.merge_type, size: 18),
+            label: const Text('Review cleanup'),
+            onPressed: onReview,
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _rentReason(CleanupSuggestion s) {
+    final parts = <String>[
+      if (s.atRiskCount > 0)
+        s.atRiskCount == 1
+            ? '1 box can\'t cover its storage rent'
+            : '${s.atRiskCount} boxes can\'t cover their storage rent',
+      if (s.dueSoonCount > 0)
+        '${s.dueSoonCount} ${s.dueSoonCount == 1 ? 'falls' : 'fall'} due within $rentSoonDays days',
+    ];
+    return '${parts.join(' and ')}. Moving them starts a new 4-year rent clock.';
   }
 }
 
