@@ -33,6 +33,9 @@ impl Drop for Policy {
 
 // ─── A stand-in node ─────────────────────────────────────────────────────
 
+/// A Scala node's answer for a box it does not hold.
+pub(crate) const NOT_FOUND: &str = r#"{"error":404,"reason":"not-found","detail":null}"#;
+
 #[derive(Clone, Default)]
 pub(crate) struct Chain {
     /// Confirmed unspent boxes by address.
@@ -107,17 +110,17 @@ impl Chain {
         } else if target.contains("/transactions/unconfirmed/inputs/byBoxId/") {
             match self.spent_in_mempool.contains(id) {
                 true => (200, format!(r#"{{"boxId":"{id}"}}"#)),
-                false => (404, r#"{"error":404}"#.into()),
+                false => (404, NOT_FOUND.into()),
             }
         } else if target.contains("/utxo/byId/") {
             match self.confirmed_ids().contains(id) && !self.spent_in_mempool.contains(id) {
                 true => (200, format!(r#"{{"boxId":"{id}"}}"#)),
-                false => (404, r#"{"error":404}"#.into()),
+                false => (404, NOT_FOUND.into()),
             }
         } else if target.contains("/transactions/unconfirmed/outputs/byBoxId/") {
             match self.pending_outputs.get(id) {
                 Some(output) => (200, output.to_string()),
-                None => (404, r#"{"error":404}"#.into()),
+                None => (404, NOT_FOUND.into()),
             }
         } else {
             (404, r#"{"error":404}"#.into())
@@ -138,6 +141,8 @@ impl Node {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
+        // Routes learned from an earlier stand-in on this port do not apply.
+        wallet_net::forget_mempool_routes(&url);
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let peak = Arc::new(AtomicUsize::new(0));
         let active = Arc::new(AtomicUsize::new(0));

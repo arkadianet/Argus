@@ -232,6 +232,7 @@ impl Server {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
+        wallet_net::forget_mempool_routes(&url);
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stopped = stop.clone();
         let reply = Arc::new(reply);
@@ -369,7 +370,7 @@ async fn real_client_keeps_pages_before_mempool_and_cross_address_chain_is_spent
             log.lock().unwrap().push(format!("{i}:mempool"));
             (200, per_tree[i].clone())
         } else if path.contains("unconfirmed/inputs/byBoxId") {
-            (404, r#"{"error":404}"#.into())
+            (404, crate::api::mempool::tests::NOT_FOUND.into())
         } else {
             (200, "[]".into())
         }

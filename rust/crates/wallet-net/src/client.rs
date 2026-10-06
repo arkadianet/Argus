@@ -22,6 +22,10 @@ const MEMPOOL_PAGE: usize = 100;
 /// address anyone spends from by hand.
 pub const MEMPOOL_MAX_TXS: usize = 1_000;
 
+/// Transactions in the node's whole mempool before a complete read of it
+/// counts as impossible. Nodes keep about a thousand by default.
+pub const MEMPOOL_SCAN_MAX_TXS: usize = 10_000;
+
 /// Unconfirmed boxes checked one by one before a spend offers them. Past
 /// this many the rest are left out rather than offered unchecked.
 pub const UNCONFIRMED_CHECKS: usize = 32;
@@ -210,6 +214,29 @@ pub struct ErgoNodeClient {
     inner: Arc<NodeInterface>,
     url: String,
 }
+
+/// A list of pending transactions to read page by page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pending<'a> {
+    /// `POST /transactions/unconfirmed/byErgoTree`: those touching one script.
+    Touching(&'a str),
+    /// `GET /transactions/unconfirmed`: the node's whole mempool.
+    All,
+}
+
+impl Pending<'_> {
+    /// Transactions read before the list counts as too long to read whole.
+    fn cap(self) -> usize {
+        match self {
+            Pending::Touching(_) => MEMPOOL_MAX_TXS,
+            Pending::All => MEMPOOL_SCAN_MAX_TXS,
+        }
+    }
+}
+
+#[path = "mempool_lookup.rs"]
+mod mempool_lookup;
+pub use mempool_lookup::{forget_mempool_routes, OutputRoute, SpendRoute};
 
 /// A parsed transaction summary from the explorer API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -613,35 +640,50 @@ impl ErgoNodeClient {
         Ok(self.get_unspent(address).await?.1)
     }
 
-    /// Every unconfirmed transaction the node lists for `ergo_tree`, page by
-    /// page, and whether the list is whole. Mempool is in-memory on the node,
-    /// so this needs no extra index and works against any node.
+    /// Every transaction on `list`, page by page, and whether the list is
+    /// whole. Mempool is in-memory on the node, so this needs no extra index
+    /// and works against any node.
     ///
     /// An error status is an error, never an empty mempool: an empty answer
     /// would read as "nothing pending spends these boxes".
     async fn mempool_pages(
         &self,
-        ergo_tree: &str,
+        list: Pending<'_>,
     ) -> Result<(Vec<serde_json::Value>, bool), String> {
-        let body =
-            serde_json::to_string(ergo_tree).map_err(|e| format!("JSON serialize: {e}"))?;
+        let body = match list {
+            Pending::Touching(ergo_tree) => Some(
+                serde_json::to_string(ergo_tree).map_err(|e| format!("JSON serialize: {e}"))?,
+            ),
+            Pending::All => None,
+        };
         let mut all = Vec::new();
         let mut offset = 0usize;
         loop {
-            let endpoint = format!(
-                "/transactions/unconfirmed/byErgoTree?offset={offset}&limit={MEMPOOL_PAGE}"
-            );
-            let response = self
-                .inner
-                .send_post_req(&endpoint, body.clone())
-                .await
-                .map_err(|e| format!("Node request: {e}"))?;
+            let response = match &body {
+                Some(body) => {
+                    let endpoint = format!(
+                        "/transactions/unconfirmed/byErgoTree?offset={offset}&limit={MEMPOOL_PAGE}"
+                    );
+                    self.inner.send_post_req(&endpoint, body.clone()).await
+                }
+                None => {
+                    let endpoint =
+                        format!("/transactions/unconfirmed?offset={offset}&limit={MEMPOOL_PAGE}");
+                    self.inner.send_get_req(&endpoint).await
+                }
+            }
+            .map_err(|e| format!("Node request: {e}"))?;
             let status = response.status();
             let text = response.text().await.map_err(|e| format!("Read: {e}"))?;
             if !status.is_success() {
                 return Err(format!("Mempool query failed ({status}): {text}"));
             }
             let items = if text.trim().is_empty() {
+                // The whole mempool stands in for lookups the node does not
+                // serve, so it must say "empty" in JSON like everything else.
+                if list == Pending::All {
+                    return Err("Mempool listing came back empty instead of as a list".into());
+                }
                 Vec::new()
             } else {
                 match serde_json::from_str(&text).map_err(|e| format!("Parse: {e}"))? {
@@ -654,12 +696,15 @@ impl ErgoNodeClient {
                     _ => return Err("Mempool answer is neither a list nor a page".into()),
                 }
             };
+            if list == Pending::All {
+                mempool_lookup::check_listed(&items)?;
+            }
             let full_page = items.len() >= MEMPOOL_PAGE;
             all.extend(items);
             if !full_page {
                 return Ok((all, true));
             }
-            if all.len() >= MEMPOOL_MAX_TXS {
+            if all.len() >= list.cap() {
                 return Ok((all, false));
             }
             offset += MEMPOOL_PAGE;
@@ -670,7 +715,7 @@ impl ErgoNodeClient {
     /// be read. A script with more than [`MEMPOOL_MAX_TXS`] pending is cut
     /// short with a warning rather than failing the view.
     pub async fn mempool_txs_for(&self, ergo_tree: &str) -> Result<Vec<serde_json::Value>, String> {
-        let (txs, whole) = self.mempool_pages(ergo_tree).await?;
+        let (txs, whole) = self.mempool_pages(Pending::Touching(ergo_tree)).await?;
         if !whole {
             tracing::warn!("Mempool listing cut at {MEMPOOL_MAX_TXS} transactions");
         }
@@ -680,22 +725,34 @@ impl ErgoNodeClient {
     /// Unconfirmed transactions touching `ergo_tree`, for spending: the whole
     /// list or an error. A partial list may omit the transaction that spends
     /// a box, and offering that box again is the double spend this guards.
+    pub async fn mempool_txs_complete(
+        &self,
+        ergo_tree: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        self.pending_complete(Pending::Touching(ergo_tree)).await
+    }
+
+    /// Every transaction on `list`, or an error.
     ///
     /// One page is one consistent answer. Past one page, the mempool can
     /// reorder between requests (a higher fee arrives, a transaction leaves)
     /// and slide a transaction across a page boundary unseen, so the list is
     /// read again until two passes agree.
-    pub async fn mempool_txs_complete(
+    async fn pending_complete(
         &self,
-        ergo_tree: &str,
+        list: Pending<'_>,
     ) -> Result<Vec<serde_json::Value>, String> {
-        let too_many = || {
-            format!(
+        let too_many = || match list {
+            Pending::Touching(_) => format!(
                 "more than {MEMPOOL_MAX_TXS} pending transactions touch one address; \
                  they cannot all be checked"
-            )
+            ),
+            Pending::All => format!(
+                "more than {MEMPOOL_SCAN_MAX_TXS} transactions are pending on the node; \
+                 they cannot all be checked"
+            ),
         };
-        let (mut txs, whole) = self.mempool_pages(ergo_tree).await?;
+        let (mut txs, whole) = self.mempool_pages(list).await?;
         if !whole {
             return Err(too_many());
         }
@@ -703,7 +760,7 @@ impl ErgoNodeClient {
             return Ok(txs);
         }
         for _ in 0..MEMPOOL_STABLE_READS {
-            let (again, whole) = self.mempool_pages(ergo_tree).await?;
+            let (again, whole) = self.mempool_pages(list).await?;
             if !whole {
                 return Err(too_many());
             }
@@ -713,111 +770,6 @@ impl ErgoNodeClient {
             txs = again;
         }
         Err("pending transactions kept changing while they were read; try again".into())
-    }
-
-    /// Whether a transaction in the node's mempool already spends `box_id`.
-    ///
-    /// The address reads find a pending spend of a *confirmed* box through
-    /// the box's own script. A pending spend of an *unconfirmed* box is listed
-    /// under the wallet only when it also pays the wallet, so a box forwarded
-    /// whole to someone else is found here, by id, instead.
-    ///
-    /// Only an answer naming the box counts as spent: an empty or `null`
-    /// answer is "not found", and anything else is an error rather than a
-    /// guess either way.
-    pub async fn mempool_spends(&self, box_id: &str) -> Result<bool, String> {
-        let response = self
-            .inner
-            .send_get_req(&format!("/transactions/unconfirmed/inputs/byBoxId/{box_id}"))
-            .await
-            .map_err(|e| format!("Node request: {e}"))?;
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
-        match status {
-            404 => Ok(false),
-            200..=299 => {
-                let body = text.trim();
-                if body.is_empty() || body == "null" {
-                    return Ok(false);
-                }
-                let answer: serde_json::Value = serde_json::from_str(body)
-                    .map_err(|e| format!("Mempool input lookup: {e}"))?;
-                match answer["boxId"].as_str() {
-                    Some(id) if id.eq_ignore_ascii_case(box_id) => Ok(true),
-                    _ => Err(format!(
-                        "Mempool input lookup for {box_id} answered about something else"
-                    )),
-                }
-            }
-            status => Err(format!("Mempool input lookup failed ({status}): {text}")),
-        }
-    }
-
-    /// [`Self::mempool_spends`] for each of `ids`, at most `concurrency`
-    /// lookups at a time. Only the first [`UNCONFIRMED_CHECKS`] ids (sorted)
-    /// are looked up; the rest are absent from the answer, as is any lookup
-    /// that could not run.
-    pub async fn mempool_spends_each(
-        &self,
-        mut ids: Vec<String>,
-        concurrency: usize,
-    ) -> std::collections::HashMap<String, Result<bool, String>> {
-        ids.sort();
-        ids.dedup();
-        ids.truncate(UNCONFIRMED_CHECKS);
-        let mut answers = std::collections::HashMap::new();
-        for chunk in ids.chunks(concurrency.max(1)) {
-            let mut lookups = tokio::task::JoinSet::new();
-            for id in chunk {
-                let (client, id) = (self.clone(), id.clone());
-                lookups.spawn(async move {
-                    let spent = client.mempool_spends(&id).await;
-                    (id, spent)
-                });
-            }
-            while let Some(done) = lookups.join_next().await {
-                if let Ok((id, spent)) = done {
-                    answers.insert(id, spent);
-                }
-            }
-        }
-        answers
-    }
-
-    /// Where `box_id` stands: spent by a pending transaction, in the confirmed
-    /// UTXO set, created by a pending transaction (with the box, so its owner
-    /// can be told), or none of these — spent in a block, or never existed.
-    pub async fn box_status(&self, box_id: &str) -> Result<BoxStatus, String> {
-        if self.mempool_spends(box_id).await? {
-            return Ok(BoxStatus::SpentInMempool);
-        }
-        let confirmed = self
-            .inner
-            .send_get_req(&format!("/utxo/byId/{box_id}"))
-            .await
-            .map_err(|e| format!("Node request: {e}"))?;
-        match confirmed.status().as_u16() {
-            200..=299 => return Ok(BoxStatus::Confirmed),
-            404 => {}
-            status => {
-                let text = confirmed.text().await.unwrap_or_default();
-                return Err(format!("UTXO lookup failed ({status}): {text}"));
-            }
-        }
-        let pending = self
-            .inner
-            .send_get_req(&format!("/transactions/unconfirmed/outputs/byBoxId/{box_id}"))
-            .await
-            .map_err(|e| format!("Node request: {e}"))?;
-        let status = pending.status().as_u16();
-        let text = pending.text().await.map_err(|e| format!("Read: {e}"))?;
-        match status {
-            200..=299 => serde_json::from_str(&text)
-                .map(BoxStatus::Unconfirmed)
-                .map_err(|e| format!("Parse pending output: {e}")),
-            404 => Ok(BoxStatus::Unknown),
-            status => Err(format!("Mempool output lookup failed ({status}): {text}")),
-        }
     }
 
     /// One address read for spending: every confirmed page first, then the
