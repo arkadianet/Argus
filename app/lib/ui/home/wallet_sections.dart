@@ -998,6 +998,7 @@ class SyncStatusLine extends StatelessWidget {
     required this.count,
     required this.fragmented,
     required this.age,
+    this.onFragmented,
   });
 
   /// Keeps the last successful age visible while the next sync is in flight.
@@ -1008,6 +1009,7 @@ class SyncStatusLine extends StatelessWidget {
     required Color statusColor,
     required int? height,
     required bool fragmented,
+    VoidCallback? onFragmented,
   }) => SyncStatusLine(
     key: key,
     status: sync.statusLabel(online: online),
@@ -1016,6 +1018,7 @@ class SyncStatusLine extends StatelessWidget {
     count: sync.utxoCount,
     fragmented: fragmented,
     age: formatSyncAge(sync.lastSyncedAt),
+    onFragmented: onFragmented,
   );
 
   final String status;
@@ -1024,6 +1027,10 @@ class SyncStatusLine extends StatelessWidget {
   final int count;
   final bool fragmented;
   final String age;
+
+  /// What tapping "N UTXOs · Fragmented" does while [fragmented]: the
+  /// suggested cleanup. Elsewhere the line keeps its host's tap.
+  final VoidCallback? onFragmented;
 
   @override
   Widget build(BuildContext context) {
@@ -1064,15 +1071,26 @@ class SyncStatusLine extends StatelessWidget {
             ),
           ],
         ),
-        Text(
-          '$count UTXOs${fragmented ? ' · Fragmented' : ''}',
-          style: style.copyWith(
-            color: fragmented ? rustFor(context) : muted,
-            fontWeight: fragmented ? FontWeight.w600 : FontWeight.w400,
-          ),
-        ),
+        if (fragmented && onFragmented != null)
+          InkWell(
+            key: const Key('utxo-fragmented'),
+            onTap: onFragmented,
+            borderRadius: BorderRadius.circular(8),
+            child: _utxoCount(context, style, muted),
+          )
+        else
+          _utxoCount(context, style, muted),
         if (age.isNotEmpty) Text(age, style: style),
       ],
     );
   }
+
+  Widget _utxoCount(BuildContext context, TextStyle style, Color muted) =>
+      Text(
+        '$count UTXOs${fragmented ? ' · Fragmented' : ''}',
+        style: style.copyWith(
+          color: fragmented ? rustFor(context) : muted,
+          fontWeight: fragmented ? FontWeight.w600 : FontWeight.w400,
+        ),
+      );
 }

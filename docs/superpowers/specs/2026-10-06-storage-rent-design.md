@@ -40,7 +40,7 @@ A single consolidation transaction, proposed only when it helps:
 - **Only if it works.** The core lays the new box out as the consolidation builder will and measures it. A candidate is dropped, and the next address tried, when the merged value cannot fund the token boxes' floors (the builder would refuse it), or when it was proposed for rent and the new box still would not cover its own rent: merging four 0.001 ERG NFT boxes would only spend fees and gather the NFTs into one box a collector still takes whole.
 - **Before signing** the review shows boxes merged, resulting boxes (the consolidation builder's own token layout), rent clocks restarted, miner and Argus fees, value after fees, and the new box's rent and due date.
 
-Entry point for the home indicator: `UtxoManagementScreen(openCleanup: true)`, routed as `UtxoManagementScreen.cleanupRoute` (`/utxos/cleanup`). It opens the review as soon as boxes and rent have loaded, or says there is nothing to clean up; a fragmented wallet whose boxes sit one per address is told that merging them would link the addresses, and that Consolidate does it anyway.
+Entry point for the home indicator: `UtxoManagementScreen(openCleanup: true)`, routed as `UtxoManagementScreen.cleanupRoute` (`/utxos/cleanup`). The wallet page's status line opens `/utxos`; while the wallet is fragmented, its "N UTXOs · Fragmented" indicator opens `/utxos/cleanup`. The route opens the review as soon as boxes and rent have loaded, or says there is nothing to clean up; a fragmented wallet whose boxes sit one per address is told that merging them would link the addresses, and that Consolidate does it anyway.
 
 ## Limits
 

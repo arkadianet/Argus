@@ -17,6 +17,7 @@ import '../../services/wallet_sync_controller.dart';
 import '../../theme/argus_theme.dart';
 import '../offline_banner.dart';
 import '../swap_hub_screen.dart';
+import '../utxo_management_screen.dart';
 import '../widgets/action_row.dart';
 import '../widgets/asset_tile.dart';
 import '../widgets/discover_sheet.dart';
@@ -237,6 +238,7 @@ class WalletLedger extends StatelessWidget {
     final elsewhere = fundsElsewhere(holdings, identity: identity);
     final online = networkController.activeUrl != null;
     final synced = sync.statusLabel(online: online) == 'Synced';
+    final fragmented = sync.utxoCount > utxoFragmentationThreshold;
     return WalletBalanceCard(
       label: 'BALANCE',
       balanceNano: headline,
@@ -281,7 +283,10 @@ class WalletLedger extends StatelessWidget {
               ? moss
               : (sync.isStale ? rust : accentOf(context)),
           height: networkController.height,
-          fragmented: sync.utxoCount > utxoFragmentationThreshold,
+          fragmented: fragmented,
+          // The indicator leads straight to the suggested cleanup; the rest
+          // of the line to the UTXO tools.
+          onFragmented: () => actions.go(UtxoManagementScreen.cleanupRoute),
         ),
         pinIssue: sync.pinIssue,
         onPinIssue: actions.showSettings,
