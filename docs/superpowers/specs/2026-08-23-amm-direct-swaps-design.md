@@ -84,6 +84,14 @@ A usable picker needs name and decimals per token via `get_token_info`, which
 across a full pool set is hundreds of lookups. These are fetched lazily for
 tokens actually displayed, then cached.
 
+> **Since 2026-10-06** pool-token metadata no longer comes from the Rust cache.
+> It became cache-only in the NFT work and then padded unknown tokens with an
+> id placeholder at zero decimals, which the app saved as names. Names and
+> decimals now come from the app's one token lookup; pool tokens are resolved,
+> 40 per pass, from the node that served the pool list into an app-wide public
+> catalog. See "One lookup, and a public catalog for pool tokens" in
+> [automatic token metadata](2026-09-19-automatic-token-metadata-design.md).
+
 ## Data flow
 
 1. Swap screen opens → `amm_pools` → cached pool set (+ truncation flag)

@@ -11,9 +11,11 @@ import '../bridge/frb_generated.dart';
 import 'app_fee.dart';
 import 'network_controller.dart';
 import 'privacy_service.dart';
+import 'token_catalog.dart';
 import 'token_descriptor_store.dart';
 import 'token_evidence.dart';
 export 'token_evidence.dart';
+import 'verified_tokens.dart' show knownToken;
 import 'mix_service.dart';
 import 'spend_policy.dart';
 import 'stealth_service.dart';
@@ -795,12 +797,37 @@ class WalletService with WidgetsBindingObserver {
   String _descriptorKey(String id) =>
       '${currentWalletId.value}|${networkController.activeUrl}|${networkController.explorer}|$id|1';
 
-  TokenBalance displayMetadata(TokenBalance holding) =>
-      _descriptors[_descriptorKey(holding.id)]?.withHolding(
+  TokenBalance displayMetadata(TokenBalance holding) {
+    final session = _descriptors[_descriptorKey(holding.id)];
+    if (session != null) {
+      return session.withHolding(
         holding.amount,
         stealthAmount: holding.stealthAmount,
-      ) ??
-      holding;
+      );
+    }
+    // A holding published before anything knew its token carries no record,
+    // and one restored from a snapshot carries a name but none of the
+    // evidence behind it. Show what is known now instead of waiting for the
+    // next sync to republish it. With nothing known — after "Clear
+    // collectible cache" — the holding keeps what it was published with.
+    if (holding.metadataState == MetadataState.unavailable) {
+      final known = cachedTokenMeta(holding.id);
+      if (known != null) {
+        return known.withHolding(
+          holding.amount,
+          stealthAmount: holding.stealthAmount,
+        );
+      }
+    }
+    return holding;
+  }
+
+  /// [cachedTokenMeta] with this session's explicitly loaded descriptor on
+  /// top, for screens that name a token by id. Display only: a session
+  /// descriptor is memory-only and must never be copied into a holding,
+  /// because holdings are persisted.
+  TokenBalance? displayTokenMeta(String id) =>
+      _descriptors[_descriptorKey(id)] ?? cachedTokenMeta(id);
 
   void clearSessionMetadata() {
     if (_metadataBusy) {
@@ -843,6 +870,7 @@ class WalletService with WidgetsBindingObserver {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_tokenMetaKey);
       await TokenDescriptorStore.clearAll();
+      await publicTokenCatalog.clear();
     } finally {
       _wipe = null;
       done.complete();
@@ -860,6 +888,21 @@ class WalletService with WidgetsBindingObserver {
     required String provider,
     bool providerIsNode = false,
   }) async {
+    // Captured before any wait. Cancelling, closing the sheet, backgrounding
+    // or switching wallet while this waits behind a catalog lookup bumps the
+    // epoch, and must stop the request before anything is sent.
+    final epoch = _descriptorEpoch;
+    final key = _descriptorKey(holding.id);
+    // A public-catalog lookup gives way to a person's request: wait out the
+    // one it has in flight and take the job before the catalog can start
+    // another. Everything below is then checked as of now. Handing the job
+    // back here leaves no gap: from this line to `_metadataBusy = true` the
+    // code runs without suspending, so nothing else can take it.
+    final fromCatalog = _catalogJob != null && await _takeJobFromCatalog();
+    if (fromCatalog) _metadataBusy = false;
+    if (epoch != _descriptorEpoch || key != _descriptorKey(holding.id)) {
+      throw StateError('Metadata request cancelled');
+    }
     if (!isUnlocked ||
         privacyService.hideBalances ||
         networkController.activeUrl == null) {
@@ -868,13 +911,8 @@ class WalletService with WidgetsBindingObserver {
     if (provider != (providerIsNode ? networkController.activeUrl : networkController.explorer))
       throw StateError('Metadata provider changed');
     if (_metadataBusy) throw MetadataBusyException();
-    if (!_observingMetadata) {
-      WidgetsBinding.instance.addObserver(this);
-      _observingMetadata = true;
-    }
+    _observeLifecycle();
     _metadataBusy = true;
-    final epoch = _descriptorEpoch;
-    final key = _descriptorKey(holding.id);
     try {
       final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
         tokenId: holding.id,
@@ -936,9 +974,92 @@ class WalletService with WidgetsBindingObserver {
     }
   }
 
+  /// Set while a public-catalog lookup holds the metadata job. Wallet passes
+  /// and explicit requests wait for it rather than give up: it is a single
+  /// bounded request, and the catalog starts no other while they wait.
+  Future<void>? _catalogJob;
+  int _catalogWaiters = 0;
+
+  /// One node lookup for the public pool-token catalog, in the same single
+  /// metadata job as everything else, so its requests never overlap the
+  /// wallet's. Null when the job is wanted elsewhere — this never waits for
+  /// the wallet's work or competes with it — or while locked or in the
+  /// background, when nothing should be asking the network for this.
+  Future<String?> inspectForCatalog(String tokenId, String provider) async {
+    if (_metadataBusy ||
+        _catalogWaiters > 0 ||
+        !isUnlocked ||
+        !_inForeground) {
+      return null;
+    }
+    // Backgrounding cancels a request already in flight, as it does an
+    // explicit one, rather than letting it finish out of sight.
+    _observeLifecycle();
+    _metadataBusy = true;
+    final done = Completer<void>();
+    _catalogJob = done.future;
+    try {
+      return await RustLib.instance.api.crateApiInspectTokenMetadata(
+        tokenId: tokenId,
+        providerUrl: provider,
+        providerIsNode: true,
+      );
+    } finally {
+      _metadataBusy = false;
+      _catalogJob = null;
+      done.complete();
+    }
+  }
+
+  /// Lifecycle changes clear session metadata and cancel the metadata job in
+  /// flight ([didChangeAppLifecycleState]). Registered by the first request
+  /// of either kind.
+  void _observeLifecycle() {
+    if (_observingMetadata) return;
+    try {
+      WidgetsBinding.instance.addObserver(this);
+      _observingMetadata = true;
+    } catch (_) {
+      // No binding (a plain unit test): nothing to observe.
+    }
+  }
+
+  static bool get _inForeground {
+    try {
+      final state = WidgetsBinding.instance.lifecycleState;
+      return state == null || state == AppLifecycleState.resumed;
+    } catch (_) {
+      // No binding (a plain unit test): nothing is backgrounded.
+      return true;
+    }
+  }
+
+  /// Waits out the catalog lookup that holds the metadata job and takes the
+  /// job in the same step, while still counted as waiting, so the catalog
+  /// cannot slip another request in between. False when the job is not the
+  /// catalog's, or another request took it first: the caller then yields as
+  /// it always has. On true the caller holds the job and must release it.
+  Future<bool> _takeJobFromCatalog() async {
+    final job = _catalogJob;
+    if (job == null) return false;
+    _catalogWaiters++;
+    try {
+      await job;
+      if (_metadataBusy) return false;
+      _metadataBusy = true;
+      return true;
+    } finally {
+      _catalogWaiters--;
+    }
+  }
+
   Future<void> init() async {
     if (_initialized) return;
-    await Future.wait([RustLib.init(), loadTokenMeta()]);
+    await Future.wait([
+      RustLib.init(),
+      loadTokenMeta(),
+      publicTokenCatalog.ensureLoaded(),
+    ]);
     // Belt and braces with the frb(init) attribute: the app fee config must
     // be installed before any transaction is built.
     await RustLib.instance.api.crateApiInitApp();
@@ -1036,6 +1157,8 @@ class WalletService with WidgetsBindingObserver {
     // sync in flight and let it re-ask about ids that just failed.
     // _setHandle clears it synchronously, where the wallet actually changes.
     _rebuildTokenMetaView();
+    // Rows already on screen were built from the view before this landed.
+    metadataChanges.value++;
   }
 
   String? _tableLoadedFor;
@@ -1195,7 +1318,7 @@ class WalletService with WidgetsBindingObserver {
     _setHandle(id, session.handleId);
     // Write the outgoing wallet's table now rather than waiting for the
     // incoming wallet's first sync, which may never come.
-    await flushPendingDescriptors();
+    await _loadActivatedTable();
     return session;
   }
 
@@ -1226,7 +1349,7 @@ class WalletService with WidgetsBindingObserver {
     );
     final id = walletId ?? const Uuid().v4();
     _setHandle(id, raw);
-    await flushPendingDescriptors();
+    await _loadActivatedTable();
   }
 
   /// Lock the currently active wallet. If [walletId] is provided, lock only
@@ -1391,8 +1514,48 @@ class WalletService with WidgetsBindingObserver {
     );
   }
 
-  /// Token metadata already known (persisted cache), without a node call.
-  TokenBalance? cachedTokenMeta(String id) => _tokenMeta[id];
+  /// Token metadata already known, without a node call. The one lookup every
+  /// screen and every published holding goes through, best layer first:
+  ///
+  ///  1. this wallet's own descriptors, resolved during its sync;
+  ///  2. the public catalog of pool tokens ([publicTokenMeta]);
+  ///  3. the curated registry built into the app;
+  ///  4. the legacy app-wide table from older builds, which has no
+  ///     provenance and so ranks last.
+  ///
+  /// Explicitly loaded session descriptors are not here: holdings are built
+  /// from this and persisted, and those are memory-only. Screens that name a
+  /// token by id use [displayTokenMeta], which adds them for display.
+  TokenBalance? cachedTokenMeta(String id) {
+    final own = _tokenMeta[id];
+    // The legacy rows share the same view as a base layer, by reference.
+    if (own != null && !identical(own, _legacyTokenMeta[id])) return own;
+    return publicTokenMeta(id) ?? own;
+  }
+
+  /// What the wallet-independent layers say about [id]: the pool-token
+  /// catalog, then the curated registry. For a context that is not this
+  /// wallet's own, and for anything that may be stored app-wide.
+  TokenBalance? publicTokenMeta(String id) {
+    final d = publicTokenCatalog.lookup(id);
+    if (d != null) return _asBalance(d);
+    final curated = knownToken(id);
+    if (curated == null) return null;
+    // The ticker is the on-chain name the registry was checked against.
+    // Evidence stays unknown: this is the app's list, not an issuance read.
+    return TokenBalance(
+      id: id,
+      amount: 0,
+      name: curated.ticker,
+      decimals: curated.decimals,
+      metadataState: MetadataState.partial,
+      source: curatedTokenSource,
+    );
+  }
+
+  /// Shown as a descriptor's source when the name came from the registry
+  /// built into the app rather than from a node.
+  static const curatedTokenSource = 'Argus curated token list';
 
   /// Ids this session already asked the node about and did not get an answer
   /// for. Without it a wallet of unresolvable tokens re-asks on every sync.
@@ -1500,9 +1663,20 @@ class WalletService with WidgetsBindingObserver {
       for (final id in ordered) {
         if (!owns() || _metadataUnsupported) return resolvedNow;
         if (attempted >= maxTokenMetaPerSync) return resolvedNow;
-        // An explicit request owns the job. Yield rather than compete.
-        if (_metadataBusy) return resolvedNow;
-        _metadataBusy = true;
+        if (!_metadataBusy) {
+          _metadataBusy = true;
+        } else {
+          // An explicit request owns the job. Yield rather than compete. A
+          // catalog lookup is one bounded request: wait it out and take the
+          // job before the catalog can start another.
+          if (_catalogJob == null || !await _takeJobFromCatalog()) {
+            return resolvedNow;
+          }
+          if (!owns() || _metadataUnsupported) {
+            _metadataBusy = false;
+            return resolvedNow;
+          }
+        }
         attempted++;
         try {
           final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
@@ -1601,16 +1775,9 @@ class WalletService with WidgetsBindingObserver {
   static const maxTokenMetaPerSync = 40;
 
   /// An unambiguous "this endpoint cannot serve issuance lookups at all".
-  /// A 404 is deliberately NOT here: `/blockchain/token/byId/{id}` answers
-  /// that both for a node without the index and for a token the node simply
-  /// does not know, and treating the first missing dust token as a dead node
-  /// would unname the whole wallet.
-  static bool _looksUnsupported(Object error) {
-    final text = error.toString().toLowerCase();
-    return text.contains('extraindex') ||
-        text.contains('extra_index') ||
-        text.contains('must be an https url');
-  }
+  /// Shared with the pool-token catalog; see [DescriptorLookupFailure].
+  static bool _looksUnsupported(Object error) =>
+      DescriptorLookupFailure.unsupported(error);
 
   /// How long a run of not-founds ends a pass. Deliberately not a verdict
   /// about the provider: unknown tokens and a missing index look alike.
@@ -1628,65 +1795,19 @@ class WalletService with WidgetsBindingObserver {
 
   /// Marker the Rust side puts on an error the provider failed to answer,
   /// as opposed to one it answered negatively.
-  static const retryableMarker = 'RETRYABLE:';
+  static const retryableMarker = DescriptorLookupFailure.retryableMarker;
 
   /// Whether the provider gave a definite "no such token", as opposed to
-  /// failing to answer. Only the former is worth remembering.
-  ///
-  /// The distinction is made in Rust, where the error still has a type:
-  /// `reqwest::Error`'s Display collapses connection refusal, DNS and TLS
-  /// failures into one opaque string, so no amount of matching here could
-  /// tell them apart from an answer. The timeout raised on this side is
-  /// recognised too, since it never reaches that layer.
-  static bool _looksDurableNegative(Object error) {
-    final text = error.toString();
-    if (text.contains(retryableMarker)) return false;
-    final lower = text.toLowerCase();
-    return !lower.contains('timed out') && !lower.contains('cancelled');
-  }
+  /// failing to answer. Only the former is worth remembering. Shared with
+  /// the pool-token catalog; see [DescriptorLookupFailure].
+  static bool _looksDurableNegative(Object error) =>
+      DescriptorLookupFailure.durableNegative(error);
 
-  static bool _looksNotFound(Object error) {
-    final text = error.toString().toLowerCase();
-    return text.contains('404') || text.contains('not found');
-  }
+  static bool _looksNotFound(Object error) =>
+      DescriptorLookupFailure.notFound(error);
 
   void _rememberDescriptor(String id, Map<String, dynamic> m, String source) {
-    final descriptor = CachedDescriptor(
-      id: id,
-      name: m['name'] as String?,
-      decimals: (m['decimals'] as num?)?.toInt() ?? 0,
-      emissionAmount: (m['emissionAmount'] as num?)?.toInt(),
-      iconUrl: m['iconUrl'] as String?,
-      supplyEvidence: TokenDescriptorStore.byName(
-        SupplyEvidence.values,
-        m['supplyEvidence'],
-        SupplyEvidence.unknown,
-      ),
-      decimalsEvidence: TokenDescriptorStore.byName(
-        DecimalsEvidence.values,
-        m['decimalsEvidence'],
-        DecimalsEvidence.unknown,
-      ),
-      declaredAssetKind: TokenDescriptorStore.byName(
-        DeclaredAssetKind.values,
-        m['declaredAssetKind'],
-        DeclaredAssetKind.none,
-      ),
-      metadataState: TokenDescriptorStore.byName(
-        MetadataState.values,
-        m['metadataState'],
-        MetadataState.partial,
-      ),
-      mediaState: TokenDescriptorStore.byName(
-        MediaState.values,
-        m['mediaState'],
-        MediaState.unknown,
-      ),
-      source: source,
-      // Persisted, so a restart can still tell that the issuance registers
-      // were never read and ask for them again.
-      incomplete: m['incomplete'] == true,
-    );
+    final descriptor = CachedDescriptor.fromInspection(m, source: source);
     // One bound, shared with the display view and the persisted table, so
     // an eviction here cannot leave a resolved token looking unresolved and
     // be requested again on every refresh forever.
@@ -1699,22 +1820,7 @@ class WalletService with WidgetsBindingObserver {
     _descriptorCache[id] = descriptor;
     // `TokenBalance`'s constructor runs issuerText() over the name, so a
     // hostile label is sanitised on the way in as well as on the way out.
-    rememberTokenMeta(
-      TokenBalance(
-        id: id,
-        amount: 0,
-        name: descriptor.name,
-        decimals: descriptor.decimals,
-        emissionAmount: descriptor.emissionAmount,
-        iconUrl: descriptor.iconUrl,
-        supplyEvidence: descriptor.supplyEvidence,
-        decimalsEvidence: descriptor.decimalsEvidence,
-        declaredAssetKind: descriptor.declaredAssetKind,
-        metadataState: descriptor.metadataState,
-        mediaState: descriptor.mediaState,
-        source: source,
-      ),
-    );
+    rememberTokenMeta(_asBalance(descriptor));
   }
 
   final Map<String, CachedDescriptor> _descriptorCache = {};
@@ -2608,6 +2714,12 @@ class WalletService with WidgetsBindingObserver {
   /// are chosen at one explicit call site rather than by a flag threaded
   /// through this interface.
   Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
+    // The wallet's own table first. It used to load only inside the name
+    // pass, which runs after history and the stealth scan, so the first
+    // balance after every unlock republished each holding without its name
+    // and the pass put it back seconds later. Memoized: only the first call
+    // waits, and only on local storage.
+    await ensureWalletTable();
     final items = raw is List ? raw : const [];
     final jobs = <Future<TokenBalance>>[];
     for (final item in items) {
@@ -2869,11 +2981,21 @@ class WalletService with WidgetsBindingObserver {
     _tokenMeta
       ..clear()
       ..addAll(_legacyTokenMeta);
-    // The table loads lazily, on the first path that needs it; the
-    // memoization was already dropped by clearSessionMetadata above.
+    // The table is read right after this, by the caller (see
+    // [_loadActivatedTable]); the memoization was already dropped by
+    // clearSessionMetadata above.
     walletSyncController.activateWallet(walletId);
     currentWalletId.value = walletId;
     unlocked.value = true;
+  }
+
+  /// Reads the newly active wallet's descriptor table before unlocking
+  /// returns, so names it has already learned are in memory for the first
+  /// frame and the first balance, rather than arriving after the first sync.
+  /// It is local storage, and the outgoing wallet's table is written first.
+  Future<void> _loadActivatedTable() async {
+    await flushPendingDescriptors();
+    await ensureWalletTable();
   }
 
   void _requireUnlocked() {

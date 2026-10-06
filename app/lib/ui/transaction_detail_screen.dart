@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../format.dart';
 import '../services/network_controller.dart';
 import '../services/session_lock.dart';
+import '../services/token_metadata.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'widgets/soft_card.dart';
@@ -12,8 +13,24 @@ import 'widgets/soft_card.dart';
 class TransactionDetailScreen extends StatelessWidget {
   const TransactionDetailScreen({super.key});
 
+  /// Tokens are named and scaled by the one token lookup, like the row this
+  /// screen was opened from, and repaint when it learns something.
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ValueListenableBuilder<int>(
+    valueListenable: walletService.metadataChanges,
+    builder: (context, _, _) => _screen(context),
+  );
+
+  Widget _tokenLine(BuildContext context, ({String id, BigInt amount}) t) =>
+      Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(
+          tokenAmountText(t.amount, t.id),
+          style: monoStyle(context, size: 12),
+        ),
+      );
+
+  Widget _screen(BuildContext context) {
     final args = WalletRouteArgs.of(context);
     final tx = args.transaction ?? const {};
     final txId = tx['tx_id']?.toString() ?? '';
@@ -134,23 +151,7 @@ class TransactionDetailScreen extends StatelessWidget {
           if (sent.isNotEmpty) ...[
             const SectionLabel('Tokens sent'),
             const SizedBox(height: 8),
-            for (final t in sent)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: FutureBuilder<TokenBalance>(
-                  future: walletService.tokenMeta(t.id, 0),
-                  builder: (context, snap) {
-                    final sym = snap.data?.name ?? shorten(t.id, head: 10, tail: 6);
-                    final decimals = snap.data?.decimals ?? 0;
-                    final fits = t.amount <= BigInt.from(0x7FFFFFFFFFFFFFFF);
-                    return Text(
-                      '${formatTokenAmount(fits ? t.amount.toInt() : 0, decimals)} $sym'
-                      '${fits ? '' : ' (large amount)'}',
-                      style: monoStyle(context, size: 12),
-                    );
-                  },
-                ),
-              ),
+            for (final t in sent) _tokenLine(context, t),
             const SizedBox(height: 10),
           ],
           const SectionLabel('Id'),
@@ -160,22 +161,7 @@ class TransactionDetailScreen extends StatelessWidget {
             if (received.isNotEmpty) ...[
             const SectionLabel('Tokens received'),
             const SizedBox(height: 8),
-            for (final t in received)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: FutureBuilder<TokenBalance>(
-                  future: walletService.tokenMeta(t.id, 0),
-                  builder: (context, snap) {
-                    final sym = snap.data?.name ?? shorten(t.id, head: 10, tail: 6);
-                    final decimals = snap.data?.decimals ?? 0;
-                    return Text(
-                      '${formatTokenAmount(t.amount <= BigInt.from(0x7FFFFFFFFFFFFFFF) ? t.amount.toInt() : 0, decimals)} $sym'
-                      '${t.amount > BigInt.from(0x7FFFFFFFFFFFFFFF) ? ' (large amount)' : ''}',
-                      style: monoStyle(context, size: 12),
-                    );
-                  },
-                ),
-              ),
+            for (final t in received) _tokenLine(context, t),
             // Compare identities, not lengths: token_ids may repeat and
             // arrivals cover a subset of the unique ids.
             if (missingTokenIds.isNotEmpty)
@@ -192,7 +178,12 @@ class TransactionDetailScreen extends StatelessWidget {
             const SizedBox(height: 8),
             ...tokens.map((id) => Padding(
                   padding: const EdgeInsets.only(bottom: 6),
-                  child: Text(shorten(id, head: 12, tail: 10), style: monoStyle(context, size: 12)),
+                  child: Text(
+                    tokenName(id) == null
+                        ? shorten(id, head: 12, tail: 10)
+                        : '${tokenName(id)} · ${shorten(id, head: 8, tail: 6)}',
+                    style: monoStyle(context, size: 12),
+                  ),
                 )),
             const SizedBox(height: 8),
           ],
