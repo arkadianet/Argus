@@ -82,6 +82,13 @@ class RentParameters {
   int get overflowBytes =>
       storageFeeFactor <= 0 ? 0 : 2147483647 ~/ storageFeeFactor;
 
+  /// Why a box owes nothing: miners voted the rate to zero, or the box is
+  /// past [overflowBytes].
+  String get noChargeReason => storageFeeFactor <= 0
+      ? 'No storage rent is charged at the current rate.'
+      : 'No storage rent can be charged on a box over '
+            '${formatWithCommas(overflowBytes)} bytes under current rules.';
+
   /// "0.00125 ERG per byte".
   String get rateLabel =>
       '${formatErg(storageFeeFactor)} per byte${factorFromNode ? '' : ' (default rate)'}';

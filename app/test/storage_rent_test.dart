@@ -149,6 +149,20 @@ void main() {
       );
       expect(node.rateLabel, '0.00125 ERG per byte');
       expect(node.overflowBytes, 1717);
+      expect(
+        node.noChargeReason,
+        'No storage rent can be charged on a box over 1,717 bytes under '
+        'current rules.',
+      );
+      const voidRate = RentParameters(
+        height: 1,
+        storageFeeFactor: 0,
+        factorFromNode: true,
+      );
+      expect(
+        voidRate.noChargeReason,
+        'No storage rent is charged at the current rate.',
+      );
       const fallback = RentParameters.fallback(height: 1);
       expect(fallback.storageFeeFactor, fallbackStorageFeeFactor);
       expect(fallback.rateLabel, '0.00125 ERG per byte (default rate)');

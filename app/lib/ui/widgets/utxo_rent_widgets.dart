@@ -34,8 +34,7 @@ class BoxRentLine extends StatelessWidget {
       BoxRent(charge: RentCharge.none) => (
         Icons.hourglass_empty,
         colors.muted,
-        'No storage rent can be charged on a box over '
-            '${formatWithCommas(parameters.overflowBytes)} bytes under current rules.',
+        parameters.noChargeReason,
       ),
       BoxRent(atRisk: true, collectableNow: true) => (
         Icons.warning_amber_rounded,

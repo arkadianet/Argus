@@ -23,10 +23,7 @@ class RentHint extends StatelessWidget {
     final body = TextStyle(fontSize: 12.5, height: 1.35, color: colors.muted);
     final String text;
     if (!estimate.chargeable) {
-      text =
-          'No storage rent can be charged on a box this large (over '
-          '${formatWithCommas(estimate.parameters.overflowBytes)} bytes) under '
-          'current rules.';
+      text = estimate.parameters.noChargeReason;
     } else {
       final rate = estimate.parameters.factorFromNode
           ? ''
