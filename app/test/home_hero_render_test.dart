@@ -289,18 +289,10 @@ Future<void> _accessible(WidgetTester tester) async {
 }
 
 
-/// The hero's colours as drawn, top and foot, for checking they are the
-/// ones the palette names.
-List<Color> _heroColors(WidgetTester tester) {
-  final box = tester.widget<DecoratedBox>(find.byKey(const Key('home-hero')));
-  return ((box.decoration as BoxDecoration).gradient! as LinearGradient).colors;
-}
-
 void main() {
   setUpAll(loadRenderFonts);
   String file(String screen, PaletteSpec palette, [String suffix = '']) =>
       'rich/$screen-${_id(palette)}-1x$suffix';
-  HeroSpec spec(PaletteSpec p) => p.hero;
 
 
   for (final palette in allPalettes) {
@@ -310,7 +302,7 @@ void main() {
       if ([harborPalette, watchfulPalette, ledgerPalette].contains(palette)) {
         await saveRender(tester, file('wallet', palette));
       }
-      expect(_heroColors(tester), [spec(palette).surface, spec(palette).surfaceEnd]);
+      expect(find.byKey(const Key('home-scene')), findsOneWidget);
       expect(
         find.bySemanticsLabel(RegExp(r'^Balance 203\.16 ERG, about A\$90\.54 AUD, 6 tokens unpriced, '
             r'incl\. 0\.001 ERG stealth$')),
@@ -327,7 +319,7 @@ void main() {
       await pumpRender(tester, _overview(_overviewData()), palette: palette);
       expect(tester.takeException(), isNull);
       await saveRender(tester, file('overview', palette));
-      expect(_heroColors(tester).first, spec(palette).surface);
+      expect(find.byKey(const Key('home-scene')), findsOneWidget);
       expect(find.bySemanticsLabel('ERG price A\$0.45 AUD, up 2.4% over 24h, SigmaUSD oracle'), findsOneWidget);
       expect(find.byKey(const Key('home-price-sparkline')), findsOneWidget);
       await _accessible(tester);
@@ -337,7 +329,7 @@ void main() {
       await pumpRender(tester, _locked(), palette: palette);
       expect(tester.takeException(), isNull);
       await saveRender(tester, file('locked', palette));
-      expect(_heroColors(tester).first, spec(palette).surface);
+      expect(find.byKey(const Key('home-scene')), findsOneWidget);
       expect(find.bySemanticsLabel(RegExp(r'^Balance 203\.16 ERG, as of 3h ago$')), findsOneWidget);
       await _accessible(tester);
     });

@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
 
 import '../../theme/argus_theme.dart';
+import 'home_glass.dart';
 import 'home_hero.dart';
 import 'home_models.dart';
 import 'home_rows.dart';
+import 'home_scene.dart';
 import 'home_style.dart';
 import 'home_widgets.dart';
+import 'wallet_actions.dart';
 import 'wallet_tools_sheet.dart';
 
 /// The launch screen: every wallet on this phone, seed and watched alike,
@@ -32,6 +35,7 @@ class OverviewScreen extends StatelessWidget {
     this.footnote,
     this.notice,
     this.noticeIsError = false,
+    this.onAction,
   });
 
   final OverviewData data;
@@ -60,10 +64,24 @@ class OverviewScreen extends StatelessWidget {
   final String? notice;
   final bool noticeIsError;
 
+  /// Send, Receive, Swap and More from the overview; without it the row is
+  /// not shown.
+  final ValueChanged<WalletAction>? onAction;
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final page = Theme.of(context).scaffoldBackgroundColor;
+    final t = HomeText.of(context);
+    final scaffold = Scaffold(
+      // The header lies on the scene, clear until the list scrolls under it.
+      backgroundColor: data.isEmpty ? null : Colors.transparent,
       appBar: AppBar(
+        backgroundColor: WidgetStateColor.resolveWith(
+          (states) => states.contains(WidgetState.scrolledUnder) ? page.withValues(alpha: 0.94) : page.withValues(alpha: 0),
+        ),
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
+        toolbarHeight: 72,
         titleSpacing: homeGutter,
         title: Semantics(
           header: true,
@@ -72,9 +90,28 @@ class OverviewScreen extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const IrisMark(size: 28),
-              const SizedBox(width: 6),
-              Text('Argus', style: Theme.of(context).textTheme.titleLarge),
+              const IrisMark(size: 40),
+              const SizedBox(width: 14),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Argus',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(fontSize: 26, height: 1.1),
+                    ),
+                    Text(
+                      'Your Ergo Wallet',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: t.secondary.copyWith(fontSize: 14, letterSpacing: 1),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -101,6 +138,19 @@ class OverviewScreen extends StatelessWidget {
         footnote: footnote,
         notice: notice,
         noticeIsError: noticeIsError,
+        onAction: onAction,
+      ),
+    );
+    if (data.isEmpty) return scaffold;
+    final top = MediaQuery.paddingOf(context).top + 72;
+    return ColoredBox(
+      color: page,
+      child: HomeScene(
+        light: SceneLight.eclipse,
+        lightAt: Offset(58, top - 12),
+        lightRadius: 80,
+        height: top + 520,
+        child: scaffold,
       ),
     );
   }
@@ -124,6 +174,7 @@ class OverviewView extends StatelessWidget {
     this.footnote,
     this.notice,
     this.noticeIsError = false,
+    this.onAction,
   });
 
   final OverviewData data;
@@ -138,6 +189,7 @@ class OverviewView extends StatelessWidget {
   final String? footnote;
   final String? notice;
   final bool noticeIsError;
+  final ValueChanged<WalletAction>? onAction;
 
   Future<void> _add(BuildContext context) async {
     final choice = await showAddWalletSheet(context);
@@ -151,11 +203,17 @@ class OverviewView extends StatelessWidget {
         onTap: onOpenWallet == null ? null : () => onOpenWallet!(w.ref),
       );
 
+  /// A wallet with keys, on a glass card of its own.
+  Widget _card(WalletSummary w) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: GlassCard(children: [_row(w)]),
+      );
+
   /// The wallets with keys here, which a long press picks up and drags.
   Widget _wallets() {
     final rows = data.wallets;
     final reorder = onReorder;
-    if (reorder == null || rows.length < 2) return Column(children: [for (final w in rows) _row(w)]);
+    if (reorder == null || rows.length < 2) return Column(children: [for (final w in rows) _card(w)]);
     return ReorderableListView(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -172,7 +230,7 @@ class OverviewView extends StatelessWidget {
             // itself use to find the row.
             key: ValueKey<Object>(('reorder', w.id)),
             index: i,
-            child: _row(w),
+            child: _card(w),
           ),
       ],
     );
@@ -190,17 +248,17 @@ class OverviewView extends StatelessWidget {
     final list = ListView(
       key: const Key('overview-list'),
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: EdgeInsets.only(top: 4, bottom: 24 + bottom),
+      padding: EdgeInsets.only(bottom: 24 + bottom),
       children: [
-        if (message != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: message),
-        // The page settles in from the top: the panel, the network line,
-        // then each list.
+        // The page settles in from the top: the scene, then each list.
+        // On the scene the screen paints behind the list.
         HomeEntrance(
-          child: RaisedPanel(
-            corner: HideBalancesButton(hidden: data.hidden, onPressed: onToggleHidden),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(homeGutter, 8, homeGutter, 8),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (message != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: message),
                 HomeBalance(
                   label: 'Total balance',
                   figureKey: const Key('overview-total'),
@@ -214,51 +272,75 @@ class OverviewView extends StatelessWidget {
                   pricesNote: data.pricesNote,
                   pending: data.pending,
                   hidden: data.hidden,
+                  onToggleHidden: onToggleHidden,
+                  figureReserve: 40,
                 ),
+                if (onAction != null) ...[
+                  const SizedBox(height: 22),
+                  HomeActionCircles(
+                    keyPrefix: 'overview-action',
+                    gridMore: true,
+                    actions: const [WalletAction.send, WalletAction.receive, WalletAction.swap, WalletAction.more],
+                    onAction: onAction!,
+                  ),
+                ],
+                const SizedBox(height: 18),
+                homeNetworkPill(context, data.network, onTap: onNetwork, action: networkAction),
                 if (price != null) ...[
-                  const SizedBox(height: 14),
-                  const HomeRule(indent: 0, endIndent: 0),
-                  const SizedBox(height: 12),
-                  ErgPriceStrip(price: price, currency: data.currency),
+                  const SizedBox(height: 10),
+                  _PriceCard(price: price, currency: data.currency),
                 ],
               ],
             ),
           ),
         ),
-        const SizedBox(height: 4),
-        HomeEntrance(
-          order: 1,
-          child: homeNetworkRow(context, data.network, onTap: onNetwork, action: networkAction),
-        ),
-        const SizedBox(height: 4),
-        // Each list on a soft surface of its own; adding a wallet closes
-        // the last of them.
         if (data.wallets.isNotEmpty)
           HomeEntrance(
-            order: 2,
-            child: HomeSection(
-              sectionKey: const Key('overview-wallets'),
+            order: 1,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                HomeSectionHeader(title: 'Wallets', count: '${data.wallets.length}'),
+                HomeSectionHeader(
+                  title: 'Wallets',
+                  count: '${data.wallets.length}',
+                  trailing: RingButton(
+                    key: const Key('overview-add-wallet'),
+                    icon: Icons.add,
+                    tooltip: 'Add a wallet',
+                    onPressed: () => _add(context),
+                  ),
+                ),
+                const SizedBox(height: 6),
                 _wallets(),
-                if (data.watched.isEmpty) AddWalletRow(onTap: () => _add(context)),
               ],
             ),
           ),
-        if (data.wallets.isNotEmpty && data.watched.isNotEmpty) const SizedBox(height: 12),
         if (data.watched.isNotEmpty)
           HomeEntrance(
-            order: 3,
-            child: HomeSection(
-              sectionKey: const Key('overview-watched'),
+            order: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                HomeSectionHeader(title: 'Watched', count: '${data.watched.length}'),
-                for (final w in data.watched) _row(w),
-                AddWalletRow(onTap: () => _add(context)),
+                const SizedBox(height: 14),
+                HomeSectionHeader(
+                  title: 'Watched addresses',
+                  count: '${data.watched.length}',
+                  trailing: RingButton(
+                    key: data.wallets.isEmpty ? const Key('overview-add-wallet') : const Key('overview-add-watched'),
+                    icon: Icons.add,
+                    tooltip: 'Watch an address or account',
+                    onPressed: () => _add(context),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                GlassCard(
+                  key: const Key('overview-watched'),
+                  dividers: true,
+                  children: [for (final w in data.watched) _row(w)],
+                ),
               ],
             ),
           ),
-        if (data.wallets.isEmpty && data.watched.isEmpty) AddWalletRow(onTap: () => _add(context)),
         if (footnote != null)
           Padding(
             padding: const EdgeInsetsDirectional.fromSTEB(homeGutter, 16, homeGutter, 0),
@@ -270,6 +352,30 @@ class OverviewView extends StatelessWidget {
     );
     final refresh = onRefresh;
     return refresh == null ? list : RefreshIndicator(onRefresh: refresh, child: list);
+  }
+}
+
+/// The ERG price on a glass card of its own, under the network pill.
+class _PriceCard extends StatelessWidget {
+  const _PriceCard({required this.price, required this.currency});
+
+  final ErgPriceView price;
+  final FiatCurrency currency;
+
+  @override
+  Widget build(BuildContext context) {
+    final spec = ArgusColors.sceneOf(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(glassRadius),
+        border: Border.all(color: spec.glassBorder),
+        color: spec.glassFill,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 10, 16, 10),
+        child: ErgPriceStrip(price: price, currency: currency),
+      ),
+    );
   }
 }
 

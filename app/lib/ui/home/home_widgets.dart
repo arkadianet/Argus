@@ -2,8 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../../theme/argus_theme.dart';
-import '../token_avatar.dart';
+import 'home_glass.dart';
 import 'home_models.dart';
 import 'home_style.dart';
 
@@ -52,29 +51,35 @@ class TappableNode extends StatelessWidget {
   }
 }
 
-/// A section's title, set in the serif, with an optional count and a
-/// "View all" link in the accent at the far edge: the way on is the thing
-/// to tap, so it takes the colour kept for what can be acted on.
+/// A list's name in widely spaced capitals, its count in a small round
+/// badge, and at the far edge either a link ("View all ›") in the accent or
+/// a control of its own, such as the round "+" that adds to the list.
 class HomeSectionHeader extends StatelessWidget {
-  const HomeSectionHeader({super.key, required this.title, this.count, this.action, this.onAction, this.actionKey});
+  const HomeSectionHeader({
+    super.key,
+    required this.title,
+    this.count,
+    this.action,
+    this.onAction,
+    this.actionKey,
+    this.trailing,
+  });
 
   final String title;
   final String? count;
   final String? action;
   final VoidCallback? onAction;
   final Key? actionKey;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
-    final accent = HomeTones.of(context).accent;
     final gutter = homeGutterOf(context);
     return Padding(
-      padding: EdgeInsetsDirectional.only(start: gutter, end: gutter - 6),
-      // A header with a link is a full touch target tall; one without
-      // sits closer to its list.
+      padding: EdgeInsetsDirectional.only(start: gutter, end: gutter - (trailing == null ? 6 : 10)),
       child: ConstrainedBox(
-        constraints: BoxConstraints(minHeight: action == null ? 44 : homeLineHeight),
+        constraints: BoxConstraints(minHeight: action == null && trailing == null ? 40 : homeLineHeight),
         child: Row(
           children: [
             Expanded(
@@ -82,35 +87,86 @@ class HomeSectionHeader extends StatelessWidget {
                 header: true,
                 label: count == null ? title : '$title, $count',
                 excludeSemantics: true,
-                child: Text.rich(
-                  TextSpan(
-                    text: title,
-                    children: [if (count != null) TextSpan(text: '  $count', style: t.secondary)],
-                  ),
-                  style: t.title,
-                ),
-              ),
-            ),
-            if (action != null)
-              TextButton(
-                key: actionKey,
-                onPressed: onAction,
-                style: TextButton.styleFrom(
-                  foregroundColor: accent,
-                  minimumSize: const Size(48, 48),
-                  padding: const EdgeInsetsDirectional.only(start: 10, end: 2),
-                  textStyle: t.link,
-                ),
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(action!),
-                    Icon(Icons.chevron_right, size: 18, color: accent),
+                    Flexible(child: Text(title.toUpperCase(), style: t.label)),
+                    if (count != null) ...[const SizedBox(width: 10), CountBadge(count: count!)],
                   ],
                 ),
               ),
+            ),
+            if (trailing != null)
+              trailing!
+            else if (action != null)
+              HomeLink(text: action!, onPressed: onAction, linkKey: actionKey),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// A heading inside the page ("Recent Activity"), in plain type, with a
+/// "View all ›" link at the far edge.
+class HomeHeading extends StatelessWidget {
+  const HomeHeading({super.key, required this.title, this.action, this.onAction, this.actionKey});
+
+  final String title;
+  final String? action;
+  final VoidCallback? onAction;
+  final Key? actionKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = HomeText.of(context);
+    final gutter = homeGutterOf(context);
+    return Padding(
+      padding: EdgeInsetsDirectional.only(start: gutter, end: gutter - 6),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: homeLineHeight),
+        child: Row(
+          children: [
+            Expanded(child: Semantics(header: true, child: Text(title, style: t.title))),
+            if (action != null) HomeLink(text: action!, onPressed: onAction, linkKey: actionKey, quiet: true),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The chevron at the end of a row that opens something.
+Widget homeChevron(BuildContext context) => Padding(
+      padding: const EdgeInsetsDirectional.only(start: 10),
+      child: Icon(Icons.chevron_right, size: 20, color: HomeText.of(context).muted),
+    );
+
+/// "View all ›": a text link, a full touch target tall. In the accent, or
+/// [quiet] in the page's muted type where the accent would crowd.
+class HomeLink extends StatelessWidget {
+  const HomeLink({super.key, required this.text, required this.onPressed, this.linkKey, this.quiet = false});
+
+  final String text;
+  final VoidCallback? onPressed;
+  final Key? linkKey;
+  final bool quiet;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = HomeText.of(context);
+    final colour = quiet ? t.ink : HomeTones.of(context).accent;
+    return TextButton(
+      key: linkKey,
+      onPressed: onPressed,
+      style: TextButton.styleFrom(
+        foregroundColor: colour,
+        minimumSize: const Size(48, 48),
+        padding: const EdgeInsetsDirectional.only(start: 10, end: 2),
+        textStyle: t.link.copyWith(fontWeight: FontWeight.w400, fontSize: 14),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [Text(text), const SizedBox(width: 4), Icon(Icons.chevron_right, size: 18, color: colour)],
       ),
     );
   }
@@ -202,42 +258,6 @@ class _HomeEntranceState extends State<HomeEntrance> with SingleTickerProviderSt
   }
 }
 
-/// A list's soft surface: one shade off the page, rounded like the hero
-/// and inset to the hero's edges, with no border and no shadow. It groups
-/// a section's title and rows the way a card would, without a box's
-/// outline, so a page of sections reads as layered rather than ruled.
-///
-/// Everything in it keeps to the page's one gutter ([HomeInset]).
-class HomeSection extends StatelessWidget {
-  const HomeSection({super.key, required this.children, this.sectionKey});
-
-  final List<Widget> children;
-  final Key? sectionKey;
-
-  /// How far the surface sits in from the screen's edge.
-  static const inset = homeGutter - 12;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: inset),
-      child: Material(
-        key: sectionKey,
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(homeRadius),
-        clipBehavior: Clip.antiAlias,
-        child: HomeInset(
-          gutter: homeGutter - inset,
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 6),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: children),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// A wallet's mark: its initial on the same disc a token gets, or an eye
 /// for a wallet watched without keys, so a page of marks reads as one set.
 class WalletMark extends StatelessWidget {
@@ -246,13 +266,31 @@ class WalletMark extends StatelessWidget {
   final String name;
   final WalletKind kind;
 
+  /// The disc every wallet's mark sits on: a deep, cool shade a step off
+  /// the page, the same for every wallet so the names, not the colours,
+  /// tell them apart.
+  static Color discOf(BuildContext context) {
+    final page = Theme.of(context).scaffoldBackgroundColor;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return dark ? Color.lerp(page, const Color(0xFF3C6B5E), 0.28)! : Color.lerp(page, const Color(0xFF3C6B5E), 0.12)!;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final colors = ArgusColors.of(context);
-    if (kind == WalletKind.seed) {
-      return ExcludeSemantics(child: TokenAvatar(label: name.trim(), radius: homeMarkSize / 2));
-    }
-    return ExcludeSemantics(child: HomeDisc(child: Icon(Icons.visibility_outlined, size: 16, color: colors.muted)));
+    final t = HomeText.of(context);
+    final trimmed = name.trim();
+    return ExcludeSemantics(
+      child: HomeDisc(
+        fill: discOf(context),
+        child: kind == WalletKind.seed
+            ? Text(
+                trimmed.isEmpty ? '?' : String.fromCharCode(trimmed.runes.first).toUpperCase(),
+                textScaler: TextScaler.noScaling,
+                style: TextStyle(fontFamily: 'Newsreader', fontSize: 20, fontWeight: FontWeight.w500, height: 1, color: t.ink),
+              )
+            : Icon(Icons.visibility_outlined, size: 20, color: t.ink),
+      ),
+    );
   }
 }
 

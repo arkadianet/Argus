@@ -206,6 +206,51 @@ Future<ui.Image?> _grab(WidgetTester tester, double pixelRatio) async {
   }
 }
 
+/// The frame [pumpRender] drew, beside the part [crop] (in the image's own
+/// pixels) of a reference image at [referencePath], scaled to the same
+/// height, saved as [name].png: for comparing a screen with the look it is
+/// meant to have. Does nothing unless renders were asked for, or when the
+/// reference is not on this machine.
+Future<void> saveBesideReference(
+  WidgetTester tester,
+  String name, {
+  required String referencePath,
+  required Rect crop,
+  Color background = const Color(0xFF111111),
+}) async {
+  final dir = renderDirectory();
+  final file = File(referencePath);
+  if (dir == null || !file.existsSync()) return;
+  final frame = await _grab(tester, renderPixelRatio);
+  if (frame == null) return;
+  final reference = await tester.runAsync(() async {
+    final codec = await ui.instantiateImageCodec(await file.readAsBytes());
+    return (await codec.getNextFrame()).image;
+  });
+  if (reference == null) return;
+  const gap = 32.0;
+  final height = frame.height.toDouble();
+  final refWidth = crop.width * height / crop.height;
+  final width = refWidth + frame.width + gap * 3;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.drawRect(Rect.fromLTWH(0, 0, width, height + gap * 2), Paint()..color = background);
+  canvas.drawImageRect(reference, crop, Rect.fromLTWH(gap, gap, refWidth, height), Paint()..filterQuality = FilterQuality.high);
+  canvas.drawImage(frame, Offset(gap * 2 + refWidth, gap), Paint());
+  final picture = recorder.endRecording();
+  await tester.runAsync(() async {
+    final image = await picture.toImage(width.ceil(), (height + gap * 2).ceil());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    final out = File('${dir.path}/$name.png');
+    await out.parent.create(recursive: true);
+    await out.writeAsBytes(bytes!.buffer.asUint8List());
+  });
+  picture.dispose();
+  frame.dispose();
+  reference.dispose();
+}
+
 /// A strip of frames of a motion, side by side and captioned with their
 /// times, saved as [name].png: one frame at each of [at] (times from now,
 /// in order), after [start] sets the motion going. Frames are drawn at

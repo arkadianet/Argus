@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:argus_wallet/theme/argus_theme.dart';
 import 'package:argus_wallet/theme/argus_tones.dart';
-import 'package:argus_wallet/ui/home/home_hero.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -20,16 +19,24 @@ double contrast(Color a, Color b) {
 /// under-reads thin text.
 void main() {
   for (final palette in allPalettes) {
+    final colors = ArgusColors.fromSpec(palette);
+    final dark = palette.isDark;
+    final scene = palette.scene;
+    final text = <String, Color>{
+      'ink': palette.ink,
+      'muted': colors.muted,
+      'a link or Tidy up': colors.accentText,
+      'an incoming amount, a rise': dark ? mossBright : moss,
+      'a fall, "Fragmented"': dark ? rustBright : rust,
+    };
+
     test('${palette.name}: the home pages meet WCAG AA', () {
-      final colors = ArgusColors.fromSpec(palette);
-      final dark = palette.isDark;
-      final grounds = {'page': palette.background, 'sheet': palette.surface};
-      final text = <String, Color>{
-        'ink': palette.ink,
-        'muted': colors.muted,
-        'a link or Tidy up': colors.accentText,
-        'an incoming amount, a rise': dark ? mossBright : moss,
-        'a fall, "Fragmented"': dark ? rustBright : rust,
+      final grounds = {
+        'page': palette.background,
+        'sheet': palette.surface,
+        // A glass card or pill on the page.
+        'glass on the page': Color.alphaBlend(scene.glassFill, palette.background),
+        'the glass sheen': Color.alphaBlend(scene.glassSheen, Color.alphaBlend(scene.glassFill, palette.background)),
       };
       final short = <String>[
         for (final MapEntry(key: what, value: fg) in text.entries)
@@ -37,7 +44,7 @@ void main() {
             if (contrast(fg, bg) < 4.5) '$what on the $where (${contrast(fg, bg).toStringAsFixed(2)})',
       ];
       final icons = <String, (Color, Color)>{
-        'the selected tab': (colors.accentText, Color.alphaBlend(palette.accent.withValues(alpha: 0.18), palette.background)),
+        'the selected tab': (colors.accentText, Color.alphaBlend(palette.accent.withValues(alpha: 0.22), palette.background)),
         'the sync dot': (moss, palette.background),
       };
       for (final MapEntry(key: what, value: (fg, bg)) in icons.entries) {
@@ -46,75 +53,51 @@ void main() {
       expect(short, isEmpty, reason: palette.name);
     });
 
-    {
-      final hero = palette.hero;
-      test('${palette.name}: the hero meets WCAG AA on its own surface', () {
-        final short = <String>[];
-        // The panel may shade toward its foot: everything on it holds on both.
-        void atLeast(String what, Color fg, Color bg, double ratio) {
-          for (final ground in {bg == hero.surface ? hero.surfaceEnd : bg, bg}) {
-            final got = contrast(fg, ground);
-            if (got < ratio) short.add('$what: ${got.toStringAsFixed(2)} < $ratio');
-          }
-        }
+    test('${palette.name}: the balance reads on every part of the scene it can fall on', () {
+      // The sky, its middle as it settles into the page, the haze round the
+      // light at its strongest, and each ridge at its top; and a pill of
+      // glass on the brightest of them. The eclipse's rim and the light on
+      // the ridges are thin lines no text sits on.
+      final skyMid = Color.lerp(scene.sky, palette.background, 0.55)!;
+      final grounds = <String, Color>{
+        'the sky': scene.sky,
+        'the sky settling': skyMid,
+        'the haze': Color.alphaBlend(scene.haze, scene.sky),
+        'a lit slope': Color.alphaBlend(scene.lit, Color.alphaBlend(scene.haze, scene.ridges[1])),
+        for (final (i, ridge) in scene.ridges.indexed) ...{
+          'ridge ${i + 1}': ridge,
+          'ridge ${i + 1} in the haze': Color.alphaBlend(scene.haze, ridge),
+        },
+      };
+      grounds['glass on the haze'] = Color.alphaBlend(scene.glassFill, grounds['the haze']!);
+      grounds['glass on the far ridge'] = Color.alphaBlend(scene.glassFill, scene.ridges.first);
+      final short = <String>[
+        for (final MapEntry(key: what, value: fg) in text.entries)
+          for (final MapEntry(key: where, value: bg) in grounds.entries)
+            if (contrast(fg, bg) < 4.5) '$what on $where (${contrast(fg, bg).toStringAsFixed(2)})',
+      ];
+      expect(short, isEmpty, reason: palette.name);
+    });
 
-        // Text, all of it set straight on the panel: the balance and its
-        // lines, the actions' names, the price strip.
-        atLeast('ink', hero.ink, hero.surface, 4.5);
-        atLeast('muted', hero.muted, hero.surface, 4.5);
-        atLeast('accent (links, the price chart)', hero.accent, hero.surface, 4.5);
-        atLeast('positive (a rise)', hero.positive, hero.surface, 4.5);
-        atLeast('negative (a fall, a stale price)', hero.negative, hero.surface, 4.5);
-        // The filled action: its shape against the panel, and its mark,
-        // held to text's ratio.
-        atLeast('the filled action on the panel', hero.filled, hero.surface, 3);
-        atLeast('the mark on the filled action', hero.onFilled, hero.filled, 4.5);
-        // The other actions: named under the well, so the well itself only
-        // has to show; its mark is held to text's ratio.
-        atLeast('the mark in a tonal well', hero.onTonal, hero.tonal, 4.5);
-        atLeast('the eye and the chevrons', hero.ink, hero.surface, 3);
-        expect(short, isEmpty, reason: palette.name);
-      });
-
-      test('${palette.name}: the hero stands apart from the page, Send apart on it', () {
-        // Apart from the page by its colour alone, before its shadow and
-        // glow, which no one should have to rely on.
-        expect(contrast(hero.surface, palette.background), greaterThan(1.2));
-        expect(hero.surface, isNot(palette.background));
-        // A divider and a well show, quietly. Neither carries meaning
-        // alone, so neither is held to a WCAG ratio.
-        expect(contrast(hero.divider, hero.surface), greaterThan(1.25));
-        // The wells sit low on the panel, where the sheen has turned: they
-        // show on both ends.
-        for (final ground in [hero.surface, hero.surfaceEnd]) {
-          expect(contrast(hero.tonal, ground), greaterThan(1.1));
-          expect(contrast(hero.tonal, ground), lessThan(contrast(hero.filled, ground)),
-              reason: 'Send stays the one filled action');
-        }
-        // The sheen is seen: the two ends differ.
-        expect(contrast(hero.surface, hero.surfaceEnd), greaterThan(1.1));
-        // The glow is the accent's own, and only on a dark page.
-        expect(hero.glow == null, !palette.isDark);
-      });
-
-      test('${palette.name}: a list\'s surface is a shade off the page, no more', () {
-        // Text on it is held to AA with the page's ("sheet" above); here, that
-        // it layers quietly rather than boxes.
-        final ratio = contrast(palette.surface, palette.background);
-        expect(ratio, greaterThan(1.02));
-        expect(ratio, lessThan(1.25));
-      });
-    }
+    test('${palette.name}: the actions and the glass hold their shape', () {
+      final behind = Color.alphaBlend(scene.haze, scene.ridges.first);
+      // Send's mark on both ends of its gradient, as an icon that carries
+      // the action alone.
+      for (final ground in [scene.sendTop, scene.sendBottom]) {
+        expect(contrast(scene.onSend, ground), greaterThanOrEqualTo(3), reason: '${palette.name}: the mark on Send');
+      }
+      // Send stands off the scene.
+      expect(contrast(scene.sendBottom, behind), greaterThanOrEqualTo(1.6), reason: '${palette.name}: Send on the scene');
+      // A ring, and the edge of a pane of glass, show: quietly, since a
+      // name under each action and the words on each pane carry them.
+      expect(contrast(Color.alphaBlend(scene.ring, behind), behind), greaterThan(1.3), reason: '${palette.name}: a ring');
+      expect(
+        contrast(Color.alphaBlend(scene.glassBorder, palette.background), palette.background),
+        greaterThan(1.12),
+        reason: '${palette.name}: a pane\'s edge',
+      );
+      // The light is the scene's brightest part, apart from the page.
+      expect(contrast(scene.glow, palette.background), greaterThan(2), reason: '${palette.name}: the glow');
+    });
   }
-
-  test('what reads the theme directly on the hero reads the hero\'s colours', () {
-    for (final palette in allPalettes) {
-      final hero = RaisedPanel.heroTheme(argusThemeFor(palette), palette.hero);
-      expect(hero.colorScheme.onSurface, palette.hero.ink, reason: palette.name);
-      expect(hero.brightness, palette.hero.brightness, reason: palette.name);
-      expect(hero.extension<ArgusColors>()!.muted, palette.hero.muted, reason: palette.name);
-      expect(hero.extension<ArgusColors>()!.accentText, palette.hero.accent, reason: palette.name);
-      expect(hero.extension<ArgusColors>()!.accent, palette.hero.filled, reason: palette.name);
-    }
-  });
 }

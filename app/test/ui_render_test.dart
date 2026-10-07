@@ -260,7 +260,7 @@ void main() {
       await tester.tapAt(const Offset(20, 20));
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
-        find.text('Recent activity'),
+        find.text('Recent Activity'),
         400,
         scrollable: find.byType(Scrollable).first,
       );
@@ -304,7 +304,7 @@ void main() {
       await tester.pumpAndSettle();
       await renderPng(tester, 'watched-address$tag');
       await tester.scrollUntilVisible(
-        find.text('Recent activity'),
+        find.text('Recent Activity'),
         300,
         scrollable: find.byType(Scrollable).first,
       );
@@ -337,6 +337,15 @@ void main() {
       await tester.tap(row);
       await tester.pumpAndSettle();
       await renderPng(tester, 'watched-account$tag');
+      // The full address is on the Addresses tab.
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('wallet-page-tab-addresses')),
+        300,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('wallet-page-tab-addresses')));
+      await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
         find.text('First address'),
         300,

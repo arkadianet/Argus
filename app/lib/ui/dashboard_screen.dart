@@ -1074,7 +1074,31 @@ class _DashboardScreenState extends State<DashboardScreen>
       onNetwork: () => Navigator.push(context, fadeRoute(const NetworkSettingsPage())),
       notice: _notice,
       noticeIsError: _noticeIsError,
+      onAction: _overviewAction,
     );
+  }
+
+  /// The overview's own Send, Receive, Swap and More act on a wallet: the
+  /// unlocked one, else the first with keys here. It opens; when it is
+  /// already unlocked the action follows at once, else its gate asks for
+  /// the key first and the wallet's own buttons are a tap away.
+  Future<void> _overviewAction(WalletAction action) async {
+    final unlocked = _walletUnlocked ? _walletId : null;
+    final id = unlocked ?? (_overview.wallets.isEmpty ? null : _overview.wallets.first.walletId);
+    if (id == null) return;
+    await _openWallet(WalletRef.seed(id));
+    if (!mounted || !_walletUnlocked || _walletId != id) return;
+    switch (action) {
+      case WalletAction.send:
+        _go('/send');
+      case WalletAction.receive:
+        _go('/receive');
+      case WalletAction.swap:
+        _openSwap(SwapVenue.spectrum);
+      case WalletAction.sendOffline:
+      case WalletAction.more:
+        break;
+    }
   }
 
   Widget _watchedPage(WalletRef ref) {
@@ -1107,15 +1131,27 @@ class _DashboardScreenState extends State<DashboardScreen>
       },
       child: WalletPageScreen(
         title: owns && tab != WalletTab.wallet ? walletTabLook(tab).label : name,
+        // The wallet's own page, open or locked, lies under a clear header
+        // with its state beneath its name.
+        immersive: !owns || tab == WalletTab.wallet,
+        subtitle: !owns || tab == WalletTab.wallet ? (unlocked ? 'Unlocked' : 'Locked') : null,
+        subtitleLive: unlocked,
         onBack: _closeWallet,
         actions: [
-          if (owns && tab == WalletTab.wallet)
+          if (owns && tab == WalletTab.wallet) ...[
             IconButton(
               key: const Key('wallet-scan'),
               icon: const Icon(Icons.qr_code_scanner),
               tooltip: 'Scan a QR code',
               onPressed: _scan,
             ),
+            IconButton(
+              key: const Key('wallet-menu'),
+              icon: const Icon(Icons.more_vert),
+              tooltip: 'Wallet settings',
+              onPressed: _openSettings,
+            ),
+          ],
         ],
         body: ListenableBuilder(
           listenable: Listenable.merge([addressLabelService, privacyService]),

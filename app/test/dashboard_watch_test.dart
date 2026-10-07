@@ -72,7 +72,7 @@ void main() {
     expect(find.widgetWithText(NavigationDestination, 'Discover'), findsNothing);
     expect(find.text(watchAccountLimitations), findsOneWidget);
     await tester.scrollUntilVisible(
-      find.text('Recent activity'),
+      find.text('Recent Activity'),
       300,
       scrollable: find.descendant(of: find.byKey(const Key('wallet-list')), matching: find.byType(Scrollable)).first,
     );

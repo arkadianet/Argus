@@ -44,7 +44,7 @@ void main() {
       expect(tester.takeException(), isNull);
       final status = find.byKey(const Key('wallet-status'));
       final line = find.descendant(of: status, matching: textPlainContaining('Out of sync'));
-      expect(plainOf(tester, line), 'Out of sync   ·   Block 1,999,999   ·   10 minutes ago');
+      expect(plainOf(tester, line), 'Out of sync  ·  Block 1,999,999  ·  10 minutes ago');
       expect(find.descendant(of: find.byKey(const Key('utxo-fragmented')), matching: textPlain('12,345 UTXOs · Fragmented')),
           findsOneWidget);
       // At this size the line takes more than one row of text.

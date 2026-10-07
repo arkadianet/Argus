@@ -5,13 +5,12 @@ import '../../theme/argus_tones.dart';
 
 /// The home screens' visual language, kept in one place.
 ///
-/// One type scale (a serif section title, three sizes and the hero
-/// numeral), spacing in steps of four, one corner radius, one hairline.
-/// Depth comes from surfaces, not lines: the hero over its soft shadow, and
-/// each list on a surface a shade off the page. Everything that sets type
-/// or space on these screens reads it from here, which is what lets several
-/// lists on one page read as one composed page rather than a stack of
-/// boxes.
+/// One type scale (spaced capitals for a list's name, three sizes, and
+/// the serif balance), spacing in steps of four, one hairline. Depth comes
+/// from the scene the pages open on and the glass laid over it
+/// (home_scene.dart, home_glass.dart). Everything that sets type or space
+/// on these screens reads it from here, which is what lets several lists on
+/// one page read as one composed page rather than a stack of boxes.
 
 /// Side margin shared by every row, so every figure on a page ends on the
 /// same edge.
@@ -43,7 +42,7 @@ const homeRowHeight = 56.0;
 const homeLineHeight = 48.0;
 
 /// Wallet initials, token letters and activity arrows share one size.
-const homeMarkSize = 32.0;
+const homeMarkSize = 40.0;
 
 /// Icons inside the content; the app bar and tab bar keep their 24.
 const homeIconSize = 20.0;
@@ -52,24 +51,8 @@ const homeIconSize = 20.0;
 /// tabular figures.
 const tabularFigures = [FontFeature.tabularFigures()];
 
-/// Marks what sits on the hero panel, whose surface is the page inverted:
-/// everything under it takes its colours from [spec] rather than from the
-/// page ([HomeTones]).
-class HeroSurface extends InheritedWidget {
-  const HeroSurface({super.key, required this.spec, required super.child});
-
-  final HeroSpec spec;
-
-  static HeroSpec? maybeOf(BuildContext context) => context.dependOnInheritedWidgetOfExactType<HeroSurface>()?.spec;
-
-  @override
-  bool updateShouldNotify(HeroSurface old) => old.spec != spec;
-}
-
-/// The colours text and marks take where they are set: on the page, or on
-/// the hero panel, whose own colours were chosen for its inverted surface.
-/// A widget that can sit in either place reads its colours from here, so
-/// the same row reads right on both.
+/// The colours text and marks take on the home pages. The scene and its
+/// glass are held to the page's own type, so one set serves everywhere.
 class HomeTones {
   const HomeTones._({
     required this.ink,
@@ -85,21 +68,6 @@ class HomeTones {
   });
 
   factory HomeTones.of(BuildContext context) {
-    final hero = HeroSurface.maybeOf(context);
-    if (hero != null) {
-      return HomeTones._(
-        ink: hero.ink,
-        muted: hero.muted,
-        accent: hero.accent,
-        positive: hero.positive,
-        negative: hero.negative,
-        divider: hero.divider,
-        filled: hero.filled,
-        onFilled: hero.onFilled,
-        tonal: hero.tonal,
-        onTonal: hero.onTonal,
-      );
-    }
     final colors = ArgusColors.of(context);
     final scheme = Theme.of(context).colorScheme;
     return HomeTones._(
@@ -167,19 +135,19 @@ class HomeText {
     return HomeText._(
       ink: ink,
       muted: muted,
-      // Newsreader, as the app bar's titles and the balance are: a section
-      // reads as a heading, not as one more label.
+      // A heading within the page ("Recent Activity"): a size up, plain.
       title: TextStyle(
-        fontFamily: 'Newsreader',
-        fontSize: 19,
-        fontWeight: FontWeight.w600,
-        height: 1.2,
-        letterSpacing: -0.2,
+        fontSize: 16.5,
+        fontWeight: FontWeight.w400,
+        height: 1.25,
+        letterSpacing: 0.3,
         color: ink,
       ),
+      // Names and figures are set in the regular cut: on the dark glass a
+      // size and ink above their detail lines carry them.
       primary: TextStyle(
-        fontSize: 16,
-        fontWeight: FontWeight.w500,
+        fontSize: 15,
+        fontWeight: FontWeight.w400,
         height: 1.3,
         color: ink,
         fontFeatures: tabularFigures,
@@ -192,10 +160,10 @@ class HomeText {
         fontFeatures: tabularFigures,
       ),
       label: TextStyle(
-        fontSize: 11,
-        fontWeight: FontWeight.w500,
+        fontSize: 12.5,
+        fontWeight: FontWeight.w400,
         height: 1.3,
-        letterSpacing: 1.6,
+        letterSpacing: 2.6,
         color: muted,
       ),
       // A button sets its label's style outright instead of inheriting it,
@@ -204,16 +172,16 @@ class HomeText {
     );
   }
 
-  /// Section titles: Newsreader 19, semibold, ink.
+  /// A heading within the page: 18, regular, ink.
   final TextStyle title;
 
-  /// Row titles, amounts, links: 16, medium, ink.
+  /// Row titles, amounts: 16, regular, ink.
   final TextStyle primary;
 
-  /// Details, values, notes: 13, regular, muted.
+  /// Details, values, notes: 13.5, regular, muted.
   final TextStyle secondary;
 
-  /// Section and card labels: 11, medium, tracked capitals.
+  /// A list's name and the balance's label: 12.5, widely spaced capitals.
   final TextStyle label;
 
   /// Text-button labels ("View all", "Learn more"): 13, medium, ink.
@@ -226,8 +194,7 @@ class HomeText {
 /// Whether text is large enough that two-column rows stack their figures.
 bool homeLargeText(BuildContext context) => MediaQuery.textScalerOf(context).scale(14) / 14 > 1.35;
 
-/// A rule one device pixel thick, in the palette's outline colour (the
-/// hero's divider on the hero), inset to the page's gutters or (indents of
+/// A rule one device pixel thick, in the palette's outline colour, inset to the page's gutters or (indents of
 /// 0) to the edges of the panel it sits in.
 class HomeRule extends StatelessWidget {
   const HomeRule({super.key, this.indent = homeGutter, this.endIndent = homeGutter});

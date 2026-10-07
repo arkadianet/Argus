@@ -4,6 +4,8 @@ import '../../format.dart';
 import '../../theme/argus_theme.dart';
 import '../pin_fields.dart';
 import 'home_hero.dart';
+import 'home_scene.dart';
+import 'wallet_page.dart';
 import 'home_style.dart';
 
 /// How a locked seed wallet can be opened on this device.
@@ -24,8 +26,8 @@ enum UnlockMethod {
 /// A locked seed wallet's page. It never asks for biometrics on its own:
 /// opening the wallet asks once, and after a cancel only [onUnlock] does.
 ///
-/// It is the wallet's own page, locked: the same raised panel with the last
-/// figure that needs no key to show, and the way in beneath it.
+/// It is the wallet's own page, locked: the same scene and medallion with
+/// the last figure that needs no key to show, and the way in beneath it.
 class UnlockGate extends StatelessWidget {
   const UnlockGate({
     super.key,
@@ -81,17 +83,20 @@ class UnlockGate extends StatelessWidget {
     final spinner = const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2));
     final showPin = method == UnlockMethod.pin || (method == UnlockMethod.biometric && usePin);
     final age = lastKnownAge;
+    final initial = name.trim().isEmpty ? '?' : String.fromCharCode(name.trim().runes.first).toUpperCase();
+    const medallion = WalletPageScreen.medallionSize;
     return ListView(
       key: const ValueKey('gate'),
-      padding: EdgeInsets.only(top: 4, bottom: 40 + MediaQuery.paddingOf(context).bottom),
+      padding: EdgeInsets.only(bottom: 40 + MediaQuery.paddingOf(context).bottom),
       children: [
-        RaisedPanel(
-          // Colours are read under the panel, which has its own.
-          child: Builder(
-            builder: (hero) {
-              final h = HomeText.of(hero);
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        // On the scene the page's frame paints.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(homeGutter, 18, homeGutter, 18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Stack(
+                clipBehavior: Clip.none,
                 children: [
                   if (lastKnownNano != null)
                     HomeBalance(
@@ -102,28 +107,34 @@ class UnlockGate extends StatelessWidget {
                       // balance. The age says what the figure is.
                       asOf: age == null ? null : formatSyncAge(DateTime.now().subtract(age)),
                       hidden: hidden,
+                      figureReserve: medallion - 18,
+                      // The header says the wallet is locked.
+                      showLabel: false,
                     )
                   else
-                    Row(
-                      children: [
-                        Icon(Icons.lock_outline, size: 14, color: h.muted),
-                        const SizedBox(width: 6),
-                        Text('LOCKED', style: h.label),
-                      ],
+                    SizedBox(
+                      height: 104,
+                      child: Row(
+                        children: [
+                          Icon(Icons.lock_outline, size: 14, color: t.muted),
+                          const SizedBox(width: 6),
+                          Text('LOCKED', style: t.label),
+                        ],
+                      ),
                     ),
-                  if (address != null)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: HomeIdentityLine(address: address!, pinnedIndex: pinnedIndex),
-                    ),
-                  const SizedBox(height: 12),
-                  Text('Unlock to see activity, send and receive.', style: h.secondary.copyWith(color: h.ink)),
+                  PositionedDirectional(top: -18, end: -14, child: WalletMedallion(letter: initial, size: medallion)),
                 ],
-              );
-            },
+              ),
+              if (address != null) ...[
+                const SizedBox(height: 18),
+                IdentityPill(address: address!, pinnedIndex: pinnedIndex),
+              ],
+              const SizedBox(height: 14),
+              Text('Unlock to see activity, send and receive.', style: t.secondary.copyWith(color: t.ink, fontSize: 14.5)),
+            ],
           ),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 8),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: homeGutter),
           child: Column(

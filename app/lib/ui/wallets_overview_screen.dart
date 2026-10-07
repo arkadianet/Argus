@@ -38,9 +38,13 @@ class WalletsOverviewScreen extends StatelessWidget {
     this.priceFeed,
     this.notice,
     this.noticeIsError = false,
+    this.onAction,
   });
 
   final WalletsOverviewModel model;
+
+  /// Send, Receive, Swap and More from the overview's own row.
+  final ValueChanged<WalletAction>? onAction;
   final ValueChanged<WalletRef> onOpen;
   final VoidCallback onCreate;
   final VoidCallback onRestore;
@@ -104,6 +108,7 @@ class WalletsOverviewScreen extends StatelessWidget {
                 ].join(' '),
           notice: notice,
           noticeIsError: noticeIsError,
+          onAction: onAction,
         );
       },
     );

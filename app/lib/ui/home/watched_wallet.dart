@@ -393,6 +393,8 @@ class _WatchedWalletPageState extends State<WatchedWalletPage> {
         listenable: _source,
         builder: (context, _) => WalletPageScreen(
           title: _tab == WalletTab.wallet ? widget.name : walletTabLook(_tab).label,
+          subtitle: _tab == WalletTab.wallet ? (_source.isAccount ? 'Watched account' : 'Watched address') : null,
+          immersive: _tab == WalletTab.wallet,
           onBack: widget.onClose,
           actions: [
             if (_tab == WalletTab.wallet)
