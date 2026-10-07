@@ -43,6 +43,7 @@ import 'send_screen.dart';
 import 'settings/network_settings_page.dart';
 import 'settings_screen.dart';
 import 'swap_hub_screen.dart';
+import '../services/amm_service.dart';
 import 'transaction_detail_screen.dart';
 import 'transactions_screen.dart';
 import 'wallets_overview_screen.dart';
@@ -973,6 +974,22 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
         );
       },
+      // This is the signing wallet's page; a watched one opens its tokens
+      // from watched_wallet.dart, which offers no swap.
+      onSwap: (token) => _swapFrom(token.id),
+      swappable: ammService.hasPool(t.id),
+    );
+  }
+
+  /// Spectrum's swap, paying with [tokenId] (null: ERG).
+  void _swapFrom(String? tokenId) {
+    if (!_guardUnlocked()) return;
+    Navigator.push(
+      context,
+      fadeRoute(
+        SwapHubScreen(initialTab: coerceVenue(SwapVenue.spectrum), initialFrom: tokenId),
+        settings: RouteSettings(arguments: _args()),
+      ),
     );
   }
 
