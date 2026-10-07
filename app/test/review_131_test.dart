@@ -68,13 +68,63 @@ void main() {
     test('the book keeps what it is told across a restart, newest last, up to its limit', () async {
       SharedPreferences.setMockInitialValues({});
       final book = StealthChangeBook(limit: 2);
-      await book.remember('a');
-      await book.remember('b');
-      await book.remember('c');
-      expect(book.addresses, {'b', 'c'});
+      await book.remember('w1', 'a');
+      await book.remember('w1', 'b');
+      await book.remember('w1', 'c');
+      expect(book.addressesFor('w1'), {'b', 'c'});
       final again = StealthChangeBook(limit: 2);
-      await again.load();
-      expect(again.addresses, {'b', 'c'});
+      await again.load('w1');
+      expect(again.addressesFor('w1'), {'b', 'c'});
+    });
+
+    test('each wallet has its own list, under its own key, and nothing links them', () async {
+      SharedPreferences.setMockInitialValues({});
+      final book = StealthChangeBook();
+      await book.remember('w1', 'change-of-w1');
+      await book.remember('w2', 'change-of-w2');
+      expect(book.addressesFor('w1'), {'change-of-w1'});
+      expect(book.addressesFor('w2'), {'change-of-w2'});
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getStringList(StealthChangeBook.keyFor('w1')), ['change-of-w1']);
+      expect(prefs.getStringList(StealthChangeBook.keyFor('w2')), ['change-of-w2']);
+      expect(prefs.getKeys().where((k) => k.startsWith('argus_stealth_self_change')), hasLength(2));
+      // w1's change paid out to w2 is a payment to w2, not w2's own.
+      final tx = _send(changeTo: 'change-of-w1');
+      expect(walletActivity(reownActivity(tx, book.addressesFor('w2')))!.category, ActivityCategory.stealth);
+    });
+
+    test('a wallet\'s list goes with the wallet', () async {
+      SharedPreferences.setMockInitialValues({});
+      final book = StealthChangeBook();
+      await book.remember('w1', 'a');
+      await book.forget('w1');
+      expect(book.addressesFor('w1'), isEmpty);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.containsKey(StealthChangeBook.keyFor('w1')), isFalse);
+    });
+
+    test('the phone-wide list of beta.4 becomes the only wallet\'s, and is deleted', () async {
+      SharedPreferences.setMockInitialValues({
+        StealthChangeBook.legacyKey: ['a', 'b'],
+      });
+      final book = StealthChangeBook();
+      await book.migrateLegacy(['w1']);
+      expect(book.addressesFor('w1'), {'a', 'b'});
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.containsKey(StealthChangeBook.legacyKey), isFalse);
+    });
+
+    test('with several wallets the phone-wide list cannot be split, so it is dropped', () async {
+      SharedPreferences.setMockInitialValues({
+        StealthChangeBook.legacyKey: ['a', 'b'],
+      });
+      final book = StealthChangeBook();
+      await book.migrateLegacy(['w1', 'w2']);
+      expect(book.addressesFor('w1'), isEmpty);
+      expect(book.addressesFor('w2'), isEmpty);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.containsKey(StealthChangeBook.legacyKey), isFalse);
+      expect(prefs.getKeys().where((k) => k.startsWith('argus_stealth_self_change')), isEmpty);
     });
   });
 

@@ -256,7 +256,8 @@ def render():
     ]
     entries = []
     for name, spec in LOGOS.items():
-        svg = (SRC / spec['file']).read_text()
+        # UTF-8 whatever the locale: erg.svg's root id is Cyrillic.
+        svg = (SRC / spec['file']).read_text(encoding='utf-8')
         size, disc, shapes = layers(svg, spec['disc'])
         layer_exprs = []
         for n, (calls, col, even) in enumerate(shapes):
@@ -301,11 +302,11 @@ def self_check():
 def main():
     if '--check' in sys.argv[1:]:
         self_check()
-        if OUT.read_text() != render():
+        if OUT.read_text(encoding='utf-8') != render():
             raise SystemExit(f'{OUT.relative_to(ROOT)} is not what the SVGs make: run the generator')
         print('ok')
         return
-    OUT.write_text(render())
+    OUT.write_text(render(), encoding='utf-8')
     print(f'wrote {OUT.relative_to(ROOT)}')
 
 

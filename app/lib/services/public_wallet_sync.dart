@@ -211,9 +211,9 @@ class PublicWalletSync extends ChangeNotifier {
             amounts.removeWhere((_, amount) => amount <= 0);
           }
           // Read against all the wallet's addresses, and the stealth
-          // addresses it sent its own change to.
-          await stealthChangeBook.load();
-          final owned = {...addresses, ...stealthChangeBook.addresses};
+          // addresses this wallet (and no other) sent its own change to.
+          await stealthChangeBook.load(entry.key);
+          final owned = {...addresses, ...stealthChangeBook.addressesFor(entry.key)};
           for (final address in addresses) {
             if (!valid()) return;
             for (final tx in await gateway.history(address)) {

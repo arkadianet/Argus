@@ -689,16 +689,17 @@ class StealthService extends ChangeNotifier {
 
   /// A fresh one-time address to send our own change to. A box paid to it
   /// carries the stealth payment script, so the template scan finds it
-  /// like any other stealth receipt. The address is also recorded
-  /// ([stealthChangeBook]) so that the transaction's history reads the
-  /// change as the wallet's own rather than as a stealth payment out.
+  /// like any other stealth receipt. The address is also recorded, in the
+  /// open wallet's own list ([stealthChangeBook]), so that the transaction's
+  /// history reads the change as that wallet's rather than as a stealth
+  /// payment out.
   Future<String?> newSelfChangeAddress() async {
     final mine = address;
     if (mine == null) return null;
     final raw = await walletService.stealthSelfChangeTarget(mine);
     final payTo = raw['address'] as String? ?? '';
     if (payTo.isEmpty) return null;
-    await stealthChangeBook.remember(payTo);
+    await stealthChangeBook.remember(walletService.currentWalletId.value, payTo);
     return payTo;
   }
 

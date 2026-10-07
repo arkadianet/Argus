@@ -33,6 +33,7 @@ import 'ui/swap_hub_screen.dart';
 import 'ui/transaction_detail_screen.dart';
 import 'ui/transactions_screen.dart';
 import 'services/mix_background.dart';
+import 'services/stealth_change_book.dart';
 import 'ui/dapp_browser_screen.dart';
 import 'ui/duckpools_screen.dart';
 import 'ui/sigmafi_screen.dart';
@@ -91,6 +92,12 @@ Future<void> main() async {
     tokenPricer.load().catchError((_) {}),
   ]);
   networkController.priceRefresher = tokenPricer.refresh;
+  // The stealth change list of 1.0.0-beta.4 was one for the whole phone;
+  // it becomes the wallet's own, or goes (see migrateLegacy).
+  walletService
+      .listWallets()
+      .then((wallets) => stealthChangeBook.migrateLegacy([for (final w in wallets) w.walletId]))
+      .catchError((_) {});
   // Watched addresses and accounts name their holdings as seed wallets do.
   watchedTokenMeta.attach();
   await MixBackground.init();

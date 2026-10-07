@@ -551,17 +551,23 @@ void main() {
       expect(p.result.ergUsd, isNull);
       expect(p.retrying, isTrue);
       expect(f.retryDelays, [TokenPricer.firstRetry]);
+      /// Waits, a bounded number of turns, for the retried refresh to finish.
+      Future<void> settled() async {
+        for (var i = 0; i < 100; i++) {
+          await Future<void>.delayed(Duration.zero);
+          if (!p.refreshing) return;
+        }
+        fail('the retried refresh never finished');
+      }
+
       f.runRetry();
-      await Future<void>.delayed(Duration.zero);
-      await Future<void>.delayed(Duration.zero);
+      await settled();
       expect(f.retryDelays, [TokenPricer.firstRetry, TokenPricer.firstRetry * 2]);
       f
         ..oracleFails = false
         ..readingsFail = false;
       f.runRetry();
-      for (var i = 0; i < 5; i++) {
-        await Future<void>.delayed(Duration.zero);
-      }
+      await settled();
       expect(p.result.ergUsd, 0.5);
       expect(p.retrying, isFalse);
     });

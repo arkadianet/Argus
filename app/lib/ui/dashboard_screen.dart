@@ -553,8 +553,12 @@ class _DashboardScreenState extends State<DashboardScreen>
     _snack('"$name" removed');
   }
 
-  void _onWatchedRemoved() {
-    _closeWallet();
+  /// [removed] is no longer watched. Its page closes only if it is still
+  /// the one open: the removal is saved after the confirmation closes, and
+  /// another wallet may have been opened while it was.
+  void _onWatchedRemoved(WalletRef removed) {
+    if (!mounted) return;
+    if (_open == removed) _closeWallet();
     _snack('Stopped watching');
   }
 
@@ -1113,7 +1117,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             : null,
         priceFeed: _price,
         onClose: _closeWallet,
-        onRemoved: _onWatchedRemoved,
+        onRemoved: () => _onWatchedRemoved(ref),
       ),
     );
   }

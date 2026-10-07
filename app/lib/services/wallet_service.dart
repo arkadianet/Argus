@@ -2205,6 +2205,7 @@ class WalletService with WidgetsBindingObserver {
     // would write its table straight back.
     _pendingFlush.removeWhere((entry) => entry.$1 == walletId);
     await TokenDescriptorStore.clear(walletId).catchError((_) {});
+    await stealthChangeBook.forget(walletId);
     await SecureStorageService.deleteWallet(walletId);
     await _removeWalletMeta(walletId);
   }
@@ -3133,10 +3134,12 @@ class WalletService with WidgetsBindingObserver {
     }
     final all = <Map<String, dynamic>>[];
     final seen = <String>{};
-    // Change this phone sent to a one-time stealth address of its own is
-    // the wallet's, though no address of [addresses] names it.
-    await stealthChangeBook.load();
-    final change = stealthChangeBook.addresses;
+    // Change this wallet sent to a one-time stealth address of its own is
+    // the wallet's, though no address of [addresses] names it. Only this
+    // wallet's list: another wallet's change paid to this one is a payment.
+    final walletId = _currentWalletId;
+    await stealthChangeBook.load(walletId);
+    final change = stealthChangeBook.addressesFor(walletId);
     for (final txs in results) {
       for (final tx in txs) {
         if (tx is! Map) continue;
