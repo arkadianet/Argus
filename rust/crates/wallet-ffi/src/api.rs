@@ -11,6 +11,7 @@ use ergo_tx::{build_send_tx_with_fee, DevFeeConfig};
 use ergopay_core::reduce_transaction_with_context;
 use once_cell::sync::Lazy;
 use rand::{rngs::SysRng, TryRng};
+use wallet_core::derivation::DerivationMode;
 use wallet_core::seed::MnemonicPhrase;
 use wallet_core::spend::{select_exact, select_preferring_one_pocket};
 use wallet_core::wallet::WalletHandle;
@@ -290,23 +291,131 @@ fn session_json(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
-fn open_wallet(mnemonic_phrase: String, passphrase: &str) -> Result<(u64, String, String), String> {
+fn open_wallet(
+    mnemonic_phrase: String,
+    passphrase: &str,
+    mode: DerivationMode,
+) -> Result<(u64, String, String), String> {
+    use zeroize::Zeroize;
     let phrase = MnemonicPhrase::parse(mnemonic_phrase).map_err(err_str)?;
-    let encrypted =
-        wallet_core::EncryptedSeed::encrypt(&phrase.to_seed(passphrase).map_err(err_str)?)
-            .map_err(err_str)?;
+    let mut seed = phrase.to_seed(passphrase).map_err(err_str)?;
+    let encrypted = wallet_core::EncryptedSeed::encrypt_with_mode(&seed, mode);
+    seed.zeroize();
+    let encrypted = encrypted.map_err(err_str)?;
     let json = serde_json::to_string(&encrypted.to_json().map_err(err_str)?)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
     let wrap_key = encrypted.wrap_key_hex();
-    let handle = WalletHandle::create(phrase, passphrase).map_err(err_str)?;
+    let handle = WalletHandle::create_with_mode(phrase, passphrase, mode).map_err(err_str)?;
     Ok((register_handle(handle), json, wrap_key))
 }
 
 /// Create a wallet from a BIP-39 mnemonic. Returns `{handle_id, encrypted_seed_json, wrap_key}`.
+///
+/// `use_pre1627_derivation` restores a phrase made by an Ergo wallet with
+/// the pre-1627 BIP-32 bug (see `wallet_core::derivation::DerivationMode`).
+/// The mode is sealed into `encrypted_seed_json`, so every later unlock
+/// derives the same keys without being told again.
 #[flutter_rust_bridge::frb]
-pub fn wallet_create(mnemonic_phrase: String, passphrase: String) -> Result<String, String> {
-    let (id, json, wrap_key) = open_wallet(mnemonic_phrase, &passphrase)?;
+pub fn wallet_create(
+    mnemonic_phrase: String,
+    passphrase: String,
+    use_pre1627_derivation: bool,
+) -> Result<String, String> {
+    let (id, json, wrap_key) = open_wallet(
+        mnemonic_phrase,
+        &passphrase,
+        DerivationMode::from_pre1627_flag(use_pre1627_derivation),
+    )?;
     session_json(id, json, wrap_key)
+}
+
+/// `"standard"` or `"pre1627"`: the key derivation of an open wallet.
+#[flutter_rust_bridge::frb]
+pub fn wallet_derivation_mode(handle_id: u64) -> Result<String, String> {
+    with_handle(handle_id, "wallet_derivation_mode", |h| {
+        h.derivation_mode().map(|m| m.as_str().to_owned()).map_err(err_str)
+    })
+}
+
+/// Live check of a recovery phrase as it is typed: the normalised words,
+/// the list they come from, each word not in it (1-based position, with
+/// suggestions), and whether count and checksum hold. Sync: it is pure
+/// and fast, and the restore screen calls it on every edit.
+///
+/// The phrase is never logged; the result lives only in the caller.
+#[flutter_rust_bridge::frb(sync)]
+pub fn check_mnemonic(mnemonic_phrase: String) -> String {
+    use zeroize::Zeroize;
+    let mut raw = mnemonic_phrase;
+    let check = wallet_core::bip39::check_phrase(&raw);
+    raw.zeroize();
+    serde_json::to_string(&check).unwrap_or_else(|_| "{}".into())
+}
+
+/// How many addresses per derivation the restore probe asks about.
+const RESTORE_PROBE_ADDRESSES: u32 = 5;
+
+/// Which key derivation should a phrase being restored use?
+///
+/// Derives the first addresses under standard and pre-1627 derivation.
+/// For the ~127 in 128 phrases where they are the same, answers at once,
+/// with no network call. Otherwise, when `query_node`, asks the node
+/// whether each set has any transactions — the node learns only addresses
+/// that are the user's own either way — and recommends legacy only when
+/// legacy alone has history. Returns
+/// `{affected, standard_used, legacy_used, recommended, standard_address, legacy_address}`.
+#[flutter_rust_bridge::frb]
+pub async fn probe_restore_derivation(
+    mnemonic_phrase: String,
+    passphrase: String,
+    node_url: Option<String>,
+    query_node: bool,
+) -> Result<String, String> {
+    use wallet_core::derivation::{choose_restore_mode, first_addresses};
+    use zeroize::Zeroize;
+    let phrase = MnemonicPhrase::parse(mnemonic_phrase).map_err(err_str)?;
+    let mut passphrase = passphrase;
+    let mut seed = phrase.to_seed(&passphrase).map_err(err_str)?;
+    passphrase.zeroize();
+    drop(phrase);
+    let standard = first_addresses(&seed, DerivationMode::Standard, RESTORE_PROBE_ADDRESSES);
+    let legacy = first_addresses(&seed, DerivationMode::Pre1627, RESTORE_PROBE_ADDRESSES);
+    seed.zeroize();
+    let (standard, legacy) = (standard.map_err(err_str)?, legacy.map_err(err_str)?);
+    let affected = standard != legacy;
+    let mut out = serde_json::json!({
+        "affected": affected,
+        "standard_used": serde_json::Value::Null,
+        "legacy_used": serde_json::Value::Null,
+        "recommended": DerivationMode::Standard.as_str(),
+        "standard_address": standard[0],
+        "legacy_address": legacy[0],
+    });
+    if affected && query_node {
+        let client = node_client(node_url).await?;
+        let any_used = |addresses: Vec<String>| {
+            let client = client.clone();
+            async move {
+                let checks = addresses
+                    .iter()
+                    .map(|a| client.address_has_transactions(a))
+                    .collect::<Vec<_>>();
+                let mut used = false;
+                for r in futures::future::join_all(checks).await {
+                    used |= r.map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+                }
+                Ok::<bool, String>(used)
+            }
+        };
+        let (standard_used, legacy_used) =
+            futures::future::join(any_used(standard), any_used(legacy)).await;
+        let (standard_used, legacy_used) = (standard_used?, legacy_used?);
+        out["standard_used"] = standard_used.into();
+        out["legacy_used"] = legacy_used.into();
+        out["recommended"] = choose_restore_mode(standard_used, legacy_used).as_str().into();
+    }
+    serde_json::to_string(&out)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
 /// Restore from a Keystore blob plus the separately stored wrap key.
@@ -321,10 +430,10 @@ pub fn wallet_restore(
     let encrypted =
         wallet_core::EncryptedSeed::from_json(&json, wrap_key.as_deref()).map_err(err_str)?;
     let mut seed_bytes = encrypted.decrypt().map_err(err_str)?;
-    let handle = WalletHandle::restore_from_seed(&seed_bytes).map_err(err_str)?;
+    let handle = WalletHandle::restore_from_seed_with_mode(&seed_bytes, encrypted.derivation());
     use zeroize::Zeroize;
     seed_bytes.zeroize();
-    Ok(register_handle(handle))
+    Ok(register_handle(handle.map_err(err_str)?))
 }
 
 #[flutter_rust_bridge::frb]
@@ -354,12 +463,17 @@ pub fn derive_address(handle_id: u64, index: u32) -> Result<String, String> {
 pub fn create_encrypted_seed(
     mnemonic_phrase: String,
     passphrase: String,
+    use_pre1627_derivation: bool,
 ) -> Result<String, String> {
     let phrase = MnemonicPhrase::parse(mnemonic_phrase).map_err(err_str)?;
     let mut seed = phrase.to_seed(&passphrase).map_err(err_str)?;
-    let encrypted = wallet_core::EncryptedSeed::encrypt(&seed).map_err(err_str)?;
+    let encrypted = wallet_core::EncryptedSeed::encrypt_with_mode(
+        &seed,
+        DerivationMode::from_pre1627_flag(use_pre1627_derivation),
+    );
     use zeroize::Zeroize;
     seed.zeroize();
+    let encrypted = encrypted.map_err(err_str)?;
     let json = encrypted.to_json().map_err(err_str)?;
     serde_json::to_string(&serde_json::json!({
         "encrypted_seed_json": json,
@@ -5216,7 +5330,7 @@ mod tests {
     #[test]
     fn dapp_prepare_sign_refuses_empty_and_foreign_transactions() {
         let session: serde_json::Value =
-            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into()).unwrap()).unwrap();
+            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into(), false).unwrap()).unwrap();
         let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
         let own_tree = address_to_ergo_tree(&derive_address(handle_id, 0).unwrap()).unwrap();
         let foreign_tree = "0008cd03a11d3028b9bc57b6ac724485e99960b89c278db6bab5d2b961b01aee29405a02";
@@ -5270,7 +5384,7 @@ mod tests {
     #[test]
     fn create_restore_lock() {
         let session: serde_json::Value =
-            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into()).unwrap()).unwrap();
+            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into(), false).unwrap()).unwrap();
         let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
         assert!(wallet_is_unlocked(handle_id).unwrap());
         let addr = derive_address(handle_id, 0).unwrap();
@@ -5294,7 +5408,94 @@ mod tests {
 
     #[test]
     fn rejects_bad_mnemonic() {
-        assert!(wallet_create("not a real mnemonic phrase at all".into(), "".into()).is_err());
+        assert!(wallet_create("not a real mnemonic phrase at all".into(), "".into(), false).is_err());
+    }
+
+    const RACE: &str = "race relax argue hair sorry riot there spirit ready fetch food hedgehog hybrid mobile pretty";
+
+    /// A wallet restored with pre-1627 derivation keeps it through lock and
+    /// unlock: the mode rides in the sealed blob, not in the caller.
+    #[test]
+    fn pre1627_mode_survives_lock_and_restore() {
+        let session: serde_json::Value =
+            serde_json::from_str(&wallet_create(RACE.into(), "".into(), true).unwrap()).unwrap();
+        let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
+        let legacy0 = "9ewv8sxJ1jfr6j3WUSbGPMTVx3TZgcJKdnjKCbJWhiJp5U62uhP";
+        assert_eq!(derive_address(handle_id, 0).unwrap(), legacy0);
+        assert_eq!(wallet_derivation_mode(handle_id).unwrap(), "pre1627");
+
+        let blob = session["encrypted_seed_json"].as_str().unwrap().to_string();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&blob).unwrap()["d"], "pre1627");
+        let wrap_key = session["wrap_key"].as_str().unwrap().to_string();
+        wallet_lock(handle_id).unwrap();
+        let restored = wallet_restore(blob, Some(wrap_key)).unwrap();
+        assert_eq!(derive_address(restored, 0).unwrap(), legacy0);
+        assert_eq!(wallet_derivation_mode(restored).unwrap(), "pre1627");
+
+        let standard: serde_json::Value =
+            serde_json::from_str(&wallet_create(RACE.into(), "".into(), false).unwrap()).unwrap();
+        let standard_id: u64 = standard["handle_id"].as_str().unwrap().parse().unwrap();
+        assert_eq!(
+            derive_address(standard_id, 0).unwrap(),
+            "9eYMpbGgBf42bCcnB2nG3wQdqPzpCCw5eB1YaWUUen9uCaW3wwm"
+        );
+        assert_eq!(wallet_derivation_mode(standard_id).unwrap(), "standard");
+        assert!(serde_json::from_str::<serde_json::Value>(
+            standard["encrypted_seed_json"].as_str().unwrap()
+        )
+        .unwrap()
+        .get("d")
+        .is_none());
+    }
+
+    /// An unaffected phrase is answered without a node: the probe must not
+    /// reach for the network at all (no node is configured here).
+    #[test]
+    fn restore_probe_skips_the_node_for_unaffected_phrases() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let out: serde_json::Value = serde_json::from_str(
+            &rt.block_on(probe_restore_derivation(
+                APPKIT.into(),
+                "".into(),
+                Some("http://127.0.0.1:9".into()),
+                true,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["affected"], false);
+        assert_eq!(out["recommended"], "standard");
+        assert!(out["legacy_used"].is_null());
+
+        let affected: serde_json::Value = serde_json::from_str(
+            &rt.block_on(probe_restore_derivation(RACE.into(), "".into(), None, false))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(affected["affected"], true);
+        assert_eq!(affected["legacy_address"], "9ewv8sxJ1jfr6j3WUSbGPMTVx3TZgcJKdnjKCbJWhiJp5U62uhP");
+        assert_eq!(affected["standard_address"], "9eYMpbGgBf42bCcnB2nG3wQdqPzpCCw5eB1YaWUUen9uCaW3wwm");
+        // Not asked to query: no verdict on history, standard by default.
+        assert!(affected["standard_used"].is_null());
+        assert_eq!(affected["recommended"], "standard");
+
+        assert!(rt
+            .block_on(probe_restore_derivation("slow silly".into(), "".into(), None, false))
+            .is_err());
+    }
+
+    #[test]
+    fn check_mnemonic_reports_positions_and_checksum() {
+        let out: serde_json::Value = serde_json::from_str(&check_mnemonic(
+            "1. slow 2. silly 3. start 4. wash 5. bundel 6. suffer 7. bulb 8. ancient 9. height 10. spin 11. express 12. remind 13. today 14. effort 15. helmet".into(),
+        ))
+        .unwrap();
+        assert_eq!(out["count_ok"], true);
+        assert_eq!(out["checksum_ok"], false);
+        assert_eq!(out["language"], "english");
+        assert_eq!(out["unknown"][0]["position"], 5);
+        assert_eq!(out["unknown"][0]["suggestions"][0], "bundle");
+        assert_eq!(out["words"].as_array().unwrap().len(), 15);
     }
 
     #[test]

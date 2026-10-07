@@ -24,12 +24,53 @@ Future<void> setNetwork({
 Future<String> probeNetwork() => RustLib.instance.api.crateApiProbeNetwork();
 
 /// Create a wallet from a BIP-39 mnemonic. Returns `{handle_id, encrypted_seed_json, wrap_key}`.
+///
+/// `use_pre1627_derivation` restores a phrase made by an Ergo wallet with
+/// the pre-1627 BIP-32 bug (see `wallet_core::derivation::DerivationMode`).
+/// The mode is sealed into `encrypted_seed_json`, so every later unlock
+/// derives the same keys without being told again.
 Future<String> walletCreate({
   required String mnemonicPhrase,
   required String passphrase,
+  required bool usePre1627Derivation,
 }) => RustLib.instance.api.crateApiWalletCreate(
   mnemonicPhrase: mnemonicPhrase,
   passphrase: passphrase,
+  usePre1627Derivation: usePre1627Derivation,
+);
+
+/// `"standard"` or `"pre1627"`: the key derivation of an open wallet.
+Future<String> walletDerivationMode({required BigInt handleId}) =>
+    RustLib.instance.api.crateApiWalletDerivationMode(handleId: handleId);
+
+/// Live check of a recovery phrase as it is typed: the normalised words,
+/// the list they come from, each word not in it (1-based position, with
+/// suggestions), and whether count and checksum hold. Sync: it is pure
+/// and fast, and the restore screen calls it on every edit.
+///
+/// The phrase is never logged; the result lives only in the caller.
+String checkMnemonic({required String mnemonicPhrase}) =>
+    RustLib.instance.api.crateApiCheckMnemonic(mnemonicPhrase: mnemonicPhrase);
+
+/// Which key derivation should a phrase being restored use?
+///
+/// Derives the first addresses under standard and pre-1627 derivation.
+/// For the ~127 in 128 phrases where they are the same, answers at once,
+/// with no network call. Otherwise, when `query_node`, asks the node
+/// whether each set has any transactions — the node learns only addresses
+/// that are the user's own either way — and recommends legacy only when
+/// legacy alone has history. Returns
+/// `{affected, standard_used, legacy_used, recommended, standard_address, legacy_address}`.
+Future<String> probeRestoreDerivation({
+  required String mnemonicPhrase,
+  required String passphrase,
+  String? nodeUrl,
+  required bool queryNode,
+}) => RustLib.instance.api.crateApiProbeRestoreDerivation(
+  mnemonicPhrase: mnemonicPhrase,
+  passphrase: passphrase,
+  nodeUrl: nodeUrl,
+  queryNode: queryNode,
 );
 
 /// Restore from a Keystore blob plus the separately stored wrap key.
@@ -57,9 +98,11 @@ Future<String> deriveAddress({required BigInt handleId, required int index}) =>
 Future<String> createEncryptedSeed({
   required String mnemonicPhrase,
   required String passphrase,
+  required bool usePre1627Derivation,
 }) => RustLib.instance.api.crateApiCreateEncryptedSeed(
   mnemonicPhrase: mnemonicPhrase,
   passphrase: passphrase,
+  usePre1627Derivation: usePre1627Derivation,
 );
 
 /// Seal the AES wrap key with a PIN (Argon2id + AES-GCM). Returns pin-wrap JSON.
