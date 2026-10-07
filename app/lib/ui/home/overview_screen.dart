@@ -385,7 +385,7 @@ class OverviewView extends StatelessWidget {
                   trailing: RingButton(
                     key: data.wallets.isEmpty ? const Key('overview-add-wallet') : const Key('overview-add-watched'),
                     icon: Icons.add,
-                    tooltip: 'Watch an address or account',
+                    tooltip: 'Add a wallet',
                     onPressed: () => _add(context),
                   ),
                 ),

@@ -172,6 +172,83 @@ mod tests {
         assert!(!signed.sigma_serialize_bytes().unwrap().is_empty());
     }
 
+    /// A spend of one P2PK box at `sender`, reduced and ready to sign.
+    fn reduced_spend(sender: &str, recipient: &str) -> (ReducedTransaction, ErgoBox) {
+        let value = BoxValue::try_from(2_000_000_000u64).unwrap();
+        let input_box = ErgoBox::new(
+            value,
+            p2pk_tree(sender),
+            None,
+            NonMandatoryRegisters::empty(),
+            1000,
+            TxId::zero(),
+            0,
+        )
+        .unwrap();
+        let fee = 1_100_000u64;
+        let out = |v: u64, tree| {
+            ErgoBoxCandidateBuilder::new(BoxValue::try_from(v).unwrap(), tree, 2000)
+                .build()
+                .unwrap()
+        };
+        let outputs = TxIoVec::from_vec(vec![
+            out(*value.as_u64() - fee, p2pk_tree(recipient)),
+            out(fee, ergo_lib::wallet::miner_fee::MINERS_FEE_ADDRESS.script().unwrap()),
+        ])
+        .unwrap();
+        let inputs = TxIoVec::from_vec(vec![UnsignedInput::new(
+            input_box.box_id(),
+            ergo_lib::ergotree_ir::chain::context_extension::ContextExtension::empty(),
+        )])
+        .unwrap();
+        let unsigned =
+            UnsignedTransaction::new(inputs, None::<TxIoVec<DataInput>>, outputs).unwrap();
+        let reduced = build_reduced_transaction(
+            unsigned,
+            vec![input_box.clone()],
+            vec![],
+            &dummy_state_context(2000),
+        )
+        .unwrap();
+        (reduced, input_box)
+    }
+
+    /// A wallet restored with pre-1627 derivation signs for its legacy
+    /// addresses, and the proof verifies; a standard wallet from the same
+    /// phrase holds none of those keys and cannot sign at all.
+    #[test]
+    fn pre1627_wallet_signs_a_verifiable_spend_of_its_legacy_address() {
+        use crate::derivation::DerivationMode;
+        use ergo_lib::wallet::tx_context::TransactionContext;
+
+        const RACE: &str = "race relax argue hair sorry riot there spirit ready fetch food hedgehog hybrid mobile pretty";
+        let legacy = WalletHandle::create_with_mode(
+            MnemonicPhrase::parse(RACE).unwrap(),
+            "",
+            DerivationMode::Pre1627,
+        )
+        .unwrap();
+        let standard = WalletHandle::create(MnemonicPhrase::parse(RACE).unwrap(), "").unwrap();
+        assert_eq!(legacy.derivation_mode().unwrap(), DerivationMode::Pre1627);
+
+        let sender = legacy.derive_address(0).unwrap();
+        assert_eq!(sender, "9ewv8sxJ1jfr6j3WUSbGPMTVx3TZgcJKdnjKCbJWhiJp5U62uhP");
+        assert!(legacy.owns_address(&sender).unwrap());
+        assert!(!standard.owns_address(&sender).unwrap());
+
+        // Index 5 too: the whole account moves with the mode, not just 0.
+        for index in [0u32, 5] {
+            let from = legacy.derive_address(index).unwrap();
+            let (reduced, input_box) = reduced_spend(&from, &standard.derive_address(0).unwrap());
+            assert!(standard.sign_reduced(reduced.clone()).is_err());
+            let signed = legacy.sign_reduced(reduced).unwrap();
+            TransactionContext::new(signed, vec![input_box], vec![])
+                .unwrap()
+                .validate(&dummy_state_context(2000))
+                .expect("legacy proof must verify");
+        }
+    }
+
     /// A stealth box can only be spent with the DH-tuple secret derived from
     /// the wallet's stealth branch — and the wallet's ordinary P2PK keys are
     /// not enough.
