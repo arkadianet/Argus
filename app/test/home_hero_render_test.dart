@@ -1,15 +1,18 @@
-// The hero (the coloured panel heading the overview and every wallet's
-// page) in both styles under comparison, solid and tint, in every palette,
-// from figures like the ones on the user's own phone, checked for layout
-// errors, 48 dp targets, labelled controls, screen-reader sentences and
-// hidden balances. Its colours are checked against WCAG AA from the tokens
-// in home_contrast_test.dart. To also save PNGs under
-// <repo>/ui-renders/hero2/{solid,tint}/:
+// The home pages (the coloured hero heading the overview and every
+// wallet's page, and the lists under it) in every palette, from figures
+// like the ones on the user's own phone, checked for layout errors, 48 dp
+// targets, labelled controls, screen-reader sentences and hidden balances;
+// and their motion, with and without the system's reduce-motion setting.
+// Colours are checked against WCAG AA from the tokens in
+// home_contrast_test.dart. To also save PNGs, and strips of the motion's
+// frames, under <repo>/ui-renders/rich/:
 //
 //   ARGUS_UI_RENDERS=1 flutter test test/home_hero_render_test.dart
 
 import 'package:argus_wallet/theme/argus_theme.dart';
+import 'package:argus_wallet/ui/home/home_format.dart';
 import 'package:argus_wallet/ui/home/home_models.dart';
+import 'package:argus_wallet/ui/home/home_widgets.dart';
 import 'package:argus_wallet/ui/home/overview_screen.dart';
 import 'package:argus_wallet/ui/home/unlock_gate.dart';
 import 'package:argus_wallet/ui/home/wallet_nav_bar.dart';
@@ -41,11 +44,14 @@ const _price = ErgPriceView(
   changePercent: 2.4,
 );
 
-final _main = WalletSummary(
+final _main = _mainWallet();
+
+/// The main wallet holding [erg]; 203.16 is what the user's phone shows.
+WalletSummary _mainWallet({num erg = 203.16}) => WalletSummary(
   ref: const WalletRef.seed('main'),
   name: 'Main Wallet',
-  nanoErg: _nano(203.16),
-  fiatValue: 90.54,
+  nanoErg: _nano(erg),
+  fiatValue: (erg * _rate * 100).round() / 100,
   tokenCount: 12,
   pockets: [PocketBalance(pocket: Pocket.stealth, nanoErg: _nano(0.001))],
   otherAddresses: FundsElsewhere(nanoErg: _nano(2.7), tokenCount: 6, addressCount: 1),
@@ -165,8 +171,8 @@ final _activity = [
   ),
 ];
 
-WalletPageData _mainPage({bool hidden = false}) => WalletPageData(
-      wallet: _main,
+WalletPageData _mainPage({bool hidden = false, num erg = 203.16}) => WalletPageData(
+      wallet: _mainWallet(erg: erg),
       currency: _aud,
       status: const NetworkStatus(state: SyncState.synced, blockHeight: 1889161, label: 'Synced'),
       assets: _assets,
@@ -293,7 +299,7 @@ List<Color> _heroColors(WidgetTester tester) {
 void main() {
   setUpAll(loadRenderFonts);
   String file(String screen, PaletteSpec palette, [String suffix = '']) =>
-      'hero/$screen-${_id(palette)}-1x$suffix';
+      'rich/$screen-${_id(palette)}-1x$suffix';
   HeroSpec spec(PaletteSpec p) => p.hero;
 
 
@@ -350,7 +356,7 @@ void main() {
       final widget = screen == 'wallet' ? _page(_mainPage()) : _overview(_overviewData());
       await pumpRender(tester, widget, palette: harborPalette, textScale: 2);
       expect(tester.takeException(), isNull);
-      await saveRender(tester, 'hero/$screen-harbor-2x');
+      await saveRender(tester, 'rich/$screen-harbor-2x');
       await _accessible(tester);
     });
   }
@@ -365,5 +371,124 @@ void main() {
       expect(shown.contains(figure), isFalse, reason: '"$figure" is on screen with balances hidden');
     }
     await _accessible(tester);
+  });
+
+  group('motion', () {
+    /// How much of each part of the page has faded in.
+    List<double> shown(WidgetTester tester) => [
+          for (final fade in tester.widgetList<FadeTransition>(
+            find.descendant(of: find.byType(HomeEntrance), matching: find.byType(FadeTransition)),
+          ))
+            fade.opacity.value,
+        ];
+
+    String figure(WidgetTester tester) =>
+        tester.widget<Text>(find.byKey(const Key('wallet-balance'))).textSpan!.toPlainText();
+
+    Finder sendCircle() => find.descendant(of: find.byKey(const Key('wallet-action-send')), matching: find.byType(AnimatedScale));
+
+    testWidgets('the page eases in from the top, once', (tester) async {
+      await pumpRender(tester, _page(_mainPage()), palette: harborPalette, settle: false);
+      final first = shown(tester);
+      // The parts the list has built: the panel, its lines, the first list.
+      expect(first.length, greaterThanOrEqualTo(3));
+      expect(first.every((o) => o < 1), isTrue, reason: 'each part starts on its way in');
+      await tester.pump(const Duration(milliseconds: 200));
+      final mid = shown(tester);
+      expect(mid.first, greaterThan(mid.last), reason: 'the panel leads, the last list follows');
+      // While it fades in, the page is still read out whole.
+      expect(find.bySemanticsLabel(RegExp(r'^Balance 203\.16 ERG')), findsOneWidget);
+      await tester.pumpAndSettle();
+      expect(shown(tester).every((o) => o == 1), isTrue);
+      // A rebuild with new figures does not play it again.
+      await pumpRender(tester, _page(_mainPage(erg: 215.4)), palette: harborPalette, settle: false);
+      expect(shown(tester).every((o) => o == 1), isTrue);
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('a new balance counts to its figure; the screen reader hears the figure', (tester) async {
+      await pumpRender(tester, _page(_mainPage()), palette: harborPalette);
+      expect(figure(tester), '203.16${nbsp}ERG');
+      await pumpRender(tester, _page(_mainPage(erg: 215.4)), palette: harborPalette, settle: false);
+      await tester.pump(const Duration(milliseconds: 150));
+      final between = figure(tester);
+      expect(between, isNot('203.16${nbsp}ERG'));
+      expect(between, isNot('215.4${nbsp}ERG'));
+      expect(find.bySemanticsLabel(RegExp(r'^Balance 215\.4 ERG')), findsOneWidget);
+      await tester.pumpAndSettle();
+      expect(figure(tester), '215.4${nbsp}ERG');
+    });
+
+    testWidgets('a round button gives under a finger and springs back', (tester) async {
+      await pumpRender(tester, _page(_mainPage()), palette: harborPalette);
+      final press = await tester.startGesture(tester.getCenter(find.byKey(const Key('wallet-action-send'))));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(tester.widget<AnimatedScale>(sendCircle()).scale, lessThan(1));
+      await press.up();
+      await tester.pumpAndSettle();
+      expect(tester.widget<AnimatedScale>(sendCircle()).scale, 1);
+    });
+
+    testWidgets('with animations removed, nothing moves', (tester) async {
+      await pumpRender(tester, _page(_mainPage()), palette: harborPalette, settle: false, reduceMotion: true);
+      expect(shown(tester).every((o) => o == 1), isTrue, reason: 'the page is simply there');
+      await pumpRender(tester, _page(_mainPage(erg: 215.4)), palette: harborPalette, settle: false, reduceMotion: true);
+      await tester.pump();
+      expect(figure(tester), '215.4${nbsp}ERG', reason: 'the new figure, at once');
+      final press = await tester.startGesture(tester.getCenter(find.byKey(const Key('wallet-action-send'))));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(tester.widget<AnimatedScale>(sendCircle()).scale, 1);
+      await press.up();
+      await tester.pumpAndSettle();
+    });
+
+    testWidgets('frame strips, Harbor', (tester) async {
+      if (renderDirectory() == null) return;
+      final background = harborPalette.surfaceHigh;
+      final caption = harborPalette.muted;
+      // The page opening.
+      await pumpRender(tester, _page(_mainPage()), palette: harborPalette, settle: false);
+      await saveFrameStrip(
+        tester,
+        'rich/motion/entrance-harbor',
+        at: [for (final ms in [0, 90, 180, 270, 380, 560]) Duration(milliseconds: ms)],
+        background: background,
+        caption: caption,
+      );
+      await tester.pumpAndSettle();
+      // A balance arriving: 203.16 to 215.4, the hero only.
+      await saveFrameStrip(
+        tester,
+        'rich/motion/count-harbor',
+        start: () => pumpRender(tester, _page(_mainPage(erg: 215.4)), palette: harborPalette, settle: false),
+        at: [for (final ms in [0, 100, 200, 320, 480, 700]) Duration(milliseconds: ms)],
+        crop: const Rect.fromLTWH(0, 76, 390, 120),
+        background: background,
+        caption: caption,
+      );
+      await tester.pumpAndSettle();
+      // Send pressed and let go.
+      final send = tester.getCenter(find.byKey(const Key('wallet-action-send')));
+      final rect = Rect.fromCenter(center: send, width: 120, height: 110);
+      final press = await tester.startGesture(send);
+      await saveFrameStrip(
+        tester,
+        'rich/motion/press-harbor',
+        at: [for (final ms in [0, 140, 200, 280]) Duration(milliseconds: ms)],
+        crop: rect,
+        background: background,
+        caption: caption,
+      );
+      await press.up();
+      await saveFrameStrip(
+        tester,
+        'rich/motion/release-harbor',
+        at: [for (final ms in [0, 50, 110, 200]) Duration(milliseconds: ms)],
+        crop: rect,
+        background: background,
+        caption: caption,
+      );
+      await tester.pumpAndSettle();
+    });
   });
 }

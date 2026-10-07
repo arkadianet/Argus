@@ -75,7 +75,7 @@ void main() {
       ),
     );
     // Listed with the tools, after every protocol.
-    final tools = tester.getTopLeft(find.text('TOOLS', skipOffstage: false));
+    final tools = tester.getTopLeft(find.text('Tools', skipOffstage: false));
     expect(tester.getTopLeft(row).dy, greaterThan(tools.dy));
 
     await tester.tap(row);

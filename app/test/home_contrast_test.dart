@@ -77,15 +77,32 @@ void main() {
       });
 
       test('${palette.name}: the hero stands apart from the page, Send apart on it', () {
-        // Apart from the page by its colour alone: no border, no shadow.
+        // Apart from the page by its colour alone, before its shadow and
+        // glow, which no one should have to rely on.
         expect(contrast(hero.surface, palette.background), greaterThan(1.2));
         expect(hero.surface, isNot(palette.background));
         // A divider and a well show, quietly. Neither carries meaning
         // alone, so neither is held to a WCAG ratio.
         expect(contrast(hero.divider, hero.surface), greaterThan(1.25));
-        expect(contrast(hero.tonal, hero.surface), greaterThan(1.1));
-        expect(contrast(hero.tonal, hero.surface), lessThan(contrast(hero.filled, hero.surface)),
-            reason: 'Send stays the one filled action');
+        // The wells sit low on the panel, where the sheen has turned: they
+        // show on both ends.
+        for (final ground in [hero.surface, hero.surfaceEnd]) {
+          expect(contrast(hero.tonal, ground), greaterThan(1.1));
+          expect(contrast(hero.tonal, ground), lessThan(contrast(hero.filled, ground)),
+              reason: 'Send stays the one filled action');
+        }
+        // The sheen is seen: the two ends differ.
+        expect(contrast(hero.surface, hero.surfaceEnd), greaterThan(1.1));
+        // The glow is the accent's own, and only on a dark page.
+        expect(hero.glow == null, !palette.isDark);
+      });
+
+      test('${palette.name}: a list\'s surface is a shade off the page, no more', () {
+        // Text on it is held to AA with the page's ("sheet" above); here, that
+        // it layers quietly rather than boxes.
+        final ratio = contrast(palette.surface, palette.background);
+        expect(ratio, greaterThan(1.02));
+        expect(ratio, lessThan(1.25));
       });
     }
   }

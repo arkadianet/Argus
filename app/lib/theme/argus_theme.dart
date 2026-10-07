@@ -14,9 +14,10 @@ const ledgerSurface = Color(0xFFFEFCF7);
 const ledgerInk = Color(0xFF1C1914);
 const ledgerMuted = Color(0xFF6B6458);
 const rust = Color(0xFFB54A3C);
-/// Brand rust brightened for text on dark ink (~6.9:1 vs ~3.6:1).
-const rustBright = Color(0xFFE08A70);
-const moss = Color(0xFF3E7A55);
+/// Brand rust brightened to a clear coral for text on dark ink (about
+/// 7:1, where [rust] manages about 3.6:1).
+const rustBright = Color(0xFFFF8A73);
+const moss = Color(0xFF1A7A47);
 const bannerTint = Color(0xFFF0E6D2);
 
 /// Palette-aware rust for *text*: the brand rust fails WCAG on dark
@@ -53,11 +54,24 @@ class HeroSpec {
     required this.onFilled,
     required this.tonal,
     required this.onTonal,
+    required this.shadow,
+    this.glow,
   });
 
-  /// The panel itself, from its top to its foot.
+  /// The panel itself, from its top-left to its bottom-right: a sheen. On a
+  /// light accent that takes dark type the top is lifted toward white. On a
+  /// deep one that takes light type the foot is deepened instead. Either
+  /// way the type gains contrast as the gradient turns.
   final Color surface;
   final Color surfaceEnd;
+
+  /// The soft, low shadow the panel casts on the page: darkness on a dark
+  /// page, the accent's own shade on a light one.
+  final Color shadow;
+
+  /// A faint haze of the accent behind the panel, on dark pages only,
+  /// where light seems to come off a coloured surface.
+  final Color? glow;
 
   /// Figures and words: the balance, the actions' names.
   final Color ink;
@@ -99,6 +113,8 @@ class HeroSpec {
         onFilled: Color.lerp(a.onFilled, b.onFilled, t)!,
         tonal: Color.lerp(a.tonal, b.tonal, t)!,
         onTonal: Color.lerp(a.onTonal, b.onTonal, t)!,
+        shadow: Color.lerp(a.shadow, b.shadow, t)!,
+        glow: Color.lerp(a.glow, b.glow, t),
       );
 }
 
@@ -151,48 +167,59 @@ class PaletteSpec {
 // Each palette's hero: the panel is its accent, with dark type on the
 // light accents and light type on the deep ones; Send is the panel's ink,
 // filled. Parchment uses its deeper sage: light type on its mid green would
-// not reach 4.5:1. Every pair is checked in home_contrast_test.dart.
+// not reach 4.5:1. The sheen is 16% toward white at the top on the light
+// accents, 16% toward black at the foot on the deep ones. Each text colour
+// is the quietest that holds 4.6:1 on both ends. The other actions sit in
+// wells that are a frosted lift of the accent, or a deeper shade of it.
+// Every pair is checked in home_contrast_test.dart.
 
-const _watchfulSolid = HeroSpec(
-  surface: Color(0xFFC4A46A), surfaceEnd: Color(0xFFC4A46A), ink: Color(0xFF14100A), muted: Color(0xFF473B26),
-  divider: Color(0xFF9D8355), accent: Color(0xFF49391D), positive: Color(0xFF22422E), negative: Color(0xFF662A22),
-  filled: Color(0xFF14100A), onFilled: Color(0xFFC4A46A), tonal: Color(0xFFAF925E), onTonal: Color(0xFF14100A),
+const _watchfulHero = HeroSpec(
+  surface: Color(0xFFCDB382), surfaceEnd: Color(0xFFBA9C65), ink: Color(0xFF14100A), muted: Color(0xFF3D3424),
+  divider: Color(0xFF9D8355), accent: Color(0xFF42331A), positive: Color(0xFF0C3D23), negative: Color(0xFF631E15),
+  filled: Color(0xFF14100A), onFilled: Color(0xFFC4A46A), tonal: Color(0xFFD9C5A0), onTonal: Color(0xFF14100A),
+  shadow: Color(0x8C000000), glow: Color(0x4CC4A46A),
 );
 
-const _ledgerSolid = HeroSpec(
-  surface: Color(0xFFC4A46A), surfaceEnd: Color(0xFFC4A46A), ink: Color(0xFF14100A), muted: Color(0xFF473B26),
-  divider: Color(0xFF9D8355), accent: Color(0xFF49391D), positive: Color(0xFF22422E), negative: Color(0xFF662A22),
-  filled: Color(0xFF14100A), onFilled: Color(0xFFC4A46A), tonal: Color(0xFFAF925E), onTonal: Color(0xFF14100A),
+const _ledgerHero = HeroSpec(
+  surface: Color(0xFFCDB382), surfaceEnd: Color(0xFFBA9C65), ink: Color(0xFF14100A), muted: Color(0xFF3D3424),
+  divider: Color(0xFF9D8355), accent: Color(0xFF42331A), positive: Color(0xFF0C3D23), negative: Color(0xFF631E15),
+  filled: Color(0xFF14100A), onFilled: Color(0xFFC4A46A), tonal: Color(0xFFD9C5A0), onTonal: Color(0xFF14100A),
+  shadow: Color(0x4C5B4824),
 );
 
-const _obsidianSolid = HeroSpec(
-  surface: Color(0xFF9DB8CC), surfaceEnd: Color(0xFF9DB8CC), ink: Color(0xFF14100A), muted: Color(0xFF404648),
-  divider: Color(0xFF7F93A1), accent: Color(0xFF2F485B), positive: Color(0xFF274C35), negative: Color(0xFF742F26),
-  filled: Color(0xFF14100A), onFilled: Color(0xFF9DB8CC), tonal: Color(0xFF8DA4B5), onTonal: Color(0xFF14100A),
+const _obsidianHero = HeroSpec(
+  surface: Color(0xFFADC3D4), surfaceEnd: Color(0xFF95AFC2), ink: Color(0xFF14100A), muted: Color(0xFF3C3F3F),
+  divider: Color(0xFF7F93A1), accent: Color(0xFF2B4152), positive: Color(0xFF0E4829), negative: Color(0xFF742319),
+  filled: Color(0xFF14100A), onFilled: Color(0xFF9DB8CC), tonal: Color(0xFFC0D2DE), onTonal: Color(0xFF14100A),
+  shadow: Color(0x8C000000), glow: Color(0x4C9DB8CC),
 );
 
-const _harborSolid = HeroSpec(
-  surface: Color(0xFF5FB3A4), surfaceEnd: Color(0xFF5FB3A4), ink: Color(0xFF04181A), muted: Color(0xFF1B3F3D),
-  divider: Color(0xFF4B9186), accent: Color(0xFF1E3E39), positive: Color(0xFF203F2C), negative: Color(0xFF612820),
-  filled: Color(0xFF04181A), onFilled: Color(0xFF5FB3A4), tonal: Color(0xFF54A093), onTonal: Color(0xFF04181A),
+const _harborHero = HeroSpec(
+  surface: Color(0xFF79BFB3), surfaceEnd: Color(0xFF5AAA9C), ink: Color(0xFF04181A), muted: Color(0xFF1A3837),
+  divider: Color(0xFF4B9186), accent: Color(0xFF1A3732), positive: Color(0xFF0C3B22), negative: Color(0xFF5D1C14),
+  filled: Color(0xFF04181A), onFilled: Color(0xFF5FB3A4), tonal: Color(0xFF99CEC5), onTonal: Color(0xFF04181A),
+  shadow: Color(0x8C000000), glow: Color(0x4C5FB3A4),
 );
 
-const _emberSolid = HeroSpec(
-  surface: Color(0xFFD48A5A), surfaceEnd: Color(0xFFD48A5A), ink: Color(0xFF14100A), muted: Color(0xFF422D1D),
-  divider: Color(0xFFAA6F48), accent: Color(0xFF4B2914), positive: Color(0xFF1C3827), negative: Color(0xFF55231C),
-  filled: Color(0xFF14100A), onFilled: Color(0xFFD48A5A), tonal: Color(0xFFBD7B50), onTonal: Color(0xFF14100A),
+const _emberHero = HeroSpec(
+  surface: Color(0xFFDB9D74), surfaceEnd: Color(0xFFC98356), ink: Color(0xFF14100A), muted: Color(0xFF36281C),
+  divider: Color(0xFFAA6F48), accent: Color(0xFF412411), positive: Color(0xFF0A301C), negative: Color(0xFF511811),
+  filled: Color(0xFF14100A), onFilled: Color(0xFFD48A5A), tonal: Color(0xFFE3B495), onTonal: Color(0xFF14100A),
+  shadow: Color(0x8C000000), glow: Color(0x4CD48A5A),
 );
 
-const _parchmentSolid = HeroSpec(
-  surface: Color(0xFF3F6B4C), surfaceEnd: Color(0xFF3F6B4C), ink: Color(0xFFFAFCF8), muted: Color(0xFFD8E2D9),
-  divider: Color(0xFF688B72), accent: Color(0xFFD1E4D7), positive: Color(0xFFCDE5D6), negative: Color(0xFFF2DBD8),
-  filled: Color(0xFFFAFCF8), onFilled: Color(0xFF3F6B4C), tonal: Color(0xFF355A40), onTonal: Color(0xFFFAFCF8),
+const _parchmentHero = HeroSpec(
+  surface: Color(0xFF3F6B4C), surfaceEnd: Color(0xFF355A40), ink: Color(0xFFFAFCF8), muted: Color(0xFFD8E2D9),
+  divider: Color(0xFF688B72), accent: Color(0xFFD1E4D7), positive: Color(0xFFA9EEC9), negative: Color(0xFFF6D9D6),
+  filled: Color(0xFFFAFCF8), onFilled: Color(0xFF3F6B4C), tonal: Color(0xFF2F4F38), onTonal: Color(0xFFFAFCF8),
+  shadow: Color(0x4C2F5039),
 );
 
-const _frostSolid = HeroSpec(
-  surface: Color(0xFF4A6FA5), surfaceEnd: Color(0xFF4A6FA5), ink: Color(0xFFFAFCF8), muted: Color(0xFFEFF4F3),
-  divider: Color(0xFF718EB7), accent: Color(0xFFF1F4F9), positive: Color(0xFFEDF6F0), negative: Color(0xFFFAF2F1),
-  filled: Color(0xFFFAFCF8), onFilled: Color(0xFF4A6FA5), tonal: Color(0xFF3E5D8B), onTonal: Color(0xFFFAFCF8),
+const _frostHero = HeroSpec(
+  surface: Color(0xFF4A6FA5), surfaceEnd: Color(0xFF3E5D8B), ink: Color(0xFFFAFCF8), muted: Color(0xFFEFF4F3),
+  divider: Color(0xFF718EB7), accent: Color(0xFFF1F4F9), positive: Color(0xFFE1F9EC), negative: Color(0xFFFCF2F1),
+  filled: Color(0xFFFAFCF8), onFilled: Color(0xFF4A6FA5), tonal: Color(0xFF37527A), onTonal: Color(0xFFFAFCF8),
+  shadow: Color(0x4C273B58),
 );
 
 const watchfulPalette = PaletteSpec(
@@ -200,7 +227,7 @@ const watchfulPalette = PaletteSpec(
   background: ink, surface: watchfulSurface, surfaceHigh: Color(0xFF1E2421), ink: bone, muted: watchfulMuted,
   outline: Color(0xFF2C3330), cardBorder: Color(0xFF262C29), chip: watchfulSurface,
   accent: iris, onAccent: ink, accentText: iris,
-  hero: _watchfulSolid,
+  hero: _watchfulHero,
 );
 
 const ledgerPalette = PaletteSpec(
@@ -208,7 +235,7 @@ const ledgerPalette = PaletteSpec(
   background: paper, surface: ledgerSurface, surfaceHigh: Color(0xFFEDE4D4), ink: ledgerInk, muted: ledgerMuted,
   outline: Color(0xFFD4C8B4), cardBorder: Color(0xFFEDE4D3), chip: bannerTint,
   accent: iris, onAccent: ink, accentText: irisDeep,
-  hero: _ledgerSolid,
+  hero: _ledgerHero,
 );
 
 const obsidianPalette = PaletteSpec(
@@ -216,7 +243,7 @@ const obsidianPalette = PaletteSpec(
   background: Color(0xFF000000), surface: Color(0xFF111214), surfaceHigh: Color(0xFF1A1C1F), ink: Color(0xFFE9EAEC), muted: Color(0xFF8B9096),
   outline: Color(0xFF2A2D31), cardBorder: Color(0xFF232629), chip: Color(0xFF17191C),
   accent: Color(0xFF9DB8CC), onAccent: Color(0xFF0B1216), accentText: Color(0xFF9DB8CC),
-  hero: _obsidianSolid,
+  hero: _obsidianHero,
 );
 
 const harborPalette = PaletteSpec(
@@ -224,7 +251,7 @@ const harborPalette = PaletteSpec(
   background: Color(0xFF0B1220), surface: Color(0xFF141D2E), surfaceHigh: Color(0xFF1B2638), ink: Color(0xFFE3E8F0), muted: Color(0xFF8592A6),
   outline: Color(0xFF283449), cardBorder: Color(0xFF222D40), chip: Color(0xFF182233),
   accent: Color(0xFF5FB3A4), onAccent: Color(0xFF06201C), accentText: Color(0xFF7CC9BB),
-  hero: _harborSolid,
+  hero: _harborHero,
 );
 
 const emberPalette = PaletteSpec(
@@ -232,7 +259,7 @@ const emberPalette = PaletteSpec(
   background: Color(0xFF151210), surface: Color(0xFF201B18), surfaceHigh: Color(0xFF29221E), ink: Color(0xFFEDE3D9), muted: Color(0xFF9A8E84),
   outline: Color(0xFF3A312C), cardBorder: Color(0xFF302925), chip: Color(0xFF261F1B),
   accent: Color(0xFFD48A5A), onAccent: Color(0xFF1E120A), accentText: Color(0xFFE0A07A),
-  hero: _emberSolid,
+  hero: _emberHero,
 );
 
 const parchmentPalette = PaletteSpec(
@@ -240,7 +267,7 @@ const parchmentPalette = PaletteSpec(
   background: Color(0xFFFAF6EC), surface: Color(0xFFFFFDF8), surfaceHigh: Color(0xFFF0EADA), ink: Color(0xFF2A2318), muted: Color(0xFF6F675A),
   outline: Color(0xFFD9D0BC), cardBorder: Color(0xFFEAE3D2), chip: Color(0xFFF1EBDC),
   accent: Color(0xFF5E8A6A), onAccent: Color(0xFFF6FBF6), accentText: Color(0xFF3F6B4C),
-  hero: _parchmentSolid,
+  hero: _parchmentHero,
 );
 
 // Muted is #687080 rather than #6B7380: on Frost's page and recessed wells
@@ -250,7 +277,7 @@ const frostPalette = PaletteSpec(
   background: Color(0xFFF3F5F8), surface: Color(0xFFFFFFFF), surfaceHigh: Color(0xFFE8ECF2), ink: Color(0xFF1B1F26), muted: Color(0xFF687080),
   outline: Color(0xFFCFD6E0), cardBorder: Color(0xFFE2E7EE), chip: Color(0xFFEDF0F5),
   accent: Color(0xFF4A6FA5), onAccent: Color(0xFFF7F9FD), accentText: Color(0xFF3C5D8C),
-  hero: _frostSolid,
+  hero: _frostHero,
 );
 
 const allPalettes = [watchfulPalette, ledgerPalette, obsidianPalette, harborPalette, emberPalette, parchmentPalette, frostPalette];
@@ -273,7 +300,7 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
     this.accent = iris,
     this.onAccent = ink,
     this.accentText = iris,
-    this.hero = _watchfulSolid,
+    this.hero = _watchfulHero,
   });
 
   factory ArgusColors.fromSpec(PaletteSpec p) => ArgusColors(
@@ -315,7 +342,7 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
     inset: paper,
     chip: bannerTint,
     accentText: irisDeep,
-    hero: _ledgerSolid,
+    hero: _ledgerHero,
   );
 
   static const dark = ArgusColors(

@@ -260,7 +260,7 @@ void main() {
       await tester.tapAt(const Offset(20, 20));
       await tester.pumpAndSettle();
       await tester.scrollUntilVisible(
-        find.text('RECENT ACTIVITY'),
+        find.text('Recent activity'),
         400,
         scrollable: find.byType(Scrollable).first,
       );
@@ -304,7 +304,7 @@ void main() {
       await tester.pumpAndSettle();
       await renderPng(tester, 'watched-address$tag');
       await tester.scrollUntilVisible(
-        find.text('RECENT ACTIVITY'),
+        find.text('Recent activity'),
         300,
         scrollable: find.byType(Scrollable).first,
       );
@@ -338,7 +338,7 @@ void main() {
       await tester.pumpAndSettle();
       await renderPng(tester, 'watched-account$tag');
       await tester.scrollUntilVisible(
-        find.text('FIRST ADDRESS'),
+        find.text('First address'),
         300,
         scrollable: find.byType(Scrollable).first,
       );

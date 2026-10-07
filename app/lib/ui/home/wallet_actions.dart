@@ -98,46 +98,91 @@ class HomeActionCircles extends StatelessWidget {
 
   Widget _button(BuildContext context, WalletAction action, TextStyle style, double labelWidth, {required bool primary}) {
     final look = walletActionLook(action);
-    final tones = HomeTones.of(context);
     final enabled = !disabled.contains(action);
-    final onTap = enabled ? () => onAction(action) : null;
     // Disabled reads as the same button at a lower opacity, so the page
     // keeps its shape while, say, an account's first scan runs.
     return TappableNode(
       label: look.label,
-      onTap: onTap,
+      onTap: enabled ? () => onAction(action) : null,
       button: true,
       child: Opacity(
         opacity: enabled ? 1 : 0.38,
-        child: InkWell(
-          key: _key(action),
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(homeRadius),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: _size,
-                  height: _size,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: primary ? tones.filled : tones.tonal,
-                  ),
-                  child: Icon(look.icon, size: homeIconSize, color: primary ? tones.onFilled : tones.onTonal),
+        child: _RoundAction(
+          inkKey: _key(action),
+          icon: look.icon,
+          label: balancedLabel(context, look.label, style, labelWidth),
+          style: style,
+          primary: primary,
+          onTap: enabled ? () => onAction(action) : null,
+        ),
+      ),
+    );
+  }
+}
+
+/// One round action: its circle gives a little under a finger, with the
+/// ink spreading over it, and springs back on release. The filled one sits
+/// on a soft shadow of its own colour, so it reads as the one to press.
+class _RoundAction extends StatefulWidget {
+  const _RoundAction({
+    required this.inkKey,
+    required this.icon,
+    required this.label,
+    required this.style,
+    required this.primary,
+    required this.onTap,
+  });
+
+  final Key inkKey;
+  final IconData icon;
+  final String label;
+  final TextStyle style;
+  final bool primary;
+  final VoidCallback? onTap;
+
+  @override
+  State<_RoundAction> createState() => _RoundActionState();
+}
+
+class _RoundActionState extends State<_RoundAction> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final tones = HomeTones.of(context);
+    final still = homeReducedMotion(context);
+    final fill = widget.primary ? tones.filled : tones.tonal;
+    return InkWell(
+      key: widget.inkKey,
+      onTap: widget.onTap,
+      onHighlightChanged: (down) => setState(() => _pressed = down),
+      borderRadius: BorderRadius.circular(homeRadius),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedScale(
+              scale: _pressed && !still ? 0.9 : 1,
+              duration: still ? Duration.zero : HomeMotion.press,
+              curve: Curves.easeOut,
+              child: Container(
+                width: HomeActionCircles._size,
+                height: HomeActionCircles._size,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: fill,
+                  boxShadow: [
+                    if (widget.primary)
+                      BoxShadow(color: fill.withValues(alpha: 0.35), blurRadius: 10, spreadRadius: -2, offset: const Offset(0, 4)),
+                  ],
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  balancedLabel(context, look.label, style, labelWidth),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: style,
-                ),
-              ],
+                child: Icon(widget.icon, size: homeIconSize, color: widget.primary ? tones.onFilled : tones.onTonal),
+              ),
             ),
-          ),
+            const SizedBox(height: 6),
+            Text(widget.label, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: widget.style),
+          ],
         ),
       ),
     );

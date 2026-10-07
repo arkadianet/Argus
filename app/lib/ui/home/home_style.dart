@@ -5,11 +5,13 @@ import '../../theme/argus_tones.dart';
 
 /// The home screens' visual language, kept in one place.
 ///
-/// One type scale (three sizes and the hero numeral), spacing in steps of
-/// four, one corner radius, one hairline. Everything that sets type or
-/// space on these screens reads it from here, which is what lets several
+/// One type scale (a serif section title, three sizes and the hero
+/// numeral), spacing in steps of four, one corner radius, one hairline.
+/// Depth comes from surfaces, not lines: the hero over its soft shadow, and
+/// each list on a surface a shade off the page. Everything that sets type
+/// or space on these screens reads it from here, which is what lets several
 /// lists on one page read as one composed page rather than a stack of
-/// blocks.
+/// boxes.
 
 /// Side margin shared by every row, so every figure on a page ends on the
 /// same edge.
@@ -17,6 +19,24 @@ const homeGutter = 24.0;
 
 /// The one corner radius: the raised panel, sheets and their ripples.
 const homeRadius = buttonRadius;
+
+/// The side margin where [context] sits. On the page it is [homeGutter].
+/// Inside a [HomeInset] (a section's soft surface, which is itself inset
+/// from the screen) it is what is left of the gutter, so the rows' figures
+/// still end on the page's one edge.
+double homeGutterOf(BuildContext context) =>
+    context.dependOnInheritedWidgetOfExactType<HomeInset>()?.gutter ?? homeGutter;
+
+/// Marks content that sits on a surface already inset from the screen's
+/// edge by `homeGutter - gutter`.
+class HomeInset extends InheritedWidget {
+  const HomeInset({super.key, required this.gutter, required super.child});
+
+  final double gutter;
+
+  @override
+  bool updateShouldNotify(HomeInset old) => old.gutter != gutter;
+}
 
 /// A two-line row (title and detail) and a one-line row (a note).
 const homeRowHeight = 56.0;
@@ -125,8 +145,13 @@ class HomeTones {
 /// a heavier request would be synthesised. The family comes from the
 /// theme rather than being named here: a span that names its family drops
 /// the fallback fonts it would otherwise inherit, and Karla has no "≈".
+///
+/// Hierarchy comes from size and face as much as from colour: a section
+/// opens on a serif title, a row's name is a size above its detail line,
+/// and labels are small tracked capitals.
 class HomeText {
   const HomeText._({
+    required this.title,
     required this.primary,
     required this.secondary,
     required this.label,
@@ -142,8 +167,18 @@ class HomeText {
     return HomeText._(
       ink: ink,
       muted: muted,
+      // Newsreader, as the app bar's titles and the balance are: a section
+      // reads as a heading, not as one more label.
+      title: TextStyle(
+        fontFamily: 'Newsreader',
+        fontSize: 19,
+        fontWeight: FontWeight.w600,
+        height: 1.2,
+        letterSpacing: -0.2,
+        color: ink,
+      ),
       primary: TextStyle(
-        fontSize: 15,
+        fontSize: 16,
         fontWeight: FontWeight.w500,
         height: 1.3,
         color: ink,
@@ -169,7 +204,10 @@ class HomeText {
     );
   }
 
-  /// Row titles, amounts, links: 15, medium, ink.
+  /// Section titles: Newsreader 19, semibold, ink.
+  final TextStyle title;
+
+  /// Row titles, amounts, links: 16, medium, ink.
   final TextStyle primary;
 
   /// Details, values, notes: 13, regular, muted.

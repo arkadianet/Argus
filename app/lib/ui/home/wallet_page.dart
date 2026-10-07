@@ -59,8 +59,8 @@ class WalletPageScreen extends StatelessWidget {
 /// Top to bottom: the raised panel holding the balance, where it sits and
 /// the round actions; a line on how current it is, and on anything that
 /// needs a look (fragmented boxes, a mix, a pin that cannot be derived);
-/// the holdings worth a glance and the last three transactions, flat on
-/// the page. Everything else has one home elsewhere: protocols in
+/// the holdings worth a glance and the last three transactions, each on a
+/// soft surface of its own. Everything else has one home elsewhere: protocols in
 /// Discover, tools behind More, the full history in Activity, settings in
 /// Settings.
 class WalletPageView extends StatelessWidget {
@@ -138,14 +138,24 @@ class WalletPageView extends StatelessWidget {
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.only(top: 4, bottom: 24),
       children: [
-        _panel(context),
+        // The page settles in from the top: the panel, its lines, then each
+        // list.
+        HomeEntrance(child: _panel(context)),
         const SizedBox(height: 4),
-        ..._statusLines(context),
-        ..._notes(context),
+        HomeEntrance(
+          order: 1,
+          child: Column(children: [..._statusLines(context), ..._notes(context)]),
+        ),
         const SizedBox(height: 4),
-        ..._assets(context),
-        const SizedBox(height: 4),
-        ..._activity(context),
+        HomeEntrance(
+          order: 2,
+          child: HomeSection(sectionKey: const Key('wallet-assets'), children: _assets(context)),
+        ),
+        const SizedBox(height: 12),
+        HomeEntrance(
+          order: 3,
+          child: HomeSection(sectionKey: const Key('wallet-activity'), children: _activity(context)),
+        ),
         ..._address(context),
       ],
     );
@@ -444,25 +454,29 @@ class WalletPageView extends StatelessWidget {
     if (watched == null || address == null) return const [];
     final t = HomeText.of(context);
     return [
-      const SizedBox(height: 4),
-      HomeSectionHeader(
-        title: watched.addressTitle,
-        action: onCopyAddress == null ? null : 'Copy',
-        actionKey: const Key('watched-copy-address'),
-        onAction: onCopyAddress,
-      ),
-      Padding(
-        padding: const EdgeInsets.symmetric(horizontal: homeGutter),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SelectableText(address, style: monoStyle(context, size: 12.5).copyWith(color: t.ink)),
-            if (watched.addressNote case final note?) ...[
-              const SizedBox(height: 8),
-              Text(note, style: t.secondary.copyWith(height: 1.4)),
-            ],
-          ],
-        ),
+      const SizedBox(height: 12),
+      HomeSection(
+        children: [
+          HomeSectionHeader(
+            title: watched.addressTitle,
+            action: onCopyAddress == null ? null : 'Copy',
+            actionKey: const Key('watched-copy-address'),
+            onAction: onCopyAddress,
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(homeGutter - HomeSection.inset, 0, homeGutter - HomeSection.inset, 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SelectableText(address, style: monoStyle(context, size: 12.5).copyWith(color: t.ink)),
+                if (watched.addressNote case final note?) ...[
+                  const SizedBox(height: 8),
+                  Text(note, style: t.secondary.copyWith(height: 1.4)),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     ];
   }

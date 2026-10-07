@@ -166,6 +166,21 @@ class HomeBalance extends StatelessWidget {
         decoration: BoxDecoration(color: t.muted.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(6)),
       );
     }
+    if (nano == null || hidden) return _figure(context, style, nano);
+    // A new balance counts to its figure from the last one, so a change is
+    // seen as a change; the first figure is simply shown, as is every
+    // figure with reduced motion. Only the drawing counts: what is read
+    // out is the balance itself.
+    return TweenAnimationBuilder<double>(
+      tween: Tween(end: nano.toDouble()),
+      duration: homeReducedMotion(context) ? Duration.zero : HomeMotion.count,
+      curve: HomeMotion.curve,
+      builder: (context, shown, _) => _figure(context, style, shown.round()),
+    );
+  }
+
+  Widget _figure(BuildContext context, TextStyle style, int? nano) {
+    final t = HomeText.of(context);
     final (whole, fraction) = nano == null
         ? ('—', '')
         : hidden
@@ -337,7 +352,7 @@ class HomeLineRow extends StatelessWidget {
     this.inkKey,
     this.hint,
     this.trailing,
-    this.padding = const EdgeInsets.symmetric(horizontal: homeGutter),
+    this.padding,
   });
 
   final Widget leading;
@@ -352,7 +367,7 @@ class HomeLineRow extends StatelessWidget {
 
   /// A control of its own at the end of the line, e.g. a dismiss button.
   final Widget? trailing;
-  final EdgeInsetsGeometry padding;
+  final EdgeInsetsGeometry? padding;
 
   @override
   Widget build(BuildContext context) {
@@ -361,7 +376,7 @@ class HomeLineRow extends StatelessWidget {
     final row = Container(
       constraints: const BoxConstraints(minHeight: homeLineHeight),
       alignment: AlignmentDirectional.centerStart,
-      padding: padding,
+      padding: padding ?? EdgeInsets.symmetric(horizontal: homeGutterOf(context)),
       child: Row(
         children: [
           SizedBox(width: homeMarkSize, child: Center(child: leading)),
@@ -484,7 +499,8 @@ class ErgPriceStrip extends StatelessWidget {
   }
 }
 
-/// A price line with a soft fill below it and a dot on the latest point.
+/// A price line over a gradient fill, strengthening toward the latest
+/// point, which carries a dot in a soft halo.
 class SparklinePainter extends CustomPainter {
   SparklinePainter({required this.points, required this.color});
 
@@ -511,24 +527,33 @@ class SparklinePainter extends CustomPainter {
       ..lineTo(last.dx, size.height)
       ..lineTo(0, size.height)
       ..close();
+    final area = Offset.zero & size;
+    // The area under the line is filled from the line's colour down to
+    // nothing, so the shape of the day reads at a glance.
     canvas.drawPath(
       fill,
       Paint()
         ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [color.withValues(alpha: 0.2), color.withValues(alpha: 0)],
-        ).createShader(Offset.zero & size),
+          colors: [color.withValues(alpha: 0.26), color.withValues(alpha: 0.02)],
+        ).createShader(area),
     );
+    // The line strengthens toward now: the latest prices carry the most.
     canvas.drawPath(
       line,
       Paint()
-        ..color = color
+        ..shader = LinearGradient(
+          colors: [color.withValues(alpha: 0.45), color],
+          stops: const [0, 0.7],
+        ).createShader(area)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5
+        ..strokeWidth = 1.75
         ..strokeJoin = StrokeJoin.round
         ..strokeCap = StrokeCap.round,
     );
+    // The latest point, with a soft halo.
+    canvas.drawCircle(last, 5, Paint()..color = color.withValues(alpha: 0.22));
     canvas.drawCircle(last, 2.6, Paint()..color = color);
   }
 
@@ -540,8 +565,9 @@ class SparklinePainter extends CustomPainter {
 ///
 /// It is coloured ([HeroSpec]): the palette's accent, so the balance and
 /// the wallet's actions read before anything else without the jolt of a
-/// paper card on a dark page. The separation is the surface's own: no
-/// border and no shadow.
+/// paper card on a dark page. It has depth without an outline: a sheen
+/// across it, a light along its top edge, a soft low shadow, and on a
+/// dark page a faint glow of its colour.
 ///
 /// Everything inside takes the hero's colours: its own tones through
 /// [HeroSurface], and a theme turned to match for what reads the theme
@@ -606,10 +632,20 @@ class RaisedPanel extends StatelessWidget {
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(homeRadius),
                 gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                   colors: [hero.surface, hero.surfaceEnd],
                 ),
+                boxShadow: [
+                  // A haze of the accent, faint and cast downward, as if the
+                  // panel lit the page under it. Kept from rising above the
+                  // panel, where the app bar would cut it off in a line.
+                  if (hero.glow case final glow?)
+                    BoxShadow(color: glow, blurRadius: 40, spreadRadius: -10, offset: const Offset(0, 20)),
+                  // The panel's own shadow: soft, low and drawn in under its
+                  // foot, so it lifts without an outline.
+                  BoxShadow(color: hero.shadow, blurRadius: 28, spreadRadius: -12, offset: const Offset(0, 16)),
+                ],
               ),
               child: Material(
                 type: MaterialType.transparency,
@@ -617,6 +653,25 @@ class RaisedPanel extends StatelessWidget {
                 clipBehavior: Clip.antiAlias,
                 child: Stack(
                   children: [
+                    // Light along the top edge, brightest at its middle: the
+                    // surface reads as a sheet with a face, not a flat fill.
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      height: 1,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              Colors.white.withValues(alpha: 0),
+                              Colors.white.withValues(alpha: 0.45),
+                              Colors.white.withValues(alpha: 0),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
                     Padding(padding: const EdgeInsets.fromLTRB(12, 16, 12, 12), child: child),
                     if (corner != null) PositionedDirectional(top: 4, end: 4, child: corner!),
                   ],

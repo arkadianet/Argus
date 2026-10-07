@@ -52,8 +52,9 @@ class TappableNode extends StatelessWidget {
   }
 }
 
-/// A section's label in tracked capitals, with an optional count and a
-/// quiet "View all" link at the far edge.
+/// A section's title, set in the serif, with an optional count and a
+/// "View all" link in the accent at the far edge: the way on is the thing
+/// to tap, so it takes the colour kept for what can be acted on.
 class HomeSectionHeader extends StatelessWidget {
   const HomeSectionHeader({super.key, required this.title, this.count, this.action, this.onAction, this.actionKey});
 
@@ -66,12 +67,14 @@ class HomeSectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
+    final accent = HomeTones.of(context).accent;
+    final gutter = homeGutterOf(context);
     return Padding(
-      padding: const EdgeInsetsDirectional.only(start: homeGutter, end: homeGutter - 6),
+      padding: EdgeInsetsDirectional.only(start: gutter, end: gutter - 6),
       // A header with a link is a full touch target tall; one without
       // sits closer to its list.
       child: ConstrainedBox(
-        constraints: BoxConstraints(minHeight: action == null ? 40 : homeLineHeight),
+        constraints: BoxConstraints(minHeight: action == null ? 44 : homeLineHeight),
         child: Row(
           children: [
             Expanded(
@@ -81,10 +84,10 @@ class HomeSectionHeader extends StatelessWidget {
                 excludeSemantics: true,
                 child: Text.rich(
                   TextSpan(
-                    text: title.toUpperCase(),
-                    children: [if (count != null) TextSpan(text: '   $count')],
+                    text: title,
+                    children: [if (count != null) TextSpan(text: '  $count', style: t.secondary)],
                   ),
-                  style: t.label,
+                  style: t.title,
                 ),
               ),
             ),
@@ -93,7 +96,7 @@ class HomeSectionHeader extends StatelessWidget {
                 key: actionKey,
                 onPressed: onAction,
                 style: TextButton.styleFrom(
-                  foregroundColor: t.ink,
+                  foregroundColor: accent,
                   minimumSize: const Size(48, 48),
                   padding: const EdgeInsetsDirectional.only(start: 10, end: 2),
                   textStyle: t.link,
@@ -102,11 +105,133 @@ class HomeSectionHeader extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(action!),
-                    Icon(Icons.chevron_right, size: 18, color: t.muted),
+                    Icon(Icons.chevron_right, size: 18, color: accent),
                   ],
                 ),
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Whether motion should be left out: the system's "remove animations"
+/// setting. Every animation on the home screens asks this first and, when
+/// it is on, shows the end state at once.
+bool homeReducedMotion(BuildContext context) => MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+
+/// How the home screens move. Short and eased out, so nothing waits on an
+/// animation.
+abstract final class HomeMotion {
+  /// A part of the page settling in when the page opens.
+  static const entrance = Duration(milliseconds: 420);
+
+  /// The gap between one part's entrance and the next's.
+  static const stagger = Duration(milliseconds: 70);
+
+  /// A balance counting to its new figure.
+  static const count = Duration(milliseconds: 700);
+
+  /// A round button giving under a finger.
+  static const press = Duration(milliseconds: 110);
+
+  static const curve = Curves.easeOutCubic;
+}
+
+/// A part of the page that eases in when the page first opens: it rises
+/// 12 points as it fades up, [order] steps after the first part. It plays
+/// once, not on every rebuild. With reduced motion it is simply there.
+///
+/// While it fades, what it holds is still read out and still takes taps.
+class HomeEntrance extends StatefulWidget {
+  const HomeEntrance({super.key, required this.child, this.order = 0});
+
+  final Widget child;
+  final int order;
+
+  @override
+  State<HomeEntrance> createState() => _HomeEntranceState();
+}
+
+class _HomeEntranceState extends State<HomeEntrance> with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: HomeMotion.entrance + HomeMotion.stagger * widget.order,
+  );
+  late final Animation<double> _shown = CurvedAnimation(
+    parent: _controller,
+    curve: Interval(
+      (HomeMotion.stagger * widget.order).inMicroseconds / _controller.duration!.inMicroseconds,
+      1,
+      curve: HomeMotion.curve,
+    ),
+  );
+  late final Animation<Offset> _rise = Tween(begin: const Offset(0, 12), end: Offset.zero).animate(_shown);
+  bool _started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_started) return;
+    _started = true;
+    if (homeReducedMotion(context)) {
+      _controller.value = 1;
+    } else {
+      _controller.forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _shown,
+      alwaysIncludeSemantics: true,
+      child: AnimatedBuilder(
+        animation: _rise,
+        builder: (context, child) => Transform.translate(offset: _rise.value, child: child),
+        child: widget.child,
+      ),
+    );
+  }
+}
+
+/// A list's soft surface: one shade off the page, rounded like the hero
+/// and inset to the hero's edges, with no border and no shadow. It groups
+/// a section's title and rows the way a card would, without a box's
+/// outline, so a page of sections reads as layered rather than ruled.
+///
+/// Everything in it keeps to the page's one gutter ([HomeInset]).
+class HomeSection extends StatelessWidget {
+  const HomeSection({super.key, required this.children, this.sectionKey});
+
+  final List<Widget> children;
+  final Key? sectionKey;
+
+  /// How far the surface sits in from the screen's edge.
+  static const inset = homeGutter - 12;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: inset),
+      child: Material(
+        key: sectionKey,
+        color: Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(homeRadius),
+        clipBehavior: Clip.antiAlias,
+        child: HomeInset(
+          gutter: homeGutter - inset,
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: children),
+          ),
         ),
       ),
     );
@@ -146,8 +271,8 @@ class HomeDisc extends StatelessWidget {
       alignment: Alignment.center,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
+        // Set apart by its fill alone, as every mark is.
         color: fill ?? Theme.of(context).colorScheme.surfaceContainerHighest,
-        border: fill == null ? Border.all(color: ArgusColors.of(context).cardBorder) : null,
       ),
       child: child,
     );
@@ -219,15 +344,17 @@ class HomeRow extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         title,
-        if (subtitle != null)
+        if (subtitle != null) ...[
+          const SizedBox(height: 1),
           Text.rich(subtitle!, style: t.secondary, maxLines: subtitleLines + (large ? 2 : 0), overflow: TextOverflow.ellipsis),
+        ],
         if (large && figures != null) ...[const SizedBox(height: 4), figures],
       ],
     );
     final row = Container(
       constraints: const BoxConstraints(minHeight: homeRowHeight),
       alignment: AlignmentDirectional.centerStart,
-      padding: const EdgeInsets.symmetric(horizontal: homeGutter, vertical: 8),
+      padding: EdgeInsets.symmetric(horizontal: homeGutterOf(context), vertical: 8),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

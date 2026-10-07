@@ -193,47 +193,72 @@ class OverviewView extends StatelessWidget {
       padding: EdgeInsets.only(top: 4, bottom: 24 + bottom),
       children: [
         if (message != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: message),
-        RaisedPanel(
-          corner: HideBalancesButton(hidden: data.hidden, onPressed: onToggleHidden),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              HomeBalance(
-                label: 'Total balance',
-                figureKey: const Key('overview-total'),
-                pendingKey: const Key('overview-total-pending'),
-                nanoErg: data.totalNano,
-                loading: data.loading,
-                notLoaded: data.notLoaded,
-                currency: data.currency,
-                fiatValue: data.totalFiat,
-                unpricedCount: data.unpricedCount,
-                pricesNote: data.pricesNote,
-                pending: data.pending,
-                hidden: data.hidden,
-              ),
-              if (price != null) ...[
-                const SizedBox(height: 14),
-                const HomeRule(indent: 0, endIndent: 0),
-                const SizedBox(height: 12),
-                ErgPriceStrip(price: price, currency: data.currency),
+        // The page settles in from the top: the panel, the network line,
+        // then each list.
+        HomeEntrance(
+          child: RaisedPanel(
+            corner: HideBalancesButton(hidden: data.hidden, onPressed: onToggleHidden),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                HomeBalance(
+                  label: 'Total balance',
+                  figureKey: const Key('overview-total'),
+                  pendingKey: const Key('overview-total-pending'),
+                  nanoErg: data.totalNano,
+                  loading: data.loading,
+                  notLoaded: data.notLoaded,
+                  currency: data.currency,
+                  fiatValue: data.totalFiat,
+                  unpricedCount: data.unpricedCount,
+                  pricesNote: data.pricesNote,
+                  pending: data.pending,
+                  hidden: data.hidden,
+                ),
+                if (price != null) ...[
+                  const SizedBox(height: 14),
+                  const HomeRule(indent: 0, endIndent: 0),
+                  const SizedBox(height: 12),
+                  ErgPriceStrip(price: price, currency: data.currency),
+                ],
               ],
-            ],
+            ),
           ),
         ),
         const SizedBox(height: 4),
-        homeNetworkRow(context, data.network, onTap: onNetwork, action: networkAction),
-        if (data.wallets.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          HomeSectionHeader(title: 'Wallets', count: '${data.wallets.length}'),
-          _wallets(),
-        ],
-        if (data.watched.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          HomeSectionHeader(title: 'Watched', count: '${data.watched.length}'),
-          for (final w in data.watched) _row(w),
-        ],
-        AddWalletRow(onTap: () => _add(context)),
+        HomeEntrance(
+          order: 1,
+          child: homeNetworkRow(context, data.network, onTap: onNetwork, action: networkAction),
+        ),
+        const SizedBox(height: 4),
+        // Each list on a soft surface of its own; adding a wallet closes
+        // the last of them.
+        if (data.wallets.isNotEmpty)
+          HomeEntrance(
+            order: 2,
+            child: HomeSection(
+              sectionKey: const Key('overview-wallets'),
+              children: [
+                HomeSectionHeader(title: 'Wallets', count: '${data.wallets.length}'),
+                _wallets(),
+                if (data.watched.isEmpty) AddWalletRow(onTap: () => _add(context)),
+              ],
+            ),
+          ),
+        if (data.wallets.isNotEmpty && data.watched.isNotEmpty) const SizedBox(height: 12),
+        if (data.watched.isNotEmpty)
+          HomeEntrance(
+            order: 3,
+            child: HomeSection(
+              sectionKey: const Key('overview-watched'),
+              children: [
+                HomeSectionHeader(title: 'Watched', count: '${data.watched.length}'),
+                for (final w in data.watched) _row(w),
+                AddWalletRow(onTap: () => _add(context)),
+              ],
+            ),
+          ),
+        if (data.wallets.isEmpty && data.watched.isEmpty) AddWalletRow(onTap: () => _add(context)),
         if (footnote != null)
           Padding(
             padding: const EdgeInsetsDirectional.fromSTEB(homeGutter, 16, homeGutter, 0),
@@ -314,7 +339,7 @@ class PrototypeNote extends StatelessWidget {
       key: const Key('overview-learn-more'),
       onPressed: onLearnMore ?? () => showPrototypeNotice(context),
       style: TextButton.styleFrom(
-        foregroundColor: t.ink,
+        foregroundColor: HomeTones.of(context).accent,
         minimumSize: const Size(48, 48),
         padding: stacked ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 10),
         alignment: AlignmentDirectional.centerStart,
