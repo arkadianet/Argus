@@ -538,11 +538,11 @@ class SparklinePainter extends CustomPainter {
 
 /// The hero: the one surface on the page that is not the page.
 ///
-/// It is the page's colours inverted ([HeroSpec]): paper on a dark
-/// palette, deep ink on a light one, so the balance and the wallet's
-/// actions read before anything else, as the one light card on a dark
-/// dashboard does. The contrast is the surface's own: no border and no
-/// shadow, which on a near-black page would not show anyway.
+/// It is coloured ([HeroSpec]): the palette's accent, solid or laid into
+/// the page as a tint, so the balance and the wallet's actions read before
+/// anything else without the jolt of a paper card on a dark page. The
+/// separation is the surface's own: no border and no shadow. A tint
+/// settles a shade toward the page at its foot.
 ///
 /// Everything inside takes the hero's colours: its own tones through
 /// [HeroSurface], and a theme turned to match for what reads the theme
@@ -602,15 +602,26 @@ class RaisedPanel extends StatelessWidget {
           spec: hero,
           child: DefaultTextStyle.merge(
             style: TextStyle(color: hero.ink),
-            child: Material(
-              color: hero.surface,
-              borderRadius: BorderRadius.circular(homeRadius),
-              clipBehavior: Clip.antiAlias,
-              child: Stack(
-                children: [
-                  Padding(padding: const EdgeInsets.fromLTRB(12, 16, 12, 12), child: child),
-                  if (corner != null) PositionedDirectional(top: 4, end: 4, child: corner!),
-                ],
+            child: DecoratedBox(
+              key: const Key('home-hero'),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(homeRadius),
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [hero.surface, hero.surfaceEnd],
+                ),
+              ),
+              child: Material(
+                type: MaterialType.transparency,
+                borderRadius: BorderRadius.circular(homeRadius),
+                clipBehavior: Clip.antiAlias,
+                child: Stack(
+                  children: [
+                    Padding(padding: const EdgeInsets.fromLTRB(12, 16, 12, 12), child: child),
+                    if (corner != null) PositionedDirectional(top: 4, end: 4, child: corner!),
+                  ],
+                ),
               ),
             ),
           ),

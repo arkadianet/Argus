@@ -46,49 +46,47 @@ void main() {
       expect(short, isEmpty, reason: palette.name);
     });
 
-    test('${palette.name}: the hero meets WCAG AA on its own surface', () {
-      final hero = palette.hero;
-      final surface = hero.surface;
-      final short = <String>[];
-      void atLeast(String what, Color fg, Color bg, double ratio) {
-        final got = contrast(fg, bg);
-        if (got < ratio) short.add('$what: ${got.toStringAsFixed(2)} < $ratio');
-      }
+    for (final (style, hero) in [('solid', palette.heroSolid), ('tint', palette.heroTint)]) {
+      test('${palette.name}, $style: the hero meets WCAG AA on its own surface', () {
+        final short = <String>[];
+        // A tint shades toward its foot: everything on it holds on both.
+        void atLeast(String what, Color fg, Color bg, double ratio) {
+          for (final ground in {bg == hero.surface ? hero.surfaceEnd : bg, bg}) {
+            final got = contrast(fg, ground);
+            if (got < ratio) short.add('$what: ${got.toStringAsFixed(2)} < $ratio');
+          }
+        }
 
-      // Text, all of it set straight on the panel: the balance and its
-      // lines, the actions' names, the price strip.
-      atLeast('ink', hero.ink, surface, 4.5);
-      atLeast('muted', hero.muted, surface, 4.5);
-      atLeast('accent (links, the price chart)', hero.accent, surface, 4.5);
-      atLeast('positive (a rise)', hero.positive, surface, 4.5);
-      atLeast('negative (a fall, a stale price)', hero.negative, surface, 4.5);
-      // The filled action: its shape against the panel, and its mark,
-      // held to text's ratio.
-      atLeast('the filled action on the panel', hero.filled, surface, 3);
-      atLeast('the mark on the filled action', hero.onFilled, hero.filled, 4.5);
-      // The other actions: named under the well, so the well itself only
-      // has to show; its mark is held to text's ratio.
-      atLeast('the mark in a tonal well', hero.onTonal, hero.tonal, 4.5);
-      atLeast('the eye and the chevrons', hero.ink, surface, 3);
-      expect(short, isEmpty, reason: palette.name);
-    });
+        // Text, all of it set straight on the panel: the balance and its
+        // lines, the actions' names, the price strip.
+        atLeast('ink', hero.ink, hero.surface, 4.5);
+        atLeast('muted', hero.muted, hero.surface, 4.5);
+        atLeast('accent (links, the price chart)', hero.accent, hero.surface, 4.5);
+        atLeast('positive (a rise)', hero.positive, hero.surface, 4.5);
+        atLeast('negative (a fall, a stale price)', hero.negative, hero.surface, 4.5);
+        // The filled action: its shape against the panel, and its mark,
+        // held to text's ratio.
+        atLeast('the filled action on the panel', hero.filled, hero.surface, 3);
+        atLeast('the mark on the filled action', hero.onFilled, hero.filled, 4.5);
+        // The other actions: named under the well, so the well itself only
+        // has to show; its mark is held to text's ratio.
+        atLeast('the mark in a tonal well', hero.onTonal, hero.tonal, 4.5);
+        atLeast('the eye and the chevrons', hero.ink, hero.surface, 3);
+        expect(short, isEmpty, reason: '${palette.name} $style');
+      });
 
-    test('${palette.name}: the hero is the page inverted', () {
-      final hero = palette.hero;
-      // Light on a dark page, dark on a light one.
-      expect(hero.brightness, isNot(palette.brightness));
-      // Apart from the page by its surface alone: the panel has no border
-      // and no shadow to lean on.
-      expect(contrast(hero.surface, palette.background), greaterThan(10));
-      // The figures read as sharply as the page's own.
-      expect(contrast(hero.ink, hero.surface), greaterThan(12));
-      // A divider and a well show, quietly. Neither carries meaning alone,
-      // so neither is held to a WCAG ratio.
-      expect(contrast(hero.divider, hero.surface), greaterThan(1.25));
-      expect(contrast(hero.tonal, hero.surface), greaterThan(1.1));
-      expect(contrast(hero.tonal, hero.surface), lessThan(contrast(hero.filled, hero.surface)),
-          reason: 'Send stays the one filled action');
-    });
+      test('${palette.name}, $style: the hero stands apart from the page, Send apart on it', () {
+        // Apart from the page by its colour alone: no border, no shadow.
+        expect(contrast(hero.surface, palette.background), greaterThan(1.2));
+        expect(hero.surface, isNot(palette.background));
+        // A divider and a well show, quietly. Neither carries meaning
+        // alone, so neither is held to a WCAG ratio.
+        expect(contrast(hero.divider, hero.surface), greaterThan(1.25));
+        expect(contrast(hero.tonal, hero.surface), greaterThan(1.1));
+        expect(contrast(hero.tonal, hero.surface), lessThan(contrast(hero.filled, hero.surface)),
+            reason: 'Send stays the one filled action');
+      });
+    }
   }
 
   test('what reads the theme directly on the hero reads the hero\'s colours', () {

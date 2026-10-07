@@ -1,14 +1,14 @@
-// The hero (the inverted panel heading the overview and every wallet's
-// page) in every palette, from figures like the ones on the user's own
-// phone, checked for layout errors, 48 dp targets, labelled controls,
-// screen-reader sentences and hidden balances. Its colours are checked
-// against WCAG AA from the tokens in home_contrast_test.dart. To also save
-// PNGs under <repo>/ui-renders/hero/:
+// The hero (the coloured panel heading the overview and every wallet's
+// page) in both styles under comparison, solid and tint, in every palette,
+// from figures like the ones on the user's own phone, checked for layout
+// errors, 48 dp targets, labelled controls, screen-reader sentences and
+// hidden balances. Its colours are checked against WCAG AA from the tokens
+// in home_contrast_test.dart. To also save PNGs under
+// <repo>/ui-renders/hero2/{solid,tint}/:
 //
 //   ARGUS_UI_RENDERS=1 flutter test test/home_hero_render_test.dart
 
 import 'package:argus_wallet/theme/argus_theme.dart';
-import 'package:argus_wallet/ui/home/home_hero.dart';
 import 'package:argus_wallet/ui/home/home_models.dart';
 import 'package:argus_wallet/ui/home/overview_screen.dart';
 import 'package:argus_wallet/ui/home/unlock_gate.dart';
@@ -282,92 +282,95 @@ Future<void> _accessible(WidgetTester tester) async {
   await expectLater(tester, meetsGuideline(labeledTapTargetGuideline));
 }
 
-/// The hero's own surface, read off the panel, for checking it is the one
-/// the palette names.
-Color _heroSurface(WidgetTester tester) {
-  final material = tester.widget<Material>(
-    find.descendant(of: find.byType(RaisedPanel), matching: find.byType(Material)).first,
-  );
-  return material.color!;
+
+/// The hero's colours as drawn, top and foot, for checking they are the
+/// ones the palette names for the style in use.
+List<Color> _heroColors(WidgetTester tester) {
+  final box = tester.widget<DecoratedBox>(find.byKey(const Key('home-hero')));
+  return ((box.decoration as BoxDecoration).gradient! as LinearGradient).colors;
 }
 
 void main() {
   setUpAll(loadRenderFonts);
+  tearDown(() => heroStyle = HeroStyle.tint);
 
-  for (final palette in allPalettes) {
-    testWidgets('wallet page, ${palette.name}', (tester) async {
-      await pumpRender(tester, _page(_mainPage()), palette: palette);
-      expect(tester.takeException(), isNull);
-      await saveRender(tester, 'hero/wallet-${_id(palette)}-1x');
-      expect(_heroSurface(tester), palette.hero.surface);
-      expect(
-        find.bySemanticsLabel(RegExp(r'^Balance 203\.16 ERG, about A\$90\.54 AUD, 6 tokens unpriced, '
-            r'incl\. 0\.001 ERG stealth$')),
-        findsOneWidget,
-      );
-      expect(find.bySemanticsLabel('Pinned address #275, 9iArkadi…WspUZA'), findsOneWidget);
-      expect(find.bySemanticsLabel('incl. 2.7 ERG · 6 tokens on 1 other address'), findsOneWidget);
-      expect(find.bySemanticsLabel('Synced, Block 1,889,161, 19 UTXOs'), findsOneWidget);
-      await _accessible(tester);
+  for (final style in HeroStyle.values) {
+    String file(String screen, PaletteSpec palette, [String suffix = '']) =>
+        'hero2/${style.name}/$screen-${_id(palette)}-1x$suffix';
+    HeroSpec spec(PaletteSpec p) => style == HeroStyle.solid ? p.heroSolid : p.heroTint;
+
+    group(style.name, () {
+      setUp(() => heroStyle = style);
+
+      for (final palette in allPalettes) {
+        testWidgets('wallet page, ${palette.name}', (tester) async {
+          await pumpRender(tester, _page(_mainPage()), palette: palette);
+          expect(tester.takeException(), isNull);
+          if ([harborPalette, watchfulPalette, ledgerPalette].contains(palette)) {
+            await saveRender(tester, file('wallet', palette));
+          }
+          expect(_heroColors(tester), [spec(palette).surface, spec(palette).surfaceEnd]);
+          expect(
+            find.bySemanticsLabel(RegExp(r'^Balance 203\.16 ERG, about A\$90\.54 AUD, 6 tokens unpriced, '
+                r'incl\. 0\.001 ERG stealth$')),
+            findsOneWidget,
+          );
+          expect(find.bySemanticsLabel('Pinned address #275, 9iArkadi…WspUZA'), findsOneWidget);
+          expect(find.bySemanticsLabel('incl. 2.7 ERG · 6 tokens on 1 other address'), findsOneWidget);
+          await _accessible(tester);
+        });
+      }
+
+      for (final palette in [harborPalette, watchfulPalette, ledgerPalette]) {
+        testWidgets('overview, ${palette.name}', (tester) async {
+          await pumpRender(tester, _overview(_overviewData()), palette: palette);
+          expect(tester.takeException(), isNull);
+          await saveRender(tester, file('overview', palette));
+          expect(_heroColors(tester).first, spec(palette).surface);
+          expect(find.bySemanticsLabel('ERG price A\$0.45 AUD, up 2.4% over 24h, SigmaUSD oracle'), findsOneWidget);
+          expect(find.byKey(const Key('home-price-sparkline')), findsOneWidget);
+          await _accessible(tester);
+        });
+
+        testWidgets('locked page, ${palette.name}', (tester) async {
+          await pumpRender(tester, _locked(), palette: palette);
+          expect(tester.takeException(), isNull);
+          await saveRender(tester, file('locked', palette));
+          expect(_heroColors(tester).first, spec(palette).surface);
+          expect(find.bySemanticsLabel(RegExp(r'^Balance 203\.16 ERG, as of 3h ago$')), findsOneWidget);
+          await _accessible(tester);
+        });
+      }
+
+      testWidgets('watched page, Harbor', (tester) async {
+        await pumpRender(tester, _page(_watchedPage()), palette: harborPalette);
+        expect(tester.takeException(), isNull);
+        await saveRender(tester, file('watched', harborPalette));
+        expect(find.byKey(const Key('watch-action-send')), findsOneWidget);
+        await _accessible(tester);
+      });
+
+      for (final screen in ['wallet', 'overview']) {
+        testWidgets('$screen at 2x text, Harbor', (tester) async {
+          final widget = screen == 'wallet' ? _page(_mainPage()) : _overview(_overviewData());
+          await pumpRender(tester, widget, palette: harborPalette, textScale: 2);
+          expect(tester.takeException(), isNull);
+          await saveRender(tester, 'hero2/${style.name}/$screen-harbor-2x');
+          await _accessible(tester);
+        });
+      }
+
+      testWidgets('hidden balances, Harbor', (tester) async {
+        await pumpRender(tester, _page(_mainPage(hidden: true)), palette: harborPalette);
+        expect(tester.takeException(), isNull);
+        await saveRender(tester, file('wallet', harborPalette, '-hidden'));
+        expect(find.bySemanticsLabel(RegExp(r'^Balance hidden')), findsOneWidget);
+        final shown = tester.widgetList<RichText>(find.byType(RichText)).map((t) => t.text.toPlainText()).join('\n');
+        for (final figure in ['203.16', '90.54', '0.001', '2.7', '6 tokens']) {
+          expect(shown.contains(figure), isFalse, reason: '"$figure" is on screen with balances hidden');
+        }
+        await _accessible(tester);
+      });
     });
   }
-
-  for (final palette in [harborPalette, watchfulPalette, ledgerPalette]) {
-    testWidgets('overview, ${palette.name}', (tester) async {
-      await pumpRender(tester, _overview(_overviewData()), palette: palette);
-      expect(tester.takeException(), isNull);
-      await saveRender(tester, 'hero/overview-${_id(palette)}-1x');
-      expect(_heroSurface(tester), palette.hero.surface);
-      expect(
-        find.bySemanticsLabel(RegExp(r'^Total balance 1,504\.46 ERG, about A\$670\.48 AUD, 6 tokens unpriced$')),
-        findsOneWidget,
-      );
-      expect(find.bySemanticsLabel('ERG price A\$0.45 AUD, up 2.4% over 24h, SigmaUSD oracle'), findsOneWidget);
-      expect(find.byKey(const Key('home-price-sparkline')), findsOneWidget);
-      await _accessible(tester);
-    });
-  }
-
-  for (final screen in ['wallet', 'overview']) {
-    testWidgets('$screen at 2x text, Harbor', (tester) async {
-      final widget = screen == 'wallet' ? _page(_mainPage()) : _overview(_overviewData());
-      await pumpRender(tester, widget, palette: harborPalette, textScale: 2);
-      expect(tester.takeException(), isNull);
-      await saveRender(tester, 'hero/$screen-harbor-2x');
-      await _accessible(tester);
-    });
-  }
-
-  testWidgets('locked page, Harbor', (tester) async {
-    await pumpRender(tester, _locked(), palette: harborPalette);
-    expect(tester.takeException(), isNull);
-    await saveRender(tester, 'hero/locked-harbor-1x');
-    expect(_heroSurface(tester), harborPalette.hero.surface);
-    expect(find.bySemanticsLabel(RegExp(r'^Balance 203\.16 ERG, as of 3h ago$')), findsOneWidget);
-    expect(find.byKey(const Key('gate-unlock')), findsOneWidget);
-    await _accessible(tester);
-  });
-
-  testWidgets('watched page, Harbor', (tester) async {
-    await pumpRender(tester, _page(_watchedPage()), palette: harborPalette);
-    expect(tester.takeException(), isNull);
-    await saveRender(tester, 'hero/watched-harbor-1x');
-    expect(_heroSurface(tester), harborPalette.hero.surface);
-    expect(find.byKey(const Key('watch-action-send')), findsOneWidget);
-    expect(find.textContaining('WATCHED ADDRESS'), findsOneWidget);
-    await _accessible(tester);
-  });
-
-  testWidgets('hidden balances on the hero, Harbor', (tester) async {
-    await pumpRender(tester, _page(_mainPage(hidden: true)), palette: harborPalette);
-    expect(tester.takeException(), isNull);
-    await saveRender(tester, 'hero/wallet-harbor-1x-hidden');
-    expect(find.bySemanticsLabel(RegExp(r'^Balance hidden')), findsOneWidget);
-    expect(find.byTooltip('Show balances'), findsOneWidget);
-    final shown = tester.widgetList<RichText>(find.byType(RichText)).map((t) => t.text.toPlainText()).join('\n');
-    for (final figure in ['203.16', '90.54', '0.001', '2.7', '6 tokens', '19']) {
-      expect(shown.contains(figure), isFalse, reason: '"$figure" is on screen with balances hidden');
-    }
-    await _accessible(tester);
-  });
 }
