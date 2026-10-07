@@ -266,130 +266,29 @@ pub struct TxSummary {
     pub counterparty: Option<String>,
     pub num_inputs: u32,
     pub num_outputs: u32,
+    /// Inputs and outputs grouped by owner, for classifying the
+    /// transaction from the wallet's point of view.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub io: Option<crate::activity::TxIo>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenReceived {
     pub token_id: String,
     pub amount: u64,
 }
 
-/// Pure summary of one `byAddress` item; extracted for fixture testing.
+/// Pure summary of one `byAddress` item for a single address; extracted
+/// for fixture testing. A wallet of several addresses must use
+/// [`crate::activity::summarize_for_wallet`] with all of them, or a move
+/// between two of its addresses reads as a payment.
 /// Returns None when the item lacks a transaction id.
 pub fn summarize_tx_for_address(
     tx: &serde_json::Value,
     address: &str,
 ) -> Option<TxSummary> {
-    let tx_id = tx["id"].as_str()?.to_string();
-    let height = tx["inclusionHeight"].as_u64().unwrap_or(0);
-    let timestamp = tx["timestamp"].as_u64().unwrap_or(0);
-    let num_inputs = tx["inputs"].as_array().map(|a| a.len() as u32).unwrap_or(0);
-    let num_outputs = tx["outputs"].as_array().map(|a| a.len() as u32).unwrap_or(0);
-
-    let value_nano_erg = net_value_for_address(tx, address);
-
-    let outs = tx["outputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
-    let mut token_ids: Vec<String> = Vec::new();
-    let mut received: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    for output in outs {
-        if let Some(assets) = output["assets"].as_array() {
-            for asset in assets {
-                if let Some(id) = asset["tokenId"].as_str() {
-                    if !token_ids.iter().any(|t| t == id) {
-                        token_ids.push(id.to_string());
-                    }
-                    // Arrivals: only outputs owned by the queried address
-                    // carry the address field on extraIndex nodes.
-                    if output["address"].as_str() == Some(address) {
-                        let amount = asset["amount"].as_u64().unwrap_or(0);
-                        let entry = received.entry(id.to_string()).or_insert(0);
-                        *entry = entry.saturating_add(amount);
-                    }
-                }
-            }
-        }
-    }
-
-    let ins = tx["inputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
-    let fee_tree = ergo_lib::wallet::miner_fee::MINERS_FEE_BASE16_BYTES;
-    let is_fee = |o: &serde_json::Value| o["ergoTree"].as_str() == Some(fee_tree);
-
-    let fee_from_output: u64 = outs
-        .iter()
-        .filter(|o| is_fee(o))
-        .map(|o| o["value"].as_u64().unwrap_or(0))
-        .sum();
-    let inputs_valued = !ins.is_empty() && ins.iter().all(|i| i["value"].is_number());
-    let fee_nano_erg = if fee_from_output > 0 {
-        Some(fee_from_output)
-    } else if inputs_valued {
-        let in_total: u64 = ins.iter().map(|i| i["value"].as_u64().unwrap_or(0)).sum();
-        let out_total: u64 = outs.iter().map(|o| o["value"].as_u64().unwrap_or(0)).sum();
-        Some(in_total.saturating_sub(out_total))
-    } else {
-        None
-    };
-
-    let counterparty = if value_nano_erg < 0 {
-        outs.iter()
-            .filter(|o| !is_fee(o))
-            .filter_map(|o| o["address"].as_str())
-            .find(|a| *a != address)
-            .map(str::to_string)
-    } else {
-        ins.iter()
-            .filter_map(|i| i["address"].as_str())
-            .find(|a| *a != address)
-            .map(str::to_string)
-    };
-
-    let mut spent: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-    for input in ins.iter().filter(|i| i["address"].as_str() == Some(address)) {
-        if let Some(assets) = input["assets"].as_array() {
-            for asset in assets {
-                if let Some(id) = asset["tokenId"].as_str() {
-                    let amount = asset["amount"].as_u64().unwrap_or(0);
-                    let e = spent.entry(id.to_string()).or_insert(0);
-                    *e = e.saturating_add(amount);
-                }
-            }
-        }
-    }
-    let spent_total = spent.clone();
-    let tokens_sent: Vec<TokenReceived> = spent
-        .into_iter()
-        .filter_map(|(token_id, out)| {
-            let back = received.get(&token_id).copied().unwrap_or(0);
-            let net = out.saturating_sub(back);
-            (net > 0).then_some(TokenReceived { token_id, amount: net })
-        })
-        .collect();
-
-    // Net arrivals: tokens that merely came back as change (they were in
-    // our inputs too) are not received. A Dexy deposit's change box carries
-    // every other token the spent boxes held; only the LP token is new.
-    let tokens_received: Vec<TokenReceived> = received
-        .into_iter()
-        .filter_map(|(token_id, back)| {
-            let out = spent_total.get(&token_id).copied().unwrap_or(0);
-            let net = back.saturating_sub(out);
-            (net > 0).then_some(TokenReceived { token_id, amount: net })
-        })
-        .collect();
-
-    Some(TxSummary {
-        tx_id,
-        height,
-        timestamp,
-        value_nano_erg,
-        token_ids,
-        tokens_received,
-        tokens_sent,
-        fee_nano_erg,
-        counterparty,
-        num_inputs,
-        num_outputs,
-    })
+    let owned: std::collections::HashSet<String> = [address.to_string()].into();
+    crate::activity::summarize_for_wallet(tx, None, &owned, &crate::activity::no_tags)
 }
 
 /// Result of following a singleton token lineage through spent transaction chains.
@@ -846,6 +745,35 @@ impl ErgoNodeClient {
 
     /// Fetch transaction history for an address (paginated, max 100).
     pub async fn get_transaction_history(&self, address: &str, limit: u64, offset: u64) -> Result<Vec<TxSummary>, String> {
+        let owned: std::collections::HashSet<String> = [address.to_string()].into();
+        self.get_wallet_transaction_history(address, &owned, &crate::activity::no_tags, limit, offset)
+            .await
+    }
+
+    /// One page of `address`'s history (max 100), each transaction read
+    /// from the point of view of a wallet owning every address in `owned`.
+    pub async fn get_wallet_transaction_history(
+        &self,
+        address: &str,
+        owned: &std::collections::HashSet<String>,
+        tagger: crate::activity::Tagger<'_>,
+        limit: u64,
+        offset: u64,
+    ) -> Result<Vec<TxSummary>, String> {
+        let items = self.transactions_by_address(address, limit, offset).await?;
+        Ok(items
+            .iter()
+            .filter_map(|tx| crate::activity::summarize_for_wallet(tx, None, owned, tagger))
+            .collect())
+    }
+
+    /// The node's raw `byAddress` page: whole transactions, inputs included.
+    pub async fn transactions_by_address(
+        &self,
+        address: &str,
+        limit: u64,
+        offset: u64,
+    ) -> Result<Vec<serde_json::Value>, String> {
         let endpoint = format!(
             "/blockchain/transaction/byAddress?offset={}&limit={}",
             offset,
@@ -871,12 +799,7 @@ impl ErgoNodeClient {
         }
         let value: serde_json::Value = serde_json::from_str(&text)
             .map_err(|e| format!("Parse: {e}"))?;
-        let items = value["items"].as_array().cloned().unwrap_or_default();
-        let summaries = items
-            .iter()
-            .filter_map(|tx| summarize_tx_for_address(tx, address))
-            .collect();
-        Ok(summaries)
+        Ok(value["items"].as_array().cloned().unwrap_or_default())
     }
 
     pub async fn get_blockchain_box_by_id(&self, box_id: &str) -> Result<serde_json::Value, String> {
@@ -1154,22 +1077,6 @@ pub async fn get_token_info(
         }
     }
     Err(last)
-}
-
-fn net_value_for_address(tx: &serde_json::Value, address: &str) -> i64 {
-    let outs = tx["outputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
-    let ins = tx["inputs"].as_array().map(|a| a.as_slice()).unwrap_or(&[]);
-    let to_self: i64 = outs
-        .iter()
-        .filter(|o| o["address"].as_str() == Some(address))
-        .map(|o| o["value"].as_i64().unwrap_or(0))
-        .sum();
-    let from_self: i64 = ins
-        .iter()
-        .filter(|i| i["address"].as_str() == Some(address))
-        .map(|i| i["value"].as_i64().unwrap_or(0))
-        .sum();
-    to_self - from_self
 }
 
 #[cfg(test)]

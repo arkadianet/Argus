@@ -228,8 +228,8 @@ void main() {
         'value_nano_erg': 1000000,
         'stealth': true,
       }, id: 's1');
-      expect(row.title, 'Received');
-      expect(row.counterparty, 'stealth payment');
+      expect(row.title, 'Stealth payment');
+      expect(row.counterparty, 'to your stealth address');
       expect(row.pending, isFalse);
     });
 

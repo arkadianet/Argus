@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import 'activity_classifier.dart' show reownActivity;
 import 'address_holdings.dart';
 import 'network_controller.dart';
 import 'pending_balance.dart';
@@ -211,7 +212,9 @@ class PublicWalletSync extends ChangeNotifier {
           for (final address in addresses) {
             if (!valid()) return;
             for (final tx in await gateway.history(address)) {
-              final row = Map<String, dynamic>.from(tx as Map);
+              // Read against all the wallet's addresses, not just the one
+              // whose listing returned it.
+              final row = reownActivity(Map<String, dynamic>.from(tx as Map), addresses);
               transactions[row['tx_id'] as String] = row;
             }
           }

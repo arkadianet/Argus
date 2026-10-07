@@ -481,6 +481,7 @@ abstract class RustLibApi extends BaseApi {
 
   Future<String> crateApiGetTransactionHistory({
     required String address,
+    required List<String> walletAddresses,
     String? nodeUrl,
     required BigInt limit,
     required BigInt offset,
@@ -3559,6 +3560,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   @override
   Future<String> crateApiGetTransactionHistory({
     required String address,
+    required List<String> walletAddresses,
     String? nodeUrl,
     required BigInt limit,
     required BigInt offset,
@@ -3568,6 +3570,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
         callFfi: (port_) {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(address, serializer);
+          sse_encode_list_String(walletAddresses, serializer);
           sse_encode_opt_String(nodeUrl, serializer);
           sse_encode_u_64(limit, serializer);
           sse_encode_u_64(offset, serializer);
@@ -3583,7 +3586,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiGetTransactionHistoryConstMeta,
-        argValues: [address, nodeUrl, limit, offset],
+        argValues: [address, walletAddresses, nodeUrl, limit, offset],
         apiImpl: this,
       ),
     );
@@ -3592,7 +3595,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   TaskConstMeta get kCrateApiGetTransactionHistoryConstMeta =>
       const TaskConstMeta(
         debugName: "get_transaction_history",
-        argNames: ["address", "nodeUrl", "limit", "offset"],
+        argNames: ["address", "walletAddresses", "nodeUrl", "limit", "offset"],
       );
 
   @override

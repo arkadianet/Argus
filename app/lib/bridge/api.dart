@@ -287,13 +287,22 @@ Future<String> inspectTokenMetadata({
 void cancelTokenMetadata() =>
     RustLib.instance.api.crateApiCancelTokenMetadata();
 
+/// One page of `address`'s history, each transaction read from the point of
+/// view of the whole wallet: `wallet_addresses` are every address it owns
+/// (derived indices, the pinned one, a watched account's addresses), so a
+/// move between two of them is not a payment and none of them is ever named
+/// as the counterparty. Each entry carries `io`, its inputs and outputs
+/// grouped by owner with protocol tags, for the activity classifier. An
+/// empty list reads the page for `address` alone.
 Future<String> getTransactionHistory({
   required String address,
+  required List<String> walletAddresses,
   String? nodeUrl,
   required BigInt limit,
   required BigInt offset,
 }) => RustLib.instance.api.crateApiGetTransactionHistory(
   address: address,
+  walletAddresses: walletAddresses,
   nodeUrl: nodeUrl,
   limit: limit,
   offset: offset,

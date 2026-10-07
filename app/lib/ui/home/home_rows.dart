@@ -288,10 +288,18 @@ class HomeActivityRow extends StatelessWidget {
       ActivityKind.contract => (Icons.code, t.muted),
     };
     final legs = item.legs;
-    final primary = legs.isEmpty ? '0${nbsp}ERG' : (hidden ? maskedFigure : legText(legs.first));
+    final primary = hidden
+        ? maskedFigure
+        : item.figure ?? (legs.isEmpty ? '0${nbsp}ERG' : legText(legs.first));
     final incoming = legs.isNotEmpty && legs.first.amount > BigInt.zero;
     final more = legs.length > 2 ? ' + ${legs.length - 2}${nbsp}more' : '';
-    final secondary = legs.length < 2 || hidden ? null : '${legText(legs[1])}$more';
+    final secondary = hidden
+        ? null
+        : item.figure != null
+            ? item.subfigure
+            : legs.length < 2
+                ? null
+                : '${legText(legs[1])}$more';
     final when = [if (item.pending) 'Pending', if (item.time.isNotEmpty) item.time, ?item.counterparty];
 
     return HomeRow(

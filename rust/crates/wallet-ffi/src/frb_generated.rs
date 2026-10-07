@@ -2639,6 +2639,7 @@ fn wire__crate__api__get_transaction_history_impl(
             let mut deserializer =
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_address = <String>::sse_decode(&mut deserializer);
+            let api_wallet_addresses = <Vec<String>>::sse_decode(&mut deserializer);
             let api_node_url = <Option<String>>::sse_decode(&mut deserializer);
             let api_limit = <u64>::sse_decode(&mut deserializer);
             let api_offset = <u64>::sse_decode(&mut deserializer);
@@ -2648,6 +2649,7 @@ fn wire__crate__api__get_transaction_history_impl(
                     (move || async move {
                         let output_ok = crate::api::get_transaction_history(
                             api_address,
+                            api_wallet_addresses,
                             api_node_url,
                             api_limit,
                             api_offset,

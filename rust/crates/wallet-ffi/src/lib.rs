@@ -10,6 +10,9 @@ mod api_sigmafi_impl;
 mod api_sigmausd_impl;
 mod api_stake_recovery_impl;
 mod api_stealth_impl;
+mod activity_tags;
+#[cfg(test)]
+mod activity_fixture_tests;
 
 pub mod api;
 mod api_ergopay_impl;
