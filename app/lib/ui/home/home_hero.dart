@@ -757,7 +757,9 @@ class _Dot extends StatelessWidget {
 
 /// The overview's network pill: whether a node answers and how far the
 /// chain has got. It opens the network settings, or with no node looks
-/// again.
+/// again. Only the first is hinted as "Network settings": a pill that
+/// retries says so in its own words ([action]) and is not hinted as
+/// somewhere it does not go.
 Widget homeNetworkPill(
   BuildContext context,
   NetworkStatus network, {
@@ -770,7 +772,7 @@ Widget homeNetworkPill(
       status: network,
       onTap: onTap,
       action: action,
-      hint: hint ?? (onTap == null ? null : 'Network settings'),
+      hint: hint ?? (onTap == null || action != null ? null : 'Network settings'),
       facts: [
         if (network.blockHeight != null) 'Block$nbsp${formatWithCommas(network.blockHeight!)}',
         if (network.age != null) network.age!,

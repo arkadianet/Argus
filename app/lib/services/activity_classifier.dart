@@ -526,13 +526,17 @@ WalletActivity readFlows(TxFlows f) {
 
 /// [tx] re-read for a wallet that owns [owned] as well: a watched account
 /// whose later addresses were derived after its first history reads, or
-/// the wallet's stealth scripts. The wallet-wide summary fields
+/// the one-time stealth addresses the wallet sent its own change to
+/// (stealth_change_book.dart). The wallet-wide summary fields
 /// (`value_nano_erg`, `tokens_*`, `counterparty`) are recomputed with the
-/// flows. Rows without `io` come back unchanged.
+/// flows. Rows without `io`, and rows where [owned] marks nothing new,
+/// come back unchanged.
 Map<String, dynamic> reownActivity(Map<String, dynamic> tx, Set<String> owned) {
   final flows = TxFlows.of(tx);
   if (flows == null || owned.isEmpty) return tx;
-  TxParty mark(TxParty p) => p.mine || !owned.contains(p.address) ? p : p.owned(true);
+  bool claims(TxParty p) => !p.mine && owned.contains(p.address);
+  if (!flows.inputs.any(claims) && !flows.outputs.any(claims)) return tx;
+  TxParty mark(TxParty p) => claims(p) ? p.owned(true) : p;
   final next = TxFlows(
     inputs: [for (final p in flows.inputs) mark(p)],
     outputs: [for (final p in flows.outputs) mark(p)],

@@ -275,7 +275,9 @@ class OverviewView extends StatelessWidget {
                   onToggleHidden: onToggleHidden,
                   figureReserve: 40,
                 ),
-                if (onAction != null) ...[
+                // Only with a wallet that holds keys for them to act on: a
+                // list of watched addresses alone has nothing to send from.
+                if (onAction != null && data.wallets.isNotEmpty) ...[
                   const SizedBox(height: 22),
                   HomeActionCircles(
                     keyPrefix: 'overview-action',

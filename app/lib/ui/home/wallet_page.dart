@@ -658,6 +658,17 @@ class WalletPageView extends StatelessWidget {
               leading: Icon(Icons.account_tree_outlined, size: 18, color: t.muted),
               text: TextSpan(text: 'Every address and what it holds', style: TextStyle(color: t.ink)),
             ),
+          // Nothing known yet (a watched account before its first scan): the
+          // tab says so rather than showing an empty pane.
+          if (address == null && other == null && (wallet.watchOnly || onTool == null))
+            HomeLineRow(
+              inkKey: const Key('wallet-no-addresses'),
+              semanticLabel: 'No addresses read yet',
+              leading: Icon(Icons.account_tree_outlined, size: 18, color: t.muted),
+              text: TextSpan(
+                text: wallet.watchOnly ? 'No addresses read yet. They appear after the first scan.' : 'No addresses read yet.',
+              ),
+            ),
         ],
       ),
     ];

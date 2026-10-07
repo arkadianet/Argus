@@ -19,6 +19,8 @@ export 'token_evidence.dart';
 import 'verified_tokens.dart' show knownToken;
 import 'mix_service.dart';
 import 'spend_policy.dart';
+import 'activity_classifier.dart' show reownActivity;
+import 'stealth_change_book.dart';
 import 'stealth_service.dart';
 import 'wallet_sync_controller.dart';
 import 'secure_storage.dart';
@@ -3131,10 +3133,14 @@ class WalletService with WidgetsBindingObserver {
     }
     final all = <Map<String, dynamic>>[];
     final seen = <String>{};
+    // Change this phone sent to a one-time stealth address of its own is
+    // the wallet's, though no address of [addresses] names it.
+    await stealthChangeBook.load();
+    final change = stealthChangeBook.addresses;
     for (final txs in results) {
       for (final tx in txs) {
         if (tx is! Map) continue;
-        final map = Map<String, dynamic>.from(tx);
+        final map = reownActivity(Map<String, dynamic>.from(tx), change);
         final id = map['tx_id']?.toString() ?? '';
         if (id.isEmpty || !seen.add(id)) continue;
         all.add(map);
