@@ -154,64 +154,70 @@ class WalletPageView extends StatelessWidget {
   }
 
   Widget _panel(BuildContext context) {
-    final t = HomeText.of(context);
     final wallet = data.wallet;
     final hidden = data.hidden;
     final other = wallet.otherAddresses;
     final address = wallet.address;
     return RaisedPanel(
       corner: HideBalancesButton(hidden: hidden, onPressed: onToggleHidden),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          HomeBalance(
-            label: 'Balance',
-            labelExtra: switch (wallet.kind) {
-              WalletKind.seed => null,
-              WalletKind.watchedAddress => 'Watched address',
-              WalletKind.watchedAccount => 'Watched account',
-            },
-            figureKey: const Key('wallet-balance'),
-            pendingKey: const Key('wallet-balance-pending'),
-            nanoErg: wallet.nanoErg,
-            loading: wallet.loading,
-            currency: data.currency,
-            fiatValue: wallet.fiatValue,
-            unpricedCount: data.unpricedCount,
-            pricesNote: data.pricesNote,
-            pending: wallet.pending,
-            pockets: wallet.pockets,
-            pocketsAsOf: wallet.pocketsAsOf,
-            hidden: hidden,
-          ),
-          // The address the wallet is shown as, which is not always where
-          // all of its money sits.
-          if (address != null)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: HomeIdentityLine(address: address, pinnedIndex: wallet.pinnedIndex),
-            ),
-          if (other != null) ...[
-            const SizedBox(height: 2),
-            HomeLineRow(
-              inkKey: const Key('funds-elsewhere'),
-              onTap: onOtherAddresses,
-              hint: 'Shows each address and what it holds',
-              padding: EdgeInsets.zero,
-              semanticLabel: spoken(otherAddressLine(other, hidden: hidden)),
-              leading: Icon(Icons.subdirectory_arrow_right, size: 18, color: t.muted),
-              text: TextSpan(text: otherAddressLine(other, hidden: hidden), style: TextStyle(color: t.ink)),
-            ),
-          ] else
-            const SizedBox(height: 12),
-          const SizedBox(height: 4),
-          HomeActionCircles(
-            actions: data.actions,
-            disabled: data.disabled,
-            watched: wallet.watchOnly,
-            onAction: (a) => _act(context, a),
-          ),
-        ],
+      // Colours are read under the panel, which has its own. Sheets still
+      // open from the page's context, so they keep the page's theme.
+      child: Builder(
+        builder: (hero) {
+          final t = HomeText.of(hero);
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              HomeBalance(
+                label: 'Balance',
+                labelExtra: switch (wallet.kind) {
+                  WalletKind.seed => null,
+                  WalletKind.watchedAddress => 'Watched address',
+                  WalletKind.watchedAccount => 'Watched account',
+                },
+                figureKey: const Key('wallet-balance'),
+                pendingKey: const Key('wallet-balance-pending'),
+                nanoErg: wallet.nanoErg,
+                loading: wallet.loading,
+                currency: data.currency,
+                fiatValue: wallet.fiatValue,
+                unpricedCount: data.unpricedCount,
+                pricesNote: data.pricesNote,
+                pending: wallet.pending,
+                pockets: wallet.pockets,
+                pocketsAsOf: wallet.pocketsAsOf,
+                hidden: hidden,
+              ),
+              // The address the wallet is shown as, which is not always
+              // where all of its money sits.
+              if (address != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: HomeIdentityLine(address: address, pinnedIndex: wallet.pinnedIndex),
+                ),
+              if (other != null) ...[
+                const SizedBox(height: 2),
+                HomeLineRow(
+                  inkKey: const Key('funds-elsewhere'),
+                  onTap: onOtherAddresses,
+                  hint: 'Shows each address and what it holds',
+                  padding: EdgeInsets.zero,
+                  semanticLabel: spoken(otherAddressLine(other, hidden: hidden)),
+                  leading: Icon(Icons.subdirectory_arrow_right, size: 18, color: t.muted),
+                  text: TextSpan(text: otherAddressLine(other, hidden: hidden), style: TextStyle(color: t.ink)),
+                ),
+              ] else
+                const SizedBox(height: 12),
+              const SizedBox(height: 4),
+              HomeActionCircles(
+                actions: data.actions,
+                disabled: data.disabled,
+                watched: wallet.watchOnly,
+                onAction: (a) => _act(context, a),
+              ),
+            ],
+          );
+        },
       ),
     );
   }

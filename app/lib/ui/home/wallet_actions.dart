@@ -2,7 +2,6 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-import '../../theme/argus_theme.dart';
 import 'home_models.dart';
 import 'home_style.dart';
 import 'home_widgets.dart';
@@ -26,10 +25,11 @@ double _labelNeed(BuildContext context, String label, TextStyle style) {
   return math.max(longestWord, whole / 2 + 8);
 }
 
-/// The wallet's actions: round buttons on the raised panel with their names
-/// beneath. The first, the wallet's main way to pay, is filled with the
-/// accent; the rest sit recessed in the panel. Four abreast, then two by
-/// two at large text sizes, rather than squeeze a name.
+/// The wallet's actions: round buttons on the hero with their names
+/// beneath. The first, the wallet's main way to pay, is the one filled
+/// button; the rest sit in tonal wells. Colours come from where they sit
+/// ([HomeTones]). Four abreast, then two by two at large text sizes, rather
+/// than squeeze a name.
 class HomeActionCircles extends StatelessWidget {
   const HomeActionCircles({
     super.key,
@@ -98,8 +98,7 @@ class HomeActionCircles extends StatelessWidget {
 
   Widget _button(BuildContext context, WalletAction action, TextStyle style, double labelWidth, {required bool primary}) {
     final look = walletActionLook(action);
-    final colors = ArgusColors.of(context);
-    final t = HomeText.of(context);
+    final tones = HomeTones.of(context);
     final enabled = !disabled.contains(action);
     final onTap = enabled ? () => onAction(action) : null;
     // Disabled reads as the same button at a lower opacity, so the page
@@ -124,9 +123,9 @@ class HomeActionCircles extends StatelessWidget {
                   height: _size,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
-                    color: primary ? colors.accent : colors.inset,
+                    color: primary ? tones.filled : tones.tonal,
                   ),
-                  child: Icon(look.icon, size: homeIconSize, color: primary ? colors.onAccent : t.ink),
+                  child: Icon(look.icon, size: homeIconSize, color: primary ? tones.onFilled : tones.onTonal),
                 ),
                 const SizedBox(height: 6),
                 Text(

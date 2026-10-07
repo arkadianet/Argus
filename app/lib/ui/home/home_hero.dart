@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../../format.dart';
 import '../../theme/argus_theme.dart';
-import '../../theme/argus_tones.dart';
 import 'home_format.dart';
 import 'home_models.dart';
 import 'home_style.dart';
@@ -284,7 +283,10 @@ class HomeIdentityLine extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
     final pinned = pinnedIndex != null && pinnedIndex! > 0;
+    // A node of its own: merged into its neighbours it read as part of
+    // the panel's label.
     return Semantics(
+      container: true,
       label: spoken('${pinned ? 'Pinned address #$pinnedIndex, ' : 'Address '}${shorten(address, head: 8, tail: 6)}'),
       excludeSemantics: true,
       child: Row(
@@ -355,7 +357,7 @@ class HomeLineRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
-    final colors = ArgusColors.of(context);
+    final accent = HomeTones.of(context).accent;
     final row = Container(
       constraints: const BoxConstraints(minHeight: homeLineHeight),
       alignment: AlignmentDirectional.centerStart,
@@ -372,10 +374,10 @@ class HomeLineRow extends StatelessWidget {
           ),
           if (action != null) ...[
             const SizedBox(width: 12),
-            Text(action!, style: t.secondary.copyWith(color: colors.accentText, fontWeight: FontWeight.w500)),
+            Text(action!, style: t.secondary.copyWith(color: accent, fontWeight: FontWeight.w500)),
           ],
           if (onTap != null && trailing == null)
-            Icon(Icons.chevron_right, size: 18, color: action != null ? colors.accentText : t.muted),
+            Icon(Icons.chevron_right, size: 18, color: action != null ? accent : t.muted),
         ],
       ),
     );
@@ -411,7 +413,7 @@ class ErgPriceStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
-    final colors = ArgusColors.of(context);
+    final tones = HomeTones.of(context);
     final rate = price.fiatPerErg;
     final change = price.changePercent;
     final trend = price.hasTrend && rate != null;
@@ -432,7 +434,7 @@ class ErgPriceStrip extends StatelessWidget {
                 TextSpan(
                   text: '   ${percentChange(change!)}',
                   style: t.secondary.copyWith(
-                    color: rising ? mossFor(context) : rustFor(context),
+                    color: rising ? tones.positive : tones.negative,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -458,7 +460,7 @@ class ErgPriceStrip extends StatelessWidget {
           key: const Key('home-price-sparkline'),
           width: width ?? _sparkWidth,
           height: _sparkHeight,
-          child: CustomPaint(painter: SparklinePainter(points: price.points, color: colors.accent)),
+          child: CustomPaint(painter: SparklinePainter(points: price.points, color: tones.accent)),
         );
     return Semantics(
       container: true,
@@ -534,13 +536,20 @@ class SparklinePainter extends CustomPainter {
   bool shouldRepaint(SparklinePainter old) => old.color != color || !identical(old.points, points);
 }
 
-/// The page's one elevated surface: the balance's plinth.
+/// The hero: the one surface on the page that is not the page.
+///
+/// It is the page's colours inverted ([HeroSpec]): paper on a dark
+/// palette, deep ink on a light one, so the balance and the wallet's
+/// actions read before anything else, as the one light card on a dark
+/// dashboard does. The contrast is the surface's own: no border and no
+/// shadow, which on a near-black page would not show anyway.
+///
+/// Everything inside takes the hero's colours: its own tones through
+/// [HeroSurface], and a theme turned to match for what reads the theme
+/// directly (ink ripples, icon buttons, the default text colour).
 ///
 /// Its edges sit 12 in from the screen and its content 12 in again, so the
-/// figures on it start on the same gutter as every row below. Depth comes
-/// from a long soft shadow and a fill that settles a shade toward the page
-/// at its foot, as if lit from above, not from a border. Shading down
-/// rather than lifting up keeps every text colour on it at its contrast.
+/// figures on it start on the same gutter as every row below.
 class RaisedPanel extends StatelessWidget {
   const RaisedPanel({super.key, required this.child, this.corner});
 
@@ -549,57 +558,67 @@ class RaisedPanel extends StatelessWidget {
   /// A control pinned to the top corner, e.g. the hide-balances eye.
   final Widget? corner;
 
+  /// The page's theme turned for the hero's surface.
+  static ThemeData heroTheme(ThemeData page, HeroSpec hero) {
+    final colors = page.extension<ArgusColors>() ?? (page.brightness == Brightness.dark ? ArgusColors.dark : ArgusColors.light);
+    return page.copyWith(
+      colorScheme: page.colorScheme.copyWith(
+        brightness: hero.brightness,
+        primary: hero.filled,
+        onPrimary: hero.onFilled,
+        surface: hero.surface,
+        onSurface: hero.ink,
+        onSurfaceVariant: hero.muted,
+        outline: hero.divider,
+      ),
+      splashColor: hero.ink.withValues(alpha: 0.12),
+      highlightColor: hero.ink.withValues(alpha: 0.06),
+      hoverColor: hero.ink.withValues(alpha: 0.04),
+      focusColor: hero.ink.withValues(alpha: 0.12),
+      iconTheme: page.iconTheme.copyWith(color: hero.ink),
+      progressIndicatorTheme: page.progressIndicatorTheme.copyWith(color: hero.accent),
+      extensions: [
+        colors.copyWith(
+          muted: hero.muted,
+          cardBorder: hero.divider,
+          inset: hero.tonal,
+          accent: hero.filled,
+          onAccent: hero.onFilled,
+          accentText: hero.accent,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final page = Theme.of(context);
+    final hero = ArgusColors.of(context).hero;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: homeGutter - 12),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(homeRadius),
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [scheme.surface, raisedPanelFoot(Theme.of(context))],
-          ),
-          boxShadow: [
-            // On paper a long shadow showed as a ledge; there the panel
-            // floats on a short, even one.
-            BoxShadow(
-              color: Colors.black.withValues(alpha: dark ? 0.45 : 0.05),
-              blurRadius: dark ? 32 : 18,
-              spreadRadius: dark ? -8 : -2,
-              offset: Offset(0, dark ? 14 : 6),
+      child: Theme(
+        data: heroTheme(page, hero),
+        child: HeroSurface(
+          spec: hero,
+          child: DefaultTextStyle.merge(
+            style: TextStyle(color: hero.ink),
+            child: Material(
+              color: hero.surface,
+              borderRadius: BorderRadius.circular(homeRadius),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                children: [
+                  Padding(padding: const EdgeInsets.fromLTRB(12, 16, 12, 12), child: child),
+                  if (corner != null) PositionedDirectional(top: 4, end: 4, child: corner!),
+                ],
+              ),
             ),
-            BoxShadow(
-              color: Colors.black.withValues(alpha: dark ? 0.3 : 0.05),
-              blurRadius: 2,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Material(
-          type: MaterialType.transparency,
-          borderRadius: BorderRadius.circular(homeRadius),
-          clipBehavior: Clip.antiAlias,
-          child: Stack(
-            children: [
-              Padding(padding: const EdgeInsets.fromLTRB(12, 16, 12, 12), child: child),
-              if (corner != null) PositionedDirectional(top: 4, end: 4, child: corner!),
-            ],
           ),
         ),
       ),
     );
   }
 }
-
-/// The panel's foot: its surface settled a shade toward the page.
-Color raisedPanelFoot(ThemeData theme) => Color.alphaBlend(
-      theme.scaffoldBackgroundColor.withValues(alpha: theme.brightness == Brightness.dark ? 0.45 : 0.35),
-      theme.colorScheme.surface,
-    );
 
 /// The hide-balances eye the panel pins in its corner, beside the figure
 /// it hides.
@@ -615,6 +634,7 @@ class HideBalancesButton extends StatelessWidget {
       key: const Key('home-hide-balances'),
       onPressed: onPressed,
       tooltip: hidden ? 'Show balances' : 'Hide balances',
+      color: HomeTones.of(context).ink,
       icon: Icon(hidden ? Icons.visibility_off_outlined : Icons.visibility_outlined),
     );
   }

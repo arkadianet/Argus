@@ -86,35 +86,41 @@ class UnlockGate extends StatelessWidget {
       padding: EdgeInsets.only(top: 4, bottom: 40 + MediaQuery.paddingOf(context).bottom),
       children: [
         RaisedPanel(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (lastKnownNano != null)
-                HomeBalance(
-                  label: 'Balance',
-                  labelExtra: 'Locked',
-                  nanoErg: lastKnownNano,
-                  // No fiat value: it would be today's price on an old
-                  // balance. The age says what the figure is.
-                  asOf: age == null ? null : formatSyncAge(DateTime.now().subtract(age)),
-                  hidden: hidden,
-                )
-              else
-                Row(
-                  children: [
-                    Icon(Icons.lock_outline, size: 14, color: t.muted),
-                    const SizedBox(width: 6),
-                    Text('LOCKED', style: t.label),
-                  ],
-                ),
-              if (address != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: HomeIdentityLine(address: address!, pinnedIndex: pinnedIndex),
-                ),
-              const SizedBox(height: 12),
-              Text('Unlock to see activity, send and receive.', style: t.secondary.copyWith(color: t.ink)),
-            ],
+          // Colours are read under the panel, which has its own.
+          child: Builder(
+            builder: (hero) {
+              final h = HomeText.of(hero);
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (lastKnownNano != null)
+                    HomeBalance(
+                      label: 'Balance',
+                      labelExtra: 'Locked',
+                      nanoErg: lastKnownNano,
+                      // No fiat value: it would be today's price on an old
+                      // balance. The age says what the figure is.
+                      asOf: age == null ? null : formatSyncAge(DateTime.now().subtract(age)),
+                      hidden: hidden,
+                    )
+                  else
+                    Row(
+                      children: [
+                        Icon(Icons.lock_outline, size: 14, color: h.muted),
+                        const SizedBox(width: 6),
+                        Text('LOCKED', style: h.label),
+                      ],
+                    ),
+                  if (address != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: HomeIdentityLine(address: address!, pinnedIndex: pinnedIndex),
+                    ),
+                  const SizedBox(height: 12),
+                  Text('Unlock to see activity, send and receive.', style: h.secondary.copyWith(color: h.ink)),
+                ],
+              );
+            },
           ),
         ),
         const SizedBox(height: 24),
