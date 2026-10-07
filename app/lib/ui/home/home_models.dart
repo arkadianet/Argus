@@ -313,10 +313,22 @@ class ActivityRowData {
     required this.legs,
     this.counterparty,
     this.pending = false,
+    this.label,
+    this.figure,
+    this.subfigure,
   });
 
   final String id;
   final ActivityKind kind;
+
+  /// The classifier's title ("Burned tokens", "Swapped"); the kind's own
+  /// title when null.
+  final String? label;
+
+  /// The amount column as the classifier words it ("−100 Test Asset 3 + 5
+  /// more", "Fee 0.0011 ERG"); built from [legs] when null.
+  final String? figure;
+  final String? subfigure;
 
   /// "10:08 pm", "Yesterday", "Oct 2"; empty when the time is not known.
   final String time;
@@ -330,7 +342,7 @@ class ActivityRowData {
   final String? counterparty;
   final bool pending;
 
-  String get title => activityTitle(kind);
+  String get title => label ?? activityTitle(kind);
 }
 
 /// The wallet page's primary actions.

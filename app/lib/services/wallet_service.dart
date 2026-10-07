@@ -3103,10 +3103,13 @@ class WalletService with WidgetsBindingObserver {
           final off = perAddressOffsets != null
               ? (perAddressOffsets[address] ?? 0)
               : offset;
+          // Every row is read against all of [addresses]: a move between
+          // two of them is the wallet's own, not a payment.
           final raw = await getTransactionHistory(
             address,
             limit: limit,
             offset: off,
+            walletAddresses: addresses,
           );
           ok++;
           final decoded = jsonDecode(raw) as List;
@@ -3150,14 +3153,18 @@ class WalletService with WidgetsBindingObserver {
         TokenBalance(id: id, amount: amount);
   }
 
+  /// One page of [address]'s history, each transaction read from the point
+  /// of view of a wallet owning [walletAddresses] (and [address]).
   Future<String> getTransactionHistory(
     String address, {
     int limit = 20,
     int offset = 0,
     String? nodeUrl,
+    List<String> walletAddresses = const [],
   }) {
     return RustLib.instance.api.crateApiGetTransactionHistory(
       address: address,
+      walletAddresses: walletAddresses,
       nodeUrl: nodeUrl,
       limit: BigInt.from(limit),
       offset: BigInt.from(offset),

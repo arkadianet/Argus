@@ -34,14 +34,14 @@ class ActivityTile extends StatelessWidget {
 
   Widget _row(BuildContext context) {
     final muted = ArgusColors.of(context).muted;
-    final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
-    final kind = classifyActivity(tx);
-    final outgoing = kind == ActivityKind.sent || (kind != ActivityKind.received && nano < 0);
+    // Read from the whole wallet's point of view: the same title, figures
+    // and counterparty as the home rows.
+    final view = describeActivity(tx, name: (id) => tokenName(id));
+    final kind = view.kind;
     final ts = (tx['timestamp'] as num?)?.toInt();
     final height = (tx['height'] as num?)?.toInt() ?? 0;
     final confirmed = height > 0;
     final txId = tx['tx_id']?.toString() ?? '';
-    final counterparty = tx['counterparty']?.toString();
     final tint = switch (kind) {
       ActivityKind.received => moss,
       ActivityKind.sent => rust,
@@ -63,19 +63,7 @@ class ActivityTile extends StatelessWidget {
       name: (id) => tokenName(id),
       decimals: (id) => tokenDecimals(id),
     );
-    // A stealth receipt has no counterparty to name: the payer built a
-    // one-time script, and nothing on chain says who they were.
-    final isStealth = tx['stealth'] == true;
-    final mixLabel = tx['mix'] == true ? tx['mix_label']?.toString() : null;
-    final who = mixLabel != null
-        ? mixLabel
-        : isStealth
-        ? 'stealth payment'
-        : counterparty == null || counterparty.isEmpty
-        ? null
-        : (isContractAddress(counterparty)
-            ? (kind == ActivityKind.swap ? null : 'contract ${shorten(counterparty, head: 6, tail: 4)}')
-            : '${outgoing ? 'to' : 'from'} ${shorten(counterparty, head: 6, tail: 4)}');
+    final who = view.who;
 
     final when = Text(
       formatActivityTime(ts),
@@ -115,7 +103,7 @@ class ActivityTile extends StatelessWidget {
                     children: [
                       Flexible(
                         child: Text(
-                          activityTitle(kind),
+                          view.title,
                           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,

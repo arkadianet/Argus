@@ -177,46 +177,41 @@ String activityRowId(Map<String, dynamic> tx, int index) {
 /// tab's rows are: the same title, the same counterparty, tokens named and
 /// scaled by the one token lookup.
 ActivityRowData activityRow(Map<String, dynamic> tx, {required String id}) {
-  final kind = classifyActivity(tx);
-  final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
-  List<Map> tokens(String key) => (tx[key] as List?)?.whereType<Map>().toList() ?? const [];
-  AmountLeg token(Map t, {required bool out}) {
-    final tokenId = t['token_id']?.toString() ?? '';
-    final amount = BigInt.from((t['amount'] as num?)?.toInt() ?? 0);
-    return AmountLeg(
-      amount: out ? -amount : amount,
-      decimals: tokenDecimals(tokenId),
-      unit: tokenName(tokenId) ?? shortTokenId(tokenId),
-    );
+  final view = describeActivity(tx, name: (id) => tokenName(id));
+  AmountLeg leg(ActivityLeg l) => l.isErg
+      ? AmountLeg(amount: l.amount, decimals: 9, unit: 'ERG')
+      : AmountLeg(
+          amount: l.amount,
+          decimals: tokenDecimals(l.tokenId!),
+          unit: tokenName(l.tokenId!) ?? shortTokenId(l.tokenId!),
+        );
+  // A labelled figure ("Fee 0.0011 ERG") is what left the wallet.
+  List<AmountLeg> legsOf(ActivityFigure? f) => [
+        for (final l in f?.legs ?? const <ActivityLeg>[])
+          f!.label == null ? leg(l) : leg(ActivityLeg(l.tokenId, -l.amount.abs())),
+      ];
+  String? text(ActivityFigure? f) {
+    if (f == null || f.legs.isEmpty) return null;
+    final first = f.legs.first;
+    if (f.label != null) {
+      return '${f.label} ${summaryAmount(first.amount.abs(), 9)}${nbsp}ERG';
+    }
+    final more = f.legs.length - 1;
+    return '${legText(leg(first))}${more > 0 ? ' + $more${nbsp}more' : ''}';
   }
 
-  final erg = nano == 0 ? null : AmountLeg(amount: BigInt.from(nano), decimals: 9, unit: 'ERG');
-  final received = [for (final t in tokens('tokens_received')) token(t, out: false)];
-  final sent = [for (final t in tokens('tokens_sent')) token(t, out: true)];
-  // Most telling first: what came back from a swap, the ERG of a payment.
-  final legs = kind == ActivityKind.swap
-      ? [...received, if (nano > 0) ?erg, ...sent, if (nano < 0) ?erg]
-      : [?erg, ...received, ...sent];
-
-  final counterparty = tx['counterparty']?.toString();
-  final outgoing = kind == ActivityKind.sent || (kind != ActivityKind.received && nano < 0);
-  final mixLabel = tx['mix'] == true ? tx['mix_label']?.toString() : null;
-  // A stealth receipt has no counterparty to name: the payer built a
-  // one-time script, and nothing on chain says who they were.
-  final who = mixLabel ??
-      (tx['stealth'] == true
-          ? 'stealth payment'
-          : counterparty == null || counterparty.isEmpty
-              ? null
-              : isContractAddress(counterparty)
-                  ? (kind == ActivityKind.swap ? null : 'contract ${shorten(counterparty, head: 6, tail: 4)}')
-                  : '${outgoing ? 'to' : 'from'} ${shorten(counterparty, head: 6, tail: 4)}');
+  // Rows read from their flows word their own figures; the rest show their
+  // legs, most telling first.
+  final worded = view.activity != null;
   return ActivityRowData(
     id: id,
-    kind: kind,
+    kind: view.kind,
+    label: view.title,
     time: shortActivityTime((tx['timestamp'] as num?)?.toInt()),
-    legs: legs,
-    counterparty: who,
+    legs: [...legsOf(view.primary), ...legsOf(view.secondary)],
+    figure: worded ? text(view.primary) : null,
+    subfigure: worded ? text(view.secondary) : null,
+    counterparty: view.who,
     pending: isPendingTx(tx),
   );
 }

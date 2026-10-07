@@ -586,7 +586,19 @@ async fn sync_inputs_json(
         "balances": balances,
         // A missing listing can hide a spent input from any transaction.
         // Null means unavailable; an empty array would claim no pending activity.
-        "pending": if complete { Some(super::pending_from_inputs(&union, &trees, &values)) } else { None },
+        "pending": if complete {
+            let owned: HashSet<String> = reads.iter().map(|r| r.address.clone()).collect();
+            let listed: Vec<(String, ErgoBox)> = reads
+                .iter()
+                .flat_map(|r| {
+                    let boxes = r.boxes.as_deref().unwrap_or_default();
+                    boxes.iter().map(|b| (r.address.clone(), b.clone()))
+                })
+                .collect();
+            Some(super::pending_from_inputs(&union, &owned, &listed))
+        } else {
+            None
+        },
         // The boxes the wallet holds once what is pending settles, so the
         // count agrees with the boxes the UTXO tools list.
         "utxo_count": if complete { Some(settled_box_count(&ids, &valued, &trees)) } else { None },

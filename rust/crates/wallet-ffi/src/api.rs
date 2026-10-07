@@ -878,17 +878,28 @@ pub fn cancel_token_metadata() {
     METADATA_CANCEL.send_modify(|generation| *generation = generation.wrapping_add(1));
 }
 
+/// One page of `address`'s history, each transaction read from the point of
+/// view of the whole wallet: `wallet_addresses` are every address it owns
+/// (derived indices, the pinned one, a watched account's addresses), so a
+/// move between two of them is not a payment and none of them is ever named
+/// as the counterparty. Each entry carries `io`, its inputs and outputs
+/// grouped by owner with protocol tags, for the activity classifier. An
+/// empty list reads the page for `address` alone.
 #[flutter_rust_bridge::frb]
 pub async fn get_transaction_history(
     address: String,
+    wallet_addresses: Vec<String>,
     node_url: Option<String>,
     limit: u64,
     offset: u64,
 ) -> Result<String, String> {
     let client = node_client(node_url).await?;
     let cap = if limit == 0 { 20 } else { limit.min(100) };
+    let mut owned: HashSet<String> =
+        wallet_addresses.into_iter().filter(|a| !a.is_empty()).collect();
+    owned.insert(address.clone());
     let txs = client
-        .get_transaction_history(&address, cap, offset)
+        .get_wallet_transaction_history(&address, &owned, &crate::activity_tags::tag_box, cap, offset)
         .await
         .map_err(|e| ArgusError::NodeError(e).to_json_string())?;
     serde_json::to_string(&txs)
@@ -929,11 +940,12 @@ pub async fn get_pending_transactions(
         let client_c = client.clone();
         let addr = addr.clone();
         unspent_set.spawn(async move {
-            client_c
+            let boxes = client_c
                 .get_unspent(&addr)
                 .await
                 .map(|(boxes, _)| boxes)
-                .unwrap_or_default()
+                .unwrap_or_default();
+            boxes.into_iter().map(|b| (addr.clone(), b)).collect::<Vec<_>>()
         });
     }
 
@@ -954,89 +966,74 @@ pub async fn get_pending_transactions(
         }
     }
 
-    // Wallet-wide context: combined confirmed values and every owned tree, so
+    // Wallet-wide context: every owned address and the boxes it holds, so
     // each transaction is valued exactly once from the whole wallet's
     // perspective instead of whichever address saw it first.
-    let mut trees = std::collections::HashSet::new();
-    let mut confirmed_values: std::collections::HashMap<String, i64> =
-        std::collections::HashMap::new();
-    for addr in &addrs {
-        if let Ok(tree) = address_to_ergo_tree(addr) {
-            trees.insert(tree);
-        }
-    }
+    let owned: HashSet<String> = addrs.iter().cloned().collect();
+    let mut confirmed: Vec<(String, ErgoBox)> = Vec::new();
     while let Some(res) = unspent_set.join_next().await {
-        for b in res.unwrap_or_default() {
-            confirmed_values.insert(b.box_id().to_string(), b.value.as_i64());
-        }
+        confirmed.extend(res.unwrap_or_default());
     }
 
-    Ok(pending_from_inputs(&unique, &trees, &confirmed_values).to_string())
+    Ok(pending_from_inputs(&unique, &owned, &confirmed).to_string())
 }
 
-fn pending_from_inputs(
+/// Activity rows for pending transactions, read from the whole wallet's
+/// point of view like confirmed history.
+///
+/// A mempool input is only a box id. It resolves against the wallet's
+/// confirmed boxes and the outputs of the other pending transactions (a
+/// chained spend); a foreign input (a pool, an order) stays unread, which
+/// leaves the row's `io` incomplete but never misstates what the wallet
+/// itself spent. No request is made for it.
+pub(crate) fn pending_from_inputs(
     unique: &[serde_json::Value],
-    trees: &HashSet<String>,
-    confirmed_values: &HashMap<String, i64>,
+    owned: &HashSet<String>,
+    confirmed: &[(String, ErgoBox)],
 ) -> serde_json::Value {
-    let mut out = Vec::new();
+    // A confirmed box belongs to the address whose listing returned it.
+    let mut known: HashMap<String, serde_json::Value> = HashMap::new();
+    for (address, b) in confirmed {
+        if let Ok(mut v) = serde_json::to_value(b) {
+            v["address"] = address.clone().into();
+            known.insert(b.box_id().to_string(), v);
+        }
+    }
     for tx in unique {
-        let id = match tx["id"].as_str() {
-            Some(i) => i.to_string(),
-            None => continue,
-        };
-        let v = wallet_net::mempool::wallet_balance_delta(
-            std::slice::from_ref(tx),
-            trees,
-            confirmed_values,
-        );
-        let token_ids: Vec<String> = tx["outputs"]
-            .as_array()
-            .map(|outs| {
-                outs.iter()
-                    .filter_map(|o| o["assets"].as_array())
-                    .flatten()
-                    .filter_map(|a| a["tokenId"].as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default();
-        // Tokens arriving at any wallet address (mempool outputs paying an
-        // owned tree), so the activity list can render incoming amounts.
-        let mut received: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
-        if let Some(outs) = tx["outputs"].as_array() {
-            for o in outs {
-                let tree_owned = o["ergoTree"]
-                    .as_str()
-                    .map(|t| trees.contains(t))
-                    .unwrap_or(false);
-                if !tree_owned {
-                    continue;
-                }
-                if let Some(assets) = o["assets"].as_array() {
-                    for a in assets {
-                        if let Some(tid) = a["tokenId"].as_str() {
-                            let entry = received.entry(tid.to_string()).or_insert(0);
-                            *entry = entry.saturating_add(a["amount"].as_u64().unwrap_or(0));
-                        }
-                    }
-                }
+        for o in tx["outputs"].as_array().into_iter().flatten() {
+            if let Some(id) = o["boxId"].as_str() {
+                known.entry(id.to_string()).or_insert_with(|| o.clone());
             }
         }
-        out.push(serde_json::json!({
-            "tx_id": id,
-            "height": 0u64,
-            "timestamp": 0u64,
-            "value_nano_erg": v,
-            "token_ids": token_ids,
-            "tokens_received": received.into_iter().map(|(token_id, amount)| {
-                serde_json::json!({"token_id": token_id, "amount": amount})
-            }).collect::<Vec<_>>(),
-            "num_inputs": tx["inputs"].as_array().map(|a| a.len() as u32).unwrap_or(0),
-            "num_outputs": tx["outputs"].as_array().map(|a| a.len() as u32).unwrap_or(0),
-            "confirmed": false,
-        }));
     }
-
+    let mut out = Vec::new();
+    for tx in unique {
+        let inputs: Vec<serde_json::Value> = tx["inputs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|i| {
+                i["boxId"]
+                    .as_str()
+                    .and_then(|id| known.get(id))
+                    .cloned()
+                    .unwrap_or_else(|| i.clone())
+            })
+            .collect();
+        let Some(summary) = wallet_net::activity::summarize_for_wallet(
+            tx,
+            Some(&inputs),
+            owned,
+            &crate::activity_tags::tag_box,
+        ) else {
+            continue;
+        };
+        let Ok(mut row) = serde_json::to_value(&summary) else { continue };
+        row["height"] = 0u64.into();
+        row["timestamp"] = 0u64.into();
+        row["confirmed"] = false.into();
+        out.push(row);
+    }
     serde_json::Value::Array(out)
 }
 

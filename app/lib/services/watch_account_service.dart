@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../bridge/api.dart' as api;
+import 'activity_classifier.dart' show reownActivity;
 import 'wallet_service.dart';
 import 'network_controller.dart';
 import 'pending_balance.dart';
@@ -138,7 +139,13 @@ Future<WatchAccountSnapshot> scanWatchAccount({
           empty++;
         }
         if (empty >= gap && index >= lastUsed + gap) {
-          final sorted = transactions.values.toList()
+          // Each address was read before the later ones were derived; read
+          // every row again against them all, so a move between two of
+          // the account's addresses is not a payment.
+          final owned = addresses.toSet();
+          final sorted = [
+            for (final tx in transactions.values) reownActivity(tx, owned),
+          ]
             ..sort(
               (a, b) => ((b['timestamp'] as num?) ?? 0).compareTo(
                 (a['timestamp'] as num?) ?? 0,
