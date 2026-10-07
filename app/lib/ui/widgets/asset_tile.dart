@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../format.dart';
+import '../../services/token_metadata.dart';
 import '../../services/verified_tokens.dart';
 import '../../services/wallet_service.dart';
 import '../../theme/argus_theme.dart';
@@ -32,6 +33,7 @@ class AssetTile extends StatelessWidget {
     this.showChevron = true,
     this.verified = false,
     this.caution = false,
+    this.rawUnits = false,
   });
 
   AssetTile.erg({
@@ -50,7 +52,8 @@ class AssetTile extends StatelessWidget {
         tokenId = null,
         isErg = true,
         verified = true,
-        caution = false;
+        caution = false,
+        rawUnits = false;
 
   AssetTile.token(
     TokenBalance t, {
@@ -63,12 +66,13 @@ class AssetTile extends StatelessWidget {
         name = issuerText(t.name).trim().isNotEmpty
             ? issuerText(t.name).trim()
             : shorten(t.id, head: 10, tail: 6),
-        amountText = formatTokenAmountGrouped(t.amount, t.decimals),
+        amountText = holdingAmountText(t),
         iconUrl = t.iconUrl,
         tokenId = t.id,
         isErg = false,
         verified = isVerifiedToken(t.id),
-        caution = cautionedToken(t.id) != null;
+        caution = cautionedToken(t.id) != null,
+        rawUnits = !hasKnownScale(t);
 
   final String ticker;
   final String name;
@@ -87,11 +91,34 @@ class AssetTile extends StatelessWidget {
   /// Shows a warning next to the ticker for cautioned tokens.
   final bool caution;
 
+  /// Nothing knows the token's decimals: [amountText] is base units and
+  /// already says so, so the ticker is not appended as if it were a scale.
+  final bool rawUnits;
+
   static String _ergAmount(int nano) => formatErg(nano, unit: false, maxFrac: 4);
 
   @override
   Widget build(BuildContext context) {
     final muted = ArgusColors.of(context).muted;
+    final amount = Text(
+      hidden
+          ? '••••'
+          : rawUnits
+          ? amountText
+          : '$amountText $ticker',
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+      style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14.5),
+    );
+    final fiat = fiatText == null
+        ? null
+        : Text(
+            hidden ? '≈ ••••' : fiatText!,
+            style: TextStyle(fontSize: 12, color: muted),
+          );
+    // At large text sizes a side column for the amount leaves it a few
+    // letters — "5,000 r…" — so it moves under the name instead.
+    final stacked = MediaQuery.textScalerOf(context).scale(14) / 14 > 1.4;
     return InkWell(
       onTap: hidden ? null : onTap,
       borderRadius: BorderRadius.circular(cardRadius),
@@ -133,30 +160,26 @@ class AssetTile extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    hidden ? '••••' : '$amountText $ticker',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14.5),
-                  ),
-                  if (fiatText != null) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      hidden ? '≈ ••••' : fiatText!,
-                      style: TextStyle(fontSize: 12, color: muted),
-                    ),
+                  if (stacked) ...[
+                    const SizedBox(height: 4),
+                    amount,
+                    if (fiat != null) ...[const SizedBox(height: 2), fiat],
                   ],
                 ],
               ),
             ),
+            if (!stacked) ...[
+              const SizedBox(width: 8),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    amount,
+                    if (fiat != null) ...[const SizedBox(height: 2), fiat],
+                  ],
+                ),
+              ),
+            ],
             if (showChevron && onTap != null) ...[
               const SizedBox(width: 4),
               Icon(Icons.chevron_right, size: 18, color: muted),

@@ -45,36 +45,278 @@ pub fn owned_outputs(txs: &[serde_json::Value], ergo_tree: &str) -> Vec<ErgoBox>
     owned
 }
 
-/// Merge the paired confirmed representations without converting retained boxes again.
-/// The pair is produced by `get_unspent`, with one EIP-12 input per box in order.
-pub(crate) fn merge_confirmed(
-    confirmed: (Vec<ErgoBox>, Vec<ergo_tx::Eip12InputBox>),
+/// The mempool transactions of several per-address reads, each once.
+///
+/// The node is asked once per address, so a transaction touching two of the
+/// wallet's addresses arrives twice. Everything that decides what is spent
+/// must look at this union rather than at one address's list: the node
+/// matches an input to an address only while the input box is confirmed, so
+/// a transaction spending an *unconfirmed* box of address B — change from an
+/// earlier pending send — is listed under B only if it also pays B. Taken
+/// address by address, B's view keeps offering a box another address's list
+/// shows as spent. Transactions without an id are kept: their inputs still
+/// count as spent.
+pub fn unique_transactions<'a, I>(lists: I) -> Vec<serde_json::Value>
+where
+    I: IntoIterator<Item = &'a [serde_json::Value]>,
+{
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for list in lists {
+        for tx in list {
+            match tx["id"].as_str() {
+                Some(id) if !seen.insert(id.to_string()) => {}
+                _ => out.push(tx.clone()),
+            }
+        }
+    }
+    out
+}
+
+/// One address as read for spending: its script, its confirmed boxes in the
+/// pair `get_unspent` returns, and every mempool transaction the node lists
+/// for the script.
+#[derive(Clone, Debug)]
+pub struct AddressRead {
+    pub tree: String,
+    pub confirmed: (Vec<ErgoBox>, Vec<ergo_tx::Eip12InputBox>),
+    pub mempool: Vec<serde_json::Value>,
+}
+
+/// What coin selection may spend across a set of addresses.
+#[derive(Debug, Default)]
+pub struct Spendable {
+    pub boxes: Vec<ErgoBox>,
+    pub inputs: Vec<ergo_tx::Eip12InputBox>,
+    /// Ids among `inputs` that a transaction still in the mempool created.
+    pub unconfirmed: HashSet<String>,
+    /// Unconfirmed outputs paying the set that were left out because the
+    /// wallet waits for a confirmation before spending them.
+    pub held_back: Vec<ergo_tx::Eip12InputBox>,
+}
+
+/// The wallet's spendable boxes: confirmed boxes no pending transaction
+/// spends, then — only when `allow_unconfirmed` — the outputs pending
+/// transactions pay to these addresses and nothing pending spends yet.
+///
+/// Spent and owned are judged over the union of every address's mempool
+/// list ([`unique_transactions`]), never per address. A box already spent by
+/// a pending transaction is never offered, whatever the policy: a second
+/// transaction spending it is a double spend the node rejects, or worse,
+/// accepts in place of the first. Order follows the reads, confirmed boxes
+/// of an address before its unconfirmed ones, and a box seen twice (an
+/// address listed twice, or a block landing between the two reads) is kept
+/// once, first copy winning. The confirmed pairs are moved, not converted
+/// again.
+pub fn spendable_across(reads: Vec<AddressRead>, allow_unconfirmed: bool) -> Spendable {
+    let txs = unique_transactions(reads.iter().map(|r| r.mempool.as_slice()));
+    let spent = spent_box_ids(&txs);
+    let mut seen = HashSet::new();
+    let mut out = Spendable::default();
+    for read in reads {
+        let (boxes, inputs) = read.confirmed;
+        for (b, input) in boxes.into_iter().zip(inputs) {
+            if spent.contains(&input.box_id) || !seen.insert(input.box_id.clone()) {
+                continue;
+            }
+            out.boxes.push(b);
+            out.inputs.push(input);
+        }
+        for b in owned_outputs(&txs, &read.tree) {
+            let id = b.box_id().to_string();
+            if spent.contains(&id) || !seen.insert(id.clone()) {
+                continue;
+            }
+            let input =
+                ergo_tx::Eip12InputBox::from_ergo_box(&b, b.transaction_id.to_string(), b.index);
+            if allow_unconfirmed {
+                out.unconfirmed.insert(id);
+                out.boxes.push(b);
+                out.inputs.push(input);
+            } else {
+                out.held_back.push(input);
+            }
+        }
+    }
+    out
+}
+
+impl Spendable {
+    /// Drop offered boxes by id, keeping the two lists paired.
+    pub fn remove(&mut self, ids: &HashSet<String>) {
+        if ids.is_empty() {
+            return;
+        }
+        let boxes = std::mem::take(&mut self.boxes);
+        let inputs = std::mem::take(&mut self.inputs);
+        for (b, input) in boxes.into_iter().zip(inputs) {
+            if ids.contains(&input.box_id) {
+                self.unconfirmed.remove(&input.box_id);
+            } else {
+                self.boxes.push(b);
+                self.inputs.push(input);
+            }
+        }
+    }
+}
+
+/// How the mempool moves a set of addresses' holdings, valued once for the
+/// whole set.
+///
+/// `pending_out` is what pending transactions take from the set's confirmed
+/// boxes; `pending_in` is what they pay to the set's scripts and nothing
+/// pending spends again. A self-transfer between two addresses of the set
+/// therefore shows on both sides, and a chained spend of unconfirmed change
+/// on neither — the change never settles anywhere.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PendingSummary {
+    pub confirmed_nano_erg: u64,
+    pub pending_in_nano_erg: u64,
+    pub pending_out_nano_erg: u64,
+    /// Per token, sorted by id: only tokens the set holds or receives.
+    pub tokens: Vec<TokenFlow>,
+    /// Pending transactions that take from or pay to the set.
+    pub pending_transactions: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TokenFlow {
+    pub token_id: String,
+    pub confirmed: u64,
+    pub pending_in: u64,
+    pub pending_out: u64,
+}
+
+impl TokenFlow {
+    /// The holding once everything pending confirms.
+    pub fn amount(&self) -> u64 {
+        self.confirmed
+            .saturating_sub(self.pending_out)
+            .saturating_add(self.pending_in)
+    }
+}
+
+impl PendingSummary {
+    /// The balance once everything pending confirms.
+    pub fn balance_nano_erg(&self) -> u64 {
+        self.confirmed_nano_erg
+            .saturating_sub(self.pending_out_nano_erg)
+            .saturating_add(self.pending_in_nano_erg)
+    }
+
+    /// The node-style JSON both sync paths return, so the app reads one shape.
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "confirmed_nano_erg": self.confirmed_nano_erg,
+            "pending_in_nano_erg": self.pending_in_nano_erg,
+            "pending_out_nano_erg": self.pending_out_nano_erg,
+            "balance_nano_erg": self.balance_nano_erg(),
+            "pending_transactions": self.pending_transactions,
+            "tokens": self.tokens.iter().map(|t| serde_json::json!({
+                "id": t.token_id,
+                "confirmed": t.confirmed,
+                "pending_in": t.pending_in,
+                "pending_out": t.pending_out,
+                "amount": t.amount(),
+            })).collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// Value the set's pending movements: `confirmed` is every confirmed box of
+/// the set, `txs` the union of their mempool transactions (see
+/// [`unique_transactions`]) and `trees` the set's scripts.
+///
+/// Mempool inputs carry no value, so leaving amounts resolve against the
+/// confirmed boxes, and the whole union is collected before anything is
+/// valued — a chained spend's input is an unconfirmed output that no
+/// confirmed set holds. An output already among the confirmed boxes is not
+/// counted again: the block that carried it can land between the two reads.
+pub fn pending_summary(
+    confirmed: &[ErgoBox],
     txs: &[serde_json::Value],
-    tree: &str,
-) -> (Vec<ErgoBox>, Vec<ergo_tx::Eip12InputBox>) {
+    trees: &HashSet<String>,
+) -> PendingSummary {
     let spent = spent_box_ids(txs);
-    let mut boxes = Vec::new();
-    let mut inputs = Vec::new();
-    for (b, input) in confirmed.0.into_iter().zip(confirmed.1) {
-        if !spent.contains(&b.box_id().to_string()) {
-            boxes.push(b);
-            inputs.push(input);
+    let mut summary = PendingSummary::default();
+    let mut tokens: std::collections::BTreeMap<String, TokenFlow> = Default::default();
+    let mut confirmed_ids = HashSet::new();
+    for b in confirmed {
+        let id = b.box_id().to_string();
+        if !confirmed_ids.insert(id.clone()) {
+            continue;
+        }
+        let leaving = spent.contains(&id);
+        let value = *b.value.as_u64();
+        summary.confirmed_nano_erg = summary.confirmed_nano_erg.saturating_add(value);
+        if leaving {
+            summary.pending_out_nano_erg = summary.pending_out_nano_erg.saturating_add(value);
+        }
+        for t in b.tokens.iter().flat_map(|held| held.iter()) {
+            let id: String = t.token_id.into();
+            let flow = tokens.entry(id.clone()).or_insert_with(|| TokenFlow {
+                token_id: id,
+                ..Default::default()
+            });
+            let amount = *t.amount.as_u64();
+            flow.confirmed = flow.confirmed.saturating_add(amount);
+            if leaving {
+                flow.pending_out = flow.pending_out.saturating_add(amount);
+            }
         }
     }
-    for b in owned_outputs(txs, tree) {
-        if !spent.contains(&b.box_id().to_string()) {
-            inputs.push(ergo_tx::Eip12InputBox::from_ergo_box(
-                &b, b.transaction_id.to_string(), b.index,
-            ));
-            boxes.push(b);
+
+    let mut arrived = HashSet::new();
+    for tx in txs {
+        let spends_ours = tx["inputs"]
+            .as_array()
+            .map(|ins| {
+                ins.iter()
+                    .filter_map(|i| i["boxId"].as_str())
+                    .any(|id| confirmed_ids.contains(id))
+            })
+            .unwrap_or(false);
+        let mut pays_ours = false;
+        for output in tx["outputs"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+            if !output["ergoTree"].as_str().is_some_and(|t| trees.contains(t)) {
+                continue;
+            }
+            pays_ours = true;
+            let id = output["boxId"].as_str().unwrap_or_default();
+            if spent.contains(id) || confirmed_ids.contains(id) || !arrived.insert(id.to_string())
+            {
+                continue;
+            }
+            let value = output["value"].as_u64().unwrap_or(0);
+            summary.pending_in_nano_erg = summary.pending_in_nano_erg.saturating_add(value);
+            for asset in output["assets"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
+                let Some(token_id) = asset["tokenId"].as_str() else {
+                    continue;
+                };
+                let flow = tokens.entry(token_id.to_string()).or_insert_with(|| TokenFlow {
+                    token_id: token_id.to_string(),
+                    ..Default::default()
+                });
+                flow.pending_in = flow
+                    .pending_in
+                    .saturating_add(asset["amount"].as_u64().unwrap_or(0));
+            }
+        }
+        if spends_ours || pays_ours {
+            summary.pending_transactions += 1;
         }
     }
-    (boxes, inputs)
+    summary.tokens = tokens.into_values().collect();
+    summary
 }
 
 #[cfg(test)]
 #[path = "mempool_merge_tests.rs"]
 mod merge_tests;
+
+#[cfg(test)]
+#[path = "mempool_spend_tests.rs"]
+mod spend_tests;
 
 /// Net nanoERG change from unconfirmed transactions for `ergo_tree`.
 ///

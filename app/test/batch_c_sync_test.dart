@@ -7,7 +7,7 @@ import 'package:argus_wallet/services/wallet_database_service.dart';
 import 'package:argus_wallet/services/wallet_service.dart';
 import 'package:argus_wallet/services/wallet_sync_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:argus_wallet/ui/wallets_overview_screen.dart';
+import 'package:argus_wallet/ui/home/overview_model.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'batch_a_sync_test.dart' show GatedGateway;
@@ -28,6 +28,22 @@ class PublicApi extends RustLibApi {
         {'id': 'shared-c', 'amount': 2},
       ],
     });
+  }
+
+  /// The live gateway reads a locked wallet's balances in one call that
+  /// walks its addresses in turn; recorded per address as before.
+  @override
+  Future<String> crateApiMempoolGetPublicSyncInputs({
+    required List<String> addresses,
+    String? nodeUrl,
+  }) async {
+    final balances = <String, dynamic>{};
+    for (final address in addresses) {
+      balances[address] = jsonDecode(
+        await crateApiGetBalance(address: address, nodeUrl: nodeUrl),
+      );
+    }
+    return jsonEncode({'balances': balances});
   }
 
   @override
@@ -346,28 +362,25 @@ void main() {
         'last_sync_timestamp': at.millisecondsSinceEpoch,
       }, () => true);
       final calls = api.calls.length;
-      expect(
-        await overviewWalletBalance(
-          WalletInfo(
-            walletId: 'w2',
-            name: 'Warm',
-            createdAt: at,
-            address0: 'b',
-          ),
-        ),
-        7000000000,
-      );
-      expect(
-        await overviewWalletBalance(
+      final known = {
+        for (final id in ['w2', 'unknown'])
+          if (await WalletDatabaseService.lastKnownBalance(id) case final k?) id: k,
+      };
+      final rows = buildOverviewEntries(
+        wallets: [
+          WalletInfo(walletId: 'w2', name: 'Warm', createdAt: at, address0: 'b'),
           WalletInfo(
             walletId: 'unknown',
             name: 'Unknown',
             createdAt: at,
             address0: 'unknown-address',
           ),
-        ),
-        isNull,
+        ],
+        lastKnown: known,
+        unlockedWalletId: null,
       );
+      expect(rows.first.balanceNano, 7000000000);
+      expect(rows.last.balanceNano, isNull);
       expect(api.calls.length, calls);
     },
   );

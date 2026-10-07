@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:argus_wallet/bridge/frb_generated.dart';
+import 'package:argus_wallet/services/network_controller.dart';
 import 'package:argus_wallet/services/watch_account_service.dart';
 import 'package:argus_wallet/services/watch_only_service.dart';
-import 'package:argus_wallet/ui/wallets_overview_screen.dart';
+import 'package:argus_wallet/ui/dashboard_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'support/home_finders.dart';
 
 class OverviewApi extends RustLibApi {
   late Completer<List<String>> derive;
@@ -43,14 +46,17 @@ void main() {
     });
     await watchOnlyService.load();
     watchAccountService.accounts.add(WatchAccount('key'));
+    networkController.probing = true;
     const channel = MethodChannel('com.argus.wallet/secure_storage');
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       channel,
       (call) async => call.method == 'listWalletIds' ? <String>[] : null,
     );
+    // The overview is the launch screen: its launch pass reads the watched
+    // address and scans the account, which has no snapshot yet.
     await tester.pumpWidget(
       MaterialApp(
-        home: WalletOverviewScreen(initializeWalletService: () async {}),
+        home: DashboardScreen(initializeWalletService: () async {}),
       ),
     );
     for (var i = 0; i < 10; i++) {
@@ -58,8 +64,9 @@ void main() {
     }
     expect(api.balances, 1);
     expect(watchAccountService.accounts.single.busy, isTrue);
-    expect(find.textContaining('Visible total'), findsOneWidget);
-    expect(find.text('Unavailable'), findsNothing);
+    expect(find.byKey(const Key('overview-total')), findsOneWidget);
+    expect(plainOf(tester, find.byKey(const Key('overview-total'))), '7 ERG');
+    expect(find.text('Balance unavailable'), findsNothing);
     // End the pending scan via incomplete derivation, avoiding extra network calls.
     api.derive.complete([]);
     for (var i = 0; i < 10; i++) {
@@ -67,6 +74,7 @@ void main() {
     }
     expect(watchAccountService.accounts.single.busy, isFalse);
     await tester.pumpWidget(const SizedBox());
+    networkController.probing = false;
     watchAccountService.accounts.clear();
     SharedPreferences.setMockInitialValues({
       'argus_watch_only_addresses': '[]',

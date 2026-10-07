@@ -139,4 +139,35 @@ void main() {
       expect(restored.accounts.single.highestUsed, 32);
     },
   );
+
+  test('a label is kept with the key, and a failed save keeps the old one', () async {
+    SharedPreferences.setMockInitialValues({
+      WatchAccountService.storageKey: jsonEncode([
+        {'kind': 'extendedPublicKey', 'key': 'labelled', 'highestUsed': 3},
+      ]),
+    });
+    final service = WatchAccountService();
+    addTearDown(service.dispose);
+    await service.load();
+    expect(service.accounts.single.label, isNull);
+    await service.setLabel(service.accounts.single, '  Ledger  ');
+    final restored = WatchAccountService();
+    addTearDown(restored.dispose);
+    await restored.load();
+    expect(restored.accounts.single.label, 'Ledger');
+    expect(restored.accounts.single.highestUsed, 3);
+    // Clearing the name drops it from storage again.
+    await restored.setLabel(restored.accounts.single, ' ');
+    expect(restored.accounts.single.label, isNull);
+    final cleared = WatchAccountService();
+    addTearDown(cleared.dispose);
+    await cleared.load();
+    expect(cleared.accounts.single.label, isNull);
+    // A write the store refuses leaves the previous name in place.
+    await cleared.setLabel(cleared.accounts.single, 'Kept');
+    SharedPreferencesStorePlatform.instance = FailingPreferences({});
+    addTearDown(() => SharedPreferences.setMockInitialValues({}));
+    await expectLater(cleared.setLabel(cleared.accounts.single, 'Lost'), throwsStateError);
+    expect(cleared.accounts.single.label, 'Kept');
+  });
 }

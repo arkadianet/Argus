@@ -395,7 +395,9 @@ Future<List<BuyableToken>> buyableTokens() async {
   final cached = await AmmPoolCache.load();
   if (cached != null) {
     for (final pool in cached.set.pools) {
-      if (pool['pool_type'] != 'N2T' && pool['erg_reserves'] == null) continue;
+      // Only an ERG pool can sell a token for ERG. A T2T pool box carries
+      // ERG too (its storage rent), so `erg_reserves` alone does not say.
+      if (pool['pool_type'] != 'N2T') continue;
       final y = pool['token_y'];
       if (y is! Map) continue;
       final id = y['token_id']?.toString() ?? '';
@@ -418,7 +420,7 @@ Future<Set<String>> spectrumPoolTokens() async {
   if (cached == null) return {};
   return {
     for (final pool in cached.set.pools)
-      if (pool['token_y'] is Map && pool['erg_reserves'] != null)
+      if (pool['token_y'] is Map && pool['pool_type'] == 'N2T')
         (pool['token_y'] as Map)['token_id'].toString(),
   };
 }

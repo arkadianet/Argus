@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'token_decimals.dart';
 import 'token_evidence.dart';
 
 /// Per-wallet cache of resolved token descriptors.
@@ -27,6 +28,11 @@ class TokenDescriptorStore {
 
   /// Bounds one wallet's table. Matches the legacy cache's ceiling.
   static const maxEntries = 1000;
+
+  /// The reading of an inspection's decimals ([declaredDecimals]) a row was
+  /// stored under. Rows from earlier builds counted an integer R6 as
+  /// malformed and a missing R6 as unknown; [decode] has them read again.
+  static const decimalsRule = 2;
 
   /// Bumped by a full wipe. A write already in flight when a wipe or a
   /// deletion ran must not land afterwards: the caller's queue can be
@@ -55,11 +61,30 @@ class TokenDescriptorStore {
     'mediaState': d.mediaState.name,
     'source': d.source,
     if (d.incomplete) 'incomplete': true,
+    'decimalsRule': decimalsRule,
   };
 
   static CachedDescriptor? decode(String id, Object? raw) {
     if (raw is! Map) return null;
     try {
+      final source = raw['source'] as String?;
+      var decimalsEvidence = byName(
+        DecimalsEvidence.values,
+        raw['decimalsEvidence'],
+        DecimalsEvidence.unknown,
+      );
+      var incomplete = raw['incomplete'] == true;
+      if (raw['decimalsRule'] != decimalsRule &&
+          !decimalsEvidence.knowsScale) {
+        if (source == null && decimalsEvidence == DecimalsEvidence.unknown) {
+          // No provenance: a name and scale from the old pool table, which
+          // never recorded evidence.
+          decimalsEvidence = DecimalsEvidence.listed;
+        } else {
+          // Read under the earlier rule: asked again.
+          incomplete = true;
+        }
+      }
       return CachedDescriptor(
         id: id,
         name: raw['name'] as String?,
@@ -71,11 +96,7 @@ class TokenDescriptorStore {
           raw['supplyEvidence'],
           SupplyEvidence.unknown,
         ),
-        decimalsEvidence: byName(
-          DecimalsEvidence.values,
-          raw['decimalsEvidence'],
-          DecimalsEvidence.unknown,
-        ),
+        decimalsEvidence: decimalsEvidence,
         declaredAssetKind: byName(
           DeclaredAssetKind.values,
           raw['declaredAssetKind'],
@@ -91,8 +112,8 @@ class TokenDescriptorStore {
           raw['mediaState'],
           MediaState.unknown,
         ),
-        source: raw['source'] as String?,
-        incomplete: raw['incomplete'] == true,
+        source: source,
+        incomplete: incomplete,
       );
     } catch (_) {
       // One unreadable row costs a refetch, not the whole table.
@@ -174,10 +195,89 @@ class TokenDescriptorStore {
   }
 }
 
+/// How a failed node lookup is read. Shared by every automatic resolver —
+/// the wallet's sync pass and the public pool-token catalog — so the two
+/// cannot drift into treating the same answer differently.
+abstract final class DescriptorLookupFailure {
+  /// Marker the Rust side puts on an error the provider failed to answer,
+  /// as opposed to one it answered negatively.
+  static const retryableMarker = 'RETRYABLE:';
+
+  /// An unambiguous "this endpoint cannot serve issuance lookups at all".
+  /// A 404 is deliberately NOT here: `/blockchain/token/byId/{id}` answers
+  /// that both for a node without the index and for a token the node simply
+  /// does not know, and treating the first missing dust token as a dead node
+  /// would unname the whole wallet.
+  static bool unsupported(Object error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('extraindex') ||
+        text.contains('extra_index') ||
+        text.contains('must be an https url');
+  }
+
+  /// Whether the provider gave a definite "no such token", as opposed to
+  /// failing to answer. Only the former is worth remembering.
+  ///
+  /// The distinction is made in Rust, where the error still has a type:
+  /// `reqwest::Error`'s Display collapses connection refusal, DNS and TLS
+  /// failures into one opaque string, so no amount of matching here could
+  /// tell them apart from an answer. The timeout raised on this side is
+  /// recognised too, since it never reaches that layer.
+  static bool durableNegative(Object error) {
+    final text = error.toString();
+    if (text.contains(retryableMarker)) return false;
+    final lower = text.toLowerCase();
+    return !lower.contains('timed out') && !lower.contains('cancelled');
+  }
+
+  static bool notFound(Object error) {
+    final text = error.toString().toLowerCase();
+    return text.contains('404') || text.contains('not found');
+  }
+}
+
 /// A descriptor as stored: chain-derived facts plus the evidence that backs
 /// them. Deliberately not a `TokenBalance` — it carries no amount, so a
 /// holding can never be reconstructed from the cache alone.
 class CachedDescriptor {
+  /// Reads one `inspect_token_metadata` answer. [source] is the endpoint
+  /// that gave it, recorded so provenance survives a restart. Its decimals
+  /// are read under the wallet's rule ([declaredDecimals]).
+  factory CachedDescriptor.fromInspection(
+    Map<String, dynamic> m, {
+    required String source,
+  }) {
+    final declared = declaredDecimals(m);
+    return CachedDescriptor(
+      id: m['id'] as String,
+      name: m['name'] as String?,
+      decimals: declared.decimals,
+      emissionAmount: (m['emissionAmount'] as num?)?.toInt(),
+      iconUrl: m['iconUrl'] as String?,
+      supplyEvidence: TokenDescriptorStore.byName(
+        SupplyEvidence.values,
+        m['supplyEvidence'],
+        SupplyEvidence.unknown,
+      ),
+      decimalsEvidence: declared.evidence,
+      declaredAssetKind: TokenDescriptorStore.byName(
+        DeclaredAssetKind.values,
+        m['declaredAssetKind'],
+        DeclaredAssetKind.none,
+      ),
+      metadataState: declared.metadataState,
+      mediaState: TokenDescriptorStore.byName(
+        MediaState.values,
+        m['mediaState'],
+        MediaState.unknown,
+      ),
+      source: source,
+      // Persisted, so a restart can still tell that the issuance registers
+      // were never read and ask for them again.
+      incomplete: m['incomplete'] == true,
+    );
+  }
+
   const CachedDescriptor({
     required this.id,
     this.name,

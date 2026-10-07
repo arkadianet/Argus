@@ -1,14 +1,105 @@
 import 'package:flutter/material.dart';
-import '../../services/watch_account_service.dart';
-import '../../services/wallet_service.dart';
-import '../../format.dart';
-import '../transactions_screen.dart';
-import '../cold_signing_screen.dart';
 
+import '../../services/watch_account_service.dart';
+import '../../services/watch_only_service.dart';
+import '../../theme/argus_theme.dart';
+
+// The two ways to watch a wallet without its keys. Both start from the
+// overview; a watched wallet then opens the standard wallet page.
+
+/// Asks for an Ergo address or a P2PK public key and watches it. Returns
+/// true when one was added.
+Future<bool> addWatchAddress(BuildContext context) async {
+  final text = (await showDialog<String>(
+    context: context,
+    builder: (_) => const _WatchAddressDialog(),
+  ))
+      ?.trim();
+  if (text == null || text.isEmpty || !context.mounted) return false;
+  final bool added;
+  try {
+    added = await watchOnlyService.add(text);
+  } catch (e) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not add watched address: $e')),
+      );
+    }
+    return false;
+  }
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          added
+              ? 'Watch-only address added'
+              : 'Already watched or invalid input. Use an Ergo address, a '
+                  '33-byte compressed public key, or its 0008cd P2PK tree '
+                  '(hex, no 0x). Raw keys use mainnet.',
+        ),
+      ),
+    );
+  }
+  return added;
+}
+
+/// Owns its field's controller: one disposed as soon as `showDialog` returns
+/// would still be in use by the dialog animating out.
+class _WatchAddressDialog extends StatefulWidget {
+  const _WatchAddressDialog();
+  @override
+  State<_WatchAddressDialog> createState() => _WatchAddressDialogState();
+}
+
+class _WatchAddressDialogState extends State<_WatchAddressDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('Watch an address'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'See balance and activity for any Ergo address. No keys are '
+              'stored, so it cannot spend.',
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              style: monoStyle(context, size: 13),
+              decoration: const InputDecoration(
+                labelText: 'Address or public key',
+                helperText: 'Mainnet key hex: 02/03… or 0008cd02/03…',
+                helperMaxLines: 2,
+                hintText: '9...',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, _controller.text),
+            child: const Text('Watch'),
+          ),
+        ],
+      );
+}
+
+/// Asks for an Ergo Wallet App extended public key and watches its account,
+/// after saying what holding that key reveals.
 Future<void> addWatchAccount(BuildContext context) => showDialog<void>(
-  context: context,
-  builder: (_) => const _ImportAccountDialog(),
-);
+      context: context,
+      builder: (_) => const _ImportAccountDialog(),
+    );
 
 class _ImportAccountDialog extends StatefulWidget {
   const _ImportAccountDialog();
@@ -28,212 +119,61 @@ class _ImportAccountDialogState extends State<_ImportAccountDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: const Text('Watch an extended public key'),
-    content: SingleChildScrollView(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const Text(watchAccountDisclosure),
-          const SizedBox(height: 12),
-          TextField(
-            controller: controller,
-            maxLines: 3,
-            decoration: const InputDecoration(
-              labelText: 'Ergo Wallet App extended public key',
-              helperText:
-                  '156 hex characters, mainnet. No checksum: verify the first address with the source wallet.',
-              helperMaxLines: 3,
-            ),
-          ),
-          if (error != null) Text(error!),
-        ],
-      ),
-    ),
-    actions: [
-      TextButton(
-        onPressed: busy ? null : () => Navigator.pop(context),
-        child: const Text('Cancel'),
-      ),
-      FilledButton(
-        onPressed: busy
-            ? null
-            : () async {
-                setState(() => busy = true);
-                try {
-                  final saved = await watchAccountService.add(controller.text);
-                  if (!context.mounted) return;
-                  if (saved) {
-                    Navigator.pop(context);
-                  } else {
-                    setState(() {
-                      error = 'This extended key is already watched.';
-                      busy = false;
-                    });
-                  }
-                } catch (e) {
-                  if (context.mounted)
-                    setState(() {
-                      error = e is StateError
-                          ? e.message.toString()
-                          : watchAccountExpected;
-                      busy = false;
-                    });
-                }
-              },
-        child: const Text('Watch account'),
-      ),
-    ],
-  );
-}
-
-class WatchAccountList extends StatelessWidget {
-  const WatchAccountList({
-    super.key,
-    this.selectedAccount,
-    this.hideBalances = false,
-  });
-
-  /// The dashboard selects one account; the overview continues to show all.
-  final WatchAccount? selectedAccount;
-  final bool hideBalances;
-  @override
-  Widget build(BuildContext context) => ListenableBuilder(
-    listenable: watchAccountService,
-    builder: (context, _) => Column(
-      children: [
-        for (final account
-            in selectedAccount == null
-                ? watchAccountService.accounts
-                : [selectedAccount!])
-          Card(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Watch-only account',
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  Text(shorten(account.key, head: 16, tail: 8)),
-                  const Text(watchAccountLimitations),
-                  const Text(
-                    'Discovery stops after 20 unused addresses. Payments beyond a larger gap can be missed.',
-                  ),
-                  if (account.snapshot case final snapshot?) ...[
-                    Text(
-                      hideBalances ? '•••••• ERG' : formatErg(snapshot.balance),
-                    ),
-                    Wrap(
-                      spacing: 8,
-                      children: [
-                        OutlinedButton(
-                          onPressed: account.busy
-                              ? null
-                              : () async {
-                                  await watchAccountService.refresh(account);
-                                  if (!context.mounted ||
-                                      account.snapshot == null)
-                                    return;
-                                  final current = account.snapshot!;
-                                  Navigator.pushNamed(
-                                    context,
-                                    '/receive',
-                                    arguments: WalletRouteArgs(
-                                      watchOnly: true,
-                                      watchAccount: true,
-                                      senderAddress: current.addresses.first,
-                                      receiveAddress: current.receiveAddress,
-                                      changeAddress: current.receiveAddress,
-                                      historyAddresses: current.addresses,
-                                    ),
-                                  );
-                                },
-                          child: const Text('Receive'),
-                        ),
-                        OutlinedButton(
-                          onPressed: account.busy
-                              ? null
-                              : () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => TransactionsScreen(
-                                      args: WalletRouteArgs(
-                                        watchOnly: true,
-                                        watchAccount: true,
-                                        senderAddress: snapshot.addresses.first,
-                                        receiveAddress: snapshot.receiveAddress,
-                                        changeAddress: snapshot.receiveAddress,
-                                        historyAddresses: snapshot.addresses,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                          child: const Text('History'),
-                        ),
-                        OutlinedButton(
-                          onPressed: account.busy
-                              ? null
-                              : () => Navigator.push(
-                                  context,
-                                  MaterialPageRoute<void>(
-                                    builder: (_) =>
-                                        ColdWatchSendScreen(account: account),
-                                  ),
-                                ),
-                          child: const Text('Send with offline signer'),
-                        ),
-                      ],
-                    ),
-                    Text('First address: ${snapshot.addresses.first}'),
-                    for (final token in snapshot.tokens.entries)
-                      Text(
-                        '${hideBalances ? '••••' : token.value} base units · ${token.key}',
-                      ),
-                  ],
-                  if (account.snapshot == null)
-                    const Text('Balance unavailable'),
-                  if (account.error != null) Text(account.error!),
-                  Wrap(
-                    spacing: 8,
-                    children: [
-                      TextButton(
-                        onPressed: account.busy
-                            ? null
-                            : () => watchAccountService.refresh(account),
-                        child: Text(
-                          account.busy ? 'Scanning…' : 'Refresh account',
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () async {
-                          try {
-                            await watchAccountService.remove(account);
-                          } catch (e) {
-                            if (context.mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Could not stop watching: $e'),
-                                ),
-                              );
-                            }
-                          }
-                        },
-                        child: const Text('Stop watching'),
-                      ),
-                    ],
-                  ),
-                ],
+        title: const Text('Watch an extended public key'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(watchAccountDisclosure),
+              const SizedBox(height: 12),
+              TextField(
+                controller: controller,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Ergo Wallet App extended public key',
+                  helperText:
+                      '156 hex characters, mainnet. No checksum: verify the first address with the source wallet.',
+                  helperMaxLines: 3,
+                ),
               ),
-            ),
+              if (error != null) Text(error!),
+            ],
           ),
-        if (selectedAccount == null)
-          OutlinedButton.icon(
-            onPressed: () => addWatchAccount(context),
-            icon: const Icon(Icons.account_tree_outlined),
-            label: const Text('Watch an extended public key'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: busy ? null : () => Navigator.pop(context),
+            child: const Text('Cancel'),
           ),
-      ],
-    ),
-  );
+          FilledButton(
+            onPressed: busy
+                ? null
+                : () async {
+                    setState(() => busy = true);
+                    try {
+                      final saved = await watchAccountService.add(controller.text);
+                      if (!context.mounted) return;
+                      if (saved) {
+                        Navigator.pop(context);
+                      } else {
+                        setState(() {
+                          error = 'This extended key is already watched.';
+                          busy = false;
+                        });
+                      }
+                    } catch (e) {
+                      if (context.mounted) {
+                        setState(() {
+                          error = e is StateError
+                              ? e.message.toString()
+                              : watchAccountExpected;
+                          busy = false;
+                        });
+                      }
+                    }
+                  },
+            child: const Text('Watch account'),
+          ),
+        ],
+      );
 }

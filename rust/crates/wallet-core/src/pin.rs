@@ -1,9 +1,9 @@
 use aes_gcm::{
-    aead::{Aead, KeyInit, OsRng},
+    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
 use argon2::{Algorithm, Argon2, Params, Version};
-use rand::RngCore;
+use rand::{rngs::SysRng, TryRng};
 use zeroize::Zeroize;
 
 use crate::CoreError;
@@ -68,15 +68,15 @@ impl PinWrappedKey {
             return Err(CoreError::Encryption("wrap key must be 32 bytes".into()));
         }
         let mut salt = [0u8; SALT_LEN];
-        OsRng.fill_bytes(&mut salt);
+        SysRng.try_fill_bytes(&mut salt).map_err(|e| CoreError::Encryption(e.to_string()))?;
         let mut kek = derive_kek(pin, &salt, M_COST, T_COST, P_COST)?;
         let cipher =
             Aes256Gcm::new_from_slice(&kek).map_err(|e| CoreError::Encryption(e.to_string()))?;
         kek.zeroize();
         let mut nonce = [0u8; NONCE_LEN];
-        OsRng.fill_bytes(&mut nonce);
+        SysRng.try_fill_bytes(&mut nonce).map_err(|e| CoreError::Encryption(e.to_string()))?;
         let ciphertext = cipher
-            .encrypt(Nonce::from_slice(&nonce), wrap_key)
+            .encrypt(&Nonce::from(nonce), wrap_key)
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
         Ok(PinWrappedKey {
             salt,
@@ -95,7 +95,7 @@ impl PinWrappedKey {
             Aes256Gcm::new_from_slice(&kek).map_err(|e| CoreError::Encryption(e.to_string()))?;
         kek.zeroize();
         let mut plain = cipher
-            .decrypt(Nonce::from_slice(&self.nonce), self.ciphertext.as_ref())
+            .decrypt(&Nonce::from(self.nonce), self.ciphertext.as_ref())
             .map_err(|_| CoreError::Encryption("incorrect PIN".into()))?;
         let key = plain
             .as_slice()

@@ -24,6 +24,17 @@ void main() {
     expect(sent?.id, token.id);
   });
 
+  testWidgets('an amount nothing can scale is said to be raw units', (tester) async {
+    final unknown = TokenBalance(id: 'e91cbc48' * 8, amount: 5000);
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(body: TokenDetailSheet(token: unknown, explorerUrl: 'https://x')),
+    ));
+    expect(find.text('5,000 raw units'), findsOneWidget);
+    await tester.tap(find.text('Metadata & media details'));
+    await tester.pumpAndSettle();
+    expect(find.text('Decimals unknown · amounts are shown in raw units'), findsOneWidget);
+  });
+
   testWidgets('hides send when there is no handler', (tester) async {
     await tester.pumpWidget(MaterialApp(
       home: Scaffold(body: TokenDetailSheet(token: token, explorerUrl: 'https://x')),

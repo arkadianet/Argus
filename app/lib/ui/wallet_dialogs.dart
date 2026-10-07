@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/wallet_service.dart';
+import 'home/name_dialog.dart';
 
 /// Right after a wallet gets its PIN: offer biometric unlock while the PIN
 /// is still in hand, so the user need not find it in Settings later. Does
@@ -53,30 +54,16 @@ Future<void> offerBiometricUnlock(
   }
 }
 
-/// Rename dialog shared by the home list, the overview and Settings.
-/// Returns true when the name changed.
+/// Rename dialog for a wallet's own settings. Returns true when the name
+/// changed.
 Future<bool> renameWalletDialog(BuildContext context, WalletInfo w) async {
-  final ctrl = TextEditingController(text: w.name);
-  final ok = await showDialog<bool>(
-    context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('Rename wallet'),
-      content: TextField(
-        controller: ctrl,
-        autofocus: true,
-        textCapitalization: TextCapitalization.words,
-        decoration: const InputDecoration(labelText: 'Name'),
-        onSubmitted: (_) => Navigator.pop(ctx, true),
-      ),
-      actions: [
-        TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-        FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Rename')),
-      ],
-    ),
+  final name = await showNameDialog(
+    context,
+    title: 'Rename wallet',
+    initial: w.name,
+    confirm: 'Rename',
   );
-  final name = ctrl.text.trim();
-  ctrl.dispose();
-  if (ok != true || name.isEmpty || name == w.name) return false;
+  if (name == null || name.isEmpty || name == w.name) return false;
   await walletService.renameWallet(w.walletId, name);
   return true;
 }

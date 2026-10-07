@@ -2,6 +2,27 @@ use super::*;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+type GatheredBoxes = (
+    Vec<ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox>,
+    Vec<ergo_tx::Eip12InputBox>,
+);
+
+/// The gather returns one result per address, in address order; this is the
+/// first-copy-wins merge the callers' own dedup applies.
+fn merged(results: Vec<GatheredBoxes>) -> GatheredBoxes {
+    let mut out = (Vec::new(), Vec::new());
+    let mut seen = HashSet::new();
+    for (boxes, inputs) in results {
+        for (b, e) in boxes.into_iter().zip(inputs) {
+            if seen.insert(e.box_id.clone()) {
+                out.0.push(b);
+                out.1.push(e);
+            }
+        }
+    }
+    out
+}
+
 fn wallet(count: u32) -> (u64, Vec<String>) {
     let h = WalletHandle::restore_from_seed(&[42; 64]).unwrap();
     let mut addresses: Vec<_> = (0..count).map(|i| h.derive_address(i).unwrap()).collect();
@@ -79,6 +100,7 @@ async fn reverse_completion_is_byte_identical_to_serial_and_reservations_still_a
         }
     })
     .await
+    .map(merged)
     .unwrap();
     assert_ne!(*completed.lock().unwrap(), (0..10).collect::<Vec<_>>());
     assert_eq!(peak.load(std::sync::atomic::Ordering::SeqCst), 4);
@@ -118,6 +140,7 @@ async fn single_and_empty_addresses_preserve_bytes_and_fetch_count() {
         std::future::ready(Ok(data.clone()))
     })
     .await
+    .map(merged)
     .unwrap();
     assert_eq!(calls.get(), 1);
     assert_eq!(
@@ -147,7 +170,7 @@ async fn failure_aborts_in_address_order_and_drops_pending_fetches() {
             match i {
                 0 => {
                     tokio::time::sleep(Duration::from_millis(10)).await;
-                    Ok((vec![], vec![]))
+                    Ok::<GatheredBoxes, String>((vec![], vec![]))
                 }
                 1 => {
                     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -183,7 +206,7 @@ async fn foreign_address_stops_admission_without_fetching_it_or_later_addresses(
             std::future::ready(if earlier_failure {
                 Err("earlier node error".into())
             } else {
-                Ok((vec![], vec![]))
+                Ok::<GatheredBoxes, String>((vec![], vec![]))
             })
         })
         .await;
@@ -204,11 +227,12 @@ struct Server {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Server {
-    fn new(reply: impl Fn(&str, &str) -> String + Send + Sync + 'static) -> Self {
+    fn new(reply: impl Fn(&str, &str) -> (u16, String) + Send + Sync + 'static) -> Self {
         use std::io::{Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
+        wallet_net::forget_mempool_routes(&url);
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stopped = stop.clone();
         let reply = Arc::new(reply);
@@ -255,11 +279,11 @@ impl Server {
                     let headers = String::from_utf8_lossy(&bytes[..header_end]);
                     let path = headers.split_whitespace().nth(1).unwrap();
                     let body = String::from_utf8_lossy(&bytes[header_end..header_end + length]);
-                    let response = reply(path, &body);
+                    let (status, response) = reply(path, &body);
                     // Cancellation may close the socket before the response.
                     let _ = write!(
                         socket,
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                         response.len(),
                         response
                     );
@@ -298,7 +322,8 @@ impl Drop for Server {
 }
 
 #[tokio::test]
-async fn real_client_keeps_pages_before_mempool_and_cross_address_chain_matches_serial() {
+async fn real_client_keeps_pages_before_mempool_and_cross_address_chain_is_spent() {
+    let _policy = mempool::tests::policy(true);
     let (handle, addresses) = wallet(2);
     let trees: Vec<_> = addresses
         .iter()
@@ -307,10 +332,15 @@ async fn real_client_keeps_pages_before_mempool_and_cross_address_chain_matches_
     let confirmed: Vec<_> = (0..500).map(|i| fixture(i, &trees[0])).collect();
     let intermediate = fixture(501, &trees[1]);
     let terminal = fixture(502, &trees[0]);
-    let txs = serde_json::json!([
-        {"id": "91".repeat(32), "inputs": [{"boxId": confirmed[0].box_id().to_string()}], "outputs": [intermediate.clone()]},
-        {"id": "91".repeat(32), "inputs": [{"boxId": intermediate.box_id().to_string()}], "outputs": [terminal.clone()]}
-    ]);
+    let first = serde_json::json!({"id": "91".repeat(32), "inputs": [{"boxId": confirmed[0].box_id().to_string()}], "outputs": [intermediate.clone()]});
+    let second = serde_json::json!({"id": "92".repeat(32), "inputs": [{"boxId": intermediate.box_id().to_string()}], "outputs": [terminal.clone()]});
+    // As a node lists them: the second transaction's input was never
+    // confirmed, so only its output matches a script — the first address.
+    // The second address sees only the payment that created its box.
+    let per_tree = [
+        serde_json::json!([first, second]).to_string(),
+        serde_json::json!([first]).to_string(),
+    ];
     let events = Arc::new(Mutex::new(Vec::new()));
     let (a, t, log, page) = (
         addresses.clone(),
@@ -330,40 +360,45 @@ async fn real_client_keeps_pages_before_mempool_and_cross_address_chain_matches_
                 .unwrap()
                 .push(format!("{i}:page{}", if second { 1 } else { 0 }));
             if i == 0 && !second {
-                page.clone()
+                (200, page.clone())
             } else {
-                "[]".into()
+                (200, "[]".into())
             }
         } else if path.contains("unconfirmed/byErgoTree") {
             let tree: String = serde_json::from_str(body).unwrap();
             let i = t.iter().position(|v| v == &tree).unwrap();
             log.lock().unwrap().push(format!("{i}:mempool"));
-            txs.to_string()
+            (200, per_tree[i].clone())
+        } else if path.contains("unconfirmed/inputs/byBoxId") {
+            (404, crate::api::mempool::tests::NOT_FOUND.into())
         } else {
-            "[]".into()
+            (200, "[]".into())
         }
     });
     let client = server.client().await;
-    let expected = serial(&addresses, |a| {
-        let a = a.to_owned();
-        let client = client.clone();
-        async move { client.get_effective_unspent(&a).await.unwrap() }
-    })
-    .await;
-    events.lock().unwrap().clear();
     let actual = gather_unspent_all(handle, &client, &addresses)
         .await
         .unwrap();
+    // Address order, confirmed before unconfirmed: the 499 confirmed boxes
+    // nothing pending spends, then the end of the chain.
+    let expected: Vec<String> = confirmed[1..]
+        .iter()
+        .chain([&terminal])
+        .map(|b| b.box_id().to_string())
+        .collect();
     assert_eq!(
-        serde_json::to_vec(&actual).unwrap(),
-        serde_json::to_vec(&expected).unwrap()
+        actual.1.iter().map(|e| e.box_id.clone()).collect::<Vec<_>>(),
+        expected
     );
     assert_eq!(actual.0.len(), 500);
     assert!(actual.0.iter().any(|b| b.box_id() == terminal.box_id()));
-    assert!(actual
-        .0
-        .iter()
-        .all(|b| b.box_id() != intermediate.box_id() && b.box_id() != confirmed[0].box_id()));
+    assert!(
+        actual
+            .0
+            .iter()
+            .all(|b| b.box_id() != intermediate.box_id() && b.box_id() != confirmed[0].box_id()),
+        "the second address's box is spent although its own list does not say so"
+    );
     let log = events.lock().unwrap();
     assert_eq!(
         log.iter()
@@ -404,13 +439,14 @@ async fn live_gather_benchmark() {
                 let mut reference = None;
                 for limit in if trial % 2 == 0 { [1, 4] } else { [4, 1] } {
                     let start = Instant::now();
-                    let result = gather_unspent_ordered(handle, &addresses[..count], limit, |a| {
-                        client.get_effective_unspent(a)
+                    let reads = gather_unspent_ordered(handle, &addresses[..count], limit, |a| {
+                        client.read_for_spending(a)
                     })
                     .await
                     .unwrap();
-                    println!("{url} addresses={count} trial={trial} concurrency={limit} ms={:.3} boxes={}", start.elapsed().as_secs_f64() * 1000.0, result.0.len());
-                    let bytes = serde_json::to_vec(&result).unwrap();
+                    let result = wallet_net::mempool::spendable_across(reads, true);
+                    println!("{url} addresses={count} trial={trial} concurrency={limit} ms={:.3} boxes={}", start.elapsed().as_secs_f64() * 1000.0, result.boxes.len());
+                    let bytes = serde_json::to_vec(&(&result.boxes, &result.inputs)).unwrap();
                     if let Some(previous) = &reference {
                         assert_eq!(&bytes, previous);
                     } else {

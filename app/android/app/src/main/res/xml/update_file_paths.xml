@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The one folder the update provider may share: cache/updates, where a
+  downloaded and verified APK waits for the system installer. Nothing else
+  of the app's storage is reachable through it.
+-->
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>

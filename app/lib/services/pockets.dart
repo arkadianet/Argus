@@ -1,4 +1,3 @@
-import '../format.dart';
 import 'wallet_service.dart';
 
 /// Money in a wallet, grouped by what spending it reveals.
@@ -55,18 +54,6 @@ List<PocketBalance> walletPockets({
     if (mixedNano > 0) PocketBalance(pocket: Pocket.mixed, nanoErg: mixedNano),
     if (inMixNano > 0) PocketBalance(pocket: Pocket.inMix, nanoErg: inMixNano),
   ];
-}
-
-/// "1.012 public · 1 stealth", or null when there is nothing worth splitting.
-String? pocketBreakdown(List<PocketBalance> pockets, {bool hidden = false}) {
-  final shown = pockets.where((p) => p.nanoErg > 0 || p.unknown).toList();
-  if (shown.length < 2) return null;
-  if (hidden) return shown.map((p) => '•••• ${p.pocket.label.toLowerCase()}').join(' · ');
-  return shown
-      .map((p) => p.unknown
-          ? '${p.pocket.label.toLowerCase()} unknown'
-          : '${formatErg(p.nanoErg, unit: false, maxFrac: 4)} ${p.pocket.label.toLowerCase()}')
-      .join(' · ');
 }
 
 /// Which pockets a send draws from.

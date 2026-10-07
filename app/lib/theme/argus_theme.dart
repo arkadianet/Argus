@@ -114,9 +114,11 @@ const parchmentPalette = PaletteSpec(
   accent: Color(0xFF5E8A6A), onAccent: Color(0xFFF6FBF6), accentText: Color(0xFF3F6B4C),
 );
 
+// Muted is #687080 rather than #6B7380: on Frost's page and recessed wells
+// the lighter grey read 4.38:1, short of WCAG AA; this reads 4.56:1.
 const frostPalette = PaletteSpec(
   id: 'frost', name: 'Frost', hint: 'Cool white, slate-blue accent', brightness: Brightness.light,
-  background: Color(0xFFF3F5F8), surface: Color(0xFFFFFFFF), surfaceHigh: Color(0xFFE8ECF2), ink: Color(0xFF1B1F26), muted: Color(0xFF6B7380),
+  background: Color(0xFFF3F5F8), surface: Color(0xFFFFFFFF), surfaceHigh: Color(0xFFE8ECF2), ink: Color(0xFF1B1F26), muted: Color(0xFF687080),
   outline: Color(0xFFCFD6E0), cardBorder: Color(0xFFE2E7EE), chip: Color(0xFFEDF0F5),
   accent: Color(0xFF4A6FA5), onAccent: Color(0xFFF7F9FD), accentText: Color(0xFF3C5D8C),
 );
@@ -367,8 +369,22 @@ ThemeData argusThemeFor(PaletteSpec p) {
       indicatorColor: p.accent.withValues(alpha: 0.18),
       elevation: 0,
       height: 68,
-      labelTextStyle: WidgetStatePropertyAll(
-        text.bodySmall?.copyWith(letterSpacing: 0.6),
+      // Left to the scheme, the selected icon took onSecondaryContainer,
+      // which falls back to the ink-on-accent colour: dark ink on the gold
+      // indicator in every dark palette. The current tab draws in the
+      // accent and the others step back, so only one tab speaks.
+      iconTheme: WidgetStateProperty.resolveWith(
+        (states) => IconThemeData(
+          size: 24,
+          color: states.contains(WidgetState.selected) ? p.accentText : p.muted,
+        ),
+      ),
+      labelTextStyle: WidgetStateProperty.resolveWith(
+        (states) => text.bodySmall?.copyWith(
+          letterSpacing: 0.6,
+          color: states.contains(WidgetState.selected) ? p.ink : p.muted,
+          fontWeight: states.contains(WidgetState.selected) ? FontWeight.w500 : FontWeight.w400,
+        ),
       ),
     ),
     snackBarTheme: SnackBarThemeData(
@@ -446,75 +462,6 @@ class SectionLabel extends StatelessWidget {
           ),
         ],
       ],
-    );
-  }
-}
-
-class WarningStrip extends StatefulWidget {
-  const WarningStrip({super.key});
-
-  @override
-  State<WarningStrip> createState() => _WarningStripState();
-}
-
-class _WarningStripState extends State<WarningStrip> {
-  bool _dismissed = false;
-
-  void _learnMore() {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Prototype software'),
-        content: const Text(
-          'Argus is an unaudited prototype. Transactions on Ergo are '
-          'irreversible — use only funds you can afford to lose.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Got it'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (_dismissed) return const SizedBox.shrink();
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 6, 16, 0),
-      padding: const EdgeInsets.fromLTRB(14, 10, 6, 10),
-      decoration: BoxDecoration(
-        color: dark ? watchfulSurface : bannerTint,
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.shield_outlined, size: 18, color: iris),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Unaudited prototype. Use only funds you can afford to lose.',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ),
-          TextButton(
-            onPressed: _learnMore,
-            style: TextButton.styleFrom(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 32),
-            ),
-            child: const Text('Learn more'),
-          ),
-          IconButton(
-            icon: const Icon(Icons.close, size: 18),
-            tooltip: 'Dismiss',
-            onPressed: () => setState(() => _dismissed = true),
-          ),
-        ],
-      ),
     );
   }
 }

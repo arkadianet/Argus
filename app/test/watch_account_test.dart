@@ -152,9 +152,18 @@ void main() {
     'import discloses stealth exclusion, spending and permanent linkage',
     (tester) async {
       await tester.pumpWidget(
-        const MaterialApp(home: Scaffold(body: WatchAccountList())),
+        MaterialApp(
+          home: Scaffold(
+            body: Builder(
+              builder: (context) => TextButton(
+                onPressed: () => addWatchAccount(context),
+                child: const Text('Watch xpub'),
+              ),
+            ),
+          ),
+        ),
       );
-      await tester.tap(find.text('Watch an extended public key'));
+      await tester.tap(find.text('Watch xpub'));
       await tester.pumpAndSettle();
       expect(find.text(watchAccountDisclosure), findsOneWidget);
       expect(watchAccountDisclosure, contains('Cannot see stealth identities'));

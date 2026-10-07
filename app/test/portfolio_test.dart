@@ -9,12 +9,6 @@ void main() {
     expect(p.unknown, 1);
     expect(p.known, 2);
   });
-
-  test('subtitle counts wallets and watched addresses', () {
-    expect(portfolioSubtitle(wallets: 3, watched: 1, unknown: 0), '3 wallets · 1 watched');
-    expect(portfolioSubtitle(wallets: 1, watched: 0, unknown: 0), '1 wallet');
-    expect(portfolioSubtitle(wallets: 2, watched: 0, unknown: 1), '2 wallets · 1 not loaded');
-  });
 }
 
 // Locked wallets refresh live from the addresses they already know

@@ -8,7 +8,6 @@ description = "Ergo explorer/node HTTP client for Argus wallet"
 
 [dependencies]
 citadel-core = { workspace = true }
-ergo-node-interface = { workspace = true }
 ergo-lib = { workspace = true }
 ergo-tx = { workspace = true, features = ["ergo-lib"] }
 tokio = { workspace = true }
@@ -17,6 +16,13 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 # ─── Misc ────────────────────────────────────────────────────────────────
 tracing = { workspace = true }
-num-bigint = { workspace = true }
+# Not the workspace num-bigint: sigma-rust's AutolykosSolution.pow_distance is a
+# num-bigint 0.4 BigUint.
+num-bigint = "0.4"
 base16 = "0.2"
 reqwest = { workspace = true }
+rustls = { workspace = true }
+webpki-roots = { workspace = true }
+
+[dev-dependencies]
+sigma-ser = { workspace = true }

@@ -130,6 +130,15 @@ wallet's ordinary keys and **can** be signed once the DHT secret is supplied.
   withdrawal transaction, not in the address format or the script.
 - **Dart owns the explorer call.** Keeping HTTP out of the Rust stealth path
   makes the degradation policy testable and reuses the configured explorer.
+- **Spent stealth boxes are caught just before broadcast** (2026-10-06). The
+  explorer lists confirmed state, so a stealth box a pending sweep or send
+  already spends still looks spendable. `send_erg` asks the node, by box id,
+  whether a pending transaction spends any stealth input, and refuses if so;
+  `sign_preparation` does the same before signing a transaction for export,
+  which would double-spend wherever it is broadcast. It asks only then — at
+  broadcast, which tells the same node the same boxes, or at an explicit
+  signature — so preparing and cancelling a stealth send still reveals
+  nothing. See the mempool awareness design.
 
 ## Not done
 

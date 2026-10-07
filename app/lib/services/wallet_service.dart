@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -12,10 +11,14 @@ import '../bridge/frb_generated.dart';
 import 'app_fee.dart';
 import 'network_controller.dart';
 import 'privacy_service.dart';
+import 'token_catalog.dart';
+import 'token_decimals.dart';
 import 'token_descriptor_store.dart';
 import 'token_evidence.dart';
 export 'token_evidence.dart';
+import 'verified_tokens.dart' show knownToken;
 import 'mix_service.dart';
+import 'spend_policy.dart';
 import 'stealth_service.dart';
 import 'wallet_sync_controller.dart';
 import 'secure_storage.dart';
@@ -157,7 +160,7 @@ class TokenBalance {
       (declaredAssetKind != DeclaredAssetKind.none ||
           (supplyEvidence == SupplyEvidence.originalEmission &&
               emissionAmount == 1 &&
-              decimalsEvidence == DecimalsEvidence.valid &&
+              decimalsEvidence.readFromToken &&
               decimals == 0));
 
   String get classification {
@@ -170,7 +173,7 @@ class TokenBalance {
     final single =
         supplyEvidence == SupplyEvidence.originalEmission &&
         emissionAmount == 1 &&
-        decimalsEvidence == DecimalsEvidence.valid &&
+        decimalsEvidence.readFromToken &&
         decimals == 0;
     if (declaredAssetKind != DeclaredAssetKind.none) {
       if (single) return 'Single-unit artwork · ${declaredAssetKind.name}';
@@ -533,12 +536,24 @@ class InputBoxInput {
   final List<InputAsset> assets;
   final String? address;
 
+  /// False for a box a transaction still in the mempool created: an
+  /// incoming payment or change not confirmed yet. Listed only while
+  /// unconfirmed funds may be spent.
+  final bool confirmed;
+
+  /// The box's exact serialized size, which storage rent is charged on.
+  /// Set by the wallet's own listing ([WalletService.listUnspentBoxes]);
+  /// null elsewhere.
+  final int? sizeBytes;
+
   InputBoxInput({
     required this.boxId,
     required this.valueNanoErg,
     required this.creationHeight,
     required this.assets,
     this.address,
+    this.confirmed = true,
+    this.sizeBytes,
   });
 
   factory InputBoxInput.fromJson(Map<String, dynamic> json) {
@@ -605,6 +620,8 @@ class InputBoxInput {
       creationHeight: height,
       assets: assets,
       address: address ?? (json['address'] as String?),
+      confirmed: json['confirmed'] != false,
+      sizeBytes: (json['size_bytes'] as num?)?.toInt(),
     );
   }
 }
@@ -781,12 +798,365 @@ class WalletService with WidgetsBindingObserver {
   String _descriptorKey(String id) =>
       '${currentWalletId.value}|${networkController.activeUrl}|${networkController.explorer}|$id|1';
 
-  TokenBalance displayMetadata(TokenBalance holding) =>
-      _descriptors[_descriptorKey(holding.id)]?.withHolding(
+  TokenBalance displayMetadata(TokenBalance holding) {
+    final session = _descriptors[_descriptorKey(holding.id)];
+    if (session != null) {
+      return session.withHolding(
         holding.amount,
         stealthAmount: holding.stealthAmount,
-      ) ??
-      holding;
+      );
+    }
+    // A holding published before anything knew its token carries no record,
+    // and one restored from a snapshot carries a name but none of the
+    // evidence behind it. Show what is known now instead of waiting for the
+    // next sync to republish it. With nothing known — after "Clear
+    // collectible cache" — the holding keeps what it was published with.
+    if (holding.metadataState == MetadataState.unavailable) {
+      final known = _displayLayers(holding.id);
+      if (known != null) {
+        return known.withHolding(
+          holding.amount,
+          stealthAmount: holding.stealthAmount,
+        );
+      }
+    }
+    return holding;
+  }
+
+  /// [cachedTokenMeta] with this session's explicitly loaded descriptor on
+  /// top, for screens that name a token by id. Display only: a session
+  /// descriptor is memory-only and must never be copied into a holding,
+  /// because holdings are persisted.
+  ///
+  /// Watched wallets' own descriptors sit below this wallet's: a watched
+  /// address or account names its holdings from them on its page, in its
+  /// activity and in its prices, and [cachedTokenMeta] — what a seed wallet
+  /// builds and persists its holdings from — never reads them.
+  TokenBalance? displayTokenMeta(String id) =>
+      _descriptors[_descriptorKey(id)] ?? _displayLayers(id);
+
+  /// The display lookup under this session's explicit loads: this wallet's
+  /// own descriptors, then watched wallets', then the public layers and
+  /// the legacy table.
+  TokenBalance? _displayLayers(String id) =>
+      _ownTokenMeta(id) ?? _watchedTokenMeta(id) ?? cachedTokenMeta(id);
+
+  TokenBalance? _ownTokenMeta(String id) {
+    final own = _tokenMeta[id];
+    return own != null && !identical(own, _legacyTokenMeta[id]) ? own : null;
+  }
+
+  // ── Watched wallets' token descriptors ──────────────────────────────────
+
+  /// What each watched wallet's holdings were resolved to, keyed by its
+  /// watched key ([watchedAddressKey], [watchedAccountKey]). Per wallet in
+  /// memory and in that wallet's own stored table, as a seed wallet's are,
+  /// never in an app-wide one: nothing on disk lists what two wallets have
+  /// in common. Read for display only ([displayTokenMeta]).
+  final Map<String, Map<String, CachedDescriptor>> _watchedTables = {};
+
+  /// Ids a watched wallet's node answered "no such token" for, per
+  /// `key|node`, so later passes this session do not ask again.
+  final Map<String, Set<String>> _watchedMisses = {};
+  final Map<String, int> _watchedCursors = {};
+
+  /// Watched wallets with a pass running: one at a time per wallet.
+  final Set<String> _watchedPasses = {};
+
+  /// A watched wallet's next pass, when its last one left tokens unnamed.
+  final Map<String, Timer> _watchedFollowUps = {};
+
+  /// Passes in a row, per watched wallet, that named nothing new.
+  final Map<String, int> _watchedIdlePasses = {};
+
+  /// How soon a pass follows one that named something but not everything
+  /// (the per-pass cap, or a run of failures cut it short).
+  @visibleForTesting
+  static Duration watchedFollowUpDelay = const Duration(seconds: 2);
+
+  /// How long, times the number of idle passes so far, a pass waits after
+  /// one that named nothing (the node not answering, the job held
+  /// elsewhere). After [maxWatchedIdlePasses] of those, follow-ups stop and
+  /// the wallet's next balance read starts again.
+  @visibleForTesting
+  static Duration watchedIdleDelay = const Duration(seconds: 15);
+  static const maxWatchedIdlePasses = 3;
+
+  /// Bumped when a watched wallet stops being watched or the caches are
+  /// wiped, so a pass or a load already running cannot write back.
+  final Map<String, int> _watchedGenerations = {};
+  int _watchedWipes = 0;
+
+  /// Told of every balance [getBalance] reads, with the node it asked. The
+  /// watched wallets' resolver (`watched_token_meta.dart`) listens here,
+  /// since the overview and a watched wallet's page read balances this way.
+  void Function(String address, Map<String, dynamic> balance, String? nodeUrl)?
+  onBalanceRead;
+
+  static String watchedAddressKey(String address) => 'address:$address';
+  static String watchedAccountKey(String key) => 'account:$key';
+  static String _watchedTableId(String key) => 'watched:$key';
+
+  /// Reads [key]'s stored table into memory, once.
+  Future<void> loadWatchedTokenTable(String key) async {
+    if (_watchedTables.containsKey(key)) return;
+    final generation = _watchedGenerations[key] ?? 0;
+    final wipes = _watchedWipes;
+    final loaded = await TokenDescriptorStore.load(_watchedTableId(key));
+    if ((_watchedGenerations[key] ?? 0) != generation ||
+        wipes != _watchedWipes ||
+        _watchedTables.containsKey(key)) {
+      return;
+    }
+    _watchedTables[key] = loaded;
+    if (loaded.isNotEmpty) metadataChanges.value++;
+  }
+
+  /// Drops a watched wallet's descriptors, in memory and on disk, once it
+  /// is no longer watched.
+  Future<void> forgetWatchedTokenTable(String key) async {
+    _watchedGenerations[key] = (_watchedGenerations[key] ?? 0) + 1;
+    final had = _watchedTables.remove(key)?.isNotEmpty ?? false;
+    _watchedMisses.removeWhere((k, _) => k.startsWith('$key|'));
+    _watchedCursors.remove(key);
+    _watchedFollowUps.remove(key)?.cancel();
+    _watchedIdlePasses.remove(key);
+    await TokenDescriptorStore.clear(_watchedTableId(key));
+    if (had) metadataChanges.value++;
+  }
+
+  /// Whether [key]'s own table already holds everything one lookup can say
+  /// about [id], scale or no scale: asking again would say it again.
+  bool watchedSettled(String key, String id) =>
+      _watchedTables[key]?[id]?.incomplete == false;
+
+  /// Whether a node already answered that [id] does not exist, for the
+  /// watched wallet [key]: asking again this session would only repeat it.
+  bool watchedMissed(String key, String id) => _watchedMisses.entries.any(
+    (e) => e.key.startsWith('$key|') && e.value.contains(id),
+  );
+
+  /// What a watched wallet's own descriptors say about [id], preferring a
+  /// complete one.
+  TokenBalance? _watchedTokenMeta(String id) {
+    CachedDescriptor? partial;
+    for (final table in _watchedTables.values) {
+      final d = table[id];
+      if (d == null) continue;
+      if (!d.incomplete) return _asBalance(d);
+      partial ??= d;
+    }
+    return partial == null ? null : _asBalance(partial);
+  }
+
+  /// A scale the wallet-independent layers (the pool catalog, the curated
+  /// registry, the legacy table) already give [id], so a watched wallet
+  /// has no need to ask about it.
+  bool _publiclyScaled(String id) {
+    final m = publicTokenMeta(id) ?? _legacyTokenMeta[id];
+    return m != null && m.decimalsEvidence.knowsScale;
+  }
+
+  /// How long a watched wallet's pass waits for the single metadata job
+  /// while a seed wallet's pass or an explicit request holds it.
+  static const _watchedJobPatience = Duration(minutes: 2);
+
+  /// The single metadata job for a watched wallet's request: taken at once
+  /// when free, from the catalog the moment its lookup ends, and otherwise
+  /// waited for, up to [_watchedJobPatience], while [keepGoing] holds.
+  Future<bool> _takeJobForWatched(bool Function() keepGoing) async {
+    final deadline = DateTime.now().add(_watchedJobPatience);
+    while (keepGoing()) {
+      if (!_metadataBusy) {
+        _metadataBusy = true;
+        return true;
+      }
+      if (_catalogJob != null) {
+        if (await _takeJobFromCatalog()) return true;
+        continue;
+      }
+      if (DateTime.now().isAfter(deadline)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
+    return false;
+  }
+
+  /// Names what a watched wallet holds, under the rule a seed wallet's name
+  /// pass follows (alpha.59): only from the node that served the wallet's
+  /// balances, never the explorer or another node, and only about ids that
+  /// node just served, so asking tells it nothing new.
+  ///
+  /// A plain balance read cannot say whether a fallback node answered, so
+  /// the balances of [addresses] are read here through the public sync
+  /// read, which names the node that did ([loadPublicSyncInputs]), one
+  /// address at a time. Ids the public layers already scale are skipped.
+  /// What the node answers goes to [key]'s own table. At most
+  /// [maxTokenMetaPerSync] requests a pass, in the single metadata job,
+  /// while the app is in front; the screens repaint as names arrive, and
+  /// what a pass leaves unnamed is asked in the passes that follow it
+  /// ([_followWatchedPass]).
+  Future<void> resolveWatchedHoldings(
+    String key,
+    List<String> addresses, {
+    String? nodeUrl,
+  }) async {
+    final targets = {
+      for (final a in addresses)
+        if (a.isNotEmpty) a,
+    }.toList();
+    if (targets.isEmpty || !_inForeground || !_watchedPasses.add(key)) return;
+    // This pass is the one a follow-up was waiting to run.
+    _watchedFollowUps.remove(key)?.cancel();
+    final generation = _watchedGenerations[key] ?? 0;
+    final wipes = _watchedWipes;
+    bool current() =>
+        _inForeground &&
+        wipes == _watchedWipes &&
+        (_watchedGenerations[key] ?? 0) == generation;
+    var learned = false;
+    // Unnamed tokens the pass set out to ask about, and how many of them it
+    // left so: the difference is what it settled.
+    var unsettled = 0;
+    var left = 0;
+    try {
+      await loadWatchedTokenTable(key);
+      if (!current()) return;
+      final Map<String, dynamic> read;
+      try {
+        read = await loadPublicSyncInputs(targets, nodeUrl: nodeUrl);
+      } catch (_) {
+        return;
+      }
+      final servedBy = read['served_by'];
+      if (servedBy is! String || servedBy.isEmpty || !current()) return;
+      final served = <String>{
+        for (final balance in ((read['balances'] as Map?) ?? const {}).values)
+          if (balance is Map)
+            for (final t in (balance['tokens'] as List? ?? const []))
+              if (t is Map && t['id'] is String) t['id'] as String,
+      };
+      final misses = _watchedMisses.putIfAbsent('$key|$servedBy', () => {});
+      final own = _watchedTables[key] ?? const <String, CachedDescriptor>{};
+      final wanted = [
+        for (final id in served)
+          if (id.length == 64 &&
+              !misses.contains(id) &&
+              (own[id]?.incomplete ?? true) &&
+              !_publiclyScaled(id))
+            id,
+      ]..sort();
+      if (wanted.isEmpty) return;
+      unsettled = wanted.length;
+      left = wanted.length;
+      // Backgrounding cancels a request in flight, as it does the wallet's.
+      _observeLifecycle();
+      final cursor = _watchedCursors[key] ?? 0;
+      final start = cursor % wanted.length;
+      final ordered = [...wanted.skip(start), ...wanted.take(start)];
+      var attempted = 0;
+      var consecutiveRetryable = 0;
+      var consecutiveNotFound = 0;
+      try {
+        for (final id in ordered) {
+          if (attempted >= maxTokenMetaPerSync || !current()) break;
+          if (!await _takeJobForWatched(current)) break;
+          if (!current()) {
+            _metadataBusy = false;
+            break;
+          }
+          attempted++;
+          try {
+            final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
+              tokenId: id,
+              providerUrl: servedBy,
+              providerIsNode: true,
+            );
+            if (!current()) break;
+            final m = jsonDecode(raw) as Map<String, dynamic>;
+            if (m['id'] != id) continue;
+            consecutiveRetryable = 0;
+            consecutiveNotFound = 0;
+            final table = _watchedTables.putIfAbsent(key, () => {});
+            table.remove(id);
+            while (table.length >= TokenDescriptorStore.maxEntries) {
+              table.remove(table.keys.first);
+            }
+            table[id] = CachedDescriptor.fromInspection(m, source: servedBy);
+            learned = true;
+            // Names show as they arrive, not after the whole pass.
+            metadataChanges.value++;
+          } catch (e) {
+            if (!current()) break;
+            final text = e.toString().toLowerCase();
+            if (e is MetadataBusyException || text.contains('already running')) {
+              break;
+            }
+            if (text.contains('cancelled') || text.contains('canceled')) break;
+            // As in the wallet's pass: only a definite answer is remembered.
+            if (!_looksDurableNegative(e)) {
+              if (++consecutiveRetryable >= maxConsecutiveRetryable) break;
+              continue;
+            }
+            consecutiveRetryable = 0;
+            misses.add(id);
+            if (_looksUnsupported(e)) break;
+            if (_looksNotFound(e)) {
+              if (++consecutiveNotFound >= notFoundRunBeforeUnsupported) break;
+            } else {
+              consecutiveNotFound = 0;
+            }
+          } finally {
+            _metadataBusy = false;
+          }
+        }
+      } finally {
+        _watchedCursors[key] = cursor + (attempted == 0 ? 1 : attempted);
+        final table = _watchedTables[key] ?? const <String, CachedDescriptor>{};
+        left = wanted
+            .where((id) => (table[id]?.incomplete ?? true) && !misses.contains(id))
+            .length;
+      }
+    } finally {
+      _watchedPasses.remove(key);
+      final table = _watchedTables[key];
+      if (learned && table != null && current()) {
+        await TokenDescriptorStore.save(_watchedTableId(key), Map.of(table));
+      }
+      if (left > 0 && current()) {
+        _followWatchedPass(key, targets, nodeUrl, settled: unsettled - left);
+      } else {
+        _watchedIdlePasses.remove(key);
+      }
+    }
+  }
+
+  /// Another pass for a watched wallet whose last one left tokens unnamed,
+  /// so they do not wait for its next balance read: the per-pass cap, a
+  /// node that stopped answering, or the single metadata job busy elsewhere
+  /// must not leave a holding unnamed for good. Soon after a pass that
+  /// settled something; after one that settled nothing, later each time,
+  /// and not after [maxWatchedIdlePasses] of those in a row. A token stays
+  /// unnamed only when its node says it does not exist, or keeps failing.
+  void _followWatchedPass(
+    String key,
+    List<String> addresses,
+    String? nodeUrl, {
+    required int settled,
+  }) {
+    _watchedFollowUps.remove(key)?.cancel();
+    final idle = settled > 0 ? 0 : (_watchedIdlePasses[key] ?? 0) + 1;
+    if (idle > maxWatchedIdlePasses) {
+      _watchedIdlePasses.remove(key);
+      return;
+    }
+    _watchedIdlePasses[key] = idle;
+    final delay = idle == 0 ? watchedFollowUpDelay : watchedIdleDelay * idle;
+    _watchedFollowUps[key] = Timer(delay, () {
+      _watchedFollowUps.remove(key);
+      if (!_inForeground) return;
+      unawaited(resolveWatchedHoldings(key, addresses, nodeUrl: nodeUrl));
+    });
+  }
 
   void clearSessionMetadata() {
     if (_metadataBusy) {
@@ -823,12 +1193,22 @@ class WalletService with WidgetsBindingObserver {
       _legacyTokenMeta.clear();
       _descriptorCache.clear();
       _metadataMisses.clear();
+      _watchedWipes++;
+      _watchedTables.clear();
+      _watchedMisses.clear();
+      _watchedCursors.clear();
+      for (final timer in _watchedFollowUps.values) {
+        timer.cancel();
+      }
+      _watchedFollowUps.clear();
+      _watchedIdlePasses.clear();
       // A queued write would otherwise recreate what this just cleared.
       _pendingFlush.clear();
       _tokenMetaDirty = false;
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove(_tokenMetaKey);
       await TokenDescriptorStore.clearAll();
+      await publicTokenCatalog.clear();
     } finally {
       _wipe = null;
       done.complete();
@@ -846,6 +1226,21 @@ class WalletService with WidgetsBindingObserver {
     required String provider,
     bool providerIsNode = false,
   }) async {
+    // Captured before any wait. Cancelling, closing the sheet, backgrounding
+    // or switching wallet while this waits behind a catalog lookup bumps the
+    // epoch, and must stop the request before anything is sent.
+    final epoch = _descriptorEpoch;
+    final key = _descriptorKey(holding.id);
+    // A public-catalog lookup gives way to a person's request: wait out the
+    // one it has in flight and take the job before the catalog can start
+    // another. Everything below is then checked as of now. Handing the job
+    // back here leaves no gap: from this line to `_metadataBusy = true` the
+    // code runs without suspending, so nothing else can take it.
+    final fromCatalog = _catalogJob != null && await _takeJobFromCatalog();
+    if (fromCatalog) _metadataBusy = false;
+    if (epoch != _descriptorEpoch || key != _descriptorKey(holding.id)) {
+      throw StateError('Metadata request cancelled');
+    }
     if (!isUnlocked ||
         privacyService.hideBalances ||
         networkController.activeUrl == null) {
@@ -854,13 +1249,8 @@ class WalletService with WidgetsBindingObserver {
     if (provider != (providerIsNode ? networkController.activeUrl : networkController.explorer))
       throw StateError('Metadata provider changed');
     if (_metadataBusy) throw MetadataBusyException();
-    if (!_observingMetadata) {
-      WidgetsBinding.instance.addObserver(this);
-      _observingMetadata = true;
-    }
+    _observeLifecycle();
     _metadataBusy = true;
-    final epoch = _descriptorEpoch;
-    final key = _descriptorKey(holding.id);
     try {
       final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
         tokenId: holding.id,
@@ -877,18 +1267,19 @@ class WalletService with WidgetsBindingObserver {
         throw StateError('Metadata exceeds wallet limits');
       final m = jsonDecode(raw) as Map<String, dynamic>;
       if (m['id'] != holding.id) throw StateError('Metadata conflict');
+      final declared = declaredDecimals(m);
       final previous = _descriptors[key];
       final conflict = previous != null && (
         (previous.issuanceBoxId != null && m['boxId'] != null && previous.issuanceBoxId != m['boxId']) ||
         (previous.emissionAmount != null && m['emissionAmount'] != null && previous.emissionAmount != m['emissionAmount']) ||
-        (previous.decimalsEvidence == DecimalsEvidence.valid && m['decimalsEvidence'] == 'valid' && previous.decimals != m['decimals']));
+        (previous.decimalsEvidence.readFromToken && declared.evidence.readFromToken && previous.decimals != declared.decimals));
       final result = TokenBalance(
         id: holding.id,
         amount: holding.amount,
         stealthAmount: holding.stealthAmount,
         name: m['name'] as String?,
         description: m['description'] as String?,
-        decimals: (m['decimals'] as num?)?.toInt() ?? 0,
+        decimals: declared.decimals,
         emissionAmount: (m['emissionAmount'] as num?)?.toInt(),
         iconUrl: m['iconUrl'] as String?,
         source: provider,
@@ -898,15 +1289,11 @@ class WalletService with WidgetsBindingObserver {
         supplyEvidence: SupplyEvidence.values.byName(
           m['supplyEvidence'] as String,
         ),
-        decimalsEvidence: DecimalsEvidence.values.byName(
-          m['decimalsEvidence'] as String,
-        ),
+        decimalsEvidence: declared.evidence,
         declaredAssetKind: DeclaredAssetKind.values.byName(
           m['declaredAssetKind'] as String,
         ),
-        metadataState: conflict ? MetadataState.conflict : MetadataState.values.byName(
-          m['metadataState'] as String,
-        ),
+        metadataState: conflict ? MetadataState.conflict : declared.metadataState,
         mediaState: MediaState.values.byName(m['mediaState'] as String),
       );
       // 1,000 × 16 KiB bounds this memory-only cache to 16 MiB serialized.
@@ -922,12 +1309,98 @@ class WalletService with WidgetsBindingObserver {
     }
   }
 
+  /// Set while a public-catalog lookup holds the metadata job. Wallet passes
+  /// and explicit requests wait for it rather than give up: it is a single
+  /// bounded request, and the catalog starts no other while they wait.
+  Future<void>? _catalogJob;
+  int _catalogWaiters = 0;
+
+  /// One node lookup for the public pool-token catalog, in the same single
+  /// metadata job as everything else, so its requests never overlap the
+  /// wallet's. Null when the job is wanted elsewhere — this never waits for
+  /// the wallet's work or competes with it — or while locked or in the
+  /// background, when nothing should be asking the network for this.
+  Future<String?> inspectForCatalog(String tokenId, String provider) async {
+    if (_metadataBusy ||
+        _catalogWaiters > 0 ||
+        !isUnlocked ||
+        !_inForeground) {
+      return null;
+    }
+    // Backgrounding cancels a request already in flight, as it does an
+    // explicit one, rather than letting it finish out of sight.
+    _observeLifecycle();
+    _metadataBusy = true;
+    final done = Completer<void>();
+    _catalogJob = done.future;
+    try {
+      return await RustLib.instance.api.crateApiInspectTokenMetadata(
+        tokenId: tokenId,
+        providerUrl: provider,
+        providerIsNode: true,
+      );
+    } finally {
+      _metadataBusy = false;
+      _catalogJob = null;
+      done.complete();
+    }
+  }
+
+  /// Lifecycle changes clear session metadata and cancel the metadata job in
+  /// flight ([didChangeAppLifecycleState]). Registered by the first request
+  /// of either kind.
+  void _observeLifecycle() {
+    if (_observingMetadata) return;
+    try {
+      WidgetsBinding.instance.addObserver(this);
+      _observingMetadata = true;
+    } catch (_) {
+      // No binding (a plain unit test): nothing to observe.
+    }
+  }
+
+  static bool get _inForeground {
+    try {
+      final state = WidgetsBinding.instance.lifecycleState;
+      return state == null || state == AppLifecycleState.resumed;
+    } catch (_) {
+      // No binding (a plain unit test): nothing is backgrounded.
+      return true;
+    }
+  }
+
+  /// Waits out the catalog lookup that holds the metadata job and takes the
+  /// job in the same step, while still counted as waiting, so the catalog
+  /// cannot slip another request in between. False when the job is not the
+  /// catalog's, or another request took it first: the caller then yields as
+  /// it always has. On true the caller holds the job and must release it.
+  Future<bool> _takeJobFromCatalog() async {
+    final job = _catalogJob;
+    if (job == null) return false;
+    _catalogWaiters++;
+    try {
+      await job;
+      if (_metadataBusy) return false;
+      _metadataBusy = true;
+      return true;
+    } finally {
+      _catalogWaiters--;
+    }
+  }
+
   Future<void> init() async {
     if (_initialized) return;
-    await Future.wait([RustLib.init(), loadTokenMeta()]);
+    await Future.wait([
+      RustLib.init(),
+      loadTokenMeta(),
+      publicTokenCatalog.ensureLoaded(),
+    ]);
     // Belt and braces with the frb(init) attribute: the app fee config must
     // be installed before any transaction is built.
     await RustLib.instance.api.crateApiInitApp();
+    // Likewise the unconfirmed-spending setting, which every spend's input
+    // gathering in Rust follows.
+    await spendPolicy.apply();
     _initialized = true;
     await _migrateLegacyIfNeeded();
   }
@@ -970,6 +1443,7 @@ class WalletService with WidgetsBindingObserver {
           decimals: (v['decimals'] as num?)?.toInt() ?? 0,
           emissionAmount: (v['emissionAmount'] as num?)?.toInt(),
           iconUrl: v['iconUrl'] as String?,
+          decimalsEvidence: DecimalsEvidence.listed,
           metadataState: MetadataState.partial,
         );
         _tokenMeta[entry.key] = _legacyTokenMeta[entry.key]!;
@@ -1019,6 +1493,8 @@ class WalletService with WidgetsBindingObserver {
     // sync in flight and let it re-ask about ids that just failed.
     // _setHandle clears it synchronously, where the wallet actually changes.
     _rebuildTokenMetaView();
+    // Rows already on screen were built from the view before this landed.
+    metadataChanges.value++;
   }
 
   String? _tableLoadedFor;
@@ -1178,7 +1654,7 @@ class WalletService with WidgetsBindingObserver {
     _setHandle(id, session.handleId);
     // Write the outgoing wallet's table now rather than waiting for the
     // incoming wallet's first sync, which may never come.
-    await flushPendingDescriptors();
+    await _loadActivatedTable();
     return session;
   }
 
@@ -1209,7 +1685,7 @@ class WalletService with WidgetsBindingObserver {
     );
     final id = walletId ?? const Uuid().v4();
     _setHandle(id, raw);
-    await flushPendingDescriptors();
+    await _loadActivatedTable();
   }
 
   /// Lock the currently active wallet. If [walletId] is provided, lock only
@@ -1374,8 +1850,49 @@ class WalletService with WidgetsBindingObserver {
     );
   }
 
-  /// Token metadata already known (persisted cache), without a node call.
-  TokenBalance? cachedTokenMeta(String id) => _tokenMeta[id];
+  /// Token metadata already known, without a node call. The one lookup every
+  /// screen and every published holding goes through, best layer first:
+  ///
+  ///  1. this wallet's own descriptors, resolved during its sync;
+  ///  2. the public catalog of pool tokens ([publicTokenMeta]);
+  ///  3. the curated registry built into the app;
+  ///  4. the legacy app-wide table from older builds, which has no
+  ///     provenance and so ranks last.
+  ///
+  /// Explicitly loaded session descriptors are not here: holdings are built
+  /// from this and persisted, and those are memory-only. Screens that name a
+  /// token by id use [displayTokenMeta], which adds them for display.
+  TokenBalance? cachedTokenMeta(String id) {
+    final own = _tokenMeta[id];
+    // The legacy rows share the same view as a base layer, by reference.
+    if (own != null && !identical(own, _legacyTokenMeta[id])) return own;
+    return publicTokenMeta(id) ?? own;
+  }
+
+  /// What the wallet-independent layers say about [id]: the pool-token
+  /// catalog, then the curated registry. For a context that is not this
+  /// wallet's own, and for anything that may be stored app-wide.
+  TokenBalance? publicTokenMeta(String id) {
+    final d = publicTokenCatalog.lookup(id);
+    if (d != null) return _asBalance(d);
+    final curated = knownToken(id);
+    if (curated == null) return null;
+    // The ticker is the on-chain name the registry was checked against.
+    // The scale is the app's list's, not an issuance read.
+    return TokenBalance(
+      id: id,
+      amount: 0,
+      name: curated.ticker,
+      decimals: curated.decimals,
+      decimalsEvidence: DecimalsEvidence.listed,
+      metadataState: MetadataState.partial,
+      source: curatedTokenSource,
+    );
+  }
+
+  /// Shown as a descriptor's source when the name came from the registry
+  /// built into the app rather than from a node.
+  static const curatedTokenSource = 'Argus curated token list';
 
   /// Ids this session already asked the node about and did not get an answer
   /// for. Without it a wallet of unresolvable tokens re-asks on every sync.
@@ -1454,6 +1971,8 @@ class WalletService with WidgetsBindingObserver {
 
     // Declared outside the try so the finally can advance the cursor.
     var attempted = 0;
+    // Whether this pass taught the lookup anything, for its listeners.
+    var learned = false;
     try {
       if (_metadataUnsupported) return resolvedNow;
       final wanted = [
@@ -1483,9 +2002,20 @@ class WalletService with WidgetsBindingObserver {
       for (final id in ordered) {
         if (!owns() || _metadataUnsupported) return resolvedNow;
         if (attempted >= maxTokenMetaPerSync) return resolvedNow;
-        // An explicit request owns the job. Yield rather than compete.
-        if (_metadataBusy) return resolvedNow;
-        _metadataBusy = true;
+        if (!_metadataBusy) {
+          _metadataBusy = true;
+        } else {
+          // An explicit request owns the job. Yield rather than compete. A
+          // catalog lookup is one bounded request: wait it out and take the
+          // job before the catalog can start another.
+          if (_catalogJob == null || !await _takeJobFromCatalog()) {
+            return resolvedNow;
+          }
+          if (!owns() || _metadataUnsupported) {
+            _metadataBusy = false;
+            return resolvedNow;
+          }
+        }
         attempted++;
         try {
           final raw = await RustLib.instance.api.crateApiInspectTokenMetadata(
@@ -1500,6 +2030,7 @@ class WalletService with WidgetsBindingObserver {
           if (m['id'] != id) continue;
           consecutiveNotFound = 0;
           _rememberDescriptor(id, m, servedBy);
+          learned = true;
           // The index answered but the issuance box did not, so the
           // registers are missing. Keep what came back — a name beats an id
           // — but leave the token eligible so a later pass can complete it
@@ -1567,6 +2098,9 @@ class WalletService with WidgetsBindingObserver {
       if (_tokenMetaDirty && _currentWalletId == walletId) {
         await persistTokenMeta();
       }
+      // Holdings republish through the sync; everything else that reads
+      // the lookup by id (activity rows, prices) hears it here, once a pass.
+      if (learned && owns()) metadataChanges.value++;
       // That await is itself a window: a wipe landing in it would leave the
       // already-selected map free to reach the caller and repopulate the
       // display that was just cleared. Emptying it here is visible to the
@@ -1584,16 +2118,9 @@ class WalletService with WidgetsBindingObserver {
   static const maxTokenMetaPerSync = 40;
 
   /// An unambiguous "this endpoint cannot serve issuance lookups at all".
-  /// A 404 is deliberately NOT here: `/blockchain/token/byId/{id}` answers
-  /// that both for a node without the index and for a token the node simply
-  /// does not know, and treating the first missing dust token as a dead node
-  /// would unname the whole wallet.
-  static bool _looksUnsupported(Object error) {
-    final text = error.toString().toLowerCase();
-    return text.contains('extraindex') ||
-        text.contains('extra_index') ||
-        text.contains('must be an https url');
-  }
+  /// Shared with the pool-token catalog; see [DescriptorLookupFailure].
+  static bool _looksUnsupported(Object error) =>
+      DescriptorLookupFailure.unsupported(error);
 
   /// How long a run of not-founds ends a pass. Deliberately not a verdict
   /// about the provider: unknown tokens and a missing index look alike.
@@ -1611,65 +2138,19 @@ class WalletService with WidgetsBindingObserver {
 
   /// Marker the Rust side puts on an error the provider failed to answer,
   /// as opposed to one it answered negatively.
-  static const retryableMarker = 'RETRYABLE:';
+  static const retryableMarker = DescriptorLookupFailure.retryableMarker;
 
   /// Whether the provider gave a definite "no such token", as opposed to
-  /// failing to answer. Only the former is worth remembering.
-  ///
-  /// The distinction is made in Rust, where the error still has a type:
-  /// `reqwest::Error`'s Display collapses connection refusal, DNS and TLS
-  /// failures into one opaque string, so no amount of matching here could
-  /// tell them apart from an answer. The timeout raised on this side is
-  /// recognised too, since it never reaches that layer.
-  static bool _looksDurableNegative(Object error) {
-    final text = error.toString();
-    if (text.contains(retryableMarker)) return false;
-    final lower = text.toLowerCase();
-    return !lower.contains('timed out') && !lower.contains('cancelled');
-  }
+  /// failing to answer. Only the former is worth remembering. Shared with
+  /// the pool-token catalog; see [DescriptorLookupFailure].
+  static bool _looksDurableNegative(Object error) =>
+      DescriptorLookupFailure.durableNegative(error);
 
-  static bool _looksNotFound(Object error) {
-    final text = error.toString().toLowerCase();
-    return text.contains('404') || text.contains('not found');
-  }
+  static bool _looksNotFound(Object error) =>
+      DescriptorLookupFailure.notFound(error);
 
   void _rememberDescriptor(String id, Map<String, dynamic> m, String source) {
-    final descriptor = CachedDescriptor(
-      id: id,
-      name: m['name'] as String?,
-      decimals: (m['decimals'] as num?)?.toInt() ?? 0,
-      emissionAmount: (m['emissionAmount'] as num?)?.toInt(),
-      iconUrl: m['iconUrl'] as String?,
-      supplyEvidence: TokenDescriptorStore.byName(
-        SupplyEvidence.values,
-        m['supplyEvidence'],
-        SupplyEvidence.unknown,
-      ),
-      decimalsEvidence: TokenDescriptorStore.byName(
-        DecimalsEvidence.values,
-        m['decimalsEvidence'],
-        DecimalsEvidence.unknown,
-      ),
-      declaredAssetKind: TokenDescriptorStore.byName(
-        DeclaredAssetKind.values,
-        m['declaredAssetKind'],
-        DeclaredAssetKind.none,
-      ),
-      metadataState: TokenDescriptorStore.byName(
-        MetadataState.values,
-        m['metadataState'],
-        MetadataState.partial,
-      ),
-      mediaState: TokenDescriptorStore.byName(
-        MediaState.values,
-        m['mediaState'],
-        MediaState.unknown,
-      ),
-      source: source,
-      // Persisted, so a restart can still tell that the issuance registers
-      // were never read and ask for them again.
-      incomplete: m['incomplete'] == true,
-    );
+    final descriptor = CachedDescriptor.fromInspection(m, source: source);
     // One bound, shared with the display view and the persisted table, so
     // an eviction here cannot leave a resolved token looking unresolved and
     // be requested again on every refresh forever.
@@ -1682,22 +2163,7 @@ class WalletService with WidgetsBindingObserver {
     _descriptorCache[id] = descriptor;
     // `TokenBalance`'s constructor runs issuerText() over the name, so a
     // hostile label is sanitised on the way in as well as on the way out.
-    rememberTokenMeta(
-      TokenBalance(
-        id: id,
-        amount: 0,
-        name: descriptor.name,
-        decimals: descriptor.decimals,
-        emissionAmount: descriptor.emissionAmount,
-        iconUrl: descriptor.iconUrl,
-        supplyEvidence: descriptor.supplyEvidence,
-        decimalsEvidence: descriptor.decimalsEvidence,
-        declaredAssetKind: descriptor.declaredAssetKind,
-        metadataState: descriptor.metadataState,
-        mediaState: descriptor.mediaState,
-        source: source,
-      ),
-    );
+    rememberTokenMeta(_asBalance(descriptor));
   }
 
   final Map<String, CachedDescriptor> _descriptorCache = {};
@@ -2574,7 +3040,9 @@ class WalletService with WidgetsBindingObserver {
       address: address,
       nodeUrl: nodeUrl,
     );
-    return jsonDecode(raw) as Map<String, dynamic>;
+    final balance = jsonDecode(raw) as Map<String, dynamic>;
+    onBalanceRead?.call(address, balance, nodeUrl);
+    return balance;
   }
 
   Future<List<TokenBalance>> tokensFor(
@@ -2591,6 +3059,12 @@ class WalletService with WidgetsBindingObserver {
   /// are chosen at one explicit call site rather than by a flag threaded
   /// through this interface.
   Future<List<TokenBalance>> hydrateTokens(dynamic raw) async {
+    // The wallet's own table first. It used to load only inside the name
+    // pass, which runs after history and the stealth scan, so the first
+    // balance after every unlock republished each holding without its name
+    // and the pass put it back seconds later. Memoized: only the first call
+    // waits, and only on local storage.
+    await ensureWalletTable();
     final items = raw is List ? raw : const [];
     final jobs = <Future<TokenBalance>>[];
     for (final item in items) {
@@ -2690,74 +3164,49 @@ class WalletService with WidgetsBindingObserver {
     );
   }
 
-  /// Fetch all unspent boxes (UTXOs) for the given addresses by calling the
-  /// node's REST API directly. Returns parsed [InputBoxInput] objects.
+  /// The wallet's spendable boxes on [addresses], for coin control and the
+  /// UTXO tools, as the Rust core gathers them for a spend: boxes a pending
+  /// transaction already spends are never listed, and unconfirmed ones —
+  /// incoming payments and change, marked [InputBoxInput.confirmed] false —
+  /// only while Settings allows spending them. [confirmedOnly] asks for
+  /// confirmed boxes whatever the setting (the mix funding finder waits for
+  /// its box to confirm). Mix reservations and mixed boxes are still listed;
+  /// the spend applies those rules.
   ///
   /// Caps at [maxUnspentBoxesTotal] across all addresses; a node error is
   /// raised, never silently treated as an empty wallet.
   Future<List<InputBoxInput>> listUnspentBoxes(
     List<String> addresses, {
     required String? nodeUrl,
-    int limit = 100,
+    bool confirmedOnly = false,
   }) async {
-    if (nodeUrl == null || nodeUrl.isEmpty) return [];
-    final normalizedUrl = nodeUrl.endsWith('/')
-        ? nodeUrl.substring(0, nodeUrl.length - 1)
-        : nodeUrl;
-    final client = http.Client();
-    try {
-      final all = <InputBoxInput>[];
-      final seen = <String>{};
-      for (final addr in addresses) {
-        if (addr.isEmpty) continue;
-        if (all.length >= maxUnspentBoxesTotal) break;
-        var offset = 0;
-        while (all.length < maxUnspentBoxesTotal) {
-          final endpoint =
-              '$normalizedUrl/blockchain/box/unspent/byAddress'
-              '?offset=$offset&limit=$limit';
-          final response = await client
-              .post(
-                Uri.parse(endpoint),
-                headers: {'Content-Type': 'application/json'},
-                body: jsonEncode(addr),
-              )
-              .timeout(const Duration(seconds: 15));
-          if (response.statusCode != 200) {
-            throw Exception(
-              'Node returned ${response.statusCode} for unspent boxes',
-            );
-          }
-          final body = response.body;
-          if (body.isEmpty) break;
-          final value = jsonDecode(body);
-          final items = (value is List)
-              ? value
-              : (value is Map ? (value['items'] as List? ?? []) : []);
-          if (items.isEmpty) break;
-          for (final item in items) {
-            if (item is! Map) continue;
-            try {
-              final b = InputBoxInput.fromErgoBox(
-                item as Map<String, dynamic>,
-                address: addr,
-              );
-              if (seen.add(b.boxId)) {
-                all.add(b);
-                if (all.length >= maxUnspentBoxesTotal) break;
-              }
-            } catch (_) {
-              // skip malformed entries
-            }
-          }
-          if (items.length < limit || all.length >= maxUnspentBoxesTotal) break;
-          offset += limit;
-        }
-      }
-      return all;
-    } finally {
-      client.close();
-    }
+    _requireUnlocked();
+    final raw = await RustLib.instance.api.crateApiMempoolListSpendableBoxes(
+      handleId: _handleId!,
+      addresses: [
+        for (final a in addresses)
+          if (a.isNotEmpty) a,
+      ],
+      nodeUrl: nodeUrl == null || nodeUrl.isEmpty ? null : nodeUrl,
+      confirmedOnly: confirmedOnly,
+    );
+    final boxes = _parseInputBoxes(jsonDecode(raw));
+    return boxes.length > maxUnspentBoxesTotal
+        ? boxes.sublist(0, maxUnspentBoxesTotal)
+        : boxes;
+  }
+
+  /// Balances, pending activity and the wallet-wide pending summary for a
+  /// wallet that is not unlocked, read one address at a time.
+  Future<Map<String, dynamic>> loadPublicSyncInputs(
+    List<String> addresses, {
+    String? nodeUrl,
+  }) async {
+    final raw = await RustLib.instance.api.crateApiMempoolGetPublicSyncInputs(
+      addresses: addresses,
+      nodeUrl: nodeUrl,
+    );
+    return jsonDecode(raw) as Map<String, dynamic>;
   }
 
   /// Consolidate ERG by sending-to-self in batches of up to 200 inputs.
@@ -2877,11 +3326,21 @@ class WalletService with WidgetsBindingObserver {
     _tokenMeta
       ..clear()
       ..addAll(_legacyTokenMeta);
-    // The table loads lazily, on the first path that needs it; the
-    // memoization was already dropped by clearSessionMetadata above.
+    // The table is read right after this, by the caller (see
+    // [_loadActivatedTable]); the memoization was already dropped by
+    // clearSessionMetadata above.
     walletSyncController.activateWallet(walletId);
     currentWalletId.value = walletId;
     unlocked.value = true;
+  }
+
+  /// Reads the newly active wallet's descriptor table before unlocking
+  /// returns, so names it has already learned are in memory for the first
+  /// frame and the first balance, rather than arriving after the first sync.
+  /// It is local storage, and the outgoing wallet's table is written first.
+  Future<void> _loadActivatedTable() async {
+    await flushPendingDescriptors();
+    await ensureWalletTable();
   }
 
   void _requireUnlocked() {

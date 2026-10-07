@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'address_holdings.dart';
+
 /// Local cache for instant 0ms UI load and non-extraIndex contract tracking.
 ///
 /// NOT encryption: `_obfuscate` only deters casual greps of prefs files. The
@@ -25,6 +27,7 @@ class LastKnownBalance {
     this.addresses = const [],
     this.stealthNano = 0,
     this.stealthScannedAt,
+    this.addressHoldings = const [],
   });
   final int balanceNano;
   /// Older snapshots without a token listing must not imply zero holdings.
@@ -46,6 +49,10 @@ class LastKnownBalance {
 
   /// Token holdings from the same snapshot, for portfolio valuation.
   final List<({String id, int amount, int decimals})> tokens;
+
+  /// What each address held when [balanceNano] was read. Empty for
+  /// snapshots written before the split was recorded.
+  final List<AddressHolding> addressHoldings;
 }
 
 class WalletDatabaseService {
@@ -129,6 +136,8 @@ class WalletDatabaseService {
     int? lastSuccessfulSyncAt,
     int stealthNano = 0,
     DateTime? stealthScannedAt,
+    List<Map<String, dynamic>> addressHoldings = const [],
+    Map<String, dynamic>? pending,
   }) async {
     if (walletId.isEmpty) return;
     final prefs = await SharedPreferences.getInstance();
@@ -147,9 +156,13 @@ class WalletDatabaseService {
       'stealth_nano_erg': stealthNano,
       'stealth_scanned_at': stealthScannedAt?.millisecondsSinceEpoch,
       'balance_nano_erg': balanceNano,
+      // Confirmed and pending figures behind balance_nano_erg, as the sync
+      // valued them (see PendingBalance). Public chain data, like the rest.
+      'pending': pending,
       'tokens': tokens,
       'transactions': transactions,
       'utxo_count': utxoCount,
+      'address_holdings': addressHoldings,
       'last_synced_height': lastSyncedHeight,
       'public_only': publicOnly,
       'sync_phase': syncPhase,
@@ -193,6 +206,7 @@ class WalletDatabaseService {
           else if (a is String && a.isNotEmpty) a,
       ],
       tokensKnown: map['tokens'] is List,
+      addressHoldings: AddressHolding.listFrom(map['address_holdings']),
       tokens: [
         for (final t in (map['tokens'] as List? ?? const []))
           if (t is Map && t['id'] is String)

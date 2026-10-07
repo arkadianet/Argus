@@ -15,10 +15,15 @@ class CoinSelection {
     required this.tokens,
     required this.addresses,
     this.mixedCount = 0,
+    this.unconfirmedCount = 0,
   });
 
   /// How many of the chosen boxes came out of a mix.
   final int mixedCount;
+
+  /// How many of the chosen boxes a transaction still in the mempool
+  /// created. Offered only while Settings allows spending unconfirmed funds.
+  final int unconfirmedCount;
 
   /// True when mixed boxes would be spent next to ordinary ones.
   bool get undoesMix => mixedCount > 0 && mixedCount < count;
@@ -63,6 +68,7 @@ CoinSelection summariseSelection(
     tokens: tokens,
     addresses: addresses,
     mixedCount: chosen.where((b) => mixedIds.contains(b.boxId)).length,
+    unconfirmedCount: chosen.where((b) => !b.confirmed).length,
   );
 }
 
@@ -110,6 +116,19 @@ String? selectionPrivacyNote(CoinSelection selection) {
   return 'These ${selection.count} boxes sit on ${selection.addresses.length} '
       'different addresses. Spending them together publicly links those '
       'addresses to one wallet.';
+}
+
+/// One line for a selection that spends boxes still confirming, or null.
+/// Spending them is allowed in Settings; the cost is that this transaction
+/// can confirm only after the one that created them, and fails with it if
+/// that one is dropped.
+String? selectionConfirmationNote(CoinSelection selection) {
+  final n = selection.unconfirmedCount;
+  if (n == 0) return null;
+  final which = n == 1 ? 'One of these boxes is' : '$n of these boxes are';
+  final them = n == 1 ? 'it' : 'them';
+  return '$which still confirming. This transaction can confirm only after '
+      'the one that created $them, and fails if that one is dropped.';
 }
 
 /// Human summary of what the chosen boxes hold.

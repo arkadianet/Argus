@@ -16,6 +16,7 @@ import '../theme/argus_theme.dart';
 import 'confirm_transaction_sheet.dart';
 import 'widgets/error_sheet.dart';
 import 'widgets/soft_card.dart';
+import 'widgets/entry_dialogs.dart';
 
 class ReceiveScreen extends StatefulWidget {
   const ReceiveScreen({super.key});
@@ -81,37 +82,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
   }
 
   Future<void> _editLabel(String address) async {
-    final existing = addressLabelService.labelFor(address) ?? '';
-    final ctrl = TextEditingController(text: existing);
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Address label'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SelectableText(
-              shorten(address, head: 10, tail: 8),
-              style: monoStyle(ctx, size: 11),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: ctrl,
-              decoration: const InputDecoration(labelText: 'Label (optional)'),
-              autofocus: true,
-              textCapitalization: TextCapitalization.words,
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
-        ],
-      ),
+    final label = await showAddressLabelDialog(
+      context,
+      address: address,
+      existing: addressLabelService.labelFor(address) ?? '',
     );
-    final label = ctrl.text;
-    ctrl.dispose();
-    if (ok != true) return;
+    if (label == null) return;
     await addressLabelService.setLabel(address, label);
   }
 
@@ -153,50 +129,27 @@ class _ReceiveScreenState extends State<ReceiveScreen> with TxReceiptOwner {
 
   /// Ask for a label and publish a new identity at the next index.
   Future<void> _addIdentity() async {
-    final controller = TextEditingController();
     final label = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add stealth address'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Text(
-              'A separate address you can publish in a different place. '
-              'Nothing links it to your other stealth addresses, and it '
-              'comes back from your recovery phrase like everything else.',
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              key: const Key('stealth-identity-label-field'),
-              controller: controller,
-              autofocus: true,
-              textCapitalization: TextCapitalization.sentences,
-              maxLength: 40,
-              decoration: const InputDecoration(
-                labelText: 'Label',
-                hintText: 'Donations',
-                helperText: 'Stored on this device only.',
-              ),
-              onSubmitted: (v) => Navigator.pop(context, v),
-            ),
-          ],
+      builder: (_) => const TextEntryDialog(
+        title: 'Add stealth address',
+        intro: Text(
+          'A separate address you can publish in a different place. '
+          'Nothing links it to your other stealth addresses, and it '
+          'comes back from your recovery phrase like everything else.',
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            key: const Key('stealth-identity-add-confirm'),
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Add'),
-          ),
-        ],
+        stretch: true,
+        fieldKey: Key('stealth-identity-label-field'),
+        confirmKey: Key('stealth-identity-add-confirm'),
+        label: 'Label',
+        hint: 'Donations',
+        helper: 'Stored on this device only.',
+        maxLength: 40,
+        textCapitalization: TextCapitalization.sentences,
+        submitOnEnter: true,
+        confirmLabel: 'Add',
       ),
     );
-    controller.dispose();
     if (label == null || !mounted) return;
     try {
       final created = await stealthService.addIdentity(label);

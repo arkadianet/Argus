@@ -368,7 +368,7 @@ const DEXY_POOL_NFTS: [&str; 2] = [
     "4ecaa1aac9846b1454563ae51746db95a3a40ee9f8c5f5301afbe348ae803d41",
 ];
 
-fn keep_pool(pool_id: &str) -> bool {
+pub(crate) fn keep_pool(pool_id: &str) -> bool {
     !DEXY_POOL_NFTS.contains(&pool_id)
 }
 
@@ -418,11 +418,47 @@ mod tests {
         ));
     }
 
-    /// `init_app` disables the inherited Citadel fee. This pins that guard:
+    /// Set in the child process [`argus_levies_its_own_fee_never_citadels`]
+    /// spawns, where the check itself runs.
+    const FEE_GUARD_CHILD: &str = "ARGUS_FEE_GUARD_CHILD";
+
+    /// `init_app` disables the inherited Citadel fee. This pins that guard.
+    ///
     /// `resolved_dev_fee_config` caches into a process-global `OnceLock` on
-    /// first call, so this must be the only test in the crate that resolves it.
+    /// first call, and other tests in this crate (the mempool ones) build
+    /// transactions without a thread-local override, so whichever test runs
+    /// first decides what is cached. On CI a mempool test sometimes won, the
+    /// cache held "no fee", and this check failed although the app is fine:
+    /// at bridge start `init_app` always runs first. So the check re-runs this
+    /// test alone in a fresh process, where `init_app` is the first thing to
+    /// touch the config, exactly as in the app.
     #[test]
     fn argus_levies_its_own_fee_never_citadels() {
+        if std::env::var_os(FEE_GUARD_CHILD).is_some() {
+            assert_init_installs_argus_fee();
+            return;
+        }
+        let exe = std::env::current_exe().expect("path of this test binary");
+        let out = std::process::Command::new(exe)
+            .args([
+                "--exact",
+                "api_amm_impl::tests::argus_levies_its_own_fee_never_citadels",
+                "--test-threads=1",
+            ])
+            .env(FEE_GUARD_CHILD, "1")
+            .output()
+            .expect("re-run the fee guard in a fresh process");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "fee guard failed in a fresh process:\n{stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // A filter that matched nothing would also exit 0.
+        assert!(stdout.contains("1 passed"), "fee guard did not run:\n{stdout}");
+    }
+
+    fn assert_init_installs_argus_fee() {
         crate::api::init_app();
 
         let cfg = ergo_tx::resolved_dev_fee_config();

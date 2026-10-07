@@ -10,13 +10,17 @@ import 'services/network_controller.dart';
 import 'services/privacy_service.dart';
 import 'services/token_pricer.dart';
 import 'services/session_lock.dart';
+import 'services/spend_policy.dart';
 import 'services/stealth_service.dart';
+import 'services/update_service.dart';
 import 'services/watch_only_service.dart';
+import 'services/watched_token_meta.dart';
 import 'services/wallet_service.dart';
 import 'services/wallet_sync_controller.dart';
 import 'theme/argus_theme.dart';
 import 'theme/theme_controller.dart';
 import 'ui/ageusd_screen.dart';
+import 'ui/arbitrage_screen.dart';
 import 'ui/contacts_screen.dart';
 import 'ui/create_wallet_screen.dart';
 import 'ui/dashboard_screen.dart';
@@ -37,10 +41,37 @@ import 'ui/liquidity_screen.dart';
 import 'ui/rosen_screen.dart';
 import 'ui/mix_screen.dart';
 import 'ui/token_tools_screen.dart';
-import 'ui/discover_screen.dart';
 import 'ui/utxo_management_screen.dart';
 
 final navigatorKey = GlobalKey<NavigatorState>();
+
+/// The page a named route opens, or null for a name the app does not know.
+Widget? appPage(String? name) => switch (name) {
+      '/' || null => const DashboardScreen(),
+      '/receive' => const ReceiveScreen(),
+      '/send' => const SendScreen(),
+      '/transactions' => const TransactionsScreen(),
+      '/create' => const CreateWalletScreen(),
+      '/restore' => const RestoreWalletScreen(),
+      '/settings' => const SettingsScreen(),
+      '/contacts' => const ContactsScreen(),
+      '/tx' => const TransactionDetailScreen(),
+      '/utxos' => const UtxoManagementScreen(),
+      UtxoManagementScreen.cleanupRoute => const UtxoManagementScreen(openCleanup: true),
+      '/stakes' => const StakeRecoveryScreen(),
+      '/tokens' => const TokenToolsScreen(),
+      '/mix' => const MixScreen(),
+      '/duckpools' => const DuckpoolsScreen(),
+      '/dapps' => const DappBrowserScreen(),
+      '/sigmafi' => const SigmaFiScreen(),
+      '/liquidity' => const LiquidityScreen(),
+      '/rosen' => const RosenScreen(),
+      '/dexy' => const DexyScreen(),
+      '/ageusd' => const AgeUsdScreen(),
+      '/swap' => const SwapHubScreen(),
+      '/arbitrage' => const ArbitrageScreen(),
+      _ => null,
+    };
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -54,13 +85,18 @@ Future<void> main() async {
     watchOnlyService.load().catchError((_) {}),
     watchAccountService.load().catchError((_) {}),
     privacyService.load().catchError((_) {}),
+    spendPolicy.load().catchError((_) {}),
     previewSettings.load().catchError((_) {}),
     stealthService.load().catchError((_) {}),
     tokenPricer.load().catchError((_) {}),
   ]);
   networkController.priceRefresher = tokenPricer.refresh;
+  // Watched addresses and accounts name their holdings as seed wallets do.
+  watchedTokenMeta.attach();
   await MixBackground.init();
   runApp(const ArgusApp());
+  // Off until the user turns it on in About; then at most one request a day.
+  updateService.checkOnStart().catchError((_) {});
 }
 
 class ArgusApp extends StatefulWidget {
@@ -132,31 +168,7 @@ class _ArgusAppState extends State<ArgusApp> with WidgetsBindingObserver {
             ),
           ),
           onGenerateRoute: (settings) {
-            final page = switch (settings.name) {
-              '/' || null => const DashboardScreen(),
-              '/receive' => const ReceiveScreen(),
-              '/send' => const SendScreen(),
-              '/transactions' => const TransactionsScreen(),
-              '/create' => const CreateWalletScreen(),
-              '/restore' => const RestoreWalletScreen(),
-              '/settings' => const SettingsScreen(),
-              '/contacts' => const ContactsScreen(),
-              '/tx' => const TransactionDetailScreen(),
-              '/utxos' => const UtxoManagementScreen(),
-              '/stakes' => const StakeRecoveryScreen(),
-              '/tokens' => const TokenToolsScreen(),
-              '/discover' => const DiscoverScreen(),
-              '/mix' => const MixScreen(),
-              '/duckpools' => const DuckpoolsScreen(),
-              '/dapps' => const DappBrowserScreen(),
-              '/sigmafi' => const SigmaFiScreen(),
-              '/liquidity' => const LiquidityScreen(),
-              '/rosen' => const RosenScreen(),
-              '/dexy' => const DexyScreen(),
-              '/ageusd' => const AgeUsdScreen(),
-              '/swap' => const SwapHubScreen(),
-              _ => null,
-            };
+            final page = appPage(settings.name);
             if (page == null) return null;
             return fadeRoute(page, settings: settings);
           },

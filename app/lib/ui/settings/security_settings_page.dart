@@ -6,14 +6,15 @@ import '../../format.dart';
 import '../../services/privacy_service.dart';
 import '../../services/secure_storage.dart';
 import '../../services/session_lock.dart';
+import '../../services/spend_policy.dart';
 import '../../services/battery_service.dart';
 import '../../services/mix_service.dart';
 import '../widgets/battery_note.dart';
 import '../../services/stealth_identities.dart';
 import '../../services/stealth_service.dart';
 import '../../services/wallet_service.dart';
-import '../pin_fields.dart';
 import 'settings_shared.dart';
+import '../widgets/entry_dialogs.dart';
 
 /// Auto-lock (app-wide) plus this wallet's PIN and biometric unlock.
 class SecuritySettingsPage extends StatefulWidget {
@@ -104,35 +105,18 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
   }
 
   Future<void> _renameStealthIdentity(StealthIdentity id) async {
-    final controller = TextEditingController(text: id.label);
     final label = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Rename stealth address'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLength: 40,
-          textCapitalization: TextCapitalization.sentences,
-          decoration: const InputDecoration(
-            labelText: 'Label',
-            helperText: 'The address itself does not change.',
-          ),
-          onSubmitted: (v) => Navigator.pop(context, v),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text),
-            child: const Text('Save'),
-          ),
-        ],
+      builder: (_) => TextEntryDialog(
+        title: 'Rename stealth address',
+        initial: id.label,
+        label: 'Label',
+        helper: 'The address itself does not change.',
+        maxLength: 40,
+        textCapitalization: TextCapitalization.sentences,
+        submitOnEnter: true,
       ),
     );
-    controller.dispose();
     if (label == null) return;
     try {
       await stealthService.renameIdentity(id.index, label);
@@ -181,21 +165,12 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
   }
 
   Future<void> _enableBiometric() async {
-    final pin = TextEditingController();
-    final ok = await showDialog<bool>(
+    final entry = await showDialog<PinEntry>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Confirm PIN'),
-        content: PinFields(pin: pin),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Continue')),
-        ],
-      ),
+      builder: (_) => const PinEntryDialog(title: 'Confirm PIN'),
     );
-    final entered = pin.text;
-    pin.dispose();
-    if (ok != true) return;
+    if (entry == null) return;
+    final entered = entry.pin;
     final pinErr = validatePin(entered);
     if (pinErr != null) {
       _snack(pinErr);
@@ -245,34 +220,20 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
   }
 
   Future<void> _changePin() async {
-    final oldPin = TextEditingController();
-    final newPin = TextEditingController();
-    final confirmPin = TextEditingController();
-    final ok = await showDialog<bool>(
+    final entry = await showDialog<PinEntry>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Change PIN'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            PinFields(pin: oldPin, label: 'Current PIN'),
-            const SizedBox(height: 12),
-            PinFields(pin: newPin, confirm: confirmPin, label: 'New PIN'),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Change')),
-        ],
+      builder: (_) => const PinEntryDialog(
+        title: 'Change PIN',
+        askCurrent: true,
+        pinLabel: 'New PIN',
+        askConfirm: true,
+        confirmLabel: 'Change',
       ),
     );
-    final old = oldPin.text;
-    final next = newPin.text;
-    final confirm = confirmPin.text;
-    oldPin.dispose();
-    newPin.dispose();
-    confirmPin.dispose();
-    if (ok != true) return;
+    if (entry == null) return;
+    final old = entry.current;
+    final next = entry.pin;
+    final confirm = entry.confirm;
     final pinErr = validatePin(next);
     if (pinErr != null) {
       _snack(pinErr);
@@ -450,6 +411,34 @@ class _SecuritySettingsPageState extends State<SecuritySettingsPage> {
         const SettingsNote(
           'Seed phrase screens always block capture, whatever this setting says.',
         ),
+        ListenableBuilder(
+          listenable: spendPolicy,
+          builder: (context, _) => SettingsGroup(
+            title: 'Spending',
+            scope: 'App-wide',
+            children: [
+              SettingsRow(
+                icon: Icons.hourglass_bottom_rounded,
+                title: 'Spend unconfirmed funds',
+                subtitle: spendPolicy.spendUnconfirmed
+                    ? 'On: received funds and change can be spent at once'
+                    : 'Off: received funds and change wait for 1 confirmation',
+                trailing: Switch(
+                  key: const Key('spend-unconfirmed-switch'),
+                  value: spendPolicy.spendUnconfirmed,
+                  onChanged: (v) async {
+                    try {
+                      await spendPolicy.setSpendUnconfirmed(v);
+                    } catch (_) {
+                      _snack('Could not save the spending setting');
+                    }
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SettingsNote(spendUnconfirmedNote),
         ListenableBuilder(
           listenable: stealthService,
           builder: (context, _) => SettingsGroup(

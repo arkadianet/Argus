@@ -14,4 +14,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 reqwest = { workspace = true }
+rustls = { workspace = true }
 tokio = { workspace = true }

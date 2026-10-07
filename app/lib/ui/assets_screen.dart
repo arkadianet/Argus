@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../format.dart';
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
+import '../services/token_metadata.dart';
 import '../services/token_pricer.dart';
 import '../services/verified_tokens.dart';
 import '../services/wallet_service.dart';
@@ -10,6 +11,7 @@ import '../theme/argus_theme.dart';
 import 'send_screen.dart';
 import 'token_avatar.dart';
 import 'widgets/asset_tile.dart';
+import 'widgets/pending_balance_line.dart';
 import 'widgets/token_detail_sheet.dart';
 
 /// A text-first, lazy view of holdings. Opening it never hydrates metadata.
@@ -181,6 +183,7 @@ class _AssetsScreenState extends State<AssetsScreen> {
                     Text(
                       'Holdings last synced ${formatSyncAge(live.lastSyncedAt)}',
                     ),
+                  PendingBalanceLine(pending: live.pending, hidden: hidden),
                 ],
               ),
             ),
@@ -361,7 +364,7 @@ class _CollectibleCard extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      'Held: ${formatTokenAmountGrouped(token.amount, token.decimals)}',
+                      'Held: ${holdingAmountText(token)}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(fontSize: 12),

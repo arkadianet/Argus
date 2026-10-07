@@ -15,24 +15,16 @@ void main() {
     test('public alone does not read as a split', () {
       final p = walletPockets(publicNano: 1012000000, stealthNano: 0, stealthUnknown: false);
       expect(p.map((e) => e.pocket), [Pocket.public]);
-      expect(pocketBreakdown(p), isNull, reason: 'nothing to break down');
     });
 
-    test('stealth funds produce a breakdown that adds up to the total', () {
+    test('stealth funds produce pockets that add up to the total', () {
       final p = walletPockets(publicNano: 1012000000, stealthNano: 1000000000, stealthUnknown: false);
       expect(p.fold<int>(0, (s, e) => s + e.nanoErg), 2012000000);
-      expect(pocketBreakdown(p), '1.012 public · 1 stealth');
     });
 
-    test('an unknown stealth balance is shown as unknown, never as zero', () {
+    test('an unknown stealth balance is kept as unknown, never as zero', () {
       final p = walletPockets(publicNano: 1, stealthNano: 0, stealthUnknown: true);
       expect(p.last.unknown, isTrue);
-      expect(pocketBreakdown(p), contains('stealth unknown'));
-    });
-
-    test('hidden balances mask the amounts but keep the pocket names', () {
-      final p = walletPockets(publicNano: 1012000000, stealthNano: 1000000000, stealthUnknown: false);
-      expect(pocketBreakdown(p, hidden: true), '•••• public · •••• stealth');
     });
 
     test('in-mix money is reported but not spendable', () {

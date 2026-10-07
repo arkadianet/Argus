@@ -39,6 +39,22 @@ class ReviewApi extends SessionApi {
     required BigInt limit,
     required BigInt offset,
   }) async => '[{"tx_id":"confirmed","height":1}]';
+
+  /// A locked wallet's balances now arrive in one call that walks its
+  /// addresses in turn; served here from the per-address stand-in.
+  @override
+  Future<String> crateApiMempoolGetPublicSyncInputs({
+    required List<String> addresses,
+    String? nodeUrl,
+  }) async {
+    final balances = <String, dynamic>{};
+    for (final address in addresses) {
+      balances[address] = jsonDecode(
+        await crateApiGetBalance(address: address, nodeUrl: nodeUrl),
+      );
+    }
+    return jsonEncode({'balances': balances});
+  }
 }
 
 void main() {

@@ -56,59 +56,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   void _addOrEdit([WalletContact? existing]) {
-    final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final addrCtrl = TextEditingController(text: existing?.address ?? '');
-    showDialog(
+    showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(existing == null ? 'Add contact' : 'Edit contact'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              decoration: const InputDecoration(labelText: 'Name'),              textCapitalization: TextCapitalization.words,
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: addrCtrl,
-              decoration: const InputDecoration(labelText: 'Address'),
-              style: monoStyle(ctx, size: 12),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () async {
-              final name = nameCtrl.text.trim();
-              final addr = addrCtrl.text.trim();
-              if (name.isEmpty || addr.isEmpty) return;
-              // Stealth strings are storable too: paying one derives a
-              // fresh one-time address at send time.
-              if (!looksLikeRecipient(addr)) {
-                ScaffoldMessenger.of(ctx).showSnackBar(
-                  const SnackBar(
-                    content: Text('Not a valid Ergo or stealth address'),
-                  ),
-                );
-                return;
-              }
-              if (existing == null) {
-                await contactsService.add(name, addr);
-              } else {
-                await contactsService.update(existing.id, name: name, address: addr);
-              }
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: Text(existing == null ? 'Add' : 'Save'),
-          ),
-        ],
-      ),
-    ).then((_) {
-      nameCtrl.dispose();
-      addrCtrl.dispose();
-    });
+      builder: (_) => _ContactDialog(existing: existing),
+    );
   }
 
   Future<void> _exportContacts() async {
@@ -256,6 +207,81 @@ class _ContactsScreenState extends State<ContactsScreen> {
           ),
         );
       },
+    );
+  }
+}
+
+/// Adds or edits a contact. Owns its fields' controllers, so they outlive
+/// the dialog's exit animation and go with its State.
+class _ContactDialog extends StatefulWidget {
+  const _ContactDialog({this.existing});
+
+  final WalletContact? existing;
+
+  @override
+  State<_ContactDialog> createState() => _ContactDialogState();
+}
+
+class _ContactDialogState extends State<_ContactDialog> {
+  late final _name = TextEditingController(text: widget.existing?.name ?? '');
+  late final _address = TextEditingController(text: widget.existing?.address ?? '');
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _address.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final existing = widget.existing;
+    final name = _name.text.trim();
+    final addr = _address.text.trim();
+    if (name.isEmpty || addr.isEmpty) return;
+    // Stealth strings are storable too: paying one derives a fresh one-time
+    // address at send time.
+    if (!looksLikeRecipient(addr)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Not a valid Ergo or stealth address')),
+      );
+      return;
+    }
+    if (existing == null) {
+      await contactsService.add(name, addr);
+    } else {
+      await contactsService.update(existing.id, name: name, address: addr);
+    }
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final existing = widget.existing;
+    return AlertDialog(
+      title: Text(existing == null ? 'Add contact' : 'Edit contact'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextField(
+            controller: _name,
+            decoration: const InputDecoration(labelText: 'Name'),
+            textCapitalization: TextCapitalization.words,
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _address,
+            decoration: const InputDecoration(labelText: 'Address'),
+            style: monoStyle(context, size: 12),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+        FilledButton(
+          onPressed: _save,
+          child: Text(existing == null ? 'Add' : 'Save'),
+        ),
+      ],
     );
   }
 }
