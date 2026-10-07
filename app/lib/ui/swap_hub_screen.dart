@@ -29,9 +29,14 @@ class SwapHubScreen extends StatefulWidget {
     this.embedded = false,
     this.venue,
     this.onVenueChanged,
+    this.initialFrom,
   });
 
   final SwapVenue initialTab;
+
+  /// The token Spectrum's swap starts paying with (null: ERG), when the hub
+  /// is opened from that token's sheet.
+  final String? initialFrom;
 
   /// Hosted as a home tab: no app bar of its own.
   final bool embedded;
@@ -112,7 +117,7 @@ class _SwapHubScreenState extends State<SwapHubScreen> {
                   for (final venue in enabledVenues())
                     switch (venue) {
                       SwapVenue.dexy => const DexyScreen(embedded: true),
-                      SwapVenue.spectrum => const SwapScreen(embedded: true),
+                      SwapVenue.spectrum => SwapScreen(embedded: true, initialFrom: widget.initialFrom),
                       SwapVenue.ageusd => const AgeUsdScreen(embedded: true),
                     },
                 ],

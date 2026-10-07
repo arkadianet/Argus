@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../format.dart';
+import '../services/amm_service.dart' show ammService;
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
 import '../services/token_metadata.dart';
@@ -9,6 +10,7 @@ import '../services/wallet_service.dart';
 import '../services/wallet_sync_controller.dart';
 import '../theme/argus_theme.dart';
 import 'send_screen.dart';
+import 'swap_hub_screen.dart';
 import 'token_avatar.dart';
 import 'widgets/asset_tile.dart';
 import 'widgets/pending_balance_line.dart';
@@ -61,6 +63,17 @@ class _AssetsScreenState extends State<AssetsScreen> {
         settings: RouteSettings(arguments: widget.args),
       ),
     ),
+    // Swapping signs; a watched wallet's holdings offer only a look.
+    onSwap: widget.args.watchOnly
+        ? null
+        : (t) => Navigator.push(
+            context,
+            fadeRoute(
+              SwapHubScreen(initialTab: coerceVenue(SwapVenue.spectrum), initialFrom: t.id),
+              settings: RouteSettings(arguments: widget.args),
+            ),
+          ),
+    swappable: widget.args.watchOnly ? null : ammService.hasPool(token.id),
   );
   @override
   Widget build(BuildContext context) => Scaffold(

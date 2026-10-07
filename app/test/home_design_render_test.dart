@@ -196,7 +196,9 @@ void main() {
       expect(find.byTooltip('All wallets'), findsOneWidget);
       expect(find.byKey(const Key('wallet-tab-discover')), findsOneWidget);
       if (scale == 1) {
-        expect(_assetsAboveFold(tester), greaterThanOrEqualTo(4), reason: 'balance, actions and the holdings fit');
+        // The page opens on the scene: the balance, its pills and the
+        // actions, then the tabs; the first holding is in view.
+        expect(_assetsAboveFold(tester), greaterThanOrEqualTo(1), reason: 'the first holding is in view');
       }
       await _accessible(tester);
 

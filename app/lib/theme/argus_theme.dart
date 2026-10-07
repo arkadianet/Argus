@@ -5,18 +5,19 @@ import 'package:flutter/material.dart';
 const iris = Color(0xFFC4A46A);
 /// Brand iris darkened for text/buttons on light paper (~6.4:1 vs ~2.1:1).
 const irisDeep = Color(0xFF6B5320);
-const ink = Color(0xFF0E1110);
-const watchfulSurface = Color(0xFF171C1A);
-const bone = Color(0xFFE8E4D9);
-const watchfulMuted = Color(0xFF8A867A);
+const ink = Color(0xFF0E0D0B);
+const watchfulSurface = Color(0xFF171512);
+const bone = Color(0xFFEDE6D6);
+const watchfulMuted = Color(0xFFA69E8F);
 const paper = Color(0xFFF5F1E8);
 const ledgerSurface = Color(0xFFFEFCF7);
 const ledgerInk = Color(0xFF1C1914);
 const ledgerMuted = Color(0xFF6B6458);
 const rust = Color(0xFFB54A3C);
-/// Brand rust brightened for text on dark ink (~6.9:1 vs ~3.6:1).
-const rustBright = Color(0xFFE08A70);
-const moss = Color(0xFF3E7A55);
+/// Brand rust brightened to a clear coral for text on dark ink (about
+/// 7:1, where [rust] manages about 3.6:1).
+const rustBright = Color(0xFFFF8A73);
+const moss = Color(0xFF1A7A47);
 const bannerTint = Color(0xFFF0E6D2);
 
 /// Palette-aware rust for *text*: the brand rust fails WCAG on dark
@@ -29,6 +30,126 @@ const buttonRadius = 14.0;
 
 /// Accent colour for the current palette (gold on Watchful and Ledger).
 Color accentOf(BuildContext context) => ArgusColors.of(context).accent;
+
+/// The colours of the scene the home pages open on: a sky that settles
+/// into the page, a glow of the accent (an eclipse's rim on the overview, a
+/// medallion's rings on a wallet's page), ridges with light along their
+/// tops, and the glass that pills and cards are made of.
+///
+/// The balance is set straight onto the scene, in the page's own type, so
+/// everything here is held dark (or, on a light palette, pale) enough for
+/// that type to meet WCAG AA on every ground it can fall on: the sky, the
+/// haze and the brightest ridge (home_contrast_test.dart). The bright parts,
+/// the rim of the eclipse and the light on the ridges, are thin lines that
+/// no text sits on.
+class SceneSpec {
+  const SceneSpec({
+    required this.sky,
+    required this.haze,
+    required this.lit,
+    required this.glow,
+    required this.rimLight,
+    required this.ridges,
+    required this.glassFill,
+    required this.glassBorder,
+    required this.glassSheen,
+    required this.ring,
+    required this.ringFill,
+    required this.sendTop,
+    required this.sendBottom,
+    required this.sendGlow,
+    required this.onSend,
+  });
+
+  /// The scene for [p]: everything is mixed from its page and accent, so a
+  /// palette needs no art of its own.
+  factory SceneSpec.of(PaletteSpec p) {
+    final bg = p.background;
+    final a = p.accent;
+    Color mix(Color x, Color y, double t) => Color.lerp(x, y, t)!;
+    // A light mark on Send (Parchment's sage) needs the accent darkened, not
+    // lifted, under it.
+    final lightMark = p.onAccent.computeLuminance() > a.computeLuminance();
+    final sendTop = lightMark ? a : mix(a, Colors.white, p.isDark ? 0.22 : 0.18);
+    final sendBottom = mix(a, Colors.black, lightMark ? 0.22 : (p.isDark ? 0.22 : 0.12));
+    if (p.isDark) {
+      return SceneSpec(
+        // The far crests catch the light, a shade above the sky; the main
+        // range and the near ridge are darker than the page, masses against
+        // the haze.
+        sky: mix(bg, a, 0.075),
+        haze: a.withValues(alpha: 0.12),
+        lit: a.withValues(alpha: 0.18),
+        glow: a,
+        rimLight: mix(a, Colors.white, 0.35),
+        ridges: [mix(bg, a, 0.10), mix(bg, Colors.black, 0.25), mix(bg, Colors.black, 0.4)],
+        glassFill: Colors.white.withValues(alpha: 0.05),
+        glassBorder: Colors.white.withValues(alpha: 0.11),
+        glassSheen: Colors.white.withValues(alpha: 0.035),
+        ring: p.ink.withValues(alpha: 0.18),
+        ringFill: p.ink.withValues(alpha: 0.05),
+        sendTop: sendTop,
+        sendBottom: sendBottom,
+        sendGlow: a.withValues(alpha: 0.45),
+        onSend: p.onAccent,
+      );
+    }
+    return SceneSpec(
+      // On a light page the scene is luminous rather than dark: a sky paler
+      // than the page, the light a white haze, the ridges barely tinted.
+      // Darkening it would cost the page's type its contrast.
+      sky: mix(p.surface, a, 0.03),
+      haze: Colors.white.withValues(alpha: 0.55),
+      lit: Colors.white.withValues(alpha: 0.6),
+      glow: mix(a, Colors.black, 0.1),
+      rimLight: Colors.white,
+      ridges: [mix(p.surface, a, 0.07), mix(p.surface, a, 0.045), mix(p.surface, a, 0.02)],
+      glassFill: Colors.white.withValues(alpha: 0.62),
+      glassBorder: p.ink.withValues(alpha: 0.08),
+      glassSheen: Colors.white.withValues(alpha: 0.55),
+      ring: p.ink.withValues(alpha: 0.2),
+      ringFill: Colors.white.withValues(alpha: 0.42),
+      sendTop: sendTop,
+      sendBottom: sendBottom,
+      sendGlow: a.withValues(alpha: 0.4),
+      onSend: p.onAccent,
+    );
+  }
+
+  /// The top of the scene; it settles into the page's own colour.
+  final Color sky;
+
+  /// The accent's haze around the glow, translucent.
+  final Color haze;
+
+  /// Light laid on the ridges' slopes nearest the glow, translucent.
+  final Color lit;
+
+  /// The eclipse's rim and the medallion's rings.
+  final Color glow;
+
+  /// The light along the ridges' tops, translucent on a light palette.
+  final Color rimLight;
+
+  /// The ridges, far to near, each fading into the page at its foot.
+  final List<Color> ridges;
+
+  /// Glass: the pills and cards, translucent, with a hairline edge and a
+  /// sheen across their top.
+  final Color glassFill;
+  final Color glassBorder;
+  final Color glassSheen;
+
+  /// The round actions' thin rings and faint fill.
+  final Color ring;
+  final Color ringFill;
+
+  /// Send: a glowing gradient of the accent, and the mark on it.
+  final Color sendTop;
+  final Color sendBottom;
+  final Color sendGlow;
+  final Color onSend;
+}
 
 /// One complete palette. Two ship as the defaults (Watchful, Ledger); the
 /// rest are alternatives the user can pick per brightness.
@@ -69,14 +190,18 @@ class PaletteSpec {
   /// Accent as text on this background, contrast-safe.
   final Color accentText;
 
+  /// The scene the home pages open on.
+  SceneSpec get scene => SceneSpec.of(this);
+
   bool get isDark => brightness == Brightness.dark;
 }
 
 const watchfulPalette = PaletteSpec(
-  id: 'watchful', name: 'Watchful', hint: 'Ink ground, bone type, gold', brightness: Brightness.dark,
-  background: ink, surface: watchfulSurface, surfaceHigh: Color(0xFF1E2421), ink: bone, muted: watchfulMuted,
-  outline: Color(0xFF2C3330), cardBorder: Color(0xFF262C29), chip: watchfulSurface,
-  accent: iris, onAccent: ink, accentText: iris,
+  id: 'watchful', name: 'Watchful', hint: 'Warm black, cream type, gold', brightness: Brightness.dark,
+  background: ink, surface: watchfulSurface, surfaceHigh: Color(0xFF201D18),
+  ink: bone, muted: watchfulMuted,
+  outline: Color(0xFF2E2A23), cardBorder: Color(0xFF26231D), chip: watchfulSurface,
+  accent: Color(0xFFC9A35A), onAccent: ink, accentText: Color(0xFFC9A35A),
 );
 
 const ledgerPalette = PaletteSpec(
@@ -88,21 +213,21 @@ const ledgerPalette = PaletteSpec(
 
 const obsidianPalette = PaletteSpec(
   id: 'obsidian', name: 'Obsidian', hint: 'True black, steel accent', brightness: Brightness.dark,
-  background: Color(0xFF000000), surface: Color(0xFF111214), surfaceHigh: Color(0xFF1A1C1F), ink: Color(0xFFE9EAEC), muted: Color(0xFF8B9096),
+  background: Color(0xFF000000), surface: Color(0xFF111214), surfaceHigh: Color(0xFF1A1C1F), ink: Color(0xFFE9EAEC), muted: Color(0xFF969BA2),
   outline: Color(0xFF2A2D31), cardBorder: Color(0xFF232629), chip: Color(0xFF17191C),
   accent: Color(0xFF9DB8CC), onAccent: Color(0xFF0B1216), accentText: Color(0xFF9DB8CC),
 );
 
 const harborPalette = PaletteSpec(
   id: 'harbor', name: 'Harbor', hint: 'Deep navy, teal accent', brightness: Brightness.dark,
-  background: Color(0xFF0B1220), surface: Color(0xFF141D2E), surfaceHigh: Color(0xFF1B2638), ink: Color(0xFFE3E8F0), muted: Color(0xFF8592A6),
+  background: Color(0xFF0B1220), surface: Color(0xFF141D2E), surfaceHigh: Color(0xFF1B2638), ink: Color(0xFFE3E8F0), muted: Color(0xFF97A3B5),
   outline: Color(0xFF283449), cardBorder: Color(0xFF222D40), chip: Color(0xFF182233),
   accent: Color(0xFF5FB3A4), onAccent: Color(0xFF06201C), accentText: Color(0xFF7CC9BB),
 );
 
 const emberPalette = PaletteSpec(
   id: 'ember', name: 'Ember', hint: 'Warm charcoal, copper accent', brightness: Brightness.dark,
-  background: Color(0xFF151210), surface: Color(0xFF201B18), surfaceHigh: Color(0xFF29221E), ink: Color(0xFFEDE3D9), muted: Color(0xFF9A8E84),
+  background: Color(0xFF151210), surface: Color(0xFF201B18), surfaceHigh: Color(0xFF29221E), ink: Color(0xFFEDE3D9), muted: Color(0xFFAEA195),
   outline: Color(0xFF3A312C), cardBorder: Color(0xFF302925), chip: Color(0xFF261F1B),
   accent: Color(0xFFD48A5A), onAccent: Color(0xFF1E120A), accentText: Color(0xFFE0A07A),
 );
@@ -143,6 +268,7 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
     this.accent = iris,
     this.onAccent = ink,
     this.accentText = iris,
+    this.scene,
   });
 
   factory ArgusColors.fromSpec(PaletteSpec p) => ArgusColors(
@@ -153,7 +279,16 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
         accent: p.accent,
         onAccent: p.onAccent,
         accentText: p.accentText,
+        scene: p.scene,
       );
+
+  /// The scene the home pages open on; null outside a palette's theme,
+  /// where [sceneOf] falls back to the default palette's.
+  final SceneSpec? scene;
+
+  /// The scene for [context]'s theme.
+  static SceneSpec sceneOf(BuildContext context) =>
+      of(context).scene ?? (Theme.of(context).brightness == Brightness.dark ? watchfulPalette : ledgerPalette).scene;
 
   /// Primary accent (buttons, links, selected states).
   final Color accent;
@@ -184,7 +319,7 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
 
   static const dark = ArgusColors(
     muted: watchfulMuted,
-    cardBorder: Color(0xFF262C29),
+    cardBorder: Color(0xFF26231D),
     inset: ink,
     chip: watchfulSurface,
   );
@@ -194,7 +329,16 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
       (Theme.of(context).brightness == Brightness.dark ? dark : light);
 
   @override
-  ArgusColors copyWith({Color? muted, Color? cardBorder, Color? inset, Color? chip, Color? accent, Color? onAccent, Color? accentText}) =>
+  ArgusColors copyWith({
+    Color? muted,
+    Color? cardBorder,
+    Color? inset,
+    Color? chip,
+    Color? accent,
+    Color? onAccent,
+    Color? accentText,
+    SceneSpec? scene,
+  }) =>
       ArgusColors(
         muted: muted ?? this.muted,
         cardBorder: cardBorder ?? this.cardBorder,
@@ -203,6 +347,7 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
         accent: accent ?? this.accent,
         onAccent: onAccent ?? this.onAccent,
         accentText: accentText ?? this.accentText,
+        scene: scene ?? this.scene,
       );
 
   @override
@@ -216,6 +361,7 @@ class ArgusColors extends ThemeExtension<ArgusColors> {
       accent: Color.lerp(accent, other.accent, t)!,
       onAccent: Color.lerp(onAccent, other.onAccent, t)!,
       accentText: Color.lerp(accentText, other.accentText, t)!,
+      scene: t < 0.5 ? scene : other.scene,
     );
   }
 }

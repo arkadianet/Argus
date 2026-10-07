@@ -43,6 +43,7 @@ import 'send_screen.dart';
 import 'settings/network_settings_page.dart';
 import 'settings_screen.dart';
 import 'swap_hub_screen.dart';
+import '../services/amm_service.dart';
 import 'transaction_detail_screen.dart';
 import 'transactions_screen.dart';
 import 'wallets_overview_screen.dart';
@@ -552,8 +553,12 @@ class _DashboardScreenState extends State<DashboardScreen>
     _snack('"$name" removed');
   }
 
-  void _onWatchedRemoved() {
-    _closeWallet();
+  /// [removed] is no longer watched. Its page closes only if it is still
+  /// the one open: the removal is saved after the confirmation closes, and
+  /// another wallet may have been opened while it was.
+  void _onWatchedRemoved(WalletRef removed) {
+    if (!mounted) return;
+    if (_open == removed) _closeWallet();
     _snack('Stopped watching');
   }
 
@@ -973,6 +978,22 @@ class _DashboardScreenState extends State<DashboardScreen>
           ),
         );
       },
+      // This is the signing wallet's page; a watched one opens its tokens
+      // from watched_wallet.dart, which offers no swap.
+      onSwap: (token) => _swapFrom(token.id),
+      swappable: ammService.hasPool(t.id),
+    );
+  }
+
+  /// Spectrum's swap, paying with [tokenId] (null: ERG).
+  void _swapFrom(String? tokenId) {
+    if (!_guardUnlocked()) return;
+    Navigator.push(
+      context,
+      fadeRoute(
+        SwapHubScreen(initialTab: coerceVenue(SwapVenue.spectrum), initialFrom: tokenId),
+        settings: RouteSettings(arguments: _args()),
+      ),
     );
   }
 
@@ -1057,7 +1078,31 @@ class _DashboardScreenState extends State<DashboardScreen>
       onNetwork: () => Navigator.push(context, fadeRoute(const NetworkSettingsPage())),
       notice: _notice,
       noticeIsError: _noticeIsError,
+      onAction: _overviewAction,
     );
+  }
+
+  /// The overview's own Send, Receive, Swap and More act on a wallet: the
+  /// unlocked one, else the first with keys here. It opens; when it is
+  /// already unlocked the action follows at once, else its gate asks for
+  /// the key first and the wallet's own buttons are a tap away.
+  Future<void> _overviewAction(WalletAction action) async {
+    final unlocked = _walletUnlocked ? _walletId : null;
+    final id = unlocked ?? (_overview.wallets.isEmpty ? null : _overview.wallets.first.walletId);
+    if (id == null) return;
+    await _openWallet(WalletRef.seed(id));
+    if (!mounted || !_walletUnlocked || _walletId != id) return;
+    switch (action) {
+      case WalletAction.send:
+        _go('/send');
+      case WalletAction.receive:
+        _go('/receive');
+      case WalletAction.swap:
+        _openSwap(SwapVenue.spectrum);
+      case WalletAction.sendOffline:
+      case WalletAction.more:
+        break;
+    }
   }
 
   Widget _watchedPage(WalletRef ref) {
@@ -1072,7 +1117,7 @@ class _DashboardScreenState extends State<DashboardScreen>
             : null,
         priceFeed: _price,
         onClose: _closeWallet,
-        onRemoved: _onWatchedRemoved,
+        onRemoved: () => _onWatchedRemoved(ref),
       ),
     );
   }
@@ -1090,15 +1135,27 @@ class _DashboardScreenState extends State<DashboardScreen>
       },
       child: WalletPageScreen(
         title: owns && tab != WalletTab.wallet ? walletTabLook(tab).label : name,
+        // The wallet's own page, open or locked, lies under a clear header
+        // with its state beneath its name.
+        immersive: !owns || tab == WalletTab.wallet,
+        subtitle: !owns || tab == WalletTab.wallet ? (unlocked ? 'Unlocked' : 'Locked') : null,
+        subtitleLive: unlocked,
         onBack: _closeWallet,
         actions: [
-          if (owns && tab == WalletTab.wallet)
+          if (owns && tab == WalletTab.wallet) ...[
             IconButton(
               key: const Key('wallet-scan'),
               icon: const Icon(Icons.qr_code_scanner),
               tooltip: 'Scan a QR code',
               onPressed: _scan,
             ),
+            IconButton(
+              key: const Key('wallet-menu'),
+              icon: const Icon(Icons.more_vert),
+              tooltip: 'Wallet settings',
+              onPressed: _openSettings,
+            ),
+          ],
         ],
         body: ListenableBuilder(
           listenable: Listenable.merge([addressLabelService, privacyService]),

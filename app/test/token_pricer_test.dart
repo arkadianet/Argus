@@ -44,6 +44,18 @@ class _Fakes {
   int readingCalls = 0;
   Completer<void>? poolGate;
 
+  /// CoinGecko refusing, as its free API does a few calls in a row (429).
+  bool geckoFails = false;
+
+  /// Retries the pricer asked for, by delay; [runRetry] fires the last.
+  final retryDelays = <Duration>[];
+  void Function()? _pendingRetry;
+  void runRetry() {
+    final run = _pendingRetry!;
+    _pendingRetry = null;
+    run();
+  }
+
   /// The LP token's decimals as the token lookup knows them (from the
   /// wallet's own descriptor when it holds the token); null when nothing
   /// knows its scale.
@@ -114,9 +126,15 @@ class _Fakes {
       if (oracleFails) throw Exception('boom');
       return OracleSnapshot(epoch: 1, poolHeight: 990, operators: 3, usd: {'ERG_USD': 0.5, 'BTC_USD': 80000});
     },
+    timer: (delay, run) {
+      retryDelays.add(delay);
+      _pendingRetry = run;
+      return _FakeTimer(() => _pendingRetry = null);
+    },
     coingecko: (ids, vs) async {
       geckoCalls++;
       lastGeckoVs = vs;
+      if (geckoFails) throw Exception('CoinGecko 429');
       return {
         'ergo': {'usd': 0.4, 'eur': 0.36},
         'bitcoin': {'usd': 81000},
@@ -142,6 +160,23 @@ class _Fakes {
       usdRate = u;
     },
   );
+}
+
+/// A retry that never fires by itself: the test fires it.
+class _FakeTimer implements Timer {
+  _FakeTimer(this._onCancel);
+  final void Function() _onCancel;
+  bool _active = true;
+  @override
+  void cancel() {
+    if (_active) _onCancel();
+    _active = false;
+  }
+
+  @override
+  bool get isActive => _active;
+  @override
+  int get tick => 0;
 }
 
 void main() {
@@ -437,6 +472,119 @@ void main() {
       final h = await TokenPricer(deps).ergPriceHistory(PriceWindow.day);
       expect(h.available, isFalse);
       expect(h.unavailableReason, contains('No node'));
+    });
+  });
+
+  group('a failed refresh', () {
+    test('with no rate ever known for the currency, no value is shown', () async {
+      // The fake CoinGecko answers in EUR only.
+      final f = _Fakes()..fiat = 'aud';
+      final p = TokenPricer(f.deps);
+      await p.refresh();
+      expect(p.displayRateKnown, isFalse);
+      expect(f.rate, isNull);
+      expect(p.retrying, isTrue, reason: 'asked for again soon');
+    });
+
+    test('a refused CoinGecko call keeps the display rate it last had', () async {
+      final e = _Fakes()..fiat = 'eur';
+      final q = TokenPricer(e.deps);
+      await q.refresh();
+      expect(q.displayRateKnown, isTrue);
+      expect(e.rate, closeTo(0.45, 1e-9));
+      // An hour and a bit later CoinGecko refuses: the rate it gave stays.
+      e.now = e.now.add(const Duration(hours: 1, minutes: 5));
+      e.geckoFails = true;
+      await q.refresh(force: true);
+      expect(e.geckoCalls, 2, reason: 'asked again once the held rate was an hour old');
+      expect(q.displayRateKnown, isTrue);
+      expect(q.fiatPerUsd, closeTo(0.9, 1e-9));
+      expect(e.rate, closeTo(0.45, 1e-9), reason: 'the row keeps its value');
+    });
+
+    test('the cross rate is asked for once an hour, not on every refresh', () async {
+      final f = _Fakes()..fiat = 'eur';
+      final p = TokenPricer(f.deps);
+      await p.refresh();
+      f.now = f.now.add(const Duration(minutes: 6));
+      await p.refresh(force: true);
+      expect(f.geckoCalls, 1, reason: 'the Oracle source needs CoinGecko only for the cross rate');
+    });
+
+    test('the cross rate survives a restart', () async {
+      final f = _Fakes()..fiat = 'eur';
+      final p = TokenPricer(f.deps);
+      await p.refresh();
+      final g = _Fakes()
+        ..fiat = 'eur'
+        ..geckoFails = true;
+      final q = TokenPricer(g.deps);
+      await q.load();
+      await q.refresh();
+      expect(q.displayRateKnown, isTrue);
+      expect(g.rate, closeTo(0.45, 1e-9));
+    });
+
+    test('prices from a moment ago are not called old; past the threshold they are', () async {
+      final f = _Fakes();
+      final p = TokenPricer(f.deps);
+      await p.refresh();
+      final at = p.asOf;
+      f
+        ..oracleFails = true
+        ..readingsFail = true
+        ..now = f.now.add(const Duration(minutes: 6));
+      await p.refresh(force: true);
+      expect(p.pricesAreOld, isTrue, reason: 'this read produced no rate');
+      expect(p.asOf, at, reason: 'an old price does not move the time it was read');
+      expect(p.pricesLookOld, isFalse, reason: 'six minutes old is still current enough');
+      f.now = f.now.add(TokenPricer.oldAfter);
+      expect(p.pricesLookOld, isTrue);
+    });
+
+    test('is retried soon, backing off, and stands down once a rate comes back', () async {
+      final f = _Fakes()
+        ..oracleFails = true
+        ..readingsFail = true;
+      final p = TokenPricer(f.deps);
+      await p.refresh();
+      expect(p.result.ergUsd, isNull);
+      expect(p.retrying, isTrue);
+      expect(f.retryDelays, [TokenPricer.firstRetry]);
+      /// Waits, a bounded number of turns, for the retried refresh to finish.
+      Future<void> settled() async {
+        for (var i = 0; i < 100; i++) {
+          await Future<void>.delayed(Duration.zero);
+          if (!p.refreshing) return;
+        }
+        fail('the retried refresh never finished');
+      }
+
+      f.runRetry();
+      await settled();
+      expect(f.retryDelays, [TokenPricer.firstRetry, TokenPricer.firstRetry * 2]);
+      f
+        ..oracleFails = false
+        ..readingsFail = false;
+      f.runRetry();
+      await settled();
+      expect(p.result.ergUsd, 0.5);
+      expect(p.retrying, isFalse);
+    });
+
+    test('a branch that answers before the rate does not flag the prices old', () async {
+      final f = _Fakes();
+      final p = TokenPricer(f.deps);
+      await p.refresh();
+      // The next refresh: the pools are held back, every other branch
+      // answers first. None of them alone has the whole picture.
+      f.poolGate = Completer<void>();
+      final run = p.refresh(force: true);
+      await Future<void>.delayed(Duration.zero);
+      expect(p.pricesAreOld, isFalse);
+      f.poolGate!.complete();
+      await run;
+      expect(p.pricesAreOld, isFalse);
     });
   });
 }

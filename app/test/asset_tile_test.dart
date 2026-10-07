@@ -29,9 +29,9 @@ void main() {
     expect(find.text('≈ ••••'), findsOneWidget);
   });
 
-  testWidgets('ERG row shows the sigma mark and fiat', (tester) async {
+  testWidgets('ERG row shows the Ergo mark and fiat', (tester) async {
     await tester.pumpWidget(_wrap(AssetTile.erg(balanceNano: 2500000000, fiatText: '≈ \$1.00 USD')));
-    expect(find.text('Σ'), findsOneWidget);
+    expect(find.byKey(const Key('token-logo-erg')), findsOneWidget);
     expect(find.text('2.5 ERG'), findsOneWidget);
     expect(find.text('≈ \$1.00 USD'), findsOneWidget);
   });

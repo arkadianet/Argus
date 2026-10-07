@@ -24,6 +24,7 @@ import 'home_models.dart';
 import 'overview_model.dart';
 import 'wallet_nav_bar.dart';
 import 'wallet_page.dart';
+import 'watched_actions.dart';
 
 /// What a watched wallet's page shows, read from public data only: the
 /// node's balance and history for a watched address, the last scan for a
@@ -280,6 +281,16 @@ class WatchedWalletPage extends StatefulWidget {
 
 class _WatchedWalletPageState extends State<WatchedWalletPage> {
   late final WatchedWalletSource _source = _sourceFor(widget.target);
+
+  Future<void> _menu(_WatchedMenu choice) async {
+    switch (choice) {
+      case _WatchedMenu.rename:
+        // The header's name follows the label services it is built from.
+        await renameWatched(context, widget.target);
+      case _WatchedMenu.stop:
+        if (await stopWatching(context, widget.target)) widget.onRemoved();
+    }
+  }
   WalletTab _tab = WalletTab.wallet;
   final Set<WalletTab> _visited = {WalletTab.wallet};
 
@@ -393,6 +404,8 @@ class _WatchedWalletPageState extends State<WatchedWalletPage> {
         listenable: _source,
         builder: (context, _) => WalletPageScreen(
           title: _tab == WalletTab.wallet ? widget.name : walletTabLook(_tab).label,
+          subtitle: _tab == WalletTab.wallet ? (_source.isAccount ? 'Watched account' : 'Watched address') : null,
+          immersive: _tab == WalletTab.wallet,
           onBack: widget.onClose,
           actions: [
             if (_tab == WalletTab.wallet)
@@ -402,6 +415,27 @@ class _WatchedWalletPageState extends State<WatchedWalletPage> {
                     ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                     : const Icon(Icons.refresh),
                 onPressed: _source.loading ? null : _source.refresh,
+              ),
+            // As a seed wallet's header has its ⋮: the ways to rename the
+            // wallet or stop watching it, not only from its Settings tab.
+            if (_tab == WalletTab.wallet)
+              PopupMenuButton<_WatchedMenu>(
+                key: const Key('watched-menu'),
+                tooltip: 'More options',
+                icon: const Icon(Icons.more_vert),
+                onSelected: _menu,
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                    key: Key('watched-menu-rename'),
+                    value: _WatchedMenu.rename,
+                    child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Rename')),
+                  ),
+                  PopupMenuItem(
+                    key: Key('watched-menu-stop'),
+                    value: _WatchedMenu.stop,
+                    child: ListTile(leading: Icon(Icons.visibility_off_outlined), title: Text('Stop watching')),
+                  ),
+                ],
               ),
           ],
           body: IndexedStack(
@@ -639,3 +673,5 @@ class WatchedAssetsScreen extends StatelessWidget {
     );
   }
 }
+
+enum _WatchedMenu { rename, stop }

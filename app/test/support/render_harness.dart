@@ -81,13 +81,17 @@ ThemeData withRenderFallback(ThemeData theme) =>
     theme.copyWith(textTheme: theme.textTheme.apply(fontFamilyFallback: const ['Roboto']));
 
 /// Pumps [screen] as the whole app on a [renderSize] phone, or [height]
-/// tall, with text at [textScale].
+/// tall, with text at [textScale]. Settles every animation unless
+/// [settle] is false, for a render of the motion itself; with
+/// [reduceMotion], as with the system setting to remove animations.
 Future<void> pumpRender(
   WidgetTester tester,
   Widget screen, {
   required PaletteSpec palette,
   double textScale = 1,
   double? height,
+  bool settle = true,
+  bool reduceMotion = false,
 }) async {
   tester.view.physicalSize = Size(renderSize.width, height ?? renderSize.height) * renderPixelRatio;
   tester.view.devicePixelRatio = renderPixelRatio;
@@ -101,14 +105,14 @@ Future<void> pumpRender(
         debugShowCheckedModeBanner: false,
         theme: renderTheme(palette),
         builder: (context, child) => MediaQuery(
-          data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale)),
+          data: MediaQuery.of(context).copyWith(textScaler: TextScaler.linear(textScale), disableAnimations: reduceMotion),
           child: child!,
         ),
         home: screen,
       ),
     ),
   );
-  await tester.pumpAndSettle();
+  if (settle) await tester.pumpAndSettle();
 }
 
 /// Re-pumps [screen] tall enough that the scrolling list under [listKey]
@@ -164,8 +168,151 @@ Future<void> _writePng(WidgetTester tester, RenderRepaintBoundary boundary, Stri
 /// [name].png; a name with slashes lands in subfolders.
 Future<void> saveRender(WidgetTester tester, String name) async {
   final boundary = _boundary.currentContext?.findRenderObject();
-  if (boundary is! RenderRepaintBoundary) return;
-  await _writePng(tester, boundary, name, renderPixelRatio);
+  if (boundary is! RenderRepaintBoundary || renderDirectory() == null) return;
+  // Tests draw shadows as hard solid shapes, so a render would show a
+  // ledge under every soft shadow. A render is for a person, so for the
+  // one frame it saves, shadows are drawn as the phone draws them. The flag
+  // is back before the test ends, as the test binding requires.
+  debugDisableShadows = false;
+  try {
+    _repaintAll(boundary);
+    await tester.pump();
+    await _writePng(tester, boundary, name, renderPixelRatio);
+  } finally {
+    debugDisableShadows = true;
+    _repaintAll(boundary);
+    await tester.pump();
+  }
+}
+
+void _repaintAll(RenderObject node) {
+  node.markNeedsPaint();
+  node.visitChildren(_repaintAll);
+}
+
+/// The frame on screen now, shadows drawn as on the phone, at [pixelRatio].
+Future<ui.Image?> _grab(WidgetTester tester, double pixelRatio) async {
+  final boundary = _boundary.currentContext?.findRenderObject();
+  if (boundary is! RenderRepaintBoundary) return null;
+  debugDisableShadows = false;
+  try {
+    _repaintAll(boundary);
+    await tester.pump();
+    return await tester.runAsync(() => boundary.toImage(pixelRatio: pixelRatio));
+  } finally {
+    debugDisableShadows = true;
+    _repaintAll(boundary);
+    await tester.pump();
+  }
+}
+
+/// The frame [pumpRender] drew, beside the part [crop] (in the image's own
+/// pixels) of a reference image at [referencePath], scaled to the same
+/// height, saved as [name].png: for comparing a screen with the look it is
+/// meant to have. Does nothing unless renders were asked for, or when the
+/// reference is not on this machine.
+Future<void> saveBesideReference(
+  WidgetTester tester,
+  String name, {
+  required String referencePath,
+  required Rect crop,
+  Color background = const Color(0xFF111111),
+}) async {
+  final dir = renderDirectory();
+  final file = File(referencePath);
+  if (dir == null || !file.existsSync()) return;
+  final frame = await _grab(tester, renderPixelRatio);
+  if (frame == null) return;
+  final reference = await tester.runAsync(() async {
+    final codec = await ui.instantiateImageCodec(await file.readAsBytes());
+    return (await codec.getNextFrame()).image;
+  });
+  if (reference == null) return;
+  const gap = 32.0;
+  final height = frame.height.toDouble();
+  final refWidth = crop.width * height / crop.height;
+  final width = refWidth + frame.width + gap * 3;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.drawRect(Rect.fromLTWH(0, 0, width, height + gap * 2), Paint()..color = background);
+  canvas.drawImageRect(reference, crop, Rect.fromLTWH(gap, gap, refWidth, height), Paint()..filterQuality = FilterQuality.high);
+  canvas.drawImage(frame, Offset(gap * 2 + refWidth, gap), Paint());
+  final picture = recorder.endRecording();
+  await tester.runAsync(() async {
+    final image = await picture.toImage(width.ceil(), (height + gap * 2).ceil());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    final out = File('${dir.path}/$name.png');
+    await out.parent.create(recursive: true);
+    await out.writeAsBytes(bytes!.buffer.asUint8List());
+  });
+  picture.dispose();
+  frame.dispose();
+  reference.dispose();
+}
+
+/// A strip of frames of a motion, side by side and captioned with their
+/// times, saved as [name].png: one frame at each of [at] (times from now,
+/// in order), after [start] sets the motion going. Frames are drawn at
+/// half the render's scale, so a strip of six stays a sensible width.
+/// Does nothing unless renders were asked for.
+Future<void> saveFrameStrip(
+  WidgetTester tester,
+  String name, {
+  required List<Duration> at,
+  required Color background,
+  required Color caption,
+  Future<void> Function()? start,
+  Rect? crop,
+}) async {
+  final dir = renderDirectory();
+  if (dir == null) return;
+  await start?.call();
+  const scale = 1.0;
+  final frames = <(Duration, ui.Image)>[];
+  var now = Duration.zero;
+  for (final time in at) {
+    await tester.pump(time - now);
+    now = time;
+    final image = await _grab(tester, scale);
+    if (image != null) frames.add((time, image));
+  }
+  if (frames.isEmpty) return;
+  final source = crop ?? Offset.zero & Size(frames.first.$2.width / scale, frames.first.$2.height / scale);
+  const gap = 12.0, label = 28.0;
+  final width = frames.length * source.width + (frames.length + 1) * gap;
+  final height = source.height + label + gap;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder);
+  canvas.drawRect(Rect.fromLTWH(0, 0, width, height), Paint()..color = background);
+  for (final (i, (time, image)) in frames.indexed) {
+    final x = gap + i * (source.width + gap);
+    canvas.drawImageRect(
+      image,
+      Rect.fromLTWH(source.left * scale, source.top * scale, source.width * scale, source.height * scale),
+      Rect.fromLTWH(x, gap, source.width, source.height),
+      Paint()..filterQuality = FilterQuality.high,
+    );
+    final text = TextPainter(
+      text: TextSpan(text: '${time.inMilliseconds} ms', style: TextStyle(fontFamily: 'Karla', fontSize: 14, color: caption)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    text.paint(canvas, Offset(x + (source.width - text.width) / 2, gap + source.height + 6));
+    text.dispose();
+  }
+  final picture = recorder.endRecording();
+  await tester.runAsync(() async {
+    final strip = await picture.toImage(width.ceil(), height.ceil());
+    final bytes = await strip.toByteData(format: ui.ImageByteFormat.png);
+    strip.dispose();
+    for (final (_, image) in frames) {
+      image.dispose();
+    }
+    final file = File('${dir.path}/$name.png');
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(bytes!.buffer.asUint8List());
+  });
+  picture.dispose();
 }
 
 /// Writes what [renderBoundaryKey] shows to `ui-renders/<name>.png`.

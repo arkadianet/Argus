@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod client;
 pub mod http;
 pub mod node_interface;

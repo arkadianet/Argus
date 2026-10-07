@@ -19,6 +19,7 @@ class AccountApi extends RustLibApi {
   @override
   Future<String> crateApiGetTransactionHistory({
     required String address,
+    required List<String> walletAddresses,
     String? nodeUrl,
     required BigInt limit,
     required BigInt offset,

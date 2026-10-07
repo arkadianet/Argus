@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 
 import '../../theme/argus_theme.dart';
+import 'home_glass.dart';
 import 'home_hero.dart';
 import 'home_models.dart';
 import 'home_rows.dart';
+import 'home_scene.dart';
 import 'home_style.dart';
 import 'home_widgets.dart';
+import 'wallet_actions.dart';
 import 'wallet_tools_sheet.dart';
 
 /// The launch screen: every wallet on this phone, seed and watched alike,
@@ -32,10 +36,16 @@ class OverviewScreen extends StatelessWidget {
     this.footnote,
     this.notice,
     this.noticeIsError = false,
+    this.onAction,
+    this.onStopWatching,
   });
 
   final OverviewData data;
   final ValueChanged<WalletRef>? onOpenWallet;
+
+  /// A watched wallet's row swiped to the left, or its screen reader
+  /// action: confirm and stop watching it. True when it is gone.
+  final Future<bool> Function(WalletRef ref)? onStopWatching;
 
   /// A wallet with keys here was dragged to a new place in the list (a
   /// long press picks it up). Watched wallets keep the order they were
@@ -60,10 +70,24 @@ class OverviewScreen extends StatelessWidget {
   final String? notice;
   final bool noticeIsError;
 
+  /// Send, Receive, Swap and More from the overview; without it the row is
+  /// not shown.
+  final ValueChanged<WalletAction>? onAction;
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    final page = Theme.of(context).scaffoldBackgroundColor;
+    final t = HomeText.of(context);
+    final scaffold = Scaffold(
+      // The header lies on the scene, clear until the list scrolls under it.
+      backgroundColor: data.isEmpty ? null : Colors.transparent,
       appBar: AppBar(
+        backgroundColor: WidgetStateColor.resolveWith(
+          (states) => states.contains(WidgetState.scrolledUnder) ? page.withValues(alpha: 0.94) : page.withValues(alpha: 0),
+        ),
+        surfaceTintColor: Colors.transparent,
+        scrolledUnderElevation: 0,
+        toolbarHeight: 72,
         titleSpacing: homeGutter,
         title: Semantics(
           header: true,
@@ -72,9 +96,28 @@ class OverviewScreen extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const IrisMark(size: 28),
-              const SizedBox(width: 6),
-              Text('Argus', style: Theme.of(context).textTheme.titleLarge),
+              const IrisMark(size: 40),
+              const SizedBox(width: 14),
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Argus',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(fontSize: 26, height: 1.1),
+                    ),
+                    Text(
+                      'Your Ergo Wallet',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: t.secondary.copyWith(fontSize: 14, letterSpacing: 1),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
@@ -101,6 +144,20 @@ class OverviewScreen extends StatelessWidget {
         footnote: footnote,
         notice: notice,
         noticeIsError: noticeIsError,
+        onAction: onAction,
+        onStopWatching: onStopWatching,
+      ),
+    );
+    if (data.isEmpty) return scaffold;
+    final top = MediaQuery.paddingOf(context).top + 72;
+    return ColoredBox(
+      color: page,
+      child: HomeScene(
+        light: SceneLight.eclipse,
+        lightAt: Offset(96, top + 66),
+        lightRadius: 80,
+        height: top + 520,
+        child: scaffold,
       ),
     );
   }
@@ -124,10 +181,13 @@ class OverviewView extends StatelessWidget {
     this.footnote,
     this.notice,
     this.noticeIsError = false,
+    this.onAction,
+    this.onStopWatching,
   });
 
   final OverviewData data;
   final ValueChanged<WalletRef>? onOpenWallet;
+  final Future<bool> Function(WalletRef ref)? onStopWatching;
   final void Function(int oldIndex, int newIndex)? onReorder;
   final ValueChanged<AddWalletChoice>? onAdd;
   final VoidCallback? onToggleHidden;
@@ -138,6 +198,7 @@ class OverviewView extends StatelessWidget {
   final String? footnote;
   final String? notice;
   final bool noticeIsError;
+  final ValueChanged<WalletAction>? onAction;
 
   Future<void> _add(BuildContext context) async {
     final choice = await showAddWalletSheet(context);
@@ -151,11 +212,63 @@ class OverviewView extends StatelessWidget {
         onTap: onOpenWallet == null ? null : () => onOpenWallet!(w.ref),
       );
 
+  /// A watched wallet's row. Swiped to the left it shows Stop watching and
+  /// asks before doing it; the row springs back either way, and leaves the
+  /// list when the overview next reads it without the wallet. A screen
+  /// reader, which cannot swipe, has the same as an action on the row.
+  /// Long-press is left alone: it reorders.
+  Widget _watchedRow(BuildContext context, WalletSummary w) {
+    final stop = onStopWatching;
+    final row = OverviewWalletRow(
+      wallet: w,
+      currency: data.currency,
+      hidden: data.hidden,
+      onTap: onOpenWallet == null ? null : () => onOpenWallet!(w.ref),
+      semanticActions: stop == null ? null : {const CustomSemanticsAction(label: 'Stop watching'): () => stop(w.ref)},
+    );
+    if (stop == null) return row;
+    final t = HomeText.of(context);
+    return Dismissible(
+      key: ValueKey(('stop-watching', w.ref.id)),
+      direction: DismissDirection.endToStart,
+      confirmDismiss: (_) async {
+        await stop(w.ref);
+        // Never dismissed here: the overview's own list drops the row
+        // once the wallet is gone, and a cancel leaves it as it was.
+        return false;
+      },
+      background: ColoredBox(
+        color: rust.withValues(alpha: 0.22),
+        child: Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: Padding(
+            padding: const EdgeInsetsDirectional.only(end: glassGutter + 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.visibility_off_outlined, size: 20, color: rustFor(context)),
+                const SizedBox(width: 8),
+                Text('Stop watching', style: t.primary.copyWith(color: rustFor(context))),
+              ],
+            ),
+          ),
+        ),
+      ),
+      child: row,
+    );
+  }
+
+  /// A wallet with keys, on a glass card of its own.
+  Widget _card(WalletSummary w) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: GlassCard(children: [_row(w)]),
+      );
+
   /// The wallets with keys here, which a long press picks up and drags.
   Widget _wallets() {
     final rows = data.wallets;
     final reorder = onReorder;
-    if (reorder == null || rows.length < 2) return Column(children: [for (final w in rows) _row(w)]);
+    if (reorder == null || rows.length < 2) return Column(children: [for (final w in rows) _card(w)]);
     return ReorderableListView(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
@@ -172,7 +285,7 @@ class OverviewView extends StatelessWidget {
             // itself use to find the row.
             key: ValueKey<Object>(('reorder', w.id)),
             index: i,
-            child: _row(w),
+            child: _card(w),
           ),
       ],
     );
@@ -190,50 +303,101 @@ class OverviewView extends StatelessWidget {
     final list = ListView(
       key: const Key('overview-list'),
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: EdgeInsets.only(top: 4, bottom: 24 + bottom),
+      padding: EdgeInsets.only(bottom: 24 + bottom),
       children: [
-        if (message != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: message),
-        RaisedPanel(
-          corner: HideBalancesButton(hidden: data.hidden, onPressed: onToggleHidden),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              HomeBalance(
-                label: 'Total balance',
-                figureKey: const Key('overview-total'),
-                pendingKey: const Key('overview-total-pending'),
-                nanoErg: data.totalNano,
-                loading: data.loading,
-                notLoaded: data.notLoaded,
-                currency: data.currency,
-                fiatValue: data.totalFiat,
-                unpricedCount: data.unpricedCount,
-                pricesNote: data.pricesNote,
-                pending: data.pending,
-                hidden: data.hidden,
-              ),
-              if (price != null) ...[
-                const SizedBox(height: 14),
-                const HomeRule(indent: 0, endIndent: 0),
-                const SizedBox(height: 12),
-                ErgPriceStrip(price: price, currency: data.currency),
+        // The page settles in from the top: the scene, then each list.
+        // On the scene the screen paints behind the list.
+        HomeEntrance(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(homeGutter, 8, homeGutter, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (message != null) Padding(padding: const EdgeInsets.only(bottom: 8), child: message),
+                HomeBalance(
+                  label: 'Total balance',
+                  figureKey: const Key('overview-total'),
+                  pendingKey: const Key('overview-total-pending'),
+                  nanoErg: data.totalNano,
+                  loading: data.loading,
+                  notLoaded: data.notLoaded,
+                  currency: data.currency,
+                  fiatValue: data.totalFiat,
+                  unpricedCount: data.unpricedCount,
+                  pricesNote: data.pricesNote,
+                  pending: data.pending,
+                  hidden: data.hidden,
+                  onToggleHidden: onToggleHidden,
+                  figureReserve: 40,
+                ),
+                // Only with a wallet that holds keys for them to act on: a
+                // list of watched addresses alone has nothing to send from.
+                if (onAction != null && data.wallets.isNotEmpty) ...[
+                  const SizedBox(height: 22),
+                  HomeActionCircles(
+                    keyPrefix: 'overview-action',
+                    gridMore: true,
+                    actions: const [WalletAction.send, WalletAction.receive, WalletAction.swap, WalletAction.more],
+                    onAction: onAction!,
+                  ),
+                ],
+                const SizedBox(height: 18),
+                homeNetworkPill(context, data.network, onTap: onNetwork, action: networkAction),
+                if (price != null) ...[
+                  const SizedBox(height: 10),
+                  _PriceCard(price: price, currency: data.currency),
+                ],
               ],
-            ],
+            ),
           ),
         ),
-        const SizedBox(height: 4),
-        homeNetworkRow(context, data.network, onTap: onNetwork, action: networkAction),
-        if (data.wallets.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          HomeSectionHeader(title: 'Wallets', count: '${data.wallets.length}'),
-          _wallets(),
-        ],
-        if (data.watched.isNotEmpty) ...[
-          const SizedBox(height: 4),
-          HomeSectionHeader(title: 'Watched', count: '${data.watched.length}'),
-          for (final w in data.watched) _row(w),
-        ],
-        AddWalletRow(onTap: () => _add(context)),
+        if (data.wallets.isNotEmpty)
+          HomeEntrance(
+            order: 1,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                HomeSectionHeader(
+                  title: 'Wallets',
+                  count: '${data.wallets.length}',
+                  trailing: RingButton(
+                    key: const Key('overview-add-wallet'),
+                    icon: Icons.add,
+                    tooltip: 'Add a wallet',
+                    onPressed: () => _add(context),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                _wallets(),
+              ],
+            ),
+          ),
+        if (data.watched.isNotEmpty)
+          HomeEntrance(
+            order: 2,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 14),
+                HomeSectionHeader(
+                  title: 'Watched addresses',
+                  count: '${data.watched.length}',
+                  trailing: RingButton(
+                    key: data.wallets.isEmpty ? const Key('overview-add-wallet') : const Key('overview-add-watched'),
+                    icon: Icons.add,
+                    tooltip: 'Watch an address or account',
+                    onPressed: () => _add(context),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                GlassCard(
+                  key: const Key('overview-watched'),
+                  dividers: true,
+                  children: [for (final w in data.watched) _watchedRow(context, w)],
+                ),
+              ],
+            ),
+          ),
         if (footnote != null)
           Padding(
             padding: const EdgeInsetsDirectional.fromSTEB(homeGutter, 16, homeGutter, 0),
@@ -245,6 +409,30 @@ class OverviewView extends StatelessWidget {
     );
     final refresh = onRefresh;
     return refresh == null ? list : RefreshIndicator(onRefresh: refresh, child: list);
+  }
+}
+
+/// The ERG price on a glass card of its own, under the network pill.
+class _PriceCard extends StatelessWidget {
+  const _PriceCard({required this.price, required this.currency});
+
+  final ErgPriceView price;
+  final FiatCurrency currency;
+
+  @override
+  Widget build(BuildContext context) {
+    final spec = ArgusColors.sceneOf(context);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(glassRadius),
+        border: Border.all(color: spec.glassBorder),
+        color: spec.glassFill,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(18, 10, 16, 10),
+        child: ErgPriceStrip(price: price, currency: currency),
+      ),
+    );
   }
 }
 
@@ -314,7 +502,7 @@ class PrototypeNote extends StatelessWidget {
       key: const Key('overview-learn-more'),
       onPressed: onLearnMore ?? () => showPrototypeNotice(context),
       style: TextButton.styleFrom(
-        foregroundColor: t.ink,
+        foregroundColor: HomeTones.of(context).accent,
         minimumSize: const Size(48, 48),
         padding: stacked ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 10),
         alignment: AlignmentDirectional.centerStart,

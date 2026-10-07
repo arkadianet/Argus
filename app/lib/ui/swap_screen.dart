@@ -38,11 +38,16 @@ ConfirmTxRow swapInputRow(AmmSwapBuild build, {required String symbol, required 
 /// spent in the same signed transaction, so quotes go stale on contention —
 /// the service reports that as `POOL_MOVED` and this screen re-quotes.
 class SwapScreen extends StatefulWidget {
-  const SwapScreen({super.key, this.embedded = false});
+  const SwapScreen({super.key, this.embedded = false, this.initialFrom});
 
   /// When true the screen renders without its own Scaffold/AppBar so it can
   /// live inside the swap hub's tab view.
   final bool embedded;
+
+  /// The token to pay with when the screen opens, as a token's own sheet
+  /// asks for; null pays with ERG, as the screen always starts. The other
+  /// side starts on ERG, which every token with an ERG pool trades against.
+  final String? initialFrom;
 
   @override
   State<SwapScreen> createState() => _SwapScreenState();
@@ -59,7 +64,7 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
   String? _error;
 
   // null means ERG, matching the bridge's from/to encoding.
-  String? _fromToken;
+  late String? _fromToken = widget.initialFrom;
   String? _toToken;
 
   /// The FROM field is the single source of truth for quoting. The TO field
@@ -245,6 +250,17 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
   /// the old reading, is dropped and asked again.
   int _fromScaleSeen = 9;
   int _toScaleSeen = 9;
+  bool _scalesRead = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // A preselected token's scale needs the wallet's holdings, which are
+    // read through context and so are not there yet in initState.
+    if (_scalesRead) return;
+    _scalesRead = true;
+    _fromScaleSeen = _decimals(_fromToken);
+  }
 
   void _metadataChanged() {
     if (!mounted) return;

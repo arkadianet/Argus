@@ -10,7 +10,7 @@ import 'home_models.dart';
           selected: Icons.account_balance_wallet,
           label: 'Wallet',
         ),
-      WalletTab.activity => (icon: Icons.receipt_long_outlined, selected: Icons.receipt_long, label: 'Activity'),
+      WalletTab.activity => (icon: Icons.bar_chart_rounded, selected: Icons.bar_chart_rounded, label: 'Activity'),
       WalletTab.discover => (icon: Icons.explore_outlined, selected: Icons.explore, label: 'Discover'),
       WalletTab.settings => (icon: Icons.settings_outlined, selected: Icons.settings, label: 'Settings'),
     };
@@ -22,8 +22,8 @@ import 'home_models.dart';
 /// longer offered three times. Settings lives here and nowhere in a
 /// header. A watched wallet has no keys to use a protocol with, so it
 /// has no Discover tab. Activity carries a badge while anything is
-/// unconfirmed. Colours come from the theme: the current tab in the
-/// accent, the rest quiet.
+/// unconfirmed. The current tab sits on a pill of the accent, its icon and
+/// name in the accent; the rest are quiet line icons.
 class WalletNavBar extends StatelessWidget {
   const WalletNavBar({
     super.key,
@@ -54,6 +54,7 @@ class WalletNavBar extends StatelessWidget {
     final shown = tabs;
     final index = shown.indexOf(current);
     final media = MediaQuery.of(context);
+    final colors = ArgusColors.of(context);
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -66,7 +67,27 @@ class WalletNavBar extends StatelessWidget {
         ),
         MediaQuery(
           data: media.copyWith(textScaler: media.textScaler.clamp(maxScaleFactor: maxLabelScale)),
-          child: NavigationBar(
+          child: NavigationBarTheme(
+            data: NavigationBarThemeData(
+              backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+              indicatorColor: colors.accent.withValues(alpha: 0.22),
+              indicatorShape: const StadiumBorder(),
+              iconTheme: WidgetStateProperty.resolveWith(
+                (states) => IconThemeData(
+                  size: 24,
+                  color: states.contains(WidgetState.selected) ? colors.accentText : colors.muted,
+                ),
+              ),
+              labelTextStyle: WidgetStateProperty.resolveWith(
+                (states) => TextStyle(
+                  fontFamily: 'Karla',
+                  fontSize: 13,
+                  letterSpacing: 0.3,
+                  color: states.contains(WidgetState.selected) ? colors.accentText : colors.muted,
+                ),
+              ),
+            ),
+            child: NavigationBar(
             selectedIndex: index < 0 ? 0 : index,
             onDestinationSelected: (i) => onSelect(shown[i]),
             destinations: [
@@ -81,6 +102,7 @@ class WalletNavBar extends StatelessWidget {
                       : walletTabLook(tab).label,
                 ),
             ],
+          ),
           ),
         ),
       ],

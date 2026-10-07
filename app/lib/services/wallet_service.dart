@@ -19,6 +19,8 @@ export 'token_evidence.dart';
 import 'verified_tokens.dart' show knownToken;
 import 'mix_service.dart';
 import 'spend_policy.dart';
+import 'activity_classifier.dart' show reownActivity;
+import 'stealth_change_book.dart';
 import 'stealth_service.dart';
 import 'wallet_sync_controller.dart';
 import 'secure_storage.dart';
@@ -2203,6 +2205,7 @@ class WalletService with WidgetsBindingObserver {
     // would write its table straight back.
     _pendingFlush.removeWhere((entry) => entry.$1 == walletId);
     await TokenDescriptorStore.clear(walletId).catchError((_) {});
+    await stealthChangeBook.forget(walletId);
     await SecureStorageService.deleteWallet(walletId);
     await _removeWalletMeta(walletId);
   }
@@ -3103,10 +3106,13 @@ class WalletService with WidgetsBindingObserver {
           final off = perAddressOffsets != null
               ? (perAddressOffsets[address] ?? 0)
               : offset;
+          // Every row is read against all of [addresses]: a move between
+          // two of them is the wallet's own, not a payment.
           final raw = await getTransactionHistory(
             address,
             limit: limit,
             offset: off,
+            walletAddresses: addresses,
           );
           ok++;
           final decoded = jsonDecode(raw) as List;
@@ -3128,10 +3134,16 @@ class WalletService with WidgetsBindingObserver {
     }
     final all = <Map<String, dynamic>>[];
     final seen = <String>{};
+    // Change this wallet sent to a one-time stealth address of its own is
+    // the wallet's, though no address of [addresses] names it. Only this
+    // wallet's list: another wallet's change paid to this one is a payment.
+    final walletId = _currentWalletId;
+    await stealthChangeBook.load(walletId);
+    final change = stealthChangeBook.addressesFor(walletId);
     for (final txs in results) {
       for (final tx in txs) {
         if (tx is! Map) continue;
-        final map = Map<String, dynamic>.from(tx);
+        final map = reownActivity(Map<String, dynamic>.from(tx), change);
         final id = map['tx_id']?.toString() ?? '';
         if (id.isEmpty || !seen.add(id)) continue;
         all.add(map);
@@ -3150,14 +3162,18 @@ class WalletService with WidgetsBindingObserver {
         TokenBalance(id: id, amount: amount);
   }
 
+  /// One page of [address]'s history, each transaction read from the point
+  /// of view of a wallet owning [walletAddresses] (and [address]).
   Future<String> getTransactionHistory(
     String address, {
     int limit = 20,
     int offset = 0,
     String? nodeUrl,
+    List<String> walletAddresses = const [],
   }) {
     return RustLib.instance.api.crateApiGetTransactionHistory(
       address: address,
+      walletAddresses: walletAddresses,
       nodeUrl: nodeUrl,
       limit: BigInt.from(limit),
       offset: BigInt.from(offset),

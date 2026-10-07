@@ -42,13 +42,19 @@ bool networkOffline() => networkController.activeUrl == null && !networkControll
 
 /// Said beside a fiat value while the ERG rate is not current: the age of
 /// the stopped feed it came from ("prices 3 h old"), or when the last good
-/// read was. Null while prices are current.
+/// read was, once that is old enough to matter ([TokenPricer.oldAfter]).
+/// Null while prices are current, including the minutes after a refresh
+/// that failed while the last good prices are still recent.
 String? pricesNote() {
-  if (!tokenPricer.stale) return null;
   if (tokenPricer.result.ergStaleAge case final age?) return 'prices $age old';
+  if (!tokenPricer.pricesLookOld) return null;
   final at = tokenPricer.asOf;
   return at == null ? 'prices stale' : 'prices as of ${formatSyncAge(at)}';
 }
+
+/// Why ERG has no usable price right now, for a row that would show one:
+/// "unavailable · retrying" while another read is on its way.
+String _unavailableNote() => tokenPricer.retrying || tokenPricer.refreshing ? 'unavailable · retrying' : 'unavailable';
 
 /// The overview's network line: whether a node answers, and the chain's
 /// height when it does.
@@ -75,9 +81,11 @@ ErgPriceView ergPriceView(ErgPriceHistory? history) {
       : staleAge == null
           ? via
           : via.replaceFirst(', $staleAge old', '');
+  // A stopped feed says its age; prices from an earlier read say when that
+  // was only once they are old enough to matter, never "as of just now".
   final staleNote = staleAge != null
       ? '$staleAge old'
-      : tokenPricer.pricesAreOld && tokenPricer.asOf != null
+      : tokenPricer.pricesLookOld && tokenPricer.asOf != null
           ? 'as of ${formatSyncAge(tokenPricer.asOf)}'
           : null;
   final h = history;
@@ -119,7 +127,9 @@ AssetRowData ergAssetRow(int nanoErg, ErgPriceView? price) {
     fiatValue: rate == null ? null : nanoErg / 1e9 * rate,
     unitFiat: rate,
     changePercent: price != null && price.hasTrend && price.staleNote == null ? price.changePercent : null,
-    priceNote: price?.staleNote,
+    // No rate at all: the row says so ("Price unavailable · retrying")
+    // rather than being left without a value and without a word.
+    priceNote: rate == null ? _unavailableNote() : price?.staleNote,
     kind: AssetKind.erg,
   );
 }
@@ -177,46 +187,41 @@ String activityRowId(Map<String, dynamic> tx, int index) {
 /// tab's rows are: the same title, the same counterparty, tokens named and
 /// scaled by the one token lookup.
 ActivityRowData activityRow(Map<String, dynamic> tx, {required String id}) {
-  final kind = classifyActivity(tx);
-  final nano = (tx['value_nano_erg'] as num?)?.toInt() ?? 0;
-  List<Map> tokens(String key) => (tx[key] as List?)?.whereType<Map>().toList() ?? const [];
-  AmountLeg token(Map t, {required bool out}) {
-    final tokenId = t['token_id']?.toString() ?? '';
-    final amount = BigInt.from((t['amount'] as num?)?.toInt() ?? 0);
-    return AmountLeg(
-      amount: out ? -amount : amount,
-      decimals: tokenDecimals(tokenId),
-      unit: tokenName(tokenId) ?? shortTokenId(tokenId),
-    );
+  final view = describeActivity(tx, name: (id) => tokenName(id));
+  AmountLeg leg(ActivityLeg l) => l.isErg
+      ? AmountLeg(amount: l.amount, decimals: 9, unit: 'ERG')
+      : AmountLeg(
+          amount: l.amount,
+          decimals: tokenDecimals(l.tokenId!),
+          unit: tokenName(l.tokenId!) ?? shortTokenId(l.tokenId!),
+        );
+  // A labelled figure ("Fee 0.0011 ERG") is what left the wallet.
+  List<AmountLeg> legsOf(ActivityFigure? f) => [
+        for (final l in f?.legs ?? const <ActivityLeg>[])
+          f!.label == null ? leg(l) : leg(ActivityLeg(l.tokenId, -l.amount.abs())),
+      ];
+  String? text(ActivityFigure? f) {
+    if (f == null || f.legs.isEmpty) return null;
+    final first = f.legs.first;
+    if (f.label != null) {
+      return '${f.label} ${summaryAmount(first.amount.abs(), 9)}${nbsp}ERG';
+    }
+    final more = f.legs.length - 1;
+    return '${legText(leg(first))}${more > 0 ? ' + $more${nbsp}more' : ''}';
   }
 
-  final erg = nano == 0 ? null : AmountLeg(amount: BigInt.from(nano), decimals: 9, unit: 'ERG');
-  final received = [for (final t in tokens('tokens_received')) token(t, out: false)];
-  final sent = [for (final t in tokens('tokens_sent')) token(t, out: true)];
-  // Most telling first: what came back from a swap, the ERG of a payment.
-  final legs = kind == ActivityKind.swap
-      ? [...received, if (nano > 0) ?erg, ...sent, if (nano < 0) ?erg]
-      : [?erg, ...received, ...sent];
-
-  final counterparty = tx['counterparty']?.toString();
-  final outgoing = kind == ActivityKind.sent || (kind != ActivityKind.received && nano < 0);
-  final mixLabel = tx['mix'] == true ? tx['mix_label']?.toString() : null;
-  // A stealth receipt has no counterparty to name: the payer built a
-  // one-time script, and nothing on chain says who they were.
-  final who = mixLabel ??
-      (tx['stealth'] == true
-          ? 'stealth payment'
-          : counterparty == null || counterparty.isEmpty
-              ? null
-              : isContractAddress(counterparty)
-                  ? (kind == ActivityKind.swap ? null : 'contract ${shorten(counterparty, head: 6, tail: 4)}')
-                  : '${outgoing ? 'to' : 'from'} ${shorten(counterparty, head: 6, tail: 4)}');
+  // Rows read from their flows word their own figures; the rest show their
+  // legs, most telling first.
+  final worded = view.activity != null;
   return ActivityRowData(
     id: id,
-    kind: kind,
+    kind: view.kind,
+    label: view.title,
     time: shortActivityTime((tx['timestamp'] as num?)?.toInt()),
-    legs: legs,
-    counterparty: who,
+    legs: [...legsOf(view.primary), ...legsOf(view.secondary)],
+    figure: worded ? text(view.primary) : null,
+    subfigure: worded ? text(view.secondary) : null,
+    counterparty: view.who,
     pending: isPendingTx(tx),
   );
 }

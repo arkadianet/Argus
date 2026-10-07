@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 
 import '../../format.dart';
 import '../../services/token_amounts.dart';
@@ -23,9 +24,13 @@ class OverviewWalletRow extends StatelessWidget {
     this.hidden = false,
     this.onTap,
     this.onLongPress,
+    this.semanticActions,
   });
 
   final WalletSummary wallet;
+
+  /// Actions a screen reader offers on the row, e.g. Stop watching.
+  final Map<CustomSemanticsAction, VoidCallback>? semanticActions;
   final FiatCurrency currency;
   final bool hidden;
   final VoidCallback? onTap;
@@ -67,7 +72,16 @@ class OverviewWalletRow extends StatelessWidget {
     // Only the open wallet is marked: "Locked" on every other row would be
     // noise, and the eye and the Watched heading already mark a watched
     // one (a screen reader still hears it).
-    if (w.unlocked) fact('Unlocked', TextStyle(color: mossFor(context), fontWeight: FontWeight.w500));
+    if (w.unlocked) {
+      facts.add(WidgetSpan(
+        alignment: PlaceholderAlignment.middle,
+        child: Padding(
+          padding: const EdgeInsetsDirectional.only(end: 5),
+          child: Icon(Icons.lock_open_rounded, size: 14, color: mossFor(context)),
+        ),
+      ));
+      facts.add(TextSpan(text: 'Unlocked', style: TextStyle(color: mossFor(context))));
+    }
     if (address != null) fact(address);
     if (holds != null) fact(holds);
     if (asOf != null) fact(asOf);
@@ -105,6 +119,7 @@ class OverviewWalletRow extends StatelessWidget {
       inkKey: keyFor(w.ref),
       onTap: onTap,
       onLongPress: onLongPress,
+      semanticActions: semanticActions,
       hint: 'Opens the wallet',
       semanticLabel: spoken([
         w.name,
@@ -120,39 +135,25 @@ class OverviewWalletRow extends StatelessWidget {
         ?pockets,
       ].join(', ')),
       leading: WalletMark(name: w.name, kind: w.kind),
-      title: Text(w.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: t.primary),
+      // Each wallet's name in the serif, as its own page's title is.
+      title: Text(
+        w.name,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: t.primary.copyWith(fontFamily: 'Newsreader', fontSize: 16.5, fontWeight: FontWeight.w500, height: 1.25),
+      ),
       subtitle: facts.isEmpty ? null : TextSpan(children: facts),
       figure: TextSpan(
         children: [
           TextSpan(text: amount),
-          TextSpan(text: '${nbsp}ERG', style: t.secondary),
+          TextSpan(text: '${nbsp}ERG', style: t.secondary.copyWith(fontSize: 14)),
         ],
       ),
       subfigure: fiat == null ? null : TextSpan(text: fiat),
       footnote: footnotes.isEmpty
           ? null
           : Column(crossAxisAlignment: CrossAxisAlignment.start, children: footnotes),
-    );
-  }
-}
-
-/// The last row of the wallet list: one quiet way to add a wallet, which
-/// opens the choice of creating, restoring or watching one.
-class AddWalletRow extends StatelessWidget {
-  const AddWalletRow({super.key, required this.onTap});
-
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = HomeText.of(context);
-    return HomeRow(
-      inkKey: const Key('overview-add-wallet'),
-      onTap: onTap,
-      semanticLabel: 'Add a wallet: create, restore or watch',
-      leading: HomeDisc(child: Icon(Icons.add, size: 18, color: t.ink)),
-      title: Text('Add a wallet', style: t.primary),
-      subtitle: const TextSpan(text: 'Create, restore or watch'),
+      trailing: onTap == null ? null : homeChevron(context),
     );
   }
 }
@@ -264,6 +265,7 @@ class HomeAssetRow extends StatelessWidget {
       subtitle: detail,
       figure: TextSpan(text: amount),
       subfigure: fiat == null ? null : TextSpan(text: fiat),
+      trailing: onTap == null ? null : homeChevron(context),
     );
   }
 }
@@ -292,10 +294,18 @@ class HomeActivityRow extends StatelessWidget {
       ActivityKind.contract => (Icons.code, t.muted),
     };
     final legs = item.legs;
-    final primary = legs.isEmpty ? '0${nbsp}ERG' : (hidden ? maskedFigure : legText(legs.first));
+    final primary = hidden
+        ? maskedFigure
+        : item.figure ?? (legs.isEmpty ? '0${nbsp}ERG' : legText(legs.first));
     final incoming = legs.isNotEmpty && legs.first.amount > BigInt.zero;
     final more = legs.length > 2 ? ' + ${legs.length - 2}${nbsp}more' : '';
-    final secondary = legs.length < 2 || hidden ? null : '${legText(legs[1])}$more';
+    final secondary = hidden
+        ? null
+        : item.figure != null
+            ? item.subfigure
+            : legs.length < 2
+                ? null
+                : '${legText(legs[1])}$more';
     final when = [if (item.pending) 'Pending', if (item.time.isNotEmpty) item.time, ?item.counterparty];
 
     return HomeRow(
@@ -308,7 +318,7 @@ class HomeActivityRow extends StatelessWidget {
         ?item.counterparty,
         if (item.time.isNotEmpty) item.time,
       ].join(', ')),
-      leading: HomeDisc(fill: tint.withValues(alpha: 0.13), child: Icon(icon, size: 16, color: tint)),
+      leading: HomeDisc(fill: tint.withValues(alpha: 0.16), child: Icon(icon, size: 20, color: tint)),
       title: Text(item.title, style: t.primary),
       subtitle: when.isEmpty
           ? null
@@ -323,6 +333,7 @@ class HomeActivityRow extends StatelessWidget {
             ),
       figure: TextSpan(text: primary, style: incoming && !hidden ? TextStyle(color: mossFor(context)) : null),
       subfigure: secondary == null ? null : TextSpan(text: secondary),
+      trailing: onTap == null ? null : homeChevron(context),
     );
   }
 }

@@ -62,6 +62,13 @@ class AmmPoolSet {
     for (final pool in pools) ...poolTokenIds(pool),
   };
 
+  /// Whether some pool here trades [tokenId] (null: ERG), so a swap from it
+  /// has somewhere to go. ERG is traded by any ERG pool; a T2T box holds
+  /// ERG only as storage rent, so it does not count.
+  bool trades(String? tokenId) => tokenId == null
+      ? pools.any((p) => p['pool_type'] == 'N2T')
+      : tokenIds.contains(tokenId);
+
   Map<String, dynamic> toJson() => {
         'truncated': truncated,
         'pools': pools,
@@ -328,6 +335,19 @@ class AmmService {
   /// Last pool list from disk, for an instant first paint while [pools]
   /// refreshes. Null when nothing was cached yet.
   Future<AmmPoolSet?> cachedPools() async => (await AmmPoolCache.load())?.set;
+
+  /// Whether the last known pool list trades [tokenId] (null: ERG). Read
+  /// from disk, not the node, so a token's sheet can decide at once whether
+  /// to offer a swap; the price service keeps that list fresh. With nothing
+  /// cached it says no: a Swap button that led to "no pool" would be worse
+  /// than none.
+  Future<bool> hasPool(String? tokenId) async {
+    try {
+      return (await cachedPools())?.trades(tokenId) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 
   Future<AmmQuote> quote({
     String? fromToken,

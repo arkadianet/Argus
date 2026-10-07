@@ -1,18 +1,21 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../format.dart';
 import '../../theme/argus_theme.dart';
-import '../../theme/argus_tones.dart';
 import 'home_format.dart';
+import 'home_glass.dart';
 import 'home_models.dart';
 import 'home_style.dart';
 import 'home_widgets.dart';
 
-/// The balance on its raised panel, set as type rather than boxed: a label,
-/// the numeral, its value and what the value leaves out, then a line for
-/// what is pending and one for what is not on public addresses.
+/// The balance, set straight onto the scene as type: a label in spaced
+/// capitals with the hide-balances eye beside it, the serif numeral, its
+/// value in the same serif, then quieter lines for what is pending, what
+/// is not on public addresses and how old the figures are. Tokens the value
+/// leaves out are counted in a pill under it.
 class HomeBalance extends StatelessWidget {
   const HomeBalance({
     super.key,
@@ -32,11 +35,21 @@ class HomeBalance extends StatelessWidget {
     this.hidden = false,
     this.figureKey,
     this.pendingKey,
+    this.onToggleHidden,
+    this.onUnpriced,
+    this.figureReserve = 0,
+    this.showLabel = true,
+    this.unpricedPill = true,
   });
 
-  /// Room kept clear at the end of the label line for the hide-balances
-  /// eye the panel pins in its corner.
-  static const _cornerReserve = 40.0;
+  /// The "83 unpriced tokens" pill under the value; a wallet's page counts
+  /// its holdings on its Assets tab instead.
+  final bool unpricedPill;
+
+  /// The label line ("TOTAL BALANCE" and the eye). Without it the figure
+  /// leads, as on a wallet's own page whose title already names it, and
+  /// the eye sits beside the figure's value instead.
+  final bool showLabel;
 
   /// "Total balance" or "Balance".
   final String label;
@@ -71,6 +84,16 @@ class HomeBalance extends StatelessWidget {
   /// without knowing how it is set.
   final Key? figureKey;
   final Key? pendingKey;
+
+  /// The eye beside the label; without it there is none.
+  final VoidCallback? onToggleHidden;
+
+  /// Where the unpriced-tokens pill leads; without it the pill only says.
+  final VoidCallback? onUnpriced;
+
+  /// Room kept clear at the end of the figure and its value, e.g. for the
+  /// wallet's medallion beside them.
+  final double figureReserve;
 
   /// The value, when there is one and something to say it in.
   ({double value, FiatCurrency currency})? get _fiat => switch ((fiatValue, currency)) {
@@ -112,20 +135,58 @@ class HomeBalance extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
+    final eye = onToggleHidden;
+    if (!showLabel) {
+      final lines = _lines(context);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // The figures are read as one sentence, from the numeral; the
+          // lines under it are in that sentence, so they are not read again.
+          Semantics(
+            container: true,
+            label: _spoken(),
+            excludeSemantics: true,
+            child: Padding(padding: EdgeInsetsDirectional.only(end: figureReserve), child: _numeral(context)),
+          ),
+          // The eye beside the value it hides.
+          Padding(
+            padding: EdgeInsetsDirectional.only(end: figureReserve > 48 ? figureReserve - 48 : 0),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (lines.isNotEmpty) Flexible(child: ExcludeSemantics(child: lines.first)),
+                if (eye != null) HideBalancesButton(hidden: hidden, onPressed: eye),
+              ],
+            ),
+          ),
+          ExcludeSemantics(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: lines.skip(1).toList()),
+          ),
+          ..._unpriced(),
+        ],
+      );
+    }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsetsDirectional.only(end: _cornerReserve),
-          child: Text.rich(
-            TextSpan(
-              text: label.toUpperCase(),
-              children: [if (labelExtra != null) TextSpan(text: '   ·   ${labelExtra!.toUpperCase()}')],
-            ),
-            style: t.label,
+        ConstrainedBox(
+          constraints: BoxConstraints(minHeight: eye == null ? 24 : 48),
+          child: Row(
+            children: [
+              Flexible(
+                child: Text.rich(
+                  TextSpan(
+                    text: label.toUpperCase(),
+                    children: [if (labelExtra != null) TextSpan(text: '   ·   ${labelExtra!.toUpperCase()}')],
+                  ),
+                  style: t.label,
+                ),
+              ),
+              if (eye != null) HideBalancesButton(hidden: hidden, onPressed: eye),
+            ],
           ),
         ),
-        const SizedBox(height: 6),
         // The figures are read as one sentence: amount, value, what the
         // value leaves out, and what is on its way.
         Semantics(
@@ -135,38 +196,65 @@ class HomeBalance extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _numeral(context),
-              const SizedBox(height: 2),
+              Padding(padding: EdgeInsetsDirectional.only(end: figureReserve), child: _numeral(context)),
               ..._lines(context),
             ],
           ),
         ),
+        ..._unpriced(),
       ],
     );
   }
 
+  List<Widget> _unpriced() => [
+        if (_showUnpriced && unpricedPill) ...[
+          const SizedBox(height: 12),
+          OutlinePill(
+            inkKey: const Key('home-unpriced'),
+            text: '$unpricedCount unpriced ${unpricedCount == 1 ? 'token' : 'tokens'}',
+            semanticLabel: '$unpricedCount unpriced ${unpricedCount == 1 ? 'token' : 'tokens'}',
+            onTap: onUnpriced,
+          ),
+        ],
+      ];
+
   Widget _numeral(BuildContext context) {
     final t = HomeText.of(context);
     final nano = nanoErg;
-    // Newsreader's regular cut at display size, tracked in: the hero is
-    // the one serif figure on the page, so it can afford to be quiet.
+    // Newsreader at display size: the one serif figure on the page, large
+    // enough to read across a room.
     final style = TextStyle(
       fontFamily: 'Newsreader',
-      fontWeight: FontWeight.w400,
+      fontWeight: FontWeight.w500,
       fontSize: 46,
-      height: 1.1,
-      letterSpacing: -1.4,
+      height: 1.08,
+      letterSpacing: -1,
       color: t.ink,
       fontFeatures: const [FontFeature.liningFigures()],
     );
     if (nano == null && loading) {
       return Container(
-        width: 168,
-        height: 34,
+        width: 170,
+        height: 38,
         margin: const EdgeInsets.symmetric(vertical: 9),
-        decoration: BoxDecoration(color: t.muted.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(6)),
+        decoration: BoxDecoration(color: t.muted.withValues(alpha: 0.16), borderRadius: BorderRadius.circular(8)),
       );
     }
+    if (nano == null || hidden) return _figure(context, style, nano);
+    // A new balance counts to its figure from the last one, so a change is
+    // seen as a change; the first figure is simply shown, as is every
+    // figure with reduced motion. Only the drawing counts: what is read
+    // out is the balance itself.
+    return TweenAnimationBuilder<double>(
+      tween: Tween(end: nano.toDouble()),
+      duration: homeReducedMotion(context) ? Duration.zero : HomeMotion.count,
+      curve: HomeMotion.curve,
+      builder: (context, shown, _) => _figure(context, style, shown.round()),
+    );
+  }
+
+  Widget _figure(BuildContext context, TextStyle style, int? nano) {
+    final t = HomeText.of(context);
     final (whole, fraction) = nano == null
         ? ('—', '')
         : hidden
@@ -184,16 +272,22 @@ class HomeBalance extends StatelessWidget {
             // they read as a password field) in a line of the same height,
             // so hiding balances moves nothing.
             if (hidden && nano != null)
-              TextSpan(text: whole, style: TextStyle(fontSize: 28, height: 46 * 1.1 / 28, letterSpacing: 3, color: t.muted))
+              TextSpan(text: whole, style: TextStyle(fontSize: 26, height: 46 * 1.08 / 26, letterSpacing: 3, color: t.muted))
             else
               TextSpan(text: whole, style: nano == null ? TextStyle(color: t.muted) : null),
-            // The fraction is set smaller and quieter, so the magnitude
+            // The fraction in the same cut, a size down, so the magnitude
             // reads first.
-            if (fraction.isNotEmpty)
-              TextSpan(text: fraction, style: TextStyle(fontSize: 30, letterSpacing: -0.6, color: t.muted)),
+            if (fraction.isNotEmpty) TextSpan(text: fraction, style: const TextStyle(fontSize: 32, letterSpacing: -0.5)),
             TextSpan(
               text: '${nbsp}ERG',
-              style: t.label.copyWith(fontSize: 13, letterSpacing: 1.4, fontFeatures: const []),
+              style: TextStyle(
+                fontFamily: 'Karla',
+                fontSize: 17,
+                fontWeight: FontWeight.w400,
+                letterSpacing: 1.6,
+                color: t.muted,
+                fontFeatures: const [],
+              ),
             ),
           ],
         ),
@@ -208,34 +302,41 @@ class HomeBalance extends StatelessWidget {
   List<Widget> _lines(BuildContext context) {
     final t = HomeText.of(context);
     final lines = <Widget>[];
-    final caveats = [if (_showUnpriced) '$unpricedCount${nbsp}unpriced', ..._notes()];
     final fiat = _fiat;
-    if (fiat != null || caveats.isNotEmpty) {
-      lines.add(Text.rich(
-        TextSpan(
-          children: [
-            if (fiat != null)
-              TextSpan(
-                text: hidden ? '≈$nbsp${fiat.currency.symbol}$maskedFigure' : fiatFigure(fiat.value, fiat.currency),
-                style: t.primary,
-              ),
-            // Honest about what the value leaves out, and how old it is.
-            for (final (i, c) in caveats.indexed) TextSpan(text: i == 0 && fiat == null ? c : '   ·   $c'),
-          ],
+    if (fiat != null) {
+      lines.add(Padding(
+        padding: EdgeInsetsDirectional.only(end: showLabel ? figureReserve : 0),
+        child: Text(
+          hidden ? '≈$nbsp${fiat.currency.symbol}$maskedFigure' : fiatFigure(fiat.value, fiat.currency),
+          style: TextStyle(
+            fontFamily: 'Newsreader',
+            fontSize: 21,
+            height: 1.2,
+            fontWeight: FontWeight.w400,
+            color: t.ink,
+            fontFeatures: const [FontFeature.liningFigures()],
+          ),
         ),
-        style: t.secondary,
+      ));
+    }
+    // Honest about how old the figures are and what they leave out.
+    final notes = _notes();
+    if (notes.isNotEmpty) {
+      lines.add(Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(notes.join('   ·   '), style: t.secondary.copyWith(fontSize: 14.5)),
       ));
     }
     if (pendingText(pending, hidden: hidden) != null) {
       lines.add(Padding(
-        padding: const EdgeInsets.only(top: 2),
+        padding: const EdgeInsets.only(top: 6),
         child: HomePendingLine(key: pendingKey, pending: pending, hidden: hidden),
       ));
     }
     if (pocketsLine(pockets, hidden: hidden, asOf: pocketsAsOf) case final note?) {
       lines.add(Padding(
-        padding: const EdgeInsets.only(top: 2),
-        child: Text(note, style: t.secondary),
+        padding: const EdgeInsets.only(top: 6),
+        child: Text(note, style: t.secondary.copyWith(fontSize: 15, letterSpacing: 0.3)),
       ));
     }
     return lines;
@@ -272,35 +373,51 @@ class HomePendingLine extends StatelessWidget {
   }
 }
 
-/// The address a wallet is shown as, with its pinned index when it has one:
-/// "📌 #275  9evoke9R…KmPoW".
-class HomeIdentityLine extends StatelessWidget {
-  const HomeIdentityLine({super.key, required this.address, this.pinnedIndex});
+/// The address a wallet is shown as, on a pill of glass: its pinned index
+/// when it has one, the address shortened, and a button that copies it
+/// whole.
+class IdentityPill extends StatelessWidget {
+  const IdentityPill({super.key, required this.address, this.pinnedIndex, this.onCopy});
 
   final String address;
   final int? pinnedIndex;
+
+  /// Copies the address; without one the pill copies it itself and says so.
+  final VoidCallback? onCopy;
+
+  void _copy(BuildContext context) {
+    if (onCopy != null) return onCopy!();
+    Clipboard.setData(ClipboardData(text: address));
+    ScaffoldMessenger.maybeOf(context)?.showSnackBar(const SnackBar(content: Text('Address copied')));
+  }
 
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
     final pinned = pinnedIndex != null && pinnedIndex! > 0;
-    return Semantics(
-      label: spoken('${pinned ? 'Pinned address #$pinnedIndex, ' : 'Address '}${shorten(address, head: 8, tail: 6)}'),
-      excludeSemantics: true,
+    final short = shorten(address, head: 8, tail: 6);
+    return GlassPill(
+      inkKey: const Key('wallet-identity'),
+      semanticLabel: spoken('${pinned ? 'Pinned address #$pinnedIndex, ' : 'Address '}$short'),
+      leading: Icon(Icons.person_outline, size: 20, color: HomeTones.of(context).accent),
+      trailing: IconButton(
+        key: const Key('wallet-copy-address'),
+        tooltip: 'Copy address',
+        onPressed: () => _copy(context),
+        icon: Icon(Icons.copy_rounded, size: 19, color: t.muted),
+      ),
       child: Row(
         children: [
           if (pinned) ...[
-            Icon(Icons.push_pin_outlined, size: 13, color: t.muted),
-            const SizedBox(width: 3),
-            Text('#$pinnedIndex', style: t.secondary),
-            const SizedBox(width: 8),
+            Text('#$pinnedIndex', style: t.secondary.copyWith(color: t.ink, fontSize: 13.5)),
+            const SizedBox(width: 14),
           ],
           Flexible(
             child: Text(
-              shorten(address, head: 8, tail: 6),
+              short,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: monoStyle(context, size: 12).copyWith(color: t.muted),
+              style: t.secondary.copyWith(color: t.ink, fontSize: 13.5, letterSpacing: 0.8),
             ),
           ),
         ],
@@ -335,8 +452,16 @@ class HomeLineRow extends StatelessWidget {
     this.inkKey,
     this.hint,
     this.trailing,
-    this.padding = const EdgeInsets.symmetric(horizontal: homeGutter),
+    this.padding,
+    this.markWidth = homeMarkSize,
+    this.chevron = true,
   });
+
+  /// Whether a line that leads somewhere ends in a chevron.
+  final bool chevron;
+
+  /// The column the leading mark is centred in.
+  final double markWidth;
 
   final Widget leading;
   final InlineSpan text;
@@ -350,19 +475,19 @@ class HomeLineRow extends StatelessWidget {
 
   /// A control of its own at the end of the line, e.g. a dismiss button.
   final Widget? trailing;
-  final EdgeInsetsGeometry padding;
+  final EdgeInsetsGeometry? padding;
 
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
-    final colors = ArgusColors.of(context);
+    final accent = HomeTones.of(context).accent;
     final row = Container(
       constraints: const BoxConstraints(minHeight: homeLineHeight),
       alignment: AlignmentDirectional.centerStart,
-      padding: padding,
+      padding: padding ?? EdgeInsets.symmetric(horizontal: homeGutterOf(context)),
       child: Row(
         children: [
-          SizedBox(width: homeMarkSize, child: Center(child: leading)),
+          SizedBox(width: markWidth, child: Center(child: leading)),
           const SizedBox(width: 12),
           Expanded(
             child: Padding(
@@ -372,10 +497,10 @@ class HomeLineRow extends StatelessWidget {
           ),
           if (action != null) ...[
             const SizedBox(width: 12),
-            Text(action!, style: t.secondary.copyWith(color: colors.accentText, fontWeight: FontWeight.w500)),
+            Text(action!, style: t.secondary.copyWith(color: accent, fontWeight: FontWeight.w500)),
           ],
-          if (onTap != null && trailing == null)
-            Icon(Icons.chevron_right, size: 18, color: action != null ? colors.accentText : t.muted),
+          if (onTap != null && trailing == null && chevron)
+            Icon(Icons.chevron_right, size: 18, color: action != null ? accent : t.muted),
         ],
       ),
     );
@@ -411,7 +536,7 @@ class ErgPriceStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
-    final colors = ArgusColors.of(context);
+    final tones = HomeTones.of(context);
     final rate = price.fiatPerErg;
     final change = price.changePercent;
     final trend = price.hasTrend && rate != null;
@@ -432,7 +557,7 @@ class ErgPriceStrip extends StatelessWidget {
                 TextSpan(
                   text: '   ${percentChange(change!)}',
                   style: t.secondary.copyWith(
-                    color: rising ? mossFor(context) : rustFor(context),
+                    color: rising ? tones.positive : tones.negative,
                     fontWeight: FontWeight.w500,
                   ),
                 ),
@@ -458,7 +583,7 @@ class ErgPriceStrip extends StatelessWidget {
           key: const Key('home-price-sparkline'),
           width: width ?? _sparkWidth,
           height: _sparkHeight,
-          child: CustomPaint(painter: SparklinePainter(points: price.points, color: colors.accent)),
+          child: CustomPaint(painter: SparklinePainter(points: price.points, color: tones.accent)),
         );
     return Semantics(
       container: true,
@@ -482,7 +607,8 @@ class ErgPriceStrip extends StatelessWidget {
   }
 }
 
-/// A price line with a soft fill below it and a dot on the latest point.
+/// A price line over a gradient fill, strengthening toward the latest
+/// point, which carries a dot in a soft halo.
 class SparklinePainter extends CustomPainter {
   SparklinePainter({required this.points, required this.color});
 
@@ -509,24 +635,33 @@ class SparklinePainter extends CustomPainter {
       ..lineTo(last.dx, size.height)
       ..lineTo(0, size.height)
       ..close();
+    final area = Offset.zero & size;
+    // The area under the line is filled from the line's colour down to
+    // nothing, so the shape of the day reads at a glance.
     canvas.drawPath(
       fill,
       Paint()
         ..shader = LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [color.withValues(alpha: 0.2), color.withValues(alpha: 0)],
-        ).createShader(Offset.zero & size),
+          colors: [color.withValues(alpha: 0.26), color.withValues(alpha: 0.02)],
+        ).createShader(area),
     );
+    // The line strengthens toward now: the latest prices carry the most.
     canvas.drawPath(
       line,
       Paint()
-        ..color = color
+        ..shader = LinearGradient(
+          colors: [color.withValues(alpha: 0.45), color],
+          stops: const [0, 0.7],
+        ).createShader(area)
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5
+        ..strokeWidth = 1.75
         ..strokeJoin = StrokeJoin.round
         ..strokeCap = StrokeCap.round,
     );
+    // The latest point, with a soft halo.
+    canvas.drawCircle(last, 5, Paint()..color = color.withValues(alpha: 0.22));
     canvas.drawCircle(last, 2.6, Paint()..color = color);
   }
 
@@ -534,75 +669,7 @@ class SparklinePainter extends CustomPainter {
   bool shouldRepaint(SparklinePainter old) => old.color != color || !identical(old.points, points);
 }
 
-/// The page's one elevated surface: the balance's plinth.
-///
-/// Its edges sit 12 in from the screen and its content 12 in again, so the
-/// figures on it start on the same gutter as every row below. Depth comes
-/// from a long soft shadow and a fill that settles a shade toward the page
-/// at its foot, as if lit from above, not from a border. Shading down
-/// rather than lifting up keeps every text colour on it at its contrast.
-class RaisedPanel extends StatelessWidget {
-  const RaisedPanel({super.key, required this.child, this.corner});
-
-  final Widget child;
-
-  /// A control pinned to the top corner, e.g. the hide-balances eye.
-  final Widget? corner;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: homeGutter - 12),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(homeRadius),
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [scheme.surface, raisedPanelFoot(Theme.of(context))],
-          ),
-          boxShadow: [
-            // On paper a long shadow showed as a ledge; there the panel
-            // floats on a short, even one.
-            BoxShadow(
-              color: Colors.black.withValues(alpha: dark ? 0.45 : 0.05),
-              blurRadius: dark ? 32 : 18,
-              spreadRadius: dark ? -8 : -2,
-              offset: Offset(0, dark ? 14 : 6),
-            ),
-            BoxShadow(
-              color: Colors.black.withValues(alpha: dark ? 0.3 : 0.05),
-              blurRadius: 2,
-              offset: const Offset(0, 1),
-            ),
-          ],
-        ),
-        child: Material(
-          type: MaterialType.transparency,
-          borderRadius: BorderRadius.circular(homeRadius),
-          clipBehavior: Clip.antiAlias,
-          child: Stack(
-            children: [
-              Padding(padding: const EdgeInsets.fromLTRB(12, 16, 12, 12), child: child),
-              if (corner != null) PositionedDirectional(top: 4, end: 4, child: corner!),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// The panel's foot: its surface settled a shade toward the page.
-Color raisedPanelFoot(ThemeData theme) => Color.alphaBlend(
-      theme.scaffoldBackgroundColor.withValues(alpha: theme.brightness == Brightness.dark ? 0.45 : 0.35),
-      theme.colorScheme.surface,
-    );
-
-/// The hide-balances eye the panel pins in its corner, beside the figure
-/// it hides.
+/// The hide-balances eye, beside the label of the figure it hides.
 class HideBalancesButton extends StatelessWidget {
   const HideBalancesButton({super.key, required this.hidden, required this.onPressed});
 
@@ -615,39 +682,99 @@ class HideBalancesButton extends StatelessWidget {
       key: const Key('home-hide-balances'),
       onPressed: onPressed,
       tooltip: hidden ? 'Show balances' : 'Hide balances',
+      color: HomeText.of(context).muted,
+      iconSize: 19,
       icon: Icon(hidden ? Icons.visibility_off_outlined : Icons.visibility_outlined),
     );
   }
 }
 
-/// A short line saying whether a node answers and how far the chain has
-/// got: the overview's only status line. It opens the network settings, or
-/// with no node looks again.
-HomeLineRow homeNetworkRow(
+/// A status on a pill of glass, full width: a coloured dot, the word for
+/// the state in ink and the facts after it, and a chevron when it leads
+/// somewhere ("● Connected · Block 1,889,207 ›").
+class StatusPill extends StatelessWidget {
+  const StatusPill({
+    super.key,
+    required this.status,
+    this.facts = const [],
+    this.onTap,
+    this.hint,
+    this.action,
+    this.inkKey,
+  });
+
+  final NetworkStatus status;
+  final List<String> facts;
+  final VoidCallback? onTap;
+  final String? hint;
+
+  /// A link's words in the accent, e.g. "Retry" when no node answers.
+  final String? action;
+  final Key? inkKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = HomeText.of(context);
+    final (word, dot, problem) = syncLook(context, status);
+    return GlassPill(
+      inkKey: inkKey,
+      onTap: onTap,
+      hint: hint,
+      semanticLabel: spoken([word, ...facts, ?action].join(', ')),
+      leading: _Dot(color: dot),
+      child: Text.rich(
+        TextSpan(
+          children: [
+            TextSpan(text: word, style: TextStyle(color: problem ? rustFor(context) : t.ink)),
+            for (final f in facts) TextSpan(text: '   ·   $f', style: TextStyle(color: t.muted)),
+            if (action != null)
+              TextSpan(text: '   $action', style: TextStyle(color: HomeTones.of(context).accent)),
+          ],
+        ),
+        style: t.secondary.copyWith(fontSize: 13.5),
+      ),
+    );
+  }
+}
+
+/// A status dot with a soft halo of its own colour.
+class _Dot extends StatelessWidget {
+  const _Dot({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: 10,
+        height: 10,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          boxShadow: [BoxShadow(color: color.withValues(alpha: 0.55), blurRadius: 8)],
+        ),
+      );
+}
+
+/// The overview's network pill: whether a node answers and how far the
+/// chain has got. It opens the network settings, or with no node looks
+/// again. Only the first is hinted as "Network settings": a pill that
+/// retries says so in its own words ([action]) and is not hinted as
+/// somewhere it does not go.
+Widget homeNetworkPill(
   BuildContext context,
   NetworkStatus network, {
   VoidCallback? onTap,
   String? action,
   String? hint,
-}) {
-  final t = HomeText.of(context);
-  final (word, dot, problem) = syncLook(context, network);
-  final parts = [
-    if (network.blockHeight != null) 'Block$nbsp${formatWithCommas(network.blockHeight!)}',
-    if (network.age != null) network.age!,
-  ];
-  return HomeLineRow(
-    inkKey: const Key('home-network'),
-    onTap: onTap,
-    action: action,
-    hint: hint ?? (onTap == null ? null : 'Network settings'),
-    semanticLabel: spoken([word, ...parts, ?action].join(', ')),
-    leading: Container(width: 7, height: 7, decoration: BoxDecoration(color: dot, shape: BoxShape.circle)),
-    text: TextSpan(
-      children: [
-        TextSpan(text: word, style: TextStyle(color: problem ? rustFor(context) : t.ink, fontWeight: FontWeight.w500)),
-        for (final p in parts) TextSpan(text: '   ·   $p'),
+}) =>
+    StatusPill(
+      inkKey: const Key('home-network'),
+      status: network,
+      onTap: onTap,
+      action: action,
+      hint: hint ?? (onTap == null || action != null ? null : 'Network settings'),
+      facts: [
+        if (network.blockHeight != null) 'Block$nbsp${formatWithCommas(network.blockHeight!)}',
+        if (network.age != null) network.age!,
       ],
-    ),
-  );
-}
+    );

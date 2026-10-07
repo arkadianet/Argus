@@ -9,9 +9,9 @@ import 'home_widgets.dart';
 
 /// Mark and words for each primary action.
 ({IconData icon, String label}) walletActionLook(WalletAction action) => switch (action) {
-      WalletAction.send => (icon: Icons.north_east, label: 'Send'),
+      WalletAction.send => (icon: Icons.near_me_outlined, label: 'Send'),
       WalletAction.sendOffline => (icon: Icons.qr_code_2, label: 'Send with offline signer'),
-      WalletAction.receive => (icon: Icons.south_west, label: 'Receive'),
+      WalletAction.receive => (icon: Icons.arrow_downward_rounded, label: 'Receive'),
       WalletAction.swap => (icon: Icons.swap_horiz, label: 'Swap'),
       WalletAction.more => (icon: Icons.more_horiz, label: 'More'),
     };
@@ -26,10 +26,11 @@ double _labelNeed(BuildContext context, String label, TextStyle style) {
   return math.max(longestWord, whole / 2 + 8);
 }
 
-/// The wallet's actions: round buttons on the raised panel with their names
-/// beneath. The first, the wallet's main way to pay, is filled with the
-/// accent; the rest sit recessed in the panel. Four abreast, then two by
-/// two at large text sizes, rather than squeeze a name.
+/// The wallet's actions: large round buttons on the scene with their names
+/// beneath. The first, the wallet's main way to pay, is filled with a
+/// glowing gradient of the accent; the rest are thin rings of light round
+/// a line icon. Four abreast, then two by two at large text sizes, rather
+/// than squeeze a name.
 class HomeActionCircles extends StatelessWidget {
   const HomeActionCircles({
     super.key,
@@ -37,6 +38,8 @@ class HomeActionCircles extends StatelessWidget {
     required this.onAction,
     this.disabled = const {},
     this.watched = false,
+    this.keyPrefix,
+    this.gridMore = false,
   });
 
   final List<WalletAction> actions;
@@ -49,17 +52,26 @@ class HomeActionCircles extends StatelessWidget {
   /// ("watch-action-send"), which other screens' tests look for.
   final bool watched;
 
-  static const _size = 44.0;
+  /// Keys "<prefix>-<action>" instead, e.g. the overview's own row.
+  final String? keyPrefix;
+
+  /// More as a grid of four dots (the overview's, where it opens more than
+  /// one wallet's tools) rather than three.
+  final bool gridMore;
+
+  static const _size = 52.0;
   static const _gap = 8.0;
 
-  Key _key(WalletAction action) => watched
-      ? Key('watch-action-${action == WalletAction.sendOffline ? 'send' : action.name}')
-      : Key('wallet-action-${action.name}');
+  Key _key(WalletAction action) => keyPrefix != null
+      ? Key('$keyPrefix-${action.name}')
+      : watched
+          ? Key('watch-action-${action == WalletAction.sendOffline ? 'send' : action.name}')
+          : Key('wallet-action-${action.name}');
 
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
-    final style = t.secondary.copyWith(color: t.ink, fontWeight: FontWeight.w500);
+    final style = t.secondary.copyWith(color: t.ink, fontSize: 13.5);
     return LayoutBuilder(
       builder: (context, constraints) {
         final needs = [
@@ -98,47 +110,128 @@ class HomeActionCircles extends StatelessWidget {
 
   Widget _button(BuildContext context, WalletAction action, TextStyle style, double labelWidth, {required bool primary}) {
     final look = walletActionLook(action);
-    final colors = ArgusColors.of(context);
-    final t = HomeText.of(context);
     final enabled = !disabled.contains(action);
-    final onTap = enabled ? () => onAction(action) : null;
     // Disabled reads as the same button at a lower opacity, so the page
     // keeps its shape while, say, an account's first scan runs.
     return TappableNode(
       label: look.label,
-      onTap: onTap,
+      onTap: enabled ? () => onAction(action) : null,
       button: true,
       child: Opacity(
         opacity: enabled ? 1 : 0.38,
-        child: InkWell(
-          key: _key(action),
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(homeRadius),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: _size,
-                  height: _size,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: primary ? colors.accent : colors.inset,
-                  ),
-                  child: Icon(look.icon, size: homeIconSize, color: primary ? colors.onAccent : t.ink),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  balancedLabel(context, look.label, style, labelWidth),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: style,
-                ),
-              ],
+        child: _RoundAction(
+          inkKey: _key(action),
+          icon: action == WalletAction.more && gridMore ? null : look.icon,
+          label: balancedLabel(context, look.label, style, labelWidth),
+          style: style,
+          primary: primary,
+          onTap: enabled ? () => onAction(action) : null,
+        ),
+      ),
+    );
+  }
+}
+
+/// One round action: its circle gives a little under a finger, with the
+/// ink spreading over it, and springs back on release. The filled one sits
+/// on a soft shadow of its own colour, so it reads as the one to press.
+class _RoundAction extends StatefulWidget {
+  const _RoundAction({
+    required this.inkKey,
+    required this.icon,
+    required this.label,
+    required this.style,
+    required this.primary,
+    required this.onTap,
+  });
+
+  final Key inkKey;
+
+  /// Null draws four dots in a square.
+  final IconData? icon;
+  final String label;
+  final TextStyle style;
+  final bool primary;
+  final VoidCallback? onTap;
+
+  @override
+  State<_RoundAction> createState() => _RoundActionState();
+}
+
+class _RoundActionState extends State<_RoundAction> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final tones = HomeTones.of(context);
+    final still = homeReducedMotion(context);
+    final spec = ArgusColors.sceneOf(context);
+    return InkWell(
+      key: widget.inkKey,
+      onTap: widget.onTap,
+      onHighlightChanged: (down) => setState(() => _pressed = down),
+      borderRadius: BorderRadius.circular(homeRadius),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AnimatedScale(
+              scale: _pressed && !still ? 0.92 : 1,
+              duration: still ? Duration.zero : HomeMotion.press,
+              curve: Curves.easeOut,
+              child: Container(
+                width: HomeActionCircles._size,
+                height: HomeActionCircles._size,
+                decoration: widget.primary
+                    ? BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          center: const Alignment(-0.3, -0.45),
+                          radius: 0.95,
+                          colors: [spec.sendTop, spec.sendBottom],
+                        ),
+                        border: Border.all(color: spec.sendTop.withValues(alpha: 0.9)),
+                        boxShadow: [BoxShadow(color: spec.sendGlow, blurRadius: 22, spreadRadius: 1)],
+                      )
+                    : BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: spec.ringFill,
+                        border: Border.all(color: spec.ring),
+                      ),
+                child: widget.icon == null
+                    ? _DotGrid(color: tones.ink)
+                    : Icon(widget.icon, size: 22, color: widget.primary ? spec.onSend : tones.ink),
+              ),
             ),
-          ),
+            const SizedBox(height: 8),
+            Text(widget.label, textAlign: TextAlign.center, maxLines: 2, overflow: TextOverflow.ellipsis, style: widget.style),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Four dots in a square: the overview's More.
+class _DotGrid extends StatelessWidget {
+  const _DotGrid({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget dot() => Container(width: 5, height: 5, decoration: BoxDecoration(color: color, shape: BoxShape.circle));
+    return Center(
+      child: SizedBox(
+        width: 15,
+        height: 15,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [dot(), dot()]),
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [dot(), dot()]),
+          ],
         ),
       ),
     );

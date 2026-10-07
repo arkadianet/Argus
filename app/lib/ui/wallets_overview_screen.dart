@@ -13,6 +13,7 @@ import 'home/home_models.dart';
 import 'home/overview_model.dart';
 import 'home/overview_screen.dart';
 import 'home/wallet_tools_sheet.dart';
+import 'home/watched_actions.dart';
 
 /// The launch screen: every wallet on this device — seed wallets, watched
 /// addresses and watched accounts — with its balance, and the total across
@@ -38,9 +39,13 @@ class WalletsOverviewScreen extends StatelessWidget {
     this.priceFeed,
     this.notice,
     this.noticeIsError = false,
+    this.onAction,
   });
 
   final WalletsOverviewModel model;
+
+  /// Send, Receive, Swap and More from the overview's own row.
+  final ValueChanged<WalletAction>? onAction;
   final ValueChanged<WalletRef> onOpen;
   final VoidCallback onCreate;
   final VoidCallback onRestore;
@@ -104,6 +109,8 @@ class WalletsOverviewScreen extends StatelessWidget {
                 ].join(' '),
           notice: notice,
           noticeIsError: noticeIsError,
+          onAction: onAction,
+          onStopWatching: (ref) => stopWatching(context, ref),
         );
       },
     );

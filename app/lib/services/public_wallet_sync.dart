@@ -2,9 +2,11 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import 'activity_classifier.dart' show reownActivity;
 import 'address_holdings.dart';
 import 'network_controller.dart';
 import 'pending_balance.dart';
+import 'stealth_change_book.dart';
 import 'wallet_database_service.dart';
 import 'wallet_service.dart';
 import 'wallet_sync_controller.dart';
@@ -208,10 +210,14 @@ class PublicWalletSync extends ChangeNotifier {
             }
             amounts.removeWhere((_, amount) => amount <= 0);
           }
+          // Read against all the wallet's addresses, and the stealth
+          // addresses this wallet (and no other) sent its own change to.
+          await stealthChangeBook.load(entry.key);
+          final owned = {...addresses, ...stealthChangeBook.addressesFor(entry.key)};
           for (final address in addresses) {
             if (!valid()) return;
             for (final tx in await gateway.history(address)) {
-              final row = Map<String, dynamic>.from(tx as Map);
+              final row = reownActivity(Map<String, dynamic>.from(tx as Map), owned);
               transactions[row['tx_id'] as String] = row;
             }
           }
