@@ -538,11 +538,10 @@ class SparklinePainter extends CustomPainter {
 
 /// The hero: the one surface on the page that is not the page.
 ///
-/// It is coloured ([HeroSpec]): the palette's accent, solid or laid into
-/// the page as a tint, so the balance and the wallet's actions read before
-/// anything else without the jolt of a paper card on a dark page. The
-/// separation is the surface's own: no border and no shadow. A tint
-/// settles a shade toward the page at its foot.
+/// It is coloured ([HeroSpec]): the palette's accent, so the balance and
+/// the wallet's actions read before anything else without the jolt of a
+/// paper card on a dark page. The separation is the surface's own: no
+/// border and no shadow.
 ///
 /// Everything inside takes the hero's colours: its own tones through
 /// [HeroSurface], and a theme turned to match for what reads the theme

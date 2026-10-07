@@ -46,10 +46,11 @@ void main() {
       expect(short, isEmpty, reason: palette.name);
     });
 
-    for (final (style, hero) in [('solid', palette.heroSolid), ('tint', palette.heroTint)]) {
-      test('${palette.name}, $style: the hero meets WCAG AA on its own surface', () {
+    {
+      final hero = palette.hero;
+      test('${palette.name}: the hero meets WCAG AA on its own surface', () {
         final short = <String>[];
-        // A tint shades toward its foot: everything on it holds on both.
+        // The panel may shade toward its foot: everything on it holds on both.
         void atLeast(String what, Color fg, Color bg, double ratio) {
           for (final ground in {bg == hero.surface ? hero.surfaceEnd : bg, bg}) {
             final got = contrast(fg, ground);
@@ -72,10 +73,10 @@ void main() {
         // has to show; its mark is held to text's ratio.
         atLeast('the mark in a tonal well', hero.onTonal, hero.tonal, 4.5);
         atLeast('the eye and the chevrons', hero.ink, hero.surface, 3);
-        expect(short, isEmpty, reason: '${palette.name} $style');
+        expect(short, isEmpty, reason: palette.name);
       });
 
-      test('${palette.name}, $style: the hero stands apart from the page, Send apart on it', () {
+      test('${palette.name}: the hero stands apart from the page, Send apart on it', () {
         // Apart from the page by its colour alone: no border, no shadow.
         expect(contrast(hero.surface, palette.background), greaterThan(1.2));
         expect(hero.surface, isNot(palette.background));
