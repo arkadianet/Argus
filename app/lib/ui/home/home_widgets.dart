@@ -392,7 +392,7 @@ class HomeRow extends StatelessWidget {
     final row = Container(
       constraints: const BoxConstraints(minHeight: homeRowHeight),
       alignment: AlignmentDirectional.centerStart,
-      padding: EdgeInsets.symmetric(horizontal: homeGutterOf(context), vertical: 8),
+      padding: EdgeInsets.symmetric(horizontal: homeGutterOf(context), vertical: 6),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

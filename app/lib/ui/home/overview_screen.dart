@@ -147,7 +147,7 @@ class OverviewScreen extends StatelessWidget {
       color: page,
       child: HomeScene(
         light: SceneLight.eclipse,
-        lightAt: Offset(58, top - 12),
+        lightAt: Offset(96, top + 66),
         lightRadius: 80,
         height: top + 520,
         child: scaffold,

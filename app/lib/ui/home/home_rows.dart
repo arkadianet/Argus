@@ -134,7 +134,7 @@ class OverviewWalletRow extends StatelessWidget {
         w.name,
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
-        style: t.primary.copyWith(fontFamily: 'Newsreader', fontSize: 18, fontWeight: FontWeight.w500, height: 1.25),
+        style: t.primary.copyWith(fontFamily: 'Newsreader', fontSize: 16.5, fontWeight: FontWeight.w500, height: 1.25),
       ),
       subtitle: facts.isEmpty ? null : TextSpan(children: facts),
       figure: TextSpan(

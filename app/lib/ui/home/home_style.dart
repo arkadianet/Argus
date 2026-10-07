@@ -137,7 +137,7 @@ class HomeText {
       muted: muted,
       // A heading within the page ("Recent Activity"): a size up, plain.
       title: TextStyle(
-        fontSize: 16.5,
+        fontSize: 16,
         fontWeight: FontWeight.w400,
         height: 1.25,
         letterSpacing: 0.3,
@@ -146,21 +146,21 @@ class HomeText {
       // Names and figures are set in the regular cut: on the dark glass a
       // size and ink above their detail lines carry them.
       primary: TextStyle(
-        fontSize: 15,
+        fontSize: 14.5,
         fontWeight: FontWeight.w400,
         height: 1.3,
         color: ink,
         fontFeatures: tabularFigures,
       ),
       secondary: TextStyle(
-        fontSize: 13,
+        fontSize: 12.5,
         fontWeight: FontWeight.w400,
         height: 1.3,
         color: muted,
         fontFeatures: tabularFigures,
       ),
       label: TextStyle(
-        fontSize: 12.5,
+        fontSize: 12,
         fontWeight: FontWeight.w400,
         height: 1.3,
         letterSpacing: 2.6,
@@ -172,16 +172,16 @@ class HomeText {
     );
   }
 
-  /// A heading within the page: 18, regular, ink.
+  /// A heading within the page: 16, regular, ink.
   final TextStyle title;
 
-  /// Row titles, amounts: 16, regular, ink.
+  /// Row titles, amounts: 14.5, regular, ink.
   final TextStyle primary;
 
-  /// Details, values, notes: 13.5, regular, muted.
+  /// Details, values, notes: 12.5, regular, muted.
   final TextStyle secondary;
 
-  /// A list's name and the balance's label: 12.5, widely spaced capitals.
+  /// A list's name and the balance's label: 12, widely spaced capitals.
   final TextStyle label;
 
   /// Text-button labels ("View all", "Learn more"): 13, medium, ink.

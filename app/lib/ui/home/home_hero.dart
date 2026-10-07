@@ -226,7 +226,7 @@ class HomeBalance extends StatelessWidget {
     final style = TextStyle(
       fontFamily: 'Newsreader',
       fontWeight: FontWeight.w500,
-      fontSize: 49,
+      fontSize: 46,
       height: 1.08,
       letterSpacing: -1,
       color: t.ink,
@@ -272,17 +272,17 @@ class HomeBalance extends StatelessWidget {
             // they read as a password field) in a line of the same height,
             // so hiding balances moves nothing.
             if (hidden && nano != null)
-              TextSpan(text: whole, style: TextStyle(fontSize: 28, height: 49 * 1.08 / 28, letterSpacing: 3, color: t.muted))
+              TextSpan(text: whole, style: TextStyle(fontSize: 26, height: 46 * 1.08 / 26, letterSpacing: 3, color: t.muted))
             else
               TextSpan(text: whole, style: nano == null ? TextStyle(color: t.muted) : null),
             // The fraction in the same cut, a size down, so the magnitude
             // reads first.
-            if (fraction.isNotEmpty) TextSpan(text: fraction, style: const TextStyle(fontSize: 35, letterSpacing: -0.5)),
+            if (fraction.isNotEmpty) TextSpan(text: fraction, style: const TextStyle(fontSize: 32, letterSpacing: -0.5)),
             TextSpan(
               text: '${nbsp}ERG',
               style: TextStyle(
                 fontFamily: 'Karla',
-                fontSize: 18,
+                fontSize: 17,
                 fontWeight: FontWeight.w400,
                 letterSpacing: 1.6,
                 color: t.muted,
@@ -310,7 +310,7 @@ class HomeBalance extends StatelessWidget {
           hidden ? '≈$nbsp${fiat.currency.symbol}$maskedFigure' : fiatFigure(fiat.value, fiat.currency),
           style: TextStyle(
             fontFamily: 'Newsreader',
-            fontSize: 23,
+            fontSize: 21,
             height: 1.2,
             fontWeight: FontWeight.w400,
             color: t.ink,

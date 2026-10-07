@@ -59,7 +59,7 @@ class HomeActionCircles extends StatelessWidget {
   /// one wallet's tools) rather than three.
   final bool gridMore;
 
-  static const _size = 56.0;
+  static const _size = 52.0;
   static const _gap = 8.0;
 
   Key _key(WalletAction action) => keyPrefix != null
@@ -71,7 +71,7 @@ class HomeActionCircles extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = HomeText.of(context);
-    final style = t.secondary.copyWith(color: t.ink, fontSize: 14);
+    final style = t.secondary.copyWith(color: t.ink, fontSize: 13.5);
     return LayoutBuilder(
       builder: (context, constraints) {
         final needs = [

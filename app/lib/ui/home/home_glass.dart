@@ -13,7 +13,7 @@ import 'home_widgets.dart';
 const glassRadius = 18.0;
 
 /// Inside a glass card, rows keep this much in from its edge.
-const glassGutter = 16.0;
+const glassGutter = 14.0;
 
 /// How far a glass card sits in from the screen's edge.
 const glassInset = 16.0;
