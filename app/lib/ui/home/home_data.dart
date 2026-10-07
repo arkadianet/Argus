@@ -42,13 +42,19 @@ bool networkOffline() => networkController.activeUrl == null && !networkControll
 
 /// Said beside a fiat value while the ERG rate is not current: the age of
 /// the stopped feed it came from ("prices 3 h old"), or when the last good
-/// read was. Null while prices are current.
+/// read was, once that is old enough to matter ([TokenPricer.oldAfter]).
+/// Null while prices are current, including the minutes after a refresh
+/// that failed while the last good prices are still recent.
 String? pricesNote() {
-  if (!tokenPricer.stale) return null;
   if (tokenPricer.result.ergStaleAge case final age?) return 'prices $age old';
+  if (!tokenPricer.pricesLookOld) return null;
   final at = tokenPricer.asOf;
   return at == null ? 'prices stale' : 'prices as of ${formatSyncAge(at)}';
 }
+
+/// Why ERG has no usable price right now, for a row that would show one:
+/// "unavailable · retrying" while another read is on its way.
+String _unavailableNote() => tokenPricer.retrying || tokenPricer.refreshing ? 'unavailable · retrying' : 'unavailable';
 
 /// The overview's network line: whether a node answers, and the chain's
 /// height when it does.
@@ -75,9 +81,11 @@ ErgPriceView ergPriceView(ErgPriceHistory? history) {
       : staleAge == null
           ? via
           : via.replaceFirst(', $staleAge old', '');
+  // A stopped feed says its age; prices from an earlier read say when that
+  // was only once they are old enough to matter, never "as of just now".
   final staleNote = staleAge != null
       ? '$staleAge old'
-      : tokenPricer.pricesAreOld && tokenPricer.asOf != null
+      : tokenPricer.pricesLookOld && tokenPricer.asOf != null
           ? 'as of ${formatSyncAge(tokenPricer.asOf)}'
           : null;
   final h = history;
@@ -119,7 +127,9 @@ AssetRowData ergAssetRow(int nanoErg, ErgPriceView? price) {
     fiatValue: rate == null ? null : nanoErg / 1e9 * rate,
     unitFiat: rate,
     changePercent: price != null && price.hasTrend && price.staleNote == null ? price.changePercent : null,
-    priceNote: price?.staleNote,
+    // No rate at all: the row says so ("Price unavailable · retrying")
+    // rather than being left without a value and without a word.
+    priceNote: rate == null ? _unavailableNote() : price?.staleNote,
     kind: AssetKind.erg,
   );
 }

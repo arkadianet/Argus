@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 
 import 'home_glass.dart';
 import 'home_models.dart';
@@ -23,6 +24,7 @@ class TappableNode extends StatelessWidget {
     this.onLongPress,
     this.hint,
     this.button,
+    this.actions,
   });
 
   final String label;
@@ -35,6 +37,10 @@ class TappableNode extends StatelessWidget {
   /// still an action. Defaults to whether there is a tap.
   final bool? button;
 
+  /// Further things a screen reader can do with the node, for what a
+  /// gesture alone offers (a swipe to stop watching).
+  final Map<CustomSemanticsAction, VoidCallback>? actions;
+
   @override
   Widget build(BuildContext context) {
     return Semantics(
@@ -45,6 +51,7 @@ class TappableNode extends StatelessWidget {
       hint: hint,
       onTap: onTap,
       onLongPress: onLongPress,
+      customSemanticsActions: actions,
       excludeSemantics: true,
       child: child,
     );
@@ -337,7 +344,11 @@ class HomeRow extends StatelessWidget {
     this.inkKey,
     this.hint,
     this.subtitleLines = 1,
+    this.semanticActions,
   });
+
+  /// See [TappableNode.actions].
+  final Map<CustomSemanticsAction, VoidCallback>? semanticActions;
 
   final Widget leading;
   final Widget title;
@@ -427,6 +438,7 @@ class HomeRow extends StatelessWidget {
       hint: hint,
       onTap: onTap,
       onLongPress: onLongPress,
+      actions: semanticActions,
       child: InkWell(key: inkKey, onTap: onTap, onLongPress: onLongPress, child: row),
     );
   }

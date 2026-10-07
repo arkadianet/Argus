@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -35,7 +36,9 @@ class PricerDeps {
     int? Function(String tokenId)? decimalsOf,
     String? Function(String tokenId)? nameOf,
     Listenable? metadataChanges,
-  })  : oracleReading = oracleReading ?? ((node, feed) => fetchOracleReading(node, feed)),
+    Timer Function(Duration delay, void Function() run)? timer,
+  })  : timer = timer ?? Timer.new,
+        oracleReading = oracleReading ?? ((node, feed) => fetchOracleReading(node, feed)),
         boxPage = boxPage ?? fetchBoxPage,
         coingeckoChart = coingeckoChart ?? ((fiat, days) => fetchCoingeckoChart(fiat, days)),
         clock = clock ?? DateTime.now,
@@ -82,6 +85,10 @@ class PricerDeps {
   /// Fires when the lookup learns a name or a scale, so prices it held back
   /// are worked out again without another read.
   final Listenable metadataChanges;
+
+  /// Schedules a retry after a refresh that came back without a usable
+  /// rate.
+  final Timer Function(Duration delay, void Function() run) timer;
 }
 
 /// Prices every token the wallet can see, from the source the user picked.
@@ -91,7 +98,28 @@ class TokenPricer extends ChangeNotifier {
   }
 
   static const _prefKey = 'argus_price_source';
+  static const _crossKey = 'argus_price_cross_rate_v1';
   static const refreshTtl = Duration(minutes: 5);
+
+  /// Prices shown from an earlier read are said to be old only past this
+  /// age. A refresh is due every [refreshTtl]; one that fails leaves the
+  /// last good prices up, and while those are under three refresh periods
+  /// old they are as current as a wallet's prices need to be. Saying "as of
+  /// just now" beside them would flag a price that is not stale.
+  static const oldAfter = Duration(minutes: 15);
+
+  /// The display currency's rate against the dollar (AUD per USD) changes
+  /// slowly: it is asked again only this often, which keeps the Oracle and
+  /// Spectrum sources from calling CoinGecko on every refresh. CoinGecko's
+  /// free API answers 429 to a few calls in a row.
+  static const crossRateTtl = Duration(hours: 1);
+
+  /// A cross rate older than this is no longer used to show values.
+  static const crossRateMaxAge = Duration(days: 2);
+
+  /// The first retry after a refresh without a usable rate; each further
+  /// failure doubles it, up to [refreshTtl].
+  static const firstRetry = Duration(seconds: 15);
 
   final PricerDeps _deps;
 
@@ -111,6 +139,27 @@ class TokenPricer extends ChangeNotifier {
 
   DateTime? _fetchedAt;
   int _gen = 0;
+
+  /// The last display-currency rate CoinGecko gave, kept across refreshes
+  /// and launches so one refused request does not take every value off
+  /// screen.
+  ({String fiat, double perUsd, DateTime at})? _cross;
+
+  /// Refreshes in a row that came back without a usable rate, and the
+  /// retry waiting after them.
+  int _failures = 0;
+  Timer? _retry;
+
+  /// A retry is waiting: the screen can say the price is being asked for
+  /// again rather than that it is gone.
+  bool get retrying => _retry != null;
+
+  /// [pricesAreOld], and old enough to say so ([oldAfter]).
+  bool get pricesLookOld {
+    if (!pricesAreOld) return false;
+    final at = asOf;
+    return at == null || _deps.clock().difference(at) > oldAfter;
+  }
   bool _pendingForcedRefresh = false;
 
   /// The ERG/SigUSD pool the last price book priced SigUSD from: the pool
@@ -138,13 +187,52 @@ class TokenPricer extends ChangeNotifier {
   @override
   void dispose() {
     _deps.metadataChanges.removeListener(_reprice);
+    _retry?.cancel();
     super.dispose();
   }
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     source = PriceSource.fromId(prefs.getString(_prefKey));
+    final cross = prefs.getString(_crossKey);
+    if (cross != null) {
+      try {
+        final m = jsonDecode(cross) as Map;
+        _cross = (
+          fiat: m['fiat'] as String,
+          perUsd: (m['per_usd'] as num).toDouble(),
+          at: DateTime.fromMillisecondsSinceEpoch((m['at'] as num).toInt()),
+        );
+      } catch (_) {
+        // An unreadable rate is asked for again.
+      }
+    }
     notifyListeners();
+  }
+
+  /// The cached cross rate for [fiat], when it is recent enough to show
+  /// values with.
+  double? _crossFor(String fiat, DateTime now) {
+    final c = _cross;
+    if (c == null || c.fiat != fiat || now.difference(c.at) > crossRateMaxAge) return null;
+    return c.perUsd;
+  }
+
+  /// After a refresh: retry soon while it left no usable rate (none for
+  /// ERG, or none for the display currency), backing off, else stand down.
+  void _scheduleRetry({required bool usable}) {
+    _retry?.cancel();
+    _retry = null;
+    if (usable) {
+      _failures = 0;
+      return;
+    }
+    final delay = firstRetry * (1 << _failures.clamp(0, 5));
+    _failures++;
+    _retry = _deps.timer(delay > refreshTtl ? refreshTtl : delay, () {
+      _retry = null;
+      refresh(force: true);
+    });
   }
 
   /// Invalidates old prices immediately so a source switch cannot mix rates.
@@ -159,6 +247,20 @@ class TokenPricer extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_prefKey, s.name);
     await refresh(force: true);
+  }
+
+  Future<void> _saveCross() async {
+    final c = _cross;
+    if (c == null) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _crossKey,
+        jsonEncode({'fiat': c.fiat, 'per_usd': c.perUsd, 'at': c.at.millisecondsSinceEpoch}),
+      );
+    } catch (_) {
+      // Held for this session either way.
+    }
   }
 
   TokenPrice? priceOf(String tokenId) => result[tokenId];
@@ -200,7 +302,7 @@ class TokenPricer extends ChangeNotifier {
   /// Publishes usable rates as each branch settles and retains forced requests
   /// made during a fetch, so a source change cannot leave prices empty.
   Future<void> refresh({bool force = false}) async {
-    final now = DateTime.now();
+    final now = _deps.clock();
     if (!force && _fetchedAt != null && now.difference(_fetchedAt!) < refreshTtl) return;
     if (refreshing) {
       _pendingForcedRefresh |= force;
@@ -222,11 +324,20 @@ class TokenPricer extends ChangeNotifier {
       }
     }
 
-    final needsGecko = src == PriceSource.coingecko || fiat != 'usd';
+    // The cross rate is asked for only when the one held is old: under the
+    // Oracle and Spectrum sources CoinGecko is otherwise not needed at all.
+    final held = _cross;
+    final crossFresh =
+        fiat == 'usd' || (held != null && held.fiat == fiat && now.difference(held.at) < crossRateTtl);
+    final needsGecko = src == PriceSource.coingecko || !crossFresh;
     final results = List<Object?>.filled(5, null);
 
     /// Only the current source may contribute to the visible price snapshot.
-    void publish() {
+    /// Each branch publishes as it settles, so prices show as soon as any
+    /// source has them; whether the refresh left the prices old is decided
+    /// once, when every branch has settled ([last]), not by whichever
+    /// branch answered first.
+    void publish({bool last = false}) {
       if (gen != _gen) return;
       final oracle = results[0] as OracleSnapshot?;
       final gecko =
@@ -259,35 +370,37 @@ class TokenPricer extends ChangeNotifier {
       final fresh = priceTokens(inputs);
       _sigUsdPoolId = book.tokens[SigmaUsdTokens.sigUsd]?.poolId ?? _sigUsdPoolId;
       // A source that momentarily answers with nothing must not blank every
-      // price in the wallet. Keep the last good result and say it is old.
-      if (fresh.ergUsd != null || result.ergUsd == null) {
+      // price in the wallet. Keep the last good result and, once the whole
+      // refresh is in, say it is old.
+      if (fresh.ergUsd != null) {
         result = fresh;
         pricesAreOld = false;
         _lastInputs = inputs;
         _lastInputsGen = gen;
-      } else {
+        // Only a read that produced a rate makes the prices current.
+        asOf = now;
+        _fetchedAt = now;
+      } else if (result.ergUsd == null) {
+        result = fresh;
+      } else if (last) {
         pricesAreOld = true;
       }
 
       final ergo = gecko['ergo'];
-      if (fiat == 'usd') {
-        fiatPerUsd = 1;
-      } else if (ergo != null &&
-          ergo['usd'] != null &&
-          ergo[fiat] != null &&
-          ergo['usd']! > 0) {
-        fiatPerUsd = ergo[fiat]! / ergo['usd']!;
+      if (ergo != null && ergo['usd'] != null && ergo[fiat] != null && ergo['usd']! > 0 && fiat != 'usd') {
+        _cross = (fiat: fiat, perUsd: ergo[fiat]! / ergo['usd']!, at: now);
+        unawaited(_saveCross());
       }
+      // The display rate: this refresh's, else the last one held for this
+      // currency. A refused CoinGecko call no longer takes the values off.
+      final perUsd = fiat == 'usd' ? 1.0 : _crossFor(fiat, now);
+      if (perUsd != null) fiatPerUsd = perUsd;
       // Stale only when the ERG rate itself has no current source: a
       // stopped feed for one token is said on that token's row instead.
       stale = pricesAreOld || result.ergStale;
       lastError = errors.isEmpty ? null : errors.join('; ');
-      if (result.ergUsd != null) {
-        asOf = now;
-        _fetchedAt = now;
-      }
       final ergUsd = result.ergUsd;
-      displayRateKnown = fiat == 'usd' || (ergo?[fiat] != null);
+      displayRateKnown = perUsd != null;
       _deps.onRate(
         ergUsd == null || !displayRateKnown ? null : ergUsd * fiatPerUsd,
         ergUsd,
@@ -334,6 +447,8 @@ class TokenPricer extends ChangeNotifier {
             publish();
           }),
       ]);
+      publish(last: true);
+      if (gen == _gen) _scheduleRetry(usable: !pricesAreOld && result.ergUsd != null && displayRateKnown);
     } finally {
       refreshing = false;
       if (_pendingForcedRefresh) {

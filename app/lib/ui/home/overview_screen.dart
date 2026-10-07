@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 
 import '../../theme/argus_theme.dart';
 import 'home_glass.dart';
@@ -36,10 +37,15 @@ class OverviewScreen extends StatelessWidget {
     this.notice,
     this.noticeIsError = false,
     this.onAction,
+    this.onStopWatching,
   });
 
   final OverviewData data;
   final ValueChanged<WalletRef>? onOpenWallet;
+
+  /// A watched wallet's row swiped to the left, or its screen reader
+  /// action: confirm and stop watching it. True when it is gone.
+  final Future<bool> Function(WalletRef ref)? onStopWatching;
 
   /// A wallet with keys here was dragged to a new place in the list (a
   /// long press picks it up). Watched wallets keep the order they were
@@ -139,6 +145,7 @@ class OverviewScreen extends StatelessWidget {
         notice: notice,
         noticeIsError: noticeIsError,
         onAction: onAction,
+        onStopWatching: onStopWatching,
       ),
     );
     if (data.isEmpty) return scaffold;
@@ -175,10 +182,12 @@ class OverviewView extends StatelessWidget {
     this.notice,
     this.noticeIsError = false,
     this.onAction,
+    this.onStopWatching,
   });
 
   final OverviewData data;
   final ValueChanged<WalletRef>? onOpenWallet;
+  final Future<bool> Function(WalletRef ref)? onStopWatching;
   final void Function(int oldIndex, int newIndex)? onReorder;
   final ValueChanged<AddWalletChoice>? onAdd;
   final VoidCallback? onToggleHidden;
@@ -202,6 +211,52 @@ class OverviewView extends StatelessWidget {
         hidden: data.hidden,
         onTap: onOpenWallet == null ? null : () => onOpenWallet!(w.ref),
       );
+
+  /// A watched wallet's row. Swiped to the left it shows Stop watching and
+  /// asks before doing it; the row springs back either way, and leaves the
+  /// list when the overview next reads it without the wallet. A screen
+  /// reader, which cannot swipe, has the same as an action on the row.
+  /// Long-press is left alone: it reorders.
+  Widget _watchedRow(BuildContext context, WalletSummary w) {
+    final stop = onStopWatching;
+    final row = OverviewWalletRow(
+      wallet: w,
+      currency: data.currency,
+      hidden: data.hidden,
+      onTap: onOpenWallet == null ? null : () => onOpenWallet!(w.ref),
+      semanticActions: stop == null ? null : {const CustomSemanticsAction(label: 'Stop watching'): () => stop(w.ref)},
+    );
+    if (stop == null) return row;
+    final t = HomeText.of(context);
+    return Dismissible(
+      key: ValueKey(('stop-watching', w.ref.id)),
+      direction: DismissDirection.endToStart,
+      confirmDismiss: (_) async {
+        await stop(w.ref);
+        // Never dismissed here: the overview's own list drops the row
+        // once the wallet is gone, and a cancel leaves it as it was.
+        return false;
+      },
+      background: ColoredBox(
+        color: rust.withValues(alpha: 0.22),
+        child: Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: Padding(
+            padding: const EdgeInsetsDirectional.only(end: glassGutter + 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.visibility_off_outlined, size: 20, color: rustFor(context)),
+                const SizedBox(width: 8),
+                Text('Stop watching', style: t.primary.copyWith(color: rustFor(context))),
+              ],
+            ),
+          ),
+        ),
+      ),
+      child: row,
+    );
+  }
 
   /// A wallet with keys, on a glass card of its own.
   Widget _card(WalletSummary w) => Padding(
@@ -338,7 +393,7 @@ class OverviewView extends StatelessWidget {
                 GlassCard(
                   key: const Key('overview-watched'),
                   dividers: true,
-                  children: [for (final w in data.watched) _row(w)],
+                  children: [for (final w in data.watched) _watchedRow(context, w)],
                 ),
               ],
             ),

@@ -121,9 +121,13 @@ void main() {
       _price();
       tokenPricer.stale = true;
       tokenPricer.pricesAreOld = true;
+      // Under TokenPricer.oldAfter the last good price is still current.
       tokenPricer.asOf = DateTime.now().subtract(const Duration(minutes: 12));
-      expect(pricesNote(), 'prices as of 12m ago');
-      expect(ergPriceView(null).staleNote, 'as of 12m ago');
+      expect(pricesNote(), isNull);
+      expect(ergPriceView(null).staleNote, isNull);
+      tokenPricer.asOf = DateTime.now().subtract(const Duration(minutes: 22));
+      expect(pricesNote(), 'prices as of 22m ago');
+      expect(ergPriceView(null).staleNote, 'as of 22m ago');
     });
 
     test('a rate the currency cannot be converted to is unknown, never zero', () {

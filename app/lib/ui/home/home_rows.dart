@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 
 import '../../format.dart';
 import '../../services/token_amounts.dart';
@@ -23,9 +24,13 @@ class OverviewWalletRow extends StatelessWidget {
     this.hidden = false,
     this.onTap,
     this.onLongPress,
+    this.semanticActions,
   });
 
   final WalletSummary wallet;
+
+  /// Actions a screen reader offers on the row, e.g. Stop watching.
+  final Map<CustomSemanticsAction, VoidCallback>? semanticActions;
   final FiatCurrency currency;
   final bool hidden;
   final VoidCallback? onTap;
@@ -114,6 +119,7 @@ class OverviewWalletRow extends StatelessWidget {
       inkKey: keyFor(w.ref),
       onTap: onTap,
       onLongPress: onLongPress,
+      semanticActions: semanticActions,
       hint: 'Opens the wallet',
       semanticLabel: spoken([
         w.name,

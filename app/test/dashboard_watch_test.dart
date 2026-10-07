@@ -10,7 +10,9 @@ import 'package:argus_wallet/ui/receive_screen.dart';
 import 'package:argus_wallet/ui/send_screen.dart';
 import 'package:argus_wallet/ui/transactions_screen.dart';
 import 'package:argus_wallet/ui/widgets/activity_tile.dart';
+import 'package:argus_wallet/services/address_label_service.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -214,5 +216,94 @@ void main() {
     );
     expect(api.watchScans, 0);
     await disposeHome(tester);
+  });
+
+  group('stopping watching', () {
+    /// The overview with one watched address on it.
+    Future<Finder> overviewWithWatched(WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({
+        'argus_watch_only_addresses': jsonEncode([watched]),
+      });
+      await watchOnlyService.load();
+      watchAccountService.accounts.clear();
+      FakeKeystore(wallets: const []).install(tester);
+      await pumpHome(tester);
+      final row = find.byKey(const ValueKey('overview-row-watchedAddress-$watched'));
+      await tester.ensureVisible(row);
+      await tester.pumpAndSettle();
+      return row;
+    }
+
+    testWidgets('from the ⋮ menu of the wallet\'s page, after a confirmation', (tester) async {
+      final row = await overviewWithWatched(tester);
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('watched-menu')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('watched-menu-rename')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('watched-menu-stop')));
+      await tester.pumpAndSettle();
+      // A cancel changes nothing.
+      await tester.tap(find.byKey(const Key('stop-watching-cancel')));
+      await tester.pumpAndSettle();
+      expect(watchOnlyService.addresses, [watched]);
+      await tester.tap(find.byKey(const Key('watched-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('watched-menu-stop')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('stop-watching-confirm')));
+      await tester.pumpAndSettle();
+      expect(watchOnlyService.addresses, isEmpty);
+      expect(find.byType(WatchedWalletPage), findsNothing, reason: 'back on the overview');
+      await disposeHome(tester);
+    });
+
+    testWidgets('renamed from the ⋮ menu', (tester) async {
+      final row = await overviewWithWatched(tester);
+      await tester.tap(row);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('watched-menu')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('watched-menu-rename')));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField).last, 'Cold storage');
+      await tester.tap(find.text('Save'));
+      await tester.pumpAndSettle();
+      expect(addressLabelService.labelFor(watched), 'Cold storage');
+      await addressLabelService.setLabel(watched, '');
+      await disposeHome(tester);
+    });
+
+    testWidgets('by swiping its overview row left, after a confirmation', (tester) async {
+      final row = await overviewWithWatched(tester);
+      await tester.drag(row, const Offset(-500, 0));
+      await tester.pumpAndSettle();
+      expect(find.text('Stop watching?'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('stop-watching-confirm')));
+      await tester.pumpAndSettle();
+      expect(watchOnlyService.addresses, isEmpty);
+      expect(find.byKey(const ValueKey('overview-row-watchedAddress-$watched')), findsNothing);
+      await disposeHome(tester);
+    });
+
+    testWidgets('by a screen reader, which cannot swipe, through the row\'s action', (tester) async {
+      final handle = tester.ensureSemantics();
+      final row = await overviewWithWatched(tester);
+      final node = tester.getSemantics(row);
+      final action = node.getSemanticsData().customSemanticsActionIds!.single;
+      expect(CustomSemanticsAction.getAction(action)!.label, 'Stop watching');
+      tester.renderObject(row).owner!.semanticsOwner!.performAction(
+        node.id,
+        SemanticsAction.customAction,
+        action,
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Stop watching?'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('stop-watching-cancel')));
+      await tester.pumpAndSettle();
+      expect(watchOnlyService.addresses, [watched]);
+      handle.dispose();
+      await disposeHome(tester);
+    });
   });
 }

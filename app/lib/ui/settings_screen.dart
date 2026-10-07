@@ -10,8 +10,8 @@ import '../services/watch_account_service.dart';
 import '../services/watch_only_service.dart';
 import '../theme/argus_theme.dart';
 import '../theme/theme_controller.dart';
-import 'home/name_dialog.dart';
 import 'home/overview_model.dart';
+import 'home/watched_actions.dart';
 import 'settings/about_page.dart';
 import 'settings/address_book_page.dart';
 import 'settings/display_settings_page.dart';
@@ -71,11 +71,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _open(Widget page) async {
     await Navigator.push(context, fadeRoute(page));
     if (mounted) setState(() => _walletsFuture = walletService.listWallets());
-  }
-
-  void _snack(String message) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -319,62 +314,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
+  // The same flows as the watched wallet's ⋮ menu and its overview row's
+  // swipe (home/watched_actions.dart).
   Future<void> _renameWatched(WalletRef ref) async {
-    final account = _account(ref);
-    final name = await showNameDialog(
-      context,
-      title: 'Name',
-      label: 'Name (optional)',
-      initial: ref.kind == WalletKind.watchedAccount
-          ? (account?.label ?? '')
-          : (addressLabelService.labelFor(ref.id) ?? ''),
-    );
-    if (name == null) return;
-    try {
-      if (ref.kind == WalletKind.watchedAccount) {
-        if (account != null) await watchAccountService.setLabel(account, name);
-      } else {
-        await addressLabelService.setLabel(ref.id, name);
-      }
-      widget.onWalletChanged?.call();
-    } catch (e) {
-      _snack('Could not save the name: $e');
-    }
+    if (await renameWatched(context, ref)) widget.onWalletChanged?.call();
   }
 
   Future<void> _unwatch(WalletRef ref) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Stop watching?'),
-        content: Text(
-          ref.kind == WalletKind.watchedAccount
-              ? 'The extended key is removed from this device. Re-import it to watch the account again.'
-              : shorten(ref.id, head: 12, tail: 10),
-          style: ref.kind == WalletKind.watchedAccount ? null : monoStyle(ctx, size: 12),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: rust, foregroundColor: bone),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Stop watching'),
-          ),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    try {
-      if (ref.kind == WalletKind.watchedAccount) {
-        final account = _account(ref);
-        if (account != null) await watchAccountService.remove(account);
-      } else {
-        await watchOnlyService.remove(ref.id);
-      }
-    } catch (e) {
-      _snack('Could not stop watching: $e');
-      return;
-    }
-    widget.onWalletRemoved?.call(ref.id);
+    if (await stopWatching(context, ref)) widget.onWalletRemoved?.call(ref.id);
   }
 }
