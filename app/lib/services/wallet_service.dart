@@ -14,8 +14,10 @@ import 'privacy_service.dart';
 import 'token_catalog.dart';
 import 'token_decimals.dart';
 import 'token_descriptor_store.dart';
+import 'mnemonic_check.dart';
 import 'token_evidence.dart';
 export 'token_evidence.dart';
+export 'mnemonic_check.dart';
 import 'verified_tokens.dart' show knownToken;
 import 'mix_service.dart';
 import 'spend_policy.dart';
@@ -51,6 +53,10 @@ class WalletInfo {
   final String? pinnedAddress;
   final bool isUnlocked;
 
+  /// Restored with the pre-1627 key derivation. Display only: the sealed
+  /// seed carries the mode the keys are actually derived with.
+  final bool legacyDerivation;
+
   WalletInfo({
     required this.walletId,
     required this.name,
@@ -59,6 +65,7 @@ class WalletInfo {
     this.pinnedAddressIndex,
     this.pinnedAddress,
     this.isUnlocked = false,
+    this.legacyDerivation = false,
   });
 
   /// Address to show for this wallet when it is not the active one.
@@ -73,6 +80,7 @@ class WalletInfo {
         pinnedAddressIndex: pinnedAddressIndex,
         pinnedAddress: pinnedAddress,
         isUnlocked: isUnlocked ?? this.isUnlocked,
+        legacyDerivation: legacyDerivation,
       );
 
   Map<String, dynamic> toJson() => {
@@ -82,6 +90,7 @@ class WalletInfo {
         'address0': address0,
         'pinnedAddressIndex': pinnedAddressIndex,
         'pinnedAddress': pinnedAddress,
+        if (legacyDerivation) 'derivation': 'pre1627',
       };
 
   factory WalletInfo.fromJson(Map<String, dynamic> json) => WalletInfo(
@@ -92,6 +101,7 @@ class WalletInfo {
         address0: json['address0'] as String?,
         pinnedAddressIndex: json['pinnedAddressIndex'] as int?,
         pinnedAddress: json['pinnedAddress'] as String?,
+        legacyDerivation: json['derivation'] == 'pre1627',
       );
 }
 
@@ -722,11 +732,20 @@ String? validatePin(String pin) {
   return null;
 }
 
+/// Invisible format characters a paste can carry: soft hyphen, zero-width
+/// space/joiners, direction marks, word joiner, BOM.
+final _invisible = RegExp('[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]');
+
+/// Anything that is not part of a word: spaces of every kind (NBSP,
+/// ideographic, …), digits, punctuation. Mirrors `bip39::normalize_words`
+/// in Rust, which stays the authority (it also applies NFKD).
+final _nonWord = RegExp(r'[^\p{L}\p{M}]+', unicode: true);
+
 List<String> mnemonicWords(String raw) {
   return raw
-      .trim()
+      .replaceAll(_invisible, '')
       .toLowerCase()
-      .split(RegExp(r'\s+'))
+      .split(_nonWord)
       .where((w) => w.isNotEmpty)
       .toList();
 }
@@ -1605,6 +1624,7 @@ class WalletService with WidgetsBindingObserver {
     required String passphrase,
     required String pin,
     String? name,
+    bool legacyDerivation = false,
   }) async {
     final walletId = const Uuid().v4();
     final chosen = name?.trim();
@@ -1613,6 +1633,7 @@ class WalletService with WidgetsBindingObserver {
       phrase,
       passphrase: passphrase,
       walletId: walletId,
+      legacyDerivation: legacyDerivation,
     );
     try {
       final pinWrap = await wrapKeyWithPin(session.wrapKey, pin);
@@ -1627,6 +1648,7 @@ class WalletService with WidgetsBindingObserver {
         name: walletName,
         createdAt: DateTime.now().toUtc(),
         address0: address0,
+        legacyDerivation: legacyDerivation,
       );
     } catch (_) {
       await lock(walletId);
@@ -1640,10 +1662,12 @@ class WalletService with WidgetsBindingObserver {
     String mnemonic, {
     String passphrase = '',
     String? walletId,
+    bool legacyDerivation = false,
   }) async {
     final raw = await RustLib.instance.api.crateApiWalletCreate(
       mnemonicPhrase: mnemonic,
       passphrase: passphrase,
+      usePre1627Derivation: legacyDerivation,
     );
     final map = jsonDecode(raw) as Map<String, dynamic>;
     final id = walletId ?? const Uuid().v4();
@@ -1658,6 +1682,31 @@ class WalletService with WidgetsBindingObserver {
     // incoming wallet's first sync, which may never come.
     await _loadActivatedTable();
     return session;
+  }
+
+  /// Live BIP-39 check of a phrase being typed (sync, in Rust).
+  PhraseCheck checkMnemonic(String raw) {
+    if (raw.trim().isEmpty) return PhraseCheck.empty;
+    final json = RustLib.instance.api.crateApiCheckMnemonic(mnemonicPhrase: raw);
+    return PhraseCheck.fromJson(jsonDecode(json) as Map<String, dynamic>);
+  }
+
+  /// Which key derivation a phrase being restored should use. Asks the
+  /// node only when the two derivations differ for this phrase, and only
+  /// when [queryNode].
+  Future<RestoreDerivationProbe> probeRestoreDerivation({
+    required String phrase,
+    required String passphrase,
+    String? nodeUrl,
+    bool queryNode = true,
+  }) async {
+    final json = await RustLib.instance.api.crateApiProbeRestoreDerivation(
+      mnemonicPhrase: phrase,
+      passphrase: passphrase,
+      nodeUrl: nodeUrl,
+      queryNode: queryNode,
+    );
+    return RestoreDerivationProbe.fromJson(jsonDecode(json) as Map<String, dynamic>);
   }
 
   Future<String> wrapKeyWithPin(String wrapKey, String pin) {
@@ -1806,6 +1855,7 @@ class WalletService with WidgetsBindingObserver {
     required DateTime createdAt,
     String? address0,
     int? pinnedAddressIndex,
+    bool? legacyDerivation,
   }) async {
     await _upsertWalletMeta(
       walletId,
@@ -1813,6 +1863,7 @@ class WalletService with WidgetsBindingObserver {
       createdAt: createdAt,
       address0: address0,
       pinnedAddressIndex: pinnedAddressIndex,
+      legacyDerivation: legacyDerivation,
     );
   }
 
@@ -3420,6 +3471,7 @@ class WalletService with WidgetsBindingObserver {
     String? address0,
     int? pinnedAddressIndex,
     String? pinnedAddress,
+    bool? legacyDerivation,
   }) => _withMetaWrite(() async {
     final prior = await _loadAllWalletMeta();
     final next = Map<String, dynamic>.from(prior);
@@ -3433,6 +3485,9 @@ class WalletService with WidgetsBindingObserver {
       // Keep a stored pinned address unless this write sets or clears it.
       'pinnedAddress': pinnedAddress ??
           ((pinnedAddressIndex ?? 0) > 0 && existing is Map ? existing['pinnedAddress'] : null),
+      // Kept across renames and pins; only provisioning sets it.
+      if (legacyDerivation ?? (existing is Map && existing['derivation'] == 'pre1627'))
+        'derivation': 'pre1627',
     };
     await _persistMetaCache(next);
   });

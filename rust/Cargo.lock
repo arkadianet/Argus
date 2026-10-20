@@ -3155,6 +3155,7 @@ dependencies = [
  "sha2 0.11.0",
  "stealth",
  "thiserror",
+ "unicode-normalization",
  "zeroize",
  "zerojoin",
 ]

@@ -1,10 +1,11 @@
 use aes_gcm::{
-    aead::{Aead, KeyInit},
+    aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
 };
 use rand::{rngs::SysRng, TryRng};
 use zeroize::Zeroize;
 
+use crate::derivation::DerivationMode;
 use crate::CoreError;
 
 const VERSION: u32 = 2;
@@ -14,10 +15,24 @@ const KEY_LEN: usize = 32;
 
 /// AES-256-GCM sealed seed. The wrap key is stored separately in
 /// Keystore/Keychain. v1 blobs that still embed `k` are accepted for migration.
+///
+/// The key derivation travels with the seed: a non-standard mode is written
+/// as `"d"` beside the ciphertext and bound into the GCM tag as associated
+/// data, so a blob whose `d` was added, dropped or changed fails to open
+/// instead of quietly deriving another wallet's addresses. Standard blobs
+/// carry no `d` and no associated data, exactly as before the field existed.
 pub struct EncryptedSeed {
     nonce: [u8; NONCE_LEN],
     ciphertext: Vec<u8>,
     key: [u8; KEY_LEN],
+    derivation: DerivationMode,
+}
+
+fn associated_data(mode: DerivationMode) -> Vec<u8> {
+    match mode {
+        DerivationMode::Standard => Vec::new(),
+        other => format!("argus-seed-derivation:{}", other.as_str()).into_bytes(),
+    }
 }
 
 impl Drop for EncryptedSeed {
@@ -30,27 +45,51 @@ impl Drop for EncryptedSeed {
 
 impl EncryptedSeed {
     pub fn encrypt(seed_bytes: &[u8]) -> Result<Self, CoreError> {
+        Self::encrypt_with_mode(seed_bytes, DerivationMode::Standard)
+    }
+
+    pub fn encrypt_with_mode(seed_bytes: &[u8], derivation: DerivationMode) -> Result<Self, CoreError> {
         let mut key = [0u8; KEY_LEN];
         SysRng.try_fill_bytes(&mut key).map_err(|e| CoreError::Encryption(e.to_string()))?;
         let cipher =
             Aes256Gcm::new_from_slice(&key).map_err(|e| CoreError::Encryption(e.to_string()))?;
         let mut nonce = [0u8; NONCE_LEN];
         SysRng.try_fill_bytes(&mut nonce).map_err(|e| CoreError::Encryption(e.to_string()))?;
+        let aad = associated_data(derivation);
         let ciphertext = cipher
-            .encrypt(&Nonce::from(nonce), seed_bytes)
+            .encrypt(
+                &Nonce::from(nonce),
+                Payload {
+                    msg: seed_bytes,
+                    aad: &aad,
+                },
+            )
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
         Ok(EncryptedSeed {
             nonce,
             ciphertext,
             key,
+            derivation,
         })
+    }
+
+    /// The key derivation this seed was sealed with.
+    pub fn derivation(&self) -> DerivationMode {
+        self.derivation
     }
 
     pub fn decrypt(&self) -> Result<Vec<u8>, CoreError> {
         let cipher = Aes256Gcm::new_from_slice(&self.key)
             .map_err(|e| CoreError::Encryption(e.to_string()))?;
+        let aad = associated_data(self.derivation);
         cipher
-            .decrypt(&Nonce::from(self.nonce), self.ciphertext.as_ref())
+            .decrypt(
+                &Nonce::from(self.nonce),
+                Payload {
+                    msg: self.ciphertext.as_ref(),
+                    aad: &aad,
+                },
+            )
             .map_err(|e| CoreError::Encryption(format!("Decryption failed: {e:?}")))
     }
 
@@ -59,11 +98,15 @@ impl EncryptedSeed {
     }
 
     pub fn to_json(&self) -> Result<serde_json::Value, CoreError> {
-        Ok(serde_json::json!({
+        let mut json = serde_json::json!({
             "v": VERSION,
             "nonce": hex::encode(self.nonce),
             "ct": hex::encode(&self.ciphertext),
-        }))
+        });
+        if self.derivation != DerivationMode::Standard {
+            json["d"] = self.derivation.as_str().into();
+        }
+        Ok(json)
     }
 
     pub fn from_json(json: &serde_json::Value, wrap_key: Option<&str>) -> Result<Self, CoreError> {
@@ -87,10 +130,18 @@ impl EncryptedSeed {
         if ciphertext.is_empty() {
             return Err(CoreError::Serialization("empty ciphertext".into()));
         }
+        let derivation = match json.get("d") {
+            None => DerivationMode::Standard,
+            Some(d) => DerivationMode::parse(
+                d.as_str()
+                    .ok_or_else(|| CoreError::Serialization("d must be a string".into()))?,
+            )?,
+        };
         Ok(EncryptedSeed {
             nonce,
             ciphertext,
             key,
+            derivation,
         })
     }
 }
@@ -141,6 +192,47 @@ mod tests {
         )
         .unwrap();
         assert_eq!(restored.decrypt().unwrap().as_slice(), seed);
+    }
+
+    #[test]
+    fn derivation_mode_round_trips_and_standard_stays_unmarked() {
+        let seed = [7u8; 64];
+        let standard = EncryptedSeed::encrypt(&seed).unwrap();
+        assert!(standard.to_json().unwrap().get("d").is_none());
+
+        let legacy = EncryptedSeed::encrypt_with_mode(&seed, DerivationMode::Pre1627).unwrap();
+        let json = legacy.to_json().unwrap();
+        assert_eq!(json["d"], "pre1627");
+        let restored = EncryptedSeed::from_json(&json, Some(&legacy.wrap_key_hex())).unwrap();
+        assert_eq!(restored.derivation(), DerivationMode::Pre1627);
+        assert_eq!(restored.decrypt().unwrap(), seed);
+    }
+
+    /// The mode is bound into the tag: stripping or adding `d` must make
+    /// the blob unreadable, never open it under the other derivation.
+    #[test]
+    fn tampered_derivation_field_fails_to_decrypt() {
+        let seed = [9u8; 64];
+        let legacy = EncryptedSeed::encrypt_with_mode(&seed, DerivationMode::Pre1627).unwrap();
+        let key = legacy.wrap_key_hex();
+        let mut stripped = legacy.to_json().unwrap();
+        stripped.as_object_mut().unwrap().remove("d");
+        assert!(EncryptedSeed::from_json(&stripped, Some(&key))
+            .unwrap()
+            .decrypt()
+            .is_err());
+
+        let standard = EncryptedSeed::encrypt(&seed).unwrap();
+        let mut added = standard.to_json().unwrap();
+        added["d"] = "pre1627".into();
+        assert!(EncryptedSeed::from_json(&added, Some(&standard.wrap_key_hex()))
+            .unwrap()
+            .decrypt()
+            .is_err());
+
+        let mut unknown = legacy.to_json().unwrap();
+        unknown["d"] = "pre1628".into();
+        assert!(EncryptedSeed::from_json(&unknown, Some(&key)).is_err());
     }
 
     #[test]
