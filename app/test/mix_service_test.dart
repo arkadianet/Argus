@@ -624,7 +624,9 @@ void main() {
       ..script['leave'] = [
         {'state': state(kind: 'reclaimed'), 'action': 'reclaim', 'tx_id': 'txr'},
       ];
-    final ex = FakeExplorer()..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null};
+    final ex = FakeExplorer()
+      ..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null}
+      ..lists['aa'] = [{'boxId': 'box1'}];
     final svc = await loaded(gw, ex, [state(kind: 'half_posted', done: 0, destination: '')]);
     expect(() => svc.leave(svc.records.single), throwsStateError);
     final tx = await svc.leave(svc.records.single, destinationAddress: '9abc');
@@ -717,7 +719,9 @@ void main() {
       ..script['leave'] = [
         {'state': state(kind: 'reclaimed'), 'action': 'reclaim', 'tx_id': 'txr'},
       ];
-    final ex = FakeExplorer()..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null};
+    final ex = FakeExplorer()
+      ..boxes['box1'] = {'boxId': 'box1', 'spentTransactionId': null}
+      ..lists['aa'] = [{'boxId': 'box1'}];
     final svc = await loaded(gw, ex, [state(kind: 'half_posted', done: 0)]);
 
     final ticking = svc.tick();
@@ -1317,5 +1321,126 @@ void main() {
     expect(json['full_boxes'], isEmpty);
     await svc.tick();
     expect(svc.records.single.lastError, isNull);
+  });
+
+  group('a box that left the pool without a recorded move', () {
+    // Late enough that any move in the fixtures is past the lost-move grace.
+    const later = 10000000;
+    Future<MixService> loadedLater(FakeGateway gw, FakeExplorer ex, List<Map<String, dynamic>> states) async {
+      SharedPreferences.setMockInitialValues({
+        'argus_mixing_enabled': true,
+        'argus_mixes_v1_w1': jsonEncode([for (final s in states) {'state': s}]),
+      });
+      final svc = MixService(gateway: gw, get: ex.get, post: ex.post, clock: () => DateTime.fromMillisecondsSinceEpoch(later));
+      await svc.load();
+      return svc;
+    }
+
+    test('a move the background job recorded is not overwritten by an older copy', () async {
+      final gw = FakeGateway()
+        ..script['observe'] = ['same']
+        ..script['plan'] = [{'action': 'wait', 'reason': 'counterpart_needed'}];
+      final ex = FakeExplorer()..lists['bb'] = [{'boxId': 'b2'}];
+      final svc = await loaded(gw, ex, [state(boxId: 'box1')]);
+      final moved = state(boxId: 'b2', round: 1, done: 2)..['updated_at'] = 9;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('argus_mixes_v1_w1', jsonEncode([{'state': moved}]));
+      await svc.tick();
+      expect(svc.records.single.boxId, 'b2');
+      final stored = jsonDecode(prefs.getString('argus_mixes_v1_w1')!) as List;
+      expect(((stored.single as Map)['state'] as Map)['phase']['box_id'], 'b2');
+    });
+
+    test('a spent box is followed to the live box the seed holds', () async {
+      final live = state(boxId: 'live', round: 2, done: 3, destination: '');
+      final gw = FakeGateway()
+        ..script['observe'] = ['same']
+        ..script['plan'] = [{'action': 'wait', 'reason': 'box_not_seen'}]
+        ..script['recover'] = [[live]];
+      final ex = FakeExplorer()
+        ..lists['bb'] = [{'boxId': 'live'}]
+        ..boxes['gone'] = {'boxId': 'gone', 'spentTransactionId': 'txlost'};
+      final svc = await loaded(gw, ex, [state(boxId: 'gone', target: 30)]);
+      await svc.tick();
+      final r = svc.records.single;
+      expect(r.boxId, 'live');
+      expect(r.stuck, isNull);
+      expect(r.roundsTarget, 30, reason: 'the target only the record knows survives');
+      expect(r.destinationErgoTree, '0008cd00');
+    });
+
+    test('a spent box that paid the destination is a finished withdrawal', () async {
+      final gw = FakeGateway()
+        ..script['observe'] = ['same']
+        ..script['plan'] = [{'action': 'wait', 'reason': 'box_not_seen'}]
+        ..script['recover'] = [<Object>[]];
+      final ex = FakeExplorer()
+        ..boxes['gone'] = {'boxId': 'gone', 'spentTransactionId': 'txw2'}
+        ..txs['txw2'] = {
+          'id': 'txw2',
+          'outputs': [
+            {'boxId': 'mixed', 'ergoTree': '0008cd00'},
+          ],
+        };
+      final svc = await loaded(gw, ex, [state(boxId: 'gone')]);
+      await svc.tick();
+      final r = svc.records.single;
+      expect(r.finished, isTrue);
+      expect(r.mixedBoxId, 'mixed');
+      expect(r.phase['tx_id'], 'txw2');
+    });
+
+    test('a spent box nobody accounts for says so on the mix', () async {
+      final gw = FakeGateway()
+        ..script['observe'] = ['same']
+        ..script['plan'] = [{'action': 'wait', 'reason': 'box_not_seen'}]
+        ..script['recover'] = [<Object>[]];
+      final ex = FakeExplorer()
+        ..boxes['gone'] = {'boxId': 'gone', 'spentTransactionId': 'txother'}
+        ..txs['txother'] = {'id': 'txother', 'outputs': [{'boxId': 'x', 'ergoTree': 'ff'}]};
+      final svc = await loaded(gw, ex, [state(boxId: 'gone')]);
+      await svc.tick();
+      expect(svc.records.single.stuck, contains('txother'));
+      expect(await svc.recover(), 0);
+      expect(svc.lastRecoveryNotes.single, contains('Mix #0'));
+    });
+
+    test('an entry that never reached the chain goes back to pending', () async {
+      final entered = state(boxId: 'never')
+        ..['events'] = [{'at': 1, 'action': 'entered_as_bob', 'round': 0, 'tx_id': 'txe'}];
+      final gw = FakeGateway()
+        ..script['observe'] = ['same']
+        ..script['plan'] = [{'action': 'wait', 'reason': 'box_not_seen'}]
+        ..script['recover'] = [<Object>[]];
+      final svc = await loadedLater(gw, FakeExplorer(), [entered]);
+      await svc.tick();
+      expect(svc.records.single.pending, isTrue);
+      expect(svc.records.single.inPool, isFalse, reason: 'the money never left the wallet');
+    });
+
+    test('a box that may still be confirming is left alone', () async {
+      final fresh = state(boxId: 'new')
+        ..['events'] = [{'at': 4, 'action': 'remixed_as_bob', 'round': 1, 'tx_id': 'txr'}];
+      final gw = FakeGateway()
+        ..script['observe'] = ['same']
+        ..script['plan'] = [{'action': 'wait', 'reason': 'box_not_seen'}];
+      final svc = await loaded(gw, FakeExplorer(), [fresh]);
+      await svc.tick();
+      expect(svc.records.single.boxId, 'new');
+      expect(svc.records.single.stuck, isNull);
+      expect(gw.calls, isNot(contains('recover')));
+    });
+
+    test('withdraw on a box that is not in the pool explains instead of failing to build', () async {
+      final fresh = state(boxId: 'new')
+        ..['events'] = [{'at': 4, 'action': 'remixed_as_bob', 'round': 1, 'tx_id': 'txr'}];
+      final gw = FakeGateway();
+      final svc = await loaded(gw, FakeExplorer(), [fresh]);
+      await expectLater(
+        svc.leave(svc.records.single),
+        throwsA(predicate((e) => e.toString().contains('still confirming'))),
+      );
+      expect(gw.calls, isNot(contains('leave')));
+    });
   });
 }

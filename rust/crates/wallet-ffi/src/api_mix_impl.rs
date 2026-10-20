@@ -457,6 +457,11 @@ pub fn build_move(
             other => Err(err(format!("unexpected plan {other:?} for this phase"))),
         };
     };
+    // A wait builds nothing, whatever the snapshot lacks: `plan` waits
+    // exactly when our box or a fee box is missing.
+    if matches!(next, Plan::Wait { .. }) {
+        return Ok(None);
+    }
     let full = view
         .full_by_id(box_id)
         .ok_or_else(|| err("our full-mix box is not in the snapshot"))?;
@@ -1002,6 +1007,19 @@ mod tests {
         .is_err());
         assert!(
             build_move(&handle_secrets(&h, 0), &entered, &v, &[], MINER_FEE, HEIGHT)
+                .unwrap()
+                .is_none()
+        );
+
+        // A full box the snapshot lacks (spent by a move the app lost, or
+        // not confirmed yet) is a wait, never a build error.
+        let mut gone = entered.clone();
+        gone.phase = MixPhase::FullOwned {
+            box_id: "00".repeat(32),
+            role: zerojoin::Role::Bob,
+        };
+        assert!(
+            build_move(&handle_secrets(&h, 0), &gone, &v, &[], MINER_FEE, HEIGHT)
                 .unwrap()
                 .is_none()
         );
