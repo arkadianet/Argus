@@ -44,21 +44,19 @@ void main() {
       selection: summariseSelection(all, {'b'}),
       amountNanoErg: 1000000000,
       feeNanoErg: minerFeeDefaultNano,
-      appFeeNanoErg: argusFeeNano,
     );
     expect(check.covers, isFalse);
     expect(check.shortfallNano, greaterThan(0));
   });
 
-  test('change is what is left after the amount and both fees', () {
+  test('change is what is left after the amount and the miner fee', () {
     final check = checkSelection(
       selection: summariseSelection(all, {'a'}),
       amountNanoErg: 500000000,
       feeNanoErg: minerFeeDefaultNano,
-      appFeeNanoErg: argusFeeNano,
     );
     expect(check.covers, isTrue);
-    expect(check.changeNano, 1000000000 - 500000000 - minerFeeDefaultNano - argusFeeNano);
+    expect(check.changeNano, 1000000000 - 500000000 - minerFeeDefaultNano);
   });
 
   test('an empty selection means automatic selection', () {

@@ -121,7 +121,6 @@ class _IssueTabState extends State<_IssueTab>
           if (_nft && _url.text.trim().isNotEmpty) ConfirmTxRow('Link', _url.text.trim()),
           ConfirmTxRow('Token id', shorten(tokenId, head: 10, tail: 8)),
           ConfirmTxRow('Box value', formatErg((prepared['box_value'] as num).toInt())),
-          ConfirmTxRow('Argus fee', formatErg((prepared['app_fee_nano'] as num?)?.toInt() ?? 0)),
           ConfirmTxRow('Miner fee', formatErg((prepared['miner_fee'] as num).toInt())),
         ],
         preparationId: (prepared['preparation_id'] as num).toInt(),
@@ -416,7 +415,6 @@ class _BurnTabState extends State<_BurnTab>
         rows: [
           for (final b in (prepared['burned'] as List).cast<Map>())
             ConfirmTxRow('Burn', label(b['token_id'] as String, (b['amount'] as num).toInt()), bold: true),
-          ConfirmTxRow('Argus fee', formatErg((prepared['app_fee_nano'] as num?)?.toInt() ?? 0)),
           ConfirmTxRow('Miner fee', formatErg((prepared['miner_fee'] as num).toInt())),
           ConfirmTxRow('Back to you', formatErg((prepared['change_nano_erg'] as num).toInt())),
         ],

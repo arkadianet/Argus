@@ -45,7 +45,8 @@ fn own_creation_reduces_exact_wallet_key_and_preflights_both_branches() {
     let (wallet, trees) = creation_inputs(&h);
     let r = request(&h, &wallet, &trees);
     let tx = create(&r, &h.context).unwrap();
-    assert_eq!(tx.outputs.len(), 4);
+    // Proxy, wallet change, miner fee. No application fee output.
+    assert_eq!(tx.outputs.len(), 3);
     assert_eq!(tx.outputs[0].assets[0].amount, "1");
     assert_eq!(tx.outputs[0].value, "104000000"); // 0.104 pinned + minimum payout - stake ERG
     assert!(tx.outputs[1].assets.is_empty());
@@ -64,7 +65,7 @@ fn own_creation_reduces_exact_wallet_key_and_preflights_both_branches() {
     )
     .unwrap();
     let expected =
-        stake_recovery::contracts::tree_from_address(stake_recovery::direct::APP_FEE_ADDRESS)
+        stake_recovery::contracts::tree_from_address(ergo_tx::dev_fee::DEFAULT_DEV_FEE_ADDRESS)
             .unwrap();
     assert_ne!(
         hex::encode(expected.sigma_serialize_bytes().unwrap()),
@@ -129,7 +130,7 @@ fn output_edits_are_refused_by_rederivation() {
             1 => {
                 bad.outputs.pop();
             }
-            2 => bad.outputs.push(tx.outputs[3].clone()),
+            2 => bad.outputs.push(tx.outputs[2].clone()),
             3 => bad.outputs[0].assets[0].amount = "2".into(),
             4 => bad.outputs[0]
                 .additional_registers
@@ -144,6 +145,8 @@ fn output_edits_are_refused_by_rederivation() {
                 .insert("R5".into(), "0e0100".into())
                 .map(|_| ())
                 .unwrap(),
+            // The miner fee output: pointing it at a wallet tree is a hostile edit
+            // the pinned layout must still refuse.
             _ => bad.outputs[2].ergo_tree = trees[0].clone(),
         };
         assert!(validate_creation(&r, &bad).is_err(), "edit {n}");
@@ -227,7 +230,7 @@ fn actual_inputs_refuse_foreign_recipients_wrong_keys_duplicates_assets_and_boun
     r.height = h.inputs[2].creation_height;
     r.recipient = "00";
     assert!(create(&r, &h.context).is_err());
-    let foreign = ergo_tx::address_to_ergo_tree(stake_recovery::direct::APP_FEE_ADDRESS).unwrap();
+    let foreign = ergo_tx::address_to_ergo_tree(ergo_tx::dev_fee::DEFAULT_DEV_FEE_ADDRESS).unwrap();
     r.recipient = &foreign;
     assert!(create(&r, &h.context).is_err());
     let h = Historical::load(REFUND);

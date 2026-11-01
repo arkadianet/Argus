@@ -1,4 +1,3 @@
-import '../../services/app_fee.dart';
 import '../../format.dart';
 import '../../services/dexy_service.dart';
 import '../confirm_transaction_sheet.dart';
@@ -27,7 +26,6 @@ DexyConfirm dexyMintConfirm(DexyBuildResult b, DexyVariant v) => DexyConfirm(
         ConfirmTxRow('Received', _dexy(b.tokenAmount, v)),
         ConfirmTxRow('ERG cost', formatErg(b.ergCostNano)),
         ConfirmTxRow('Miner fee', formatErg(b.minerFee)),
-        argusFeeRow(),
       ],
       detail: 'Minted from the Dexy bank at the oracle rate.',
       confirmLabel: 'Sign & broadcast mint',
@@ -42,7 +40,6 @@ DexyConfirm dexySwapConfirm(DexyBuildResult b, DexyVariant v) {
       ConfirmTxRow('Receive', ergIn ? _dexy(b.outputAmount, v) : formatErg(b.outputAmount)),
       ConfirmTxRow('Price impact', '${b.priceImpactPct.toStringAsFixed(2)}%'),
       ConfirmTxRow('Miner fee', formatErg(b.minerFee)),
-      argusFeeRow(),
     ],
     detail: 'Rate set by the ${v.shortName} LP pool (${b.feePct.toStringAsFixed(1)}% fee).',
     confirmLabel: 'Sign & broadcast swap',
@@ -58,13 +55,11 @@ DexyConfirm dexyLiquidityConfirm(DexyBuildResult b, DexyVariant v) {
             ConfirmTxRow('Deposit ERG', formatErg(b.ergAmount)),
             ConfirmTxRow('Deposit ${v.shortName}', _dexy(b.dexyAmount, v)),
             ConfirmTxRow('Miner fee', formatErg(b.minerFee)),
-            argusFeeRow(),
           ]
         : [
             ConfirmTxRow('LP tokens burned', '${b.lpTokens}'),
             ConfirmTxRow('Receive', '${formatErg(b.ergAmount)} + ${_dexy(b.dexyAmount, v)}'),
             ConfirmTxRow('Miner fee', formatErg(b.minerFee)),
-            argusFeeRow(),
           ],
     detail: deposit
         ? 'Receives ${formatTokenAmount(b.lpTokens, 0)} LP tokens.'

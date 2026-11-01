@@ -78,15 +78,22 @@ for this stage. Nothing is signed or broadcast.
   `batchPrice + poolAmount / rate`, both read from the live box rather
   than assumed.
 
-### The Argus app fee is deliberately absent
+### No application fee on a mixing transaction
 
-Every other transaction Argus builds carries a 0.0011 ERG app fee. Mixing
-transactions cannot. The fee emission contract pins the output count
-(`OUTPUTS.size == 3` for Alice or withdraw, `4` for Bob), the token
-emission contract pins it at 4 and 5, and the half-mix contract inspects
-outputs by index. An extra output fails validation. This is the same
-constraint ErgoPay has, for the same reason: the contract, not the wallet,
-fixes the transaction shape.
+Argus charges no application fee at all — see `init_app` in
+`rust/crates/wallet-ffi/src/api.rs`. That is worth stating here because
+the mixer would have been the reason it could not be removed otherwise:
+the fee emission contract pins the output count (`OUTPUTS.size == 3`
+for Alice or withdraw, `4` for Bob), the token emission contract pins it
+at 4 and 5, and the half-mix contract inspects outputs by index. An extra
+output fails validation. So even if a fee were configured, the mixer
+would be exactly where it could not be paid. This is the same constraint
+ErgoPay has, for the same reason: the contract, not the wallet, fixes the
+transaction shape.
+
+The other half of the reason is linking. A fixed output to the app
+developer in a mixing transaction would mark it as one this wallet
+built. The fee-free funding send below matters for the same reason.
 
 ## Secrets: derived from the seed, never stored
 

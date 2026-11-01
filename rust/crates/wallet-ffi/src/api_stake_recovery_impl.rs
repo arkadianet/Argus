@@ -276,9 +276,9 @@ pub fn prepare_direct(
         direct_input(protocol.1)?,
         keys[0].clone(),
     ];
-    let required = stake_recovery::direct::APP_FEE
-        .checked_add(miner_fee)
-        .and_then(|n| n.checked_add(2 * stake_recovery::direct::MIN_VALUE))
+    // Miner fee plus the state box and key box the layout needs; no app fee.
+    let required = miner_fee
+        .checked_add(2 * stake_recovery::direct::MIN_VALUE)
         .ok_or_else(|| error("fee overflow"))?;
     let mut available = inputs[1..].iter().try_fold(0i64, |sum, b| {
         sum.checked_add(b.value.parse::<i64>().map_err(error)?)
@@ -356,17 +356,12 @@ pub fn owned_trees(
 mod direct_tests {
     use super::*;
     #[test]
-    fn wallet_handle_refuses_foreign_addresses_and_fee_matches_argus() {
+    fn wallet_handle_refuses_foreign_addresses_and_no_fee_is_charged() {
         let handle = wallet_core::wallet::WalletHandle::create(
             wallet_core::seed::MnemonicPhrase::parse("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about").unwrap(), "").unwrap();
         let address = handle.derive_address(0).unwrap();
         assert!(owned_trees(&handle, &[address]).is_ok());
-        assert!(owned_trees(&handle, &[crate::api::ARGUS_FEE_ADDRESS.into()]).is_err());
-        assert_eq!(stake_recovery::direct::APP_FEE, crate::api::ARGUS_FEE_NANO);
-        assert_eq!(
-            stake_recovery::direct::APP_FEE_ADDRESS,
-            crate::api::ARGUS_FEE_ADDRESS
-        );
+        assert!(owned_trees(&handle, &[crate::api::LEGACY_ARGUS_FEE_ADDRESS.into()]).is_err());
     }
 
     #[test]
@@ -447,9 +442,7 @@ pub fn prepare_proxy(
     let mut inputs = vec![keys[0].clone()];
     let required = stake_recovery::proxy::required_funding(&stake)
         .map_err(error)?
-        .checked_add(
-            stake_recovery::direct::APP_FEE + 1_100_000 + stake_recovery::direct::MIN_VALUE,
-        )
+        .checked_add(1_100_000 + stake_recovery::direct::MIN_VALUE)
         .ok_or_else(|| error("funding overflow"))?;
     let mut available = keys[0].value.parse::<i64>().map_err(error)?;
     for b in wallet {
@@ -552,7 +545,7 @@ mod proxy_tests {
         assert_eq!(tx.outputs.len(), 2);
         assert_eq!(tx.outputs[0].assets[0].token_id, key);
         assert_eq!(tx.outputs[0].ergo_tree, trees[0]);
-        assert!(owned_trees(&handle, &[crate::api::ARGUS_FEE_ADDRESS.into()]).is_err());
+        assert!(owned_trees(&handle, &[crate::api::LEGACY_ARGUS_FEE_ADDRESS.into()]).is_err());
         assert!(owned_trees(&handle, &[trees[0].clone()]).is_err()); // hex is not a wallet address
         assert!(prepare_refund(
             &serde_json::to_string(&proxy).unwrap(),

@@ -294,25 +294,23 @@ void main() {
     },
   );
 
-  test('ERG MAX reserves custom fee, other recipients, app fee and change', () {
+  test('ERG MAX reserves the miner fee, other recipients and change', () {
     expect(
       maxRecipientNanoErg(
         spendableNano: 1000000000,
         minerFeeNano: 2000000,
-        appFeeNano: 1100000,
         otherRecipientsNano: 100000000,
       ),
-      895900000,
+      897000000,
     );
     expect(
       maxRecipientNanoErg(
         spendableNano: 1000000000,
         minerFeeNano: 2000000,
-        appFeeNano: 1100000,
         otherRecipientsNano: 100000000,
         feePaidInToken: true,
       ),
-      897900000,
+      899000000,
     );
   });
 }

@@ -5,7 +5,6 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../build_info.dart';
 import '../../format.dart';
 import '../../services/apk_signature.dart';
-import '../../services/app_fee.dart';
 import '../../services/update_service.dart';
 import '../../theme/argus_theme.dart';
 import 'settings_shared.dart';
@@ -115,8 +114,12 @@ class _AboutPageState extends State<AboutPage> {
               ),
               SettingsRow(
                 icon: Icons.toll_outlined,
-                title: 'App fee ${formatErg(argusFeeNano)} per transaction',
-                subtitle: 'Paid to ${argusFeeAddress.substring(0, 12)}… on every transaction Argus builds. ErgoPay requests from dApps are not charged.',
+                title: 'No app fee',
+                subtitle: 'Argus does not charge a fee on transactions it builds. You pay the miner '
+                    'fee only, and a transaction that touches a stealth address or the mixer never '
+                    'carries an output identifying this wallet. The one exception is the 0.4% '
+                    'interface fee inside a SigmaFi loan you fill for someone else: that is part of '
+                    'the loan terms the borrower agreed to, not a charge by Argus.',
               ),
               _SigningKeyRow(fingerprints: _signingKey),
               SettingsRow(

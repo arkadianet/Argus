@@ -18,7 +18,7 @@ impl ReplayNode {
             "../../vendor/protocols/zerojoin/test/fixtures/half_mix_boxes.json"
         ))
         .unwrap();
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         // The output carries its id, as a node's always does: the UTXO count
         // after the pending spend settles counts it in place of the input.
         let pending = serde_json::json!([{
@@ -99,7 +99,10 @@ impl Drop for ReplayNode {
 async fn sync_reads_once_concurrently_and_shares_pending_valuation() {
     let node = ReplayNode::start(false, false);
     let raw = get_sync_inputs(
-        vec![ARGUS_FEE_ADDRESS.into(), ARGUS_FEE_ADDRESS.into()],
+        vec![
+            LEGACY_ARGUS_FEE_ADDRESS.into(),
+            LEGACY_ARGUS_FEE_ADDRESS.into(),
+        ],
         Some(node.url.clone()),
     )
     .await
@@ -118,24 +121,30 @@ async fn sync_reads_once_concurrently_and_shares_pending_valuation() {
     let first = fixture["items"][0]["value"].as_i64().unwrap();
     let second = fixture["items"][1]["value"].as_i64().unwrap();
     assert_eq!(
-        result["balances"][ARGUS_FEE_ADDRESS]["balance_nano_erg"],
+        result["balances"][LEGACY_ARGUS_FEE_ADDRESS]["balance_nano_erg"],
         second + 123
     );
     assert_eq!(result["pending"][0]["value_nano_erg"], 123 - first);
     assert_eq!(result["pending"].as_array().unwrap().len(), 1);
     // A second explicit refresh must fetch again, even within the same second.
-    get_sync_inputs(vec![ARGUS_FEE_ADDRESS.into()], Some(node.url.clone()))
-        .await
-        .unwrap();
+    get_sync_inputs(
+        vec![LEGACY_ARGUS_FEE_ADDRESS.into()],
+        Some(node.url.clone()),
+    )
+    .await
+    .unwrap();
     assert_eq!(*node.reads.0.lock().unwrap(), (2, 2));
 }
 
 #[tokio::test]
 async fn sync_failed_listing_is_missing_not_a_zero_balance_or_count() {
     let node = ReplayNode::start(true, false);
-    let raw = get_sync_inputs(vec![ARGUS_FEE_ADDRESS.into()], Some(node.url.clone()))
-        .await
-        .unwrap();
+    let raw = get_sync_inputs(
+        vec![LEGACY_ARGUS_FEE_ADDRESS.into()],
+        Some(node.url.clone()),
+    )
+    .await
+    .unwrap();
     let result: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert!(result["balances"].as_object().unwrap().is_empty());
     assert!(result["utxo_count"].is_null());
@@ -149,13 +158,16 @@ async fn sync_failed_listing_is_missing_not_a_zero_balance_or_count() {
 #[tokio::test]
 async fn sync_mempool_failure_preserves_confirmed_balance() {
     let node = ReplayNode::start(false, true);
-    let raw = get_sync_inputs(vec![ARGUS_FEE_ADDRESS.into()], Some(node.url.clone()))
-        .await
-        .unwrap();
+    let raw = get_sync_inputs(
+        vec![LEGACY_ARGUS_FEE_ADDRESS.into()],
+        Some(node.url.clone()),
+    )
+    .await
+    .unwrap();
     let result: serde_json::Value = serde_json::from_str(&raw).unwrap();
     assert_eq!(result["utxo_count"], 2);
     assert!(
-        result["balances"][ARGUS_FEE_ADDRESS]["balance_nano_erg"]
+        result["balances"][LEGACY_ARGUS_FEE_ADDRESS]["balance_nano_erg"]
             .as_i64()
             .unwrap()
             > 0

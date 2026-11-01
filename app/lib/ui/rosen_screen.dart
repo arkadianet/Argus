@@ -129,7 +129,6 @@ class _RosenScreenState extends State<RosenScreen> with TxReceiptOwner {
           ConfirmTxRow('${rosenChainName(target.chain)} network fee', amt(q.networkFee)),
           ConfirmTxRow('You receive', '${formatTokenAmountGrouped(q.receiving, target.decimals)} ${target.name}', bold: true),
           if (!t.isErg) ConfirmTxRow('Lock box ERG', formatErg((prepared['lock_value'] as num).toInt())),
-          ConfirmTxRow('Argus fee', formatErg((prepared['app_fee_nano'] as num?)?.toInt() ?? 0)),
           ConfirmTxRow('Miner fee', formatErg((prepared['miner_fee'] as num).toInt())),
         ],
         preparationId: (prepared['preparation_id'] as num).toInt(),
@@ -289,7 +288,7 @@ class _RosenScreenState extends State<RosenScreen> with TxReceiptOwner {
                         _row('You receive', '${formatTokenAmountGrouped(q.receiving, target.decimals)} ${target.name}', bold: true),
                         const SizedBox(height: 6),
                         Text(
-                          'Plus ${t.isErg ? '' : '0.002 ERG for the lock box, '}the Argus fee and the miner fee on Ergo. '
+                          'Plus ${t.isErg ? '' : '0.002 ERG for the lock box, '}the miner fee on Ergo. '
                           'The bridge pays out after its confirmation count on Ergo, usually within the hour.',
                           style: TextStyle(color: muted, fontSize: 12),
                         ),

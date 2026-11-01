@@ -82,7 +82,6 @@ class ArbOpportunity {
     required this.outputNano,
     required this.grossProfitNano,
     required this.minerFeesNano,
-    required this.appFeesNano,
     required this.netProfitNano,
     required this.profitPct,
     required this.boxMinInTransitNano,
@@ -101,9 +100,9 @@ class ArbOpportunity {
   /// What the pools return over what goes in, after their own fees.
   final int grossProfitNano;
   final int minerFeesNano;
-  final int appFeesNano;
 
-  /// Gross minus every leg's miner and Argus fee.
+  /// Gross minus every leg's miner fee. Argus charges no application fee,
+  /// so there is no app-fee term.
   final int netProfitNano;
   final double profitPct;
 
@@ -131,7 +130,6 @@ class ArbOpportunity {
         outputNano: _int(j['output_nano']),
         grossProfitNano: _int(j['gross_profit_nano']),
         minerFeesNano: _int(j['miner_fees_nano']),
-        appFeesNano: _int(j['app_fees_nano']),
         netProfitNano: _int(j['net_profit_nano']),
         profitPct: _double(j['profit_pct']),
         boxMinInTransitNano: _int(j['box_min_in_transit_nano']),
@@ -178,6 +176,9 @@ class ArbScanResult {
   /// False when the mempool could not be read, so busy pools are unknown.
   final bool mempoolChecked;
   final int minerFeeNano;
+
+  /// Per-leg application fee the scan budgeted for. Always 0: Argus charges
+  /// no application fee. Kept so the cost the core reported is visible.
   final int appFeeNano;
 
   factory ArbScanResult.fromJson(Map<String, dynamic> j, DateTime at) {
@@ -314,7 +315,6 @@ class ArbUnwind {
     required this.inputAmount,
     required this.outputNano,
     required this.minerFeeNano,
-    required this.appFeeNano,
     required this.priceImpactPct,
   });
 
@@ -324,7 +324,6 @@ class ArbUnwind {
   final int inputAmount;
   final int outputNano;
   final int minerFeeNano;
-  final int appFeeNano;
   final double priceImpactPct;
 
   factory ArbUnwind.fromJson(Map<String, dynamic> j) => ArbUnwind(
@@ -334,7 +333,6 @@ class ArbUnwind {
         inputAmount: _int(j['input_amount']),
         outputNano: _int(j['output_amount']),
         minerFeeNano: _int(j['miner_fee']),
-        appFeeNano: _int(j['app_fee']),
         priceImpactPct: _double(j['price_impact_pct']),
       );
 }

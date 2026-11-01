@@ -81,7 +81,8 @@ wallet/
 ### Vendored Citadel Crates
 
 - `citadel-core`: Shared types (`BoxId`, `TokenId`, `TxId`), errors, config
-- `ergo-tx`: EIP-12 unsigned tx structs, send tx builder, box selector, dev fee
+- `ergo-tx`: EIP-12 unsigned tx structs, send tx builder, box selector, dev
+  fee config (Argus installs it disabled; no transaction carries a fee)
 - `ergopay-core`: Transaction reduction (EIP-12 → sigma-serialized bytes)
 - `ergo-node-client`: Full node API client with capability detection
 - `amm`, `sigmausd`, `dexy`: Protocol tx builders (vendored for Phase 1+)

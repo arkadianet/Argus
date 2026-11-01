@@ -91,15 +91,14 @@ CoinSelectionCheck checkSelection({
   required CoinSelection selection,
   required int amountNanoErg,
   required int feeNanoErg,
-  required int appFeeNanoErg,
   int minBoxNano = 1000000,
 }) {
-  final needed = amountNanoErg + feeNanoErg + appFeeNanoErg + minBoxNano;
+  final needed = amountNanoErg + feeNanoErg + minBoxNano;
   final have = selection.totalNanoErg;
   return CoinSelectionCheck(
     covers: have >= needed,
     shortfallNano: have >= needed ? 0 : needed - have,
-    changeNano: have >= needed ? have - amountNanoErg - feeNanoErg - appFeeNanoErg : 0,
+    changeNano: have >= needed ? have - amountNanoErg - feeNanoErg : 0,
   );
 }
 

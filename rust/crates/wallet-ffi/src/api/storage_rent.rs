@@ -228,7 +228,7 @@ fn parse_tokens(tokens_json: &str) -> Result<Vec<(String, u64)>, String> {
 mod tests {
     use super::*;
 
-    const P2PK: &str = crate::api::ARGUS_FEE_ADDRESS;
+    const P2PK: &str = crate::api::LEGACY_ARGUS_FEE_ADDRESS;
 
     /// A mainnet oracle box as the node returns it (438 bytes; see
     /// `wallet_core::rent` tests).

@@ -42,7 +42,6 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> with TxReceiptOwner {
   /// Confirm, broadcast and record a prepared order of any kind.
   Future<void> _post(Map<String, dynamic> prepared, {required String title, required List<ConfirmTxRow> rows}) async {
     rows.addAll([
-      ConfirmTxRow('Argus fee', formatErg((prepared['app_fee_nano'] as num?)?.toInt() ?? 0)),
       ConfirmTxRow('Miner fee', formatErg((prepared['miner_fee'] as num).toInt())),
       ConfirmTxRow('Refundable after block', '${prepared['refund_height']}'),
     ]);
@@ -393,7 +392,6 @@ class _DuckpoolsScreenState extends State<DuckpoolsScreen> with TxReceiptOwner {
       final carried = (q['box_value'] as num).toInt() - (kind == 'lend' && s.pool == 'erg' ? (q['amount'] as num).toInt() : 0);
       rows.addAll([
         ConfirmTxRow('Bot fee + fill fee', formatErg(carried)),
-        ConfirmTxRow('Argus fee', formatErg((prepared['app_fee_nano'] as num?)?.toInt() ?? 0)),
         ConfirmTxRow('Miner fee', formatErg((prepared['miner_fee'] as num).toInt())),
         ConfirmTxRow('Refundable after block', '${prepared['refund_height']}'),
       ]);
@@ -961,7 +959,7 @@ class _OrderSheetState extends State<_OrderSheet> {
             ),
             const SizedBox(height: 4),
             Text('Plus ${formatErg((q['box_value'] as num).toInt() - (lend && s.pool == 'erg' ? (q['amount'] as num).toInt() : 0))} '
-                'for the bot and the fill, the Argus fee and the miner fee. '
+                'for the bot and the fill, and the miner fee. '
                 'The order accepts up to 1% less than quoted if the pool moves.',
                 style: TextStyle(color: muted, fontSize: 12)),
           ],
