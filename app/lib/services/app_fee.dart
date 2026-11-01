@@ -1,16 +1,16 @@
-import '../format.dart';
-import '../ui/confirm_transaction_sheet.dart';
-
-/// Argus app fee, paid on every transaction the wallet builds (sends, UTXO
-/// tools, swaps, mints). ErgoPay transactions are built by the dApp and do
-/// not carry it. Must match ARGUS_FEE_* in rust/crates/wallet-ffi/src/api.rs.
-const argusFeeNano = 1100000;
-const argusFeeAddress = '9iArkadiaZAPVxbUp2XQ8SVA1zGA29rCPhbpVuUaaKW6fWspUZA';
-
-/// Row for every confirm sheet whose transaction pays the fee.
-ConfirmTxRow argusFeeRow() => ConfirmTxRow('Argus fee', formatErg(argusFeeNano));
-
-/// ERG a transaction needs on top of what it sends: miner fee plus app fee.
-int txOverheadNano({int minerFee = minerFeeDefaultNano}) => minerFee + argusFeeNano;
+/// Argus charges no application fee.
+///
+/// It used to pay a flat fee on every transaction the wallet built. That was
+/// wrong for the privacy features in particular: a transaction spending a
+/// stealth address, or paying the mixer's funding box, carried an output
+/// identifying this wallet as the one that built it — the exact link those
+/// features exist to break. The fee is now disabled in the Rust fee config
+/// (`init_app` in `rust/crates/wallet-ffi/src/api.rs`), so no builder appends
+/// one, and the only cost of a transaction is its miner fee.
+///
+/// Nothing in the app may budget for, reserve, or display a fee that is not
+/// charged. [txOverheadNano] is the single place that says what a transaction
+/// costs on top of what it sends.
+int txOverheadNano({int minerFee = minerFeeDefaultNano}) => minerFee;
 
 const minerFeeDefaultNano = 1100000;

@@ -322,9 +322,8 @@ void main() {
       ('Rent clocks restarted', '1 at risk · 1 due within 30 days'),
       ('Token types carried', '1'),
       ('Miner fee', '0.0011 ERG'),
-      ('Argus fee', '0.0011 ERG'),
       ('Total value in', '42.001 ERG'),
-      ('Value after fees', '41.9988 ERG'),
+      ('Value after fees', '41.9999 ERG'),
       ('New box rent', '0.13875 ERG, due ~Oct 2030'),
     ]) {
       expect(find.text(label), findsOneWidget, reason: label);

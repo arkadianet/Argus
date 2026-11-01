@@ -125,7 +125,7 @@ class _MixScreenState extends State<MixScreen> with TxReceiptOwner {
                 rows: [
                   ConfirmTxRow('Mixing', record == null ? formatErg(prepared.amountNano) : mixAmountText(record), bold: true),
                   ConfirmTxRow('Rounds', 'about ${record?.roundsTarget ?? ''}'),
-                  ConfirmTxRow('Operator fee', formatErg(prepared.appFeeNano)),
+                  ConfirmTxRow('Operator fee', formatErg(prepared.operatorFeeNano)),
                   ConfirmTxRow('Miner fee', formatErg(prepared.minerFeeNano)),
                 ],
               ),

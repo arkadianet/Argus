@@ -23,7 +23,7 @@ use std::sync::LazyLock;
 use ergo_lib::ergotree_ir::ergo_tree::ErgoTree;
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
 
-use crate::api::{ARGUS_FEE_ADDRESS, ARGUS_FEE_NANO};
+use crate::api::{LEGACY_ARGUS_FEE_ADDRESS, LEGACY_ARGUS_FEE_NANO};
 
 /// Protocol NFTs (and the tag of the box carrying one).
 static NFT_TAGS: LazyLock<HashMap<&'static str, &'static str>> = LazyLock::new(|| {
@@ -140,9 +140,13 @@ pub fn tag_box(b: &serde_json::Value) -> Option<String> {
         .to_ascii_lowercase();
     let assets = b["assets"].as_array();
 
-    if b["value"].as_i64() == Some(ARGUS_FEE_NANO)
+    // The app fee is no longer charged, so this only ever matches a box in a
+    // transaction this wallet broadcast before it was dropped. It still has
+    // to be recognised: net-change accounting filters it out of the real
+    // payment, and the history labels it.
+    if b["value"].as_i64() == Some(LEGACY_ARGUS_FEE_NANO)
         && assets.is_none_or(|a| a.is_empty())
-        && wallet_net::activity::box_address(b).as_deref() == Some(ARGUS_FEE_ADDRESS)
+        && wallet_net::activity::box_address(b).as_deref() == Some(LEGACY_ARGUS_FEE_ADDRESS)
     {
         return Some(wallet_net::activity::ARGUS_FEE_TAG.to_string());
     }
@@ -213,10 +217,10 @@ mod tests {
         assert_eq!(tag_box(&duck).as_deref(), Some("duckpools:pool"));
         let lp = json!({"ergoTree": "00", "value": 1, "assets": [{"tokenId": dexy::gold_mainnet::LP_NFT_ID, "amount": 1}]});
         assert_eq!(tag_box(&lp).as_deref(), Some("dexy:lp"));
-        let fee = json!({"address": ARGUS_FEE_ADDRESS, "ergoTree": "00", "value": ARGUS_FEE_NANO, "assets": []});
+        let fee = json!({"address": LEGACY_ARGUS_FEE_ADDRESS, "ergoTree": "00", "value": LEGACY_ARGUS_FEE_NANO, "assets": []});
         assert_eq!(tag_box(&fee).as_deref(), Some("argus_fee"));
         // The same address paid anything else is an ordinary payment.
-        let paid = json!({"address": ARGUS_FEE_ADDRESS, "ergoTree": "00", "value": 5_000_000, "assets": []});
+        let paid = json!({"address": LEGACY_ARGUS_FEE_ADDRESS, "ergoTree": "00", "value": 5_000_000, "assets": []});
         assert_eq!(tag_box(&paid), None);
         let p2pk = json!({"ergoTree": "0008cd03e0e953d67d623597b372ee", "value": 1});
         assert_eq!(tag_box(&p2pk), None);

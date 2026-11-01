@@ -41,7 +41,7 @@ class MixPrepared {
     required this.preparationId,
     required this.amountNano,
     required this.minerFeeNano,
-    this.appFeeNano = 0,
+    this.operatorFeeNano = 0,
     this.tokenId,
     this.tokenAmount,
   });
@@ -49,7 +49,10 @@ class MixPrepared {
   final int preparationId;
   final int amountNano;
   final int minerFeeNano;
-  final int appFeeNano;
+
+  /// The mix operator's commission on an entry. Not an Argus fee: Argus
+  /// charges none, and no mixing transaction can carry one.
+  final int operatorFeeNano;
 
   /// The token a funding transaction carries, for a token ring.
   final String? tokenId;
@@ -221,7 +224,7 @@ class MixStartFlow {
       preparationId: (entry['preparation_id'] as num).toInt(),
       amountNano: (summary['denomination'] as num?)?.toInt() ?? record.denomination,
       minerFeeNano: (summary['miner_fee_nano'] as num?)?.toInt() ?? 0,
-      appFeeNano: (summary['operator_fee_nano'] as num?)?.toInt() ?? 0,
+      operatorFeeNano: (summary['operator_fee_nano'] as num?)?.toInt() ?? 0,
     );
     if (!await confirm(MixStartStep.entry, prepared, record)) return record;
 

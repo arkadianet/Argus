@@ -33,9 +33,11 @@ fn native_builder_reduces_protocol_true_and_wallet_to_its_exact_key() {
         tx.inputs.iter().map(|b| &b.box_id).collect::<Vec<_>>(),
         h.inputs.iter().map(|b| &b.box_id).collect::<Vec<_>>()
     );
-    assert_eq!(tx.outputs.len(), 5);
+    // State out, payout, wallet change, miner fee. No application fee: Argus
+    // charges none, so the output that used to sit between change and miner
+    // fee is gone and the transaction reduces against the real script still.
+    assert_eq!(tx.outputs.len(), 4);
     assert_eq!(tx.outputs[3].value, "1100000");
-    assert_eq!(tx.outputs[4].value, "1100000");
     assert_eq!(tx.outputs[2].ergo_tree, h.inputs[2].ergo_tree);
     for asset in &h.inputs[2].assets {
         let returned = tx.outputs[2]
@@ -208,13 +210,14 @@ fn wallet_policy_refuses_foreign_recipient_and_layout_or_burn_edits() {
                 .retain(|a| a.token_id != hex::encode(key)),
             8 => {
                 changed.outputs[2].ergo_tree =
-                    ergo_tx::address_to_ergo_tree(direct::APP_FEE_ADDRESS).unwrap()
+                    ergo_tx::address_to_ergo_tree(ergo_tx::dev_fee::DEFAULT_DEV_FEE_ADDRESS)
+                        .unwrap()
             }
             _ => unreachable!(),
         }
         assert!(direct::validate(&request, &changed).is_err());
     }
-    let foreign = ergo_tx::address_to_ergo_tree(direct::APP_FEE_ADDRESS).unwrap();
+    let foreign = ergo_tx::address_to_ergo_tree(ergo_tx::dev_fee::DEFAULT_DEV_FEE_ADDRESS).unwrap();
     request.recipient = &foreign;
     assert!(direct::build(&request).is_err());
     // Recipient theft can satisfy the contracts; wallet policy must stop it.
@@ -250,7 +253,7 @@ fn conservation_with_additional_wallet_funding_and_distinct_wallet_change() {
     inputs.push(extra);
     let key = *StakeBox::parse(&inputs[1], Pool::Ergopad).unwrap().key_id();
     // Pure policy trusts this allow-list; real ownership is tested at the FFI.
-    let change = ergo_tx::address_to_ergo_tree(direct::APP_FEE_ADDRESS).unwrap();
+    let change = ergo_tx::address_to_ergo_tree(ergo_tx::dev_fee::DEFAULT_DEV_FEE_ADDRESS).unwrap();
     let trees = [inputs[2].ergo_tree.clone(), change.clone()];
     let request = DirectRequest {
         inputs: &inputs,
@@ -332,7 +335,8 @@ fn builder_refuses_integer_boundaries_foreign_funding_and_ambiguous_positions() 
         .is_err());
     }
     let mut inputs = h.inputs.clone();
-    inputs[2].ergo_tree = ergo_tx::address_to_ergo_tree(direct::APP_FEE_ADDRESS).unwrap();
+    inputs[2].ergo_tree =
+        ergo_tx::address_to_ergo_tree(ergo_tx::dev_fee::DEFAULT_DEV_FEE_ADDRESS).unwrap();
     reidentify(&mut inputs[2]);
     assert!(run(&inputs).is_err());
     let mut inputs = h.inputs.clone();

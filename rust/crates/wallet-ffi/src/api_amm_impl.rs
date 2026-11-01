@@ -418,11 +418,13 @@ mod tests {
         ));
     }
 
-    /// Set in the child process [`argus_levies_its_own_fee_never_citadels`]
+    /// Set in the child process [`argus_never_pays_a_developer_fee`]
     /// spawns, where the check itself runs.
     const FEE_GUARD_CHILD: &str = "ARGUS_FEE_GUARD_CHILD";
 
-    /// `init_app` disables the inherited Citadel fee. This pins that guard.
+    /// `init_app` disables the fee entirely, so no builder this wallet runs
+    /// can emit a developer-fee output — neither the inherited Citadel
+    /// default nor any replacement.
     ///
     /// `resolved_dev_fee_config` caches into a process-global `OnceLock` on
     /// first call, and other tests in this crate (the mempool ones) build
@@ -433,16 +435,16 @@ mod tests {
     /// test alone in a fresh process, where `init_app` is the first thing to
     /// touch the config, exactly as in the app.
     #[test]
-    fn argus_levies_its_own_fee_never_citadels() {
+    fn argus_never_pays_a_developer_fee() {
         if std::env::var_os(FEE_GUARD_CHILD).is_some() {
-            assert_init_installs_argus_fee();
+            assert_init_disables_the_fee();
             return;
         }
         let exe = std::env::current_exe().expect("path of this test binary");
         let out = std::process::Command::new(exe)
             .args([
                 "--exact",
-                "api_amm_impl::tests::argus_levies_its_own_fee_never_citadels",
+                "api_amm_impl::tests::argus_never_pays_a_developer_fee",
                 "--test-threads=1",
             ])
             .env(FEE_GUARD_CHILD, "1")
@@ -458,20 +460,22 @@ mod tests {
         assert!(stdout.contains("1 passed"), "fee guard did not run:\n{stdout}");
     }
 
-    fn assert_init_installs_argus_fee() {
+    fn assert_init_disables_the_fee() {
         crate::api::init_app();
 
         let cfg = ergo_tx::resolved_dev_fee_config();
 
-        assert!(cfg.enabled, "the Argus app fee must be installed at init");
-        assert_eq!(cfg.budget(), crate::api::ARGUS_FEE_NANO);
+        assert!(!cfg.enabled, "Argus must not charge an application fee");
+        assert_eq!(cfg.budget(), 0);
         assert_ne!(
             cfg.recipient_ergo_tree, CITADEL_DEV_FEE_TREE,
-            "Argus must never target the Citadel fee address"
+            "no fee may ever target the Citadel fee address"
         );
-        let expected =
-            wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
-        assert_eq!(cfg.recipient_ergo_tree, expected);
+        // What the UI and every builder branch on.
+        assert_eq!(
+            crate::api::app_fee_info(),
+            serde_json::json!({"address": "", "amount_nano": 0, "enabled": false}).to_string()
+        );
     }
 
     #[test]

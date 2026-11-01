@@ -8,10 +8,7 @@
 use std::collections::HashMap;
 
 use ergo_lib::wallet::secret_key::SecretKey;
-use ergo_tx::{
-    append_dev_fee_output, resolved_dev_fee_config, Eip12Asset, Eip12InputBox, Eip12Output,
-    Eip12UnsignedTx,
-};
+use ergo_tx::{Eip12Asset, Eip12InputBox, Eip12Output, Eip12UnsignedTx};
 use wallet_core::wallet::WalletHandle;
 
 use crate::error::ArgusError;
@@ -153,6 +150,8 @@ pub struct SweepBuild {
     pub unsigned_tx: Eip12UnsignedTx,
     pub swept_erg: i64,
     pub miner_fee: i64,
+    /// Always zero: Argus charges no app fee. Kept so the JSON `prepare`
+    /// emits keeps the shape `SendPreview.fromJson` parses.
     pub app_fee_nano: i64,
     pub input_count: usize,
     pub token_count: usize,
@@ -199,11 +198,13 @@ pub fn build_sweep(
             .checked_add(v)
             .ok_or_else(|| err("stealth box total is out of range"))?;
     }
-    let fee_cfg = resolved_dev_fee_config();
-    let app_fee = fee_cfg.budget();
+    // A stealth sweep pays no application fee: a fixed output to the app
+    // developer in every sweep would mark each stealth identity as having
+    // been touched by this wallet, which is the link the sweep exists to
+    // avoid. The miner fee is the only cost. `app_fee_nano` stays on the
+    // result so the wire shape, and the UI that reads it, are unchanged.
     let needed = miner_fee
-        .checked_add(app_fee)
-        .and_then(|v| v.checked_add(MIN_BOX_VALUE_NANO))
+        .checked_add(MIN_BOX_VALUE_NANO)
         .ok_or_else(|| err("sweep amount out of range"))?;
     if total_erg < needed {
         return Err(err(format!(
@@ -231,7 +232,7 @@ pub fn build_sweep(
         )));
     }
 
-    let swept_erg = total_erg - miner_fee - app_fee;
+    let swept_erg = total_erg - miner_fee;
     let destination = Eip12Output {
         value: swept_erg.to_string(),
         ergo_tree: destination_ergo_tree.to_string(),
@@ -247,7 +248,6 @@ pub fn build_sweep(
     };
 
     let mut outputs = vec![destination];
-    append_dev_fee_output(&mut outputs, &fee_cfg, height).map_err(err)?;
     outputs.push(Eip12Output::fee(miner_fee, height));
 
     Ok(SweepBuild {
@@ -258,7 +258,7 @@ pub fn build_sweep(
         },
         swept_erg,
         miner_fee,
-        app_fee_nano: app_fee,
+        app_fee_nano: 0,
         input_count: inputs.len(),
         token_count: token_totals.len(),
     })
@@ -290,6 +290,7 @@ mod tests {
     use super::*;
     use ergo_lib::wallet::ext_secret_key::ExtSecretKey;
     use ergo_lib::wallet::mnemonic::Mnemonic;
+    use ergo_tx::DevFeeConfig;
 
     const FIXTURE: &str =
         include_str!("../../vendor/protocols/stealth/test/fixtures/unspent_stealth_boxes.json");
@@ -446,13 +447,55 @@ mod tests {
         assert_eq!(out.ergo_tree, dest);
         assert_eq!(
             out.value.parse::<i64>().unwrap(),
-            1_500_000_000 - built.miner_fee - built.app_fee_nano
+            1_500_000_000 - built.miner_fee
         );
         let aa = out.assets.iter().find(|a| a.token_id == "aa").unwrap();
         assert_eq!(aa.amount, "7");
         // Miner fee is the last output.
         let fee_out = built.unsigned_tx.outputs.last().unwrap();
         assert_eq!(fee_out.value.parse::<i64>().unwrap(), built.miner_fee);
+    }
+
+    /// A sweep carries no application fee: a fixed output to the app developer
+    /// in every sweep would mark each stealth identity as touched by this
+    /// wallet, which is the link a sweep exists to break. This pins the output
+    /// count as well as the amount, so a fee cannot reappear quietly.
+    #[test]
+    fn sweep_pays_the_miner_fee_and_nothing_else() {
+        let inputs = vec![to_input(&my_box(1_000_000_000, &[("aa", "3")]))];
+        let built = build_sweep(
+            &inputs,
+            "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            1_000_000,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(built.app_fee_nano, 0);
+        // Destination and the miner fee. Nothing in between.
+        assert_eq!(built.unsigned_tx.outputs.len(), 2);
+        assert_eq!(built.swept_erg, 1_000_000_000 - built.miner_fee);
+        // And it does not depend on the process fee config either way.
+        for cfg in [
+            DevFeeConfig::disabled(),
+            DevFeeConfig::custom(
+                "0008cd03a11d3028b9bc57b6ac724485e99960b89c278db6bab5d2b961b01aee29405a02"
+                    .into(),
+                1_100_000,
+            ),
+        ] {
+            let rebuilt = ergo_tx::dev_fee::with_test_dev_fee(cfg, || {
+                build_sweep(
+                    &inputs,
+                    "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+                    1_000_000,
+                    None,
+                )
+                .unwrap()
+            });
+            assert_eq!(rebuilt.unsigned_tx.outputs.len(), 2);
+            assert_eq!(rebuilt.app_fee_nano, 0);
+        }
     }
 
     #[test]

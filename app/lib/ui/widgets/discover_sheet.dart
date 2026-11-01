@@ -263,7 +263,7 @@ const discoverExplainers = <DiscoverFeature, DiscoverExplainer>{
     risks: [
       'An incomplete scan cannot tell you that there is nothing to recover',
       'Keep your Stake Key; transferring it transfers access to the position',
-      'Scanning is free; recovery will pay miner and contract costs plus a flat 0.0011 ERG Argus fee per transaction',
+      'Scanning is free; recovery will pay miner and contract costs only',
     ],
     go: 'Open stake recovery',
   ),
@@ -274,7 +274,7 @@ const discoverExplainers = <DiscoverFeature, DiscoverExplainer>{
     route: '/arbitrage',
     what: 'When two Spectrum pools price a token differently, buying it where it is cheap and selling it where it is dear returns more ERG than it took. Argus scans the pools on your node while the screen is open and shows each round trip with every fee already taken off.',
     can: [
-      'See each route, the amount to put in and the expected profit after pool, miner and Argus fees',
+      'See each route, the amount to put in and the expected profit after pool and miner fees',
       'Set the minimum profit worth your attention',
       'Review the whole chain of transactions before signing it',
       'Sell a token left behind by a failed leg straight back to ERG',

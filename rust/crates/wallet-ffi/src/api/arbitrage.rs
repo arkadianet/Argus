@@ -102,8 +102,8 @@ async fn busy_pool_boxes(client: &ergo_node_client::NodeClient) -> Option<HashSe
     Some(busy)
 }
 
-/// What every leg pays: the swap builder's miner fee, the Argus fee as
-/// installed, and the wallet's box minimum.
+/// What every leg pays: the swap builder's miner fee, whatever application fee
+/// is installed (Argus installs none), and the wallet's box minimum.
 fn current_costs() -> Costs {
     Costs {
         miner_fee_nano: citadel_core::constants::TX_FEE_NANO as u64,

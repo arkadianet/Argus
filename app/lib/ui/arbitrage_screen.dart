@@ -244,7 +244,7 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
       children: [
         Text(
           'Pools sometimes disagree on a price. This finds round trips from ERG through them that '
-          'pay back more ERG than they cost: pool fees, plus a miner fee and the Argus fee for every leg. '
+          'pay back more ERG than they cost: pool fees, plus a miner fee for every leg. '
           'Pools are read again at each new block, and only while this screen is open.',
           style: TextStyle(color: colors.muted, fontSize: 13, height: 1.4),
         ),
@@ -288,7 +288,7 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
             ListTile(
               key: const Key('arb-min-profit-row'),
               title: const Text('Minimum profit'),
-              subtitle: Text('After pool, miner and Argus fees', style: TextStyle(color: colors.muted, fontSize: 12.5)),
+              subtitle: Text('After pool and miner fees', style: TextStyle(color: colors.muted, fontSize: 12.5)),
               trailing: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -495,7 +495,6 @@ class _ArbitrageScreenState extends State<ArbitrageScreen> with WidgetsBindingOb
           ConfirmTxRow('You receive', formatErg(u.outputNano, maxFrac: 6), bold: true),
           ConfirmTxRow('Price impact', '${u.priceImpactPct.toStringAsFixed(2)}%'),
           ConfirmTxRow('Miner fee', formatErg(u.minerFeeNano)),
-          ConfirmTxRow('Argus fee', formatErg(u.appFeeNano)),
         ],
         detail: 'Quoted against the pool as it is now. A direct Spectrum swap: it fills at exactly this amount or not at all.',
         confirmLabel: 'Sign & broadcast sale',
@@ -579,7 +578,7 @@ class _OpportunityCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final o = opportunity;
     final colors = ArgusColors.of(context);
-    final fees = o.minerFeesNano + o.appFeesNano;
+    final fees = o.minerFeesNano;
     final chips = <(String, bool)>[
       if (!o.trusted) ('Unverified token', true),
       if (o.sizedToBalance) ('Sized to your balance', false),
@@ -829,7 +828,6 @@ class _ReviewSheetState extends State<_ReviewSheet> {
       _Line('You put in', formatErg(o.inputNano, maxFrac: 6)),
       _Line('You get back', formatErg(o.outputNano, maxFrac: 6)),
       _Line('Miner fees ($n legs)', formatErg(o.minerFeesNano)),
-      _Line('Argus fees ($n legs)', formatErg(o.appFeesNano)),
       _Line('Box minimum in transit', '${formatErg(o.boxMinInTransitNano)}, returned'),
       _Line('Expected net profit', '+${formatErg(o.netProfitNano, maxFrac: 6)}', bold: true, valueColor: moss),
       _Line('Needs in this wallet', formatErg(o.capitalNano, maxFrac: 4)),

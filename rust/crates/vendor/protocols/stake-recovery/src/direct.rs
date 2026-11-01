@@ -20,9 +20,11 @@ use crate::{
     Pool, RecoveryError, StakeBox, StakeStateBox,
 };
 
-pub const APP_FEE: i64 = 1_100_000;
 pub const MIN_VALUE: i64 = 1_000_000;
-pub const APP_FEE_ADDRESS: &str = "9iArkadiaZAPVxbUp2XQ8SVA1zGA29rCPhbpVuUaaKW6fWspUZA";
+// Argus charges no application fee, so recovery pays the miner fee only. The
+// fee output that used to sit between the key return and the miner fee is
+// gone, and with it the hard-coded address and amount this builder carried
+// independently of the shared fee config.
 
 /// Inputs must already be ordered state, stake, key, then optional funding.
 /// `wallet_trees` must come from addresses authenticated by a wallet handle.
@@ -160,10 +162,7 @@ fn assemble(r: &DirectRequest<'_>) -> Result<Eip12UnsignedTx, RecoveryError> {
         .inputs
         .iter()
         .try_fold(0, |n, b| add(n, number(&b.value)?))?;
-    let spent = add(
-        add(number(&state_out.value)?, MIN_VALUE)?,
-        add(APP_FEE, r.miner_fee)?,
-    )?;
+    let spent = add(add(number(&state_out.value)?, MIN_VALUE)?, r.miner_fee)?;
     let change = total
         .checked_sub(spent)
         .ok_or(RecoveryError::Overflow("ERG change"))?;
@@ -176,8 +175,6 @@ fn assemble(r: &DirectRequest<'_>) -> Result<Eip12UnsignedTx, RecoveryError> {
         .into_iter()
         .map(|(id, n)| Eip12Asset::new(id, n))
         .collect();
-    let fee_tree = ergo_tx::address_to_ergo_tree(APP_FEE_ADDRESS)
-        .map_err(|e| RecoveryError::Serialization(e.to_string()))?;
     let tx = Eip12UnsignedTx {
         inputs: r.inputs.to_vec(),
         data_inputs: vec![],
@@ -185,7 +182,6 @@ fn assemble(r: &DirectRequest<'_>) -> Result<Eip12UnsignedTx, RecoveryError> {
             state_out,
             payout,
             Eip12Output::change(change, r.recipient, change_assets, r.height),
-            Eip12Output::simple(APP_FEE, fee_tree, r.height),
             Eip12Output::fee(r.miner_fee, r.height),
         ],
     };

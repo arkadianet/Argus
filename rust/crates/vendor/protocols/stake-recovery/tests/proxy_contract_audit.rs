@@ -6,12 +6,14 @@ use common::{reidentify, Historical, REFUND, UNSTAKE};
 use ergo_lib::{chain::transaction::reduced::reduce_tx, wallet::tx_context::TransactionContext};
 use ergo_tx::{Eip12InputBox, Eip12Output, Eip12UnsignedTx};
 use ergotree_ir::{serialization::SigmaSerializable, sigma_protocol::sigma_boolean::SigmaBoolean};
-use stake_recovery::{
-    boxes::canonical_box,
-    contracts::REFUND_FEE,
-    direct::{APP_FEE, APP_FEE_ADDRESS},
-    PaideiaProxyBox,
-};
+use stake_recovery::{boxes::canonical_box, contracts::REFUND_FEE, PaideiaProxyBox};
+
+/// The extra output each adversarial case bolts onto a contract-pinned
+/// transaction. Argus charges no application fee, so this stands in for "some
+/// third party tried to take a cut": the audit's claim is that the deployed
+/// layout rejects any extra output, whatever amount it pays and to whom.
+const SMUGGLED_FEE_NANO: i64 = 1_100_000;
+const SMUGGLED_FEE_ADDRESS: &str = ergo_tx::dev_fee::DEFAULT_DEV_FEE_ADDRESS;
 
 /// Construct from the proxy alone. No state, stake or executor is available.
 fn contract_refund(proxy: &Eip12InputBox, height: i32) -> Eip12UnsignedTx {
@@ -92,12 +94,12 @@ fn adding_standard_argus_fee_with_conservation_reduces_false() {
     let h = Historical::load(REFUND);
     let height = h.inputs[0].creation_height;
     let mut tx = contract_refund(&h.inputs[0], height);
-    tx.outputs[0].value = (112_000_000 - APP_FEE).to_string();
+    tx.outputs[0].value = (112_000_000 - SMUGGLED_FEE_NANO).to_string();
     tx.outputs.insert(
         1,
         Eip12Output::simple(
-            APP_FEE,
-            ergo_tx::address_to_ergo_tree(APP_FEE_ADDRESS).unwrap(),
+            SMUGGLED_FEE_NANO,
+            ergo_tx::address_to_ergo_tree(SMUGGLED_FEE_ADDRESS).unwrap(),
             height,
         ),
     );
@@ -113,8 +115,8 @@ fn third_output_is_rejected_even_when_recipient_value_stays_exact() {
     // Deliberately not conserved: isolate the script's output-count restriction
     // independently of its exact recipient-value requirement.
     tx.outputs.push(Eip12Output::simple(
-        APP_FEE,
-        ergo_tx::address_to_ergo_tree(APP_FEE_ADDRESS).unwrap(),
+        SMUGGLED_FEE_NANO,
+        ergo_tx::address_to_ergo_tree(SMUGGLED_FEE_ADDRESS).unwrap(),
         height,
     ));
     assert_eq!(props(&tx, &h), vec![SigmaBoolean::TrivialProp(false)]);
@@ -124,8 +126,8 @@ fn third_output_is_rejected_even_when_recipient_value_stays_exact() {
 fn larger_refund_deduction_is_rejected_even_with_only_two_outputs() {
     let h = Historical::load(REFUND);
     let mut tx = contract_refund(&h.inputs[0], h.inputs[0].creation_height);
-    tx.outputs[0].value = (113_000_000 - REFUND_FEE - APP_FEE).to_string();
-    tx.outputs[1].value = (REFUND_FEE + APP_FEE).to_string();
+    tx.outputs[0].value = (113_000_000 - REFUND_FEE - SMUGGLED_FEE_NANO).to_string();
+    tx.outputs[1].value = (REFUND_FEE + SMUGGLED_FEE_NANO).to_string();
     assert_conserved(&tx);
     assert_eq!(props(&tx, &h), vec![SigmaBoolean::TrivialProp(false)]);
 }
@@ -140,12 +142,12 @@ fn increased_proxy_funding_cannot_make_room_for_standard_argus_fee() {
         let mut tx = contract_refund(&proxy, proxy.creation_height);
         assert_conserved(&tx);
         assert_eq!(props(&tx, &h), vec![SigmaBoolean::TrivialProp(true)]);
-        tx.outputs[0].value = (value - REFUND_FEE - APP_FEE).to_string();
+        tx.outputs[0].value = (value - REFUND_FEE - SMUGGLED_FEE_NANO).to_string();
         tx.outputs.insert(
             1,
             Eip12Output::simple(
-                APP_FEE,
-                ergo_tx::address_to_ergo_tree(APP_FEE_ADDRESS).unwrap(),
+                SMUGGLED_FEE_NANO,
+                ergo_tx::address_to_ergo_tree(SMUGGLED_FEE_ADDRESS).unwrap(),
                 proxy.creation_height,
             ),
         );
@@ -165,7 +167,7 @@ fn refund_output_order_recipient_and_key_are_pinned_by_the_contract() {
         vec![SigmaBoolean::TrivialProp(false)]
     );
     let mut foreign = tx.clone();
-    foreign.outputs[0].ergo_tree = ergo_tx::address_to_ergo_tree(APP_FEE_ADDRESS).unwrap();
+    foreign.outputs[0].ergo_tree = ergo_tx::address_to_ergo_tree(SMUGGLED_FEE_ADDRESS).unwrap();
     assert_eq!(props(&foreign, &h), vec![SigmaBoolean::TrivialProp(false)]);
     let mut burned = tx;
     burned.outputs[0].assets.clear();
@@ -178,12 +180,12 @@ fn execution_also_rejects_an_added_app_fee_output() {
     let h = Historical::load(UNSTAKE);
     let mut outputs = h.unsigned.output_candidates.to_vec();
     let height = i32::try_from(outputs[1].creation_height).unwrap();
-    outputs[1].value = (10_000_000u64 - u64::try_from(APP_FEE).unwrap())
+    outputs[1].value = (10_000_000u64 - u64::try_from(SMUGGLED_FEE_NANO).unwrap())
         .try_into()
         .unwrap();
     let fee = Eip12Output::simple(
-        APP_FEE,
-        ergo_tx::address_to_ergo_tree(APP_FEE_ADDRESS).unwrap(),
+        SMUGGLED_FEE_NANO,
+        ergo_tx::address_to_ergo_tree(SMUGGLED_FEE_ADDRESS).unwrap(),
         height,
     );
     let fee_tx = Eip12UnsignedTx {
@@ -219,7 +221,8 @@ fn execution_also_rejects_an_added_app_fee_output() {
 fn execution_rejects_a_foreign_incentive_destination_with_values_unchanged() {
     let h = Historical::load(UNSTAKE);
     let mut outputs = h.unsigned.output_candidates.to_vec();
-    outputs[2].ergo_tree = stake_recovery::contracts::tree_from_address(APP_FEE_ADDRESS).unwrap();
+    outputs[2].ergo_tree =
+        stake_recovery::contracts::tree_from_address(SMUGGLED_FEE_ADDRESS).unwrap();
     let unsigned = ergo_lib::chain::transaction::unsigned::UnsignedTransaction::new_from_vec(
         h.unsigned.inputs.to_vec(),
         vec![],

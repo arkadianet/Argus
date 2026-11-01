@@ -6,7 +6,7 @@ fn input(id: &str, height: i32, value: u64, assets: Vec<Eip12Asset>) -> Eip12Inp
         box_id: id.into(),
         transaction_id: "00".repeat(32),
         index: 0,
-        ergo_tree: address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap(),
+        ergo_tree: address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap(),
         creation_height: height,
         value: value.to_string(),
         assets,
@@ -18,7 +18,7 @@ fn input(id: &str, height: i32, value: u64, assets: Vec<Eip12Asset>) -> Eip12Inp
 #[test]
 fn automatic_multi_send_funds_all_unsent_colocated_tokens() {
     ergo_tx::with_test_dev_fee(DevFeeConfig::disabled(), || {
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         let recipients = vec![RecipientSpec::with_token(
             tree.clone(),
             MIN_BOX_VALUE_NANO,
@@ -85,7 +85,7 @@ fn automatic_multi_send_funds_all_unsent_colocated_tokens() {
 #[test]
 fn manual_multi_send_never_tops_up_an_underfunded_selection() {
     ergo_tx::with_test_dev_fee(DevFeeConfig::disabled(), || {
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         let recipients = vec![RecipientSpec::with_token(
             tree.clone(),
             MIN_BOX_VALUE_NANO,
@@ -123,7 +123,7 @@ fn manual_multi_send_never_tops_up_an_underfunded_selection() {
 #[test]
 fn repeated_change_shortfalls_are_bounded() {
     ergo_tx::with_test_dev_fee(DevFeeConfig::disabled(), || {
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         let recipients = vec![RecipientSpec::with_token(
             tree.clone(),
             MIN_BOX_VALUE_NANO,
@@ -189,7 +189,7 @@ fn multi_send_leaves_unrelated_collectibles_when_eligible_funding_suffices() {
 #[test]
 fn multi_send_with_a_token_fee_reselects_and_summarizes_split_change() {
     ergo_tx::with_test_dev_fee(DevFeeConfig::disabled(), || {
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         let fee_token = "00".repeat(32);
         let sent_token = format!("{:064x}", 1);
         let recipients = vec![RecipientSpec::with_token(
@@ -320,7 +320,7 @@ fn token_heavy_public_pocket(required: u64) -> Vec<Eip12InputBox> {
 #[test]
 fn cheaper_stealth_change_does_not_inherit_the_public_funding_shortfall() {
     ergo_tx::with_test_dev_fee(DevFeeConfig::disabled(), || {
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         let token_id = "00".repeat(32);
         let recipients = vec![RecipientSpec::with_token(
             tree.clone(),
@@ -398,7 +398,7 @@ fn cheaper_stealth_change_does_not_inherit_the_public_funding_shortfall() {
 #[test]
 fn multi_send_combines_pockets_only_after_both_complete_layouts_fail() {
     ergo_tx::with_test_dev_fee(DevFeeConfig::disabled(), || {
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         let token_id = "00".repeat(32);
         let recipients = vec![RecipientSpec::with_token(
             tree.clone(),

@@ -523,11 +523,9 @@ mod lp_live_tests {
         };
         let built = if fee {
             let tree =
-                wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
-            with_test_dev_fee(
-                DevFeeConfig::custom(tree, crate::api::ARGUS_FEE_NANO),
-                build,
-            )
+                wallet_net::client::address_to_ergo_tree(crate::api::LEGACY_ARGUS_FEE_ADDRESS)
+                    .unwrap();
+            with_test_dev_fee(DevFeeConfig::custom(tree, 1_100_000), build)
         } else {
             build()
         }
@@ -593,19 +591,17 @@ mod lp_live_tests {
             current_height: height,
             recipient_ergo_tree: Some(user_tree),
         };
-        let tree = wallet_net::client::address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap();
-        let built = with_test_dev_fee(
-            DevFeeConfig::custom(tree, crate::api::ARGUS_FEE_NANO),
-            || {
-                dexy::tx_builder::build_lp_redeem_tx(
-                    &request,
-                    &ctx,
-                    &ids.dexy_token,
-                    &ids.lp_token_id,
-                    variant.initial_lp(),
-                )
-            },
-        )
+        let tree =
+            wallet_net::client::address_to_ergo_tree(crate::api::LEGACY_ARGUS_FEE_ADDRESS).unwrap();
+        let built = with_test_dev_fee(DevFeeConfig::custom(tree, 1_100_000), || {
+            dexy::tx_builder::build_lp_redeem_tx(
+                &request,
+                &ctx,
+                &ids.dexy_token,
+                &ids.lp_token_id,
+                variant.initial_lp(),
+            )
+        })
         .expect("build");
         println!("summary: {:?}", built.summary);
         for (i, o) in built.unsigned_tx.outputs.iter().enumerate() {

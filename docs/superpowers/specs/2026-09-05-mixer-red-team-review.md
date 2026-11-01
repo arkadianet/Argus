@@ -255,7 +255,8 @@ but does not promise forensic erasure of runtime/GC copies.
   a lease and merge-by-mix-id behind it.
 - Mix indices never reused after a removal.
 - Fees are validated before building; the contract shapes make an extra
-  output impossible, so the app fee cannot be smuggled in.
+  output impossible, and Argus charges no application fee, so no fee
+  output can be smuggled into a mixing transaction on any path.
 - Snapshot parsing is capped and tolerant of stray items; error bodies are
   no longer boxes.
 - Keys are deleted when a mix ends, the switch turns off, or the wallet is

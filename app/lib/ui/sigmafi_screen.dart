@@ -129,7 +129,10 @@ class _SigmaFiScreenState extends State<SigmaFiScreen>
     (p) => [
       ConfirmTxRow('You lend', _amount(o.loanAsset, o.principal), bold: true),
       ConfirmTxRow('SigmaFi fee (0.5%)', _amount(o.loanAsset, o.devFee)),
-      ConfirmTxRow('Argus fee (0.4%)', _amount(o.loanAsset, o.uiFee)),
+      // Not an Argus fee. The 0.4% interface fee is part of the repayment the
+      // borrower agreed to when the order was posted; the contract fixes it,
+      // and this row exists because the borrower is paying it.
+      ConfirmTxRow('Interface fee (0.4%)', _amount(o.loanAsset, o.uiFee)),
       ConfirmTxRow('Total out', _amount(o.loanAsset, o.lenderCost), bold: true),
       ConfirmTxRow('Repaid to you', _amount(o.loanAsset, o.repayment)),
       ConfirmTxRow(
@@ -222,7 +225,7 @@ class _SigmaFiScreenState extends State<SigmaFiScreen>
         context,
         title: 'Post the request',
         detail: 'The collateral is locked until a lender fills the request or you withdraw it. '
-            'A lender pays the SigmaFi and Argus fees on top of the loan.',
+            'A lender pays the SigmaFi fee and the interface fee on top of the loan. ',
         confirmLabel: 'Post',
         rows: [
           ConfirmTxRow('You ask for', _amount(r.asset.id, r.principal), bold: true),

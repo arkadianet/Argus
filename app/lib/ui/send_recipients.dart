@@ -133,14 +133,12 @@ List<Map<String, dynamic>> buildRecipients(
 int maxRecipientNanoErg({
   required int spendableNano,
   required int minerFeeNano,
-  required int appFeeNano,
   required int otherRecipientsNano,
   bool feePaidInToken = false,
   int changeReserveNano = minBoxNano,
 }) =>
     spendableNano -
     (feePaidInToken ? 0 : minerFeeNano) -
-    appFeeNano -
     otherRecipientsNano -
     changeReserveNano;
 

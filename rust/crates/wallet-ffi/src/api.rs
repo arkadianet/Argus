@@ -28,31 +28,46 @@ pub mod pricing;
 /// Circular arbitrage across Spectrum pools, on the chained-legs design.
 pub mod arbitrage;
 
-/// Argus app fee: paid on every transaction the wallet builds (sends, UTXO
-/// tools, swaps, mints). ErgoPay transactions are built by the dApp and are
-/// not touched. Disclosed on every confirm sheet and in Settings → About.
-pub const ARGUS_FEE_ADDRESS: &str = "9iArkadiaZAPVxbUp2XQ8SVA1zGA29rCPhbpVuUaaKW6fWspUZA";
-pub const ARGUS_FEE_NANO: i64 = 1_100_000;
+/// Where the Argus app fee used to be paid, and how much.
+///
+/// Argus charges no fee now (see [`init_app`]), so nothing creates an output
+/// matching this pair. They are kept solely to recognise the fee output in
+/// transactions this wallet broadcast before the fee was dropped, so history
+/// still labels those payments instead of showing them as ordinary sends.
+pub const LEGACY_ARGUS_FEE_ADDRESS: &str =
+    "9iArkadiaZAPVxbUp2XQ8SVA1zGA29rCPhbpVuUaaKW6fWspUZA";
+pub const LEGACY_ARGUS_FEE_NANO: i64 = 1_100_000;
 
-/// Runs at bridge start (`frb(init)`) and is also called explicitly from
-/// Dart right after `RustLib.init`, so the fee config is installed before
-/// any builder resolves it. The attribute used to sit above the constants
-/// and never applied, which left the vendored default in force.
+/// Argus charges no application fee. It used to pay a flat fee on every
+/// transaction the wallet built, which was wrong twice over: a transaction
+/// that touches a stealth address or the mixer should not carry an output
+/// identifying the wallet that built it, and on the mixer paths the fee
+/// cannot exist at all because the deployed contracts pin `OUTPUTS.size`.
+///
+/// The fee is therefore disabled process-wide rather than suppressed at each
+/// privacy-sensitive call site. Every builder already resolves
+/// [`ergo_tx::resolved_dev_fee_config`] before it appends a fee output, so
+/// one disabled config installed here removes the output from sends, UTXO
+/// tools, mints, burns, swaps, multi-sends and the stealth sweep alike.
+/// The `resolved_…` call sites stay: they are the guard that keeps a fee
+/// from creeping back in if the vendored default is ever re-enabled.
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
-    // Never the inherited Citadel fee; the Argus fee is installed instead.
+    // Belt and braces: never the inherited Citadel fee either, whatever the
+    // vendored loader would otherwise fall back to.
     std::env::set_var("CITADEL_DEV_FEE_ENABLED", "false");
-    if let Ok(tree) = address_to_ergo_tree(ARGUS_FEE_ADDRESS) {
-        ergo_tx::install_dev_fee_config(DevFeeConfig::custom(tree, ARGUS_FEE_NANO));
-    }
+    ergo_tx::install_dev_fee_config(DevFeeConfig::disabled());
 }
 
 /// The app fee as the UI should display it.
+///
+/// Kept so the Dart mirror cannot drift into showing a fee that is not
+/// charged: it reports the disabled config the builders actually see.
 #[flutter_rust_bridge::frb(sync)]
 pub fn app_fee_info() -> String {
     let cfg = ergo_tx::resolved_dev_fee_config();
     serde_json::json!({
-        "address": ARGUS_FEE_ADDRESS,
+        "address": "",
         "amount_nano": cfg.budget(),
         "enabled": cfg.enabled,
     })
@@ -4976,8 +4991,62 @@ pub async fn amm_build_swap(
 mod tests {
     use super::*;
 
+    /// A non-zero fee the tests below switch on deliberately. Argus itself
+    /// charges none, but input selection has to fund whatever the resolved
+    /// config says: these tests would go stale if the budget helpers learned
+    /// to assume zero instead of reading the config.
+    const TEST_FEE_NANO: i64 = 1_100_000;
+
     mod concurrent_gather;
     mod selected_lookup;
+
+    /// The reason the fee is gone, as a test rather than a comment: a send
+    /// built after `init_app` must carry no output identifying this wallet.
+    ///
+    /// The mixer's funding transaction is an ordinary send, so it goes
+    /// through this same builder. The entry, remix and withdraw transactions
+    /// never reach it — their contracts pin `OUTPUTS.size` and an extra
+    /// output fails validation — but the funding box was the one mixer
+    /// transaction that did carry the fee.
+    #[test]
+    fn an_ordinary_send_after_init_pays_no_application_fee() {
+        crate::api::init_app();
+
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
+        let inputs = vec![ergo_tx::Eip12InputBox {
+            box_id: "box".into(),
+            transaction_id: "tx".into(),
+            index: 0,
+            value: "1000000000".into(),
+            ergo_tree: tree.clone(),
+            assets: vec![],
+            creation_height: 1,
+            additional_registers: Default::default(),
+            extension: Default::default(),
+        }];
+        let built = build_send_tx_with_fee(
+            &inputs,
+            &tree,
+            &tree,
+            500_000_000,
+            None,
+            1_000,
+            &ergo_tx::resolved_dev_fee_config(),
+        )
+        .unwrap();
+
+        assert_eq!(built.summary.citadel_fee_nano, 0);
+        // Recipient, change, miner fee. Nothing to the fee address.
+        assert_eq!(built.unsigned_tx.outputs.len(), 3);
+        assert!(!crate::api_amm_impl::pays_citadel_dev_fee(
+            &built
+                .unsigned_tx
+                .outputs
+                .iter()
+                .map(|o| o.ergo_tree.clone())
+                .collect::<Vec<_>>()
+        ));
+    }
 
     // Documents the mechanism and pins the arithmetic: with the old budget a
     // MAX send selects one box short and the builder returns the exact error
@@ -4987,9 +5056,9 @@ mod tests {
     // and this test stayed green.
     #[test]
     fn single_send_max_selects_enough_for_the_reported_shortfall() {
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         ergo_tx::dev_fee::with_test_dev_fee(
-            DevFeeConfig::custom(tree.clone(), ARGUS_FEE_NANO),
+            DevFeeConfig::custom(tree.clone(), TEST_FEE_NANO),
             || {
                 let make_box = |id: &str, value: i64| ergo_tx::Eip12InputBox {
                     box_id: id.into(),
@@ -5004,7 +5073,7 @@ mod tests {
                 };
                 let inputs = vec![make_box("large", 996_727_888), make_box("small", 1_072_065)];
                 let balance = 997_799_953;
-                let amount = balance - TX_FEE_NANO - ARGUS_FEE_NANO - MIN_BOX_VALUE_NANO;
+                let amount = balance - TX_FEE_NANO - TEST_FEE_NANO - MIN_BOX_VALUE_NANO;
                 let old_required = (amount + TX_FEE_NANO + MIN_BOX_VALUE_NANO) as u64;
                 let (old, _) = select_preferring_one_pocket(&inputs, &[], old_required, None).unwrap();
                 let fee = ergo_tx::resolved_dev_fee_config();
@@ -5013,7 +5082,7 @@ mod tests {
                     Err(ergo_tx::send::SendError::InsufficientErg { have: 996_727_888, need: 996_799_953 })
                 ));
                 for miner in [TX_FEE_NANO, TX_FEE_NANO + 500_000] {
-                    let amount = balance - miner - ARGUS_FEE_NANO - MIN_BOX_VALUE_NANO;
+                    let amount = balance - miner - TEST_FEE_NANO - MIN_BOX_VALUE_NANO;
                     let required = multi_send_required_erg(amount, miner, false).unwrap();
                     assert_eq!(required, balance as u64);
                     // Public, stealth-only and combined-pocket selection all
@@ -5032,9 +5101,9 @@ mod tests {
 
     #[test]
     fn multi_send_exact_selection_budget_covers_the_argus_fee() {
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         ergo_tx::dev_fee::with_test_dev_fee(
-            DevFeeConfig::custom(tree.clone(), ARGUS_FEE_NANO),
+            DevFeeConfig::custom(tree.clone(), TEST_FEE_NANO),
             || {
                 let amount = 2_000_000_000;
                 let required = multi_send_required_erg(amount, TX_FEE_NANO, false).unwrap();
@@ -5052,7 +5121,7 @@ mod tests {
                 // Selection visits the last box first. The old budget stops
                 // there, leaving the builder short of the app fee.
                 let inputs = vec![
-                    make_box("app-fee", ARGUS_FEE_NANO),
+                    make_box("app-fee", TEST_FEE_NANO),
                     make_box("send", amount + TX_FEE_NANO + MIN_BOX_VALUE_NANO),
                 ];
                 let selected = select_for_multi_send(&inputs, required, &HashMap::new()).unwrap();
@@ -5065,7 +5134,7 @@ mod tests {
                 let built = ergo_tx::build_multi_send_tx_with_fee(
                     &selected, &recipients, &tree, TX_FEE_NANO, 100,
                 ).unwrap();
-                assert_eq!(built.summary.citadel_fee_nano, ARGUS_FEE_NANO);
+                assert_eq!(built.summary.citadel_fee_nano, TEST_FEE_NANO);
                 assert_eq!(built.summary.change_erg, MIN_BOX_VALUE_NANO);
                 assert!(select_for_multi_send(&inputs[1..], required, &HashMap::new()).is_err());
                 assert_eq!(
@@ -6948,7 +7017,13 @@ pub async fn sigmafi_prepare_spend(
             .to_json_string());
         }
     }
-    let ui_fee_tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS)
+    // Filling someone else's SigmaFi order pays a 0.4% interface fee, named by
+    // context variable 0 of the fill. This is a lending-protocol fee inside the
+    // repayment the borrower agreed to, not the app fee `init_app` switches off:
+    // the amount comes out of the order's own registers, so no filler can drop
+    // it, only choose where it goes. It is the one place a payment still reaches
+    // the Argus address.
+    let ui_fee_tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS)
         .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
     let mut spend_from: Vec<String> = if spend_addresses.is_empty() {
         vec![user_address.clone()]
@@ -7232,7 +7307,6 @@ pub async fn stake_recovery_prepare_direct(
     let rows = serde_json::json!([
         {"label": "You receive", "value": amount},
         {"label": "Stake key", "value": "Returns to your wallet (not burned)"},
-        {"label": "Argus fee", "value": "0.0011 ERG (flat)"},
         {"label": "Miner fee", "value": format!("{:.9} ERG", miner_fee as f64 / 1_000_000_000.0)},
         {"label": "Payout and key return", "value": "At least 0.001 ERG in each output; remains yours"}
     ]);
@@ -7255,7 +7329,7 @@ pub async fn stake_recovery_prepare_direct(
         recipient_erg: stake_recovery::direct::MIN_VALUE,
         node_url,
     });
-    Ok(serde_json::json!({"preparation_id": preparation_id, "unsigned_tx": unsigned_json, "rows": rows, "input_boxes": input_boxes, "miner_fee": miner_fee, "app_fee": ARGUS_FEE_NANO}).to_string())
+    Ok(serde_json::json!({"preparation_id": preparation_id, "unsigned_tx": unsigned_json, "rows": rows, "input_boxes": input_boxes, "miner_fee": miner_fee, "app_fee": 0}).to_string())
 }
 
 async fn revalidate_stake_recovery(
@@ -7382,14 +7456,12 @@ pub async fn stake_recovery_prepare_proxy(
         serde_json::json!([
             {"label":"Stake key", "value":"Returns to the recipient wallet"},
             {"label":"Refund ERG (nanoERG)","value":unsigned_tx.outputs[0].value},
-            {"label":"Miner fee","value":"0.001 ERG"},
-            {"label":"Argus fee","value":"None — contract-pinned refund"}
+            {"label":"Miner fee","value":"0.001 ERG"}
         ])
     } else {
         serde_json::json!([
             {"label":"Stake key","value":"Burned on successful unstake; refundable beforehand"},
             {"label":"Proxy funding (nanoERG)","value":unsigned_tx.outputs[0].value},
-            {"label":"Argus fee","value":"0.0011 ERG (flat)"},
             {"label":"Creation miner fee","value":"0.0011 ERG"},
             {"label":"Refund","value":"Returns key and proxy ERG minus 0.001 ERG, without pool state"}
         ])
@@ -7409,7 +7481,7 @@ pub async fn stake_recovery_prepare_proxy(
     revalidate_paideia(&prep, &client, &context).await?;
     let input_boxes = input_boxes_json(&prep.unsigned_tx.inputs);
     let preparation_id = store_preparation(prep);
-    Ok(serde_json::json!({"preparation_id":preparation_id,"unsigned_tx":unsigned_json,"input_boxes":input_boxes,"rows":rows,"creation_tx_id":tx_id,"expected_proxy":expected_proxy,"recipient":user_address,"app_fee":if refund {0} else {ARGUS_FEE_NANO},"miner_fee":miner_fee}).to_string())
+    Ok(serde_json::json!({"preparation_id":preparation_id,"unsigned_tx":unsigned_json,"input_boxes":input_boxes,"rows":rows,"creation_tx_id":tx_id,"expected_proxy":expected_proxy,"recipient":user_address,"app_fee":0,"miner_fee":miner_fee}).to_string())
 }
 
 async fn revalidate_paideia(
@@ -7587,7 +7659,7 @@ mod paideia_tracking_tests {
         assert_eq!(record["recipient"], address);
         assert_eq!(record["recipient_tree"], trees[0]);
         assert_eq!(record["network"], "mainnet");
-        assert!(stake_recovery_proxy_record(id, signed_json, ARGUS_FEE_ADDRESS.into()).is_err());
+        assert!(stake_recovery_proxy_record(id, signed_json, LEGACY_ARGUS_FEE_ADDRESS.into()).is_err());
         wallet_lock(id).unwrap();
     }
 }

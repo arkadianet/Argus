@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../format.dart';
 import '../theme/argus_theme.dart';
-import 'app_fee.dart';
 import 'storage_rent.dart';
 import 'utxo_tools_controller.dart';
 import 'wallet_service.dart';
@@ -224,7 +223,7 @@ class CleanupSuggestion {
     required this.dueSoonCount,
     required this.leftAtAddress,
     required this.forRent,
-    this.feesNano = minerFeeNano + argusFeeNano,
+    this.feesNano = minerFeeNano,
   });
 
   final String address;
@@ -290,7 +289,7 @@ CleanupSuggestion? suggestCleanup({
   Set<String> exclude = const {},
   int fragmentedAbove = utxoFragmentationThreshold,
   int maxInputs = consolidationMaxInputs,
-  int feesNano = minerFeeNano + argusFeeNano,
+  int feesNano = minerFeeNano,
   bool Function(CleanupSuggestion candidate)? viable,
 }) {
   if (maxInputs < 2) return null;

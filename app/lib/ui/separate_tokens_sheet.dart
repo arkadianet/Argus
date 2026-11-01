@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../format.dart';
-import '../services/app_fee.dart';
 import '../services/utxo_plans.dart';
 import '../services/utxo_tools_controller.dart';
 import '../services/wallet_service.dart';
@@ -64,7 +63,7 @@ class _SeparateTokensSheetState extends State<SeparateTokensSheet> {
         plan = planSeparateTokens(
           source: source,
           funding: funding.where((b) => _fundingIds.contains(b.boxId)).toList(),
-          feesNano: minerFeeNano + argusFeeNano,
+          feesNano: minerFeeNano,
         );
       } on FormatException catch (e) {
         issue = e.message;
@@ -115,11 +114,11 @@ class _SeparateTokensSheetState extends State<SeparateTokensSheet> {
               ),
               const SizedBox(height: 12),
               Text(
-                'Each token box holds at least ${formatErg(minBoxNano)}. Miner fee ${formatErg(minerFeeNano)} + Argus fee ${formatErg(argusFeeNano)}.',
+                'Each token box holds at least ${formatErg(minBoxNano)}. Miner fee ${formatErg(minerFeeNano)}.',
               ),
               const SizedBox(height: 8),
               Text(
-                'Minimum ERG needed: ${formatErg(source.assets.map((a) => a.tokenId).toSet().length * minBoxNano + minerFeeNano + argusFeeNano)}',
+                'Minimum ERG needed: ${formatErg(source.assets.map((a) => a.tokenId).toSet().length * minBoxNano + minerFeeNano)}',
                 style: const TextStyle(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 12),

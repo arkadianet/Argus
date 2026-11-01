@@ -48,9 +48,10 @@ R4/R5 of full boxes; a mix is found if any of its boxes is unspent.
 exactly one funding input with nothing on it the transaction cannot
 place (stage 1 enforces this). So starting a mix is two transactions:
 an ordinary send to the wallet's own address for exactly
-`denomination + operator fee + miner fee` (carrying the usual Argus fee),
-then the entry spending that box. ErgoMixer's deposit address is the
-same idea.
+`denomination + operator fee + miner fee`, then the entry spending that
+box. Argus charges no application fee, so the funding box comes out
+exactly that size with nothing held back. ErgoMixer's deposit address is
+the same idea.
 
 **Enter as Bob when a half box is waiting.** That completes a round
 immediately instead of waiting for a counterpart. The wallet never Bobs
