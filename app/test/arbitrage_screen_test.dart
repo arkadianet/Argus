@@ -183,7 +183,8 @@ void main() {
     expect(find.text('46.3 ERG → 4,629 SPF'), findsOneWidget);
     expect(find.text('4,629 SPF → 46.3294 ERG'), findsOneWidget);
     expect(find.text('Miner fees (2 legs)'), findsOneWidget);
-    expect(find.text('Argus fees (2 legs)'), findsOneWidget);
+    // No Argus fee line: Argus charges none.
+    expect(find.text('Argus fees (2 legs)'), findsNothing);
     expect(find.text('Expected net profit'), findsOneWidget);
     expect(find.text('+0.025 ERG'), findsWidgets);
     expect(find.textContaining('which would cost about 0.28 ERG'), findsOneWidget);

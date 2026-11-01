@@ -449,7 +449,7 @@ pub(crate) mod tests {
         price_book, requote, scan, ArbOptions, Asset, Costs, PricingOptions, RouteStep,
     };
 
-    use crate::api::{ARGUS_FEE_ADDRESS, ARGUS_FEE_NANO};
+    use crate::api::LEGACY_ARGUS_FEE_ADDRESS;
 
     pub(crate) const USER_TREE: &str =
         "0008cd0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
@@ -533,15 +533,20 @@ pub(crate) mod tests {
     fn costs() -> Costs {
         Costs {
             miner_fee_nano: 1_100_000,
-            app_fee_nano: ARGUS_FEE_NANO as u64,
+            app_fee_nano: TEST_FEE_NANO as u64,
             box_min_nano: 1_000_000,
         }
     }
 
+    /// The fee these tests switch on so leg costs and the route math are
+    /// exercised. Argus charges none; the arb chain reads whatever the
+    /// resolved config reports, so it still has to account for one.
+    pub(crate) const TEST_FEE_NANO: i64 = 1_100_000;
+
     pub(crate) fn argus_fee() -> DevFeeConfig {
         DevFeeConfig::custom(
-            wallet_net::client::address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap(),
-            ARGUS_FEE_NANO,
+            wallet_net::client::address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap(),
+            TEST_FEE_NANO,
         )
     }
 
@@ -622,7 +627,7 @@ pub(crate) mod tests {
                 held.retain(|b| !spent.contains(&id_of(b)));
                 held.extend(leg.wallet_outputs(USER_TREE).cloned());
                 assert_eq!(leg.miner_fee, 1_100_000);
-                assert_eq!(leg.app_fee, ARGUS_FEE_NANO as u64);
+                assert_eq!(leg.app_fee, TEST_FEE_NANO as u64);
             }
             let before: u64 = funds.iter().map(value).sum();
             let after: u64 = held.iter().map(value).sum();
@@ -851,7 +856,7 @@ pub(crate) mod tests {
                 .map(|(_, n)| n)
                 .sum();
             assert_eq!(to_wallet, 0);
-            assert_eq!(sale.app_fee, ARGUS_FEE_NANO as u64);
+            assert_eq!(sale.app_fee, TEST_FEE_NANO as u64);
             // Recovering costs money: back with less ERG than went in.
             assert!((sale.erg_out as i64) < opp.input_nano as i64);
         });

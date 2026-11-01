@@ -1,6 +1,5 @@
 import 'widgets/error_sheet.dart';
 import 'widgets/tx_result_view.dart';
-import '../services/app_fee.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -306,9 +305,14 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
         : [if (args.senderAddress.isNotEmpty) args.senderAddress];
   }
 
-  bool get _recipientValid =>
-      _recipientCtrl.text.trim().isNotEmpty &&
-      looksLikeRecipient(_recipientCtrl.text.trim());
+  bool get _recipientValid {
+    final addr = _recipientCtrl.text.trim();
+    if (addr.isEmpty || !looksLikeRecipient(addr)) return false;
+    // A mainnet wallet may not send to a testnet address and vice versa.
+    final isTestnetAddress = addr.startsWith('3');
+    if (isTestnetAddress != networkController.activeNetwork.isTestnet) return false;
+    return true;
+  }
 
   /// True when the typed recipient is a published stealth address, so the
   /// form can explain that a one-time address is derived at send time.
@@ -352,7 +356,6 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
     final max = maxRecipientNanoErg(
       spendableNano: _chosenBoxIds.isEmpty ? spendable : _selection.totalNanoErg,
       minerFeeNano: parseErgToNano(_feeCtrl.text) ?? minerFeeNano,
-      appFeeNano: argusFeeNano,
       otherRecipientsNano: otherRecipients,
       feePaidInToken: _feeTokenId != null,
     );
@@ -484,8 +487,7 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
       stealthUnknown: walletSyncController.stealthBalanceUnknown,
     );
     final fee = parseErgToNano(_feeCtrl.text) ?? minerFeeNano;
-    if (spendable != null && totalNanoErg(recipients) +
-        (_feeTokenId == null ? fee : 0) + argusFeeNano > spendable) {
+    if (spendable != null && totalNanoErg(recipients) + (_feeTokenId == null ? fee : 0) > spendable) {
       _snack('Amount plus fee exceeds your ${formatErg(spendable, maxFrac: 4)}');
       return;
     }
@@ -658,7 +660,6 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
         if (build.priceImpactPct != null)
           ConfirmTxRow('Price impact', '${build.priceImpactPct!.toStringAsFixed(2)}%', bold: build.priceImpactPct! > priceImpactWarnPct),
         ConfirmTxRow('Miner fee', formatErg(build.minerFeeNano)),
-        argusFeeRow(),
         if (build.changeNanoErg > 0) ConfirmTxRow('Change to you', formatErg(build.changeNanoErg)),
       ],
       detail: [
@@ -797,7 +798,6 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
         )
       else
         ConfirmTxRow('Miner fee', formatErg(preview.minerFee)),
-      ConfirmTxRow('Argus fee', formatErg(preview.appFeeNano)),
       ConfirmTxRow(
         stealthChange ? 'Change to a new stealth address' : 'Change to you',
         formatErg(preview.changeNanoErg),
@@ -1803,7 +1803,6 @@ class _InputPickerSheet extends StatelessWidget {
       selection: selection,
       amountNanoErg: amountNanoErg,
       feeNanoErg: feeNanoErg,
-      appFeeNanoErg: argusFeeNano,
     );
     final note = selectionPrivacyNote(selection);
     return SafeArea(

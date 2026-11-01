@@ -3,11 +3,8 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    boxes::canonical_box,
-    contracts::*,
-    direct::{APP_FEE, APP_FEE_ADDRESS},
-    validation::*,
-    PaideiaProxyBox, RecoveryError, StakeBox, StakeStateBox,
+    boxes::canonical_box, contracts::*, validation::*, PaideiaProxyBox, RecoveryError, StakeBox,
+    StakeStateBox,
 };
 use ergo_lib::{
     chain::{ergo_state_context::ErgoStateContext, transaction::reduced::reduce_tx},
@@ -222,7 +219,7 @@ fn assemble_creation(r: &CreationRequest<'_>) -> Result<Eip12UnsignedTx, Recover
         .wallet_inputs
         .iter()
         .try_fold(0, |n, b| add(n, number(&b.value)?))?;
-    let change = sub(total, add(value, add(APP_FEE, r.miner_fee)?)?)?;
+    let change = sub(total, add(value, r.miner_fee)?)?;
     Ok(Eip12UnsignedTx {
         inputs: r.wallet_inputs.to_vec(),
         data_inputs: vec![],
@@ -237,7 +234,6 @@ fn assemble_creation(r: &CreationRequest<'_>) -> Result<Eip12UnsignedTx, Recover
                     .collect(),
                 r.height,
             ),
-            Eip12Output::simple(APP_FEE, tree(APP_FEE_ADDRESS)?, r.height),
             Eip12Output::fee(r.miner_fee, r.height),
         ],
     })

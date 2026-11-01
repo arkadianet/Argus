@@ -145,9 +145,13 @@ fn review_value(
         .as_array_mut()
         .ok_or("Missing review outputs")?
     {
+        // The flat app fee is no longer charged, so this is false for anything Argus
+        // builds. It stays scoped to the address and amount the old fee used,
+        // so a cold-signed request that carries one is still surfaced for the
+        // reviewer rather than passing as an ordinary self-payment.
         output["application_fee"] = serde_json::json!(
-            output["address"].as_str() == Some(ARGUS_FEE_ADDRESS)
-                && output["nano_erg"].as_str() == Some(ARGUS_FEE_NANO.to_string().as_str())
+            output["address"].as_str() == Some(LEGACY_ARGUS_FEE_ADDRESS)
+                && output["nano_erg"].as_str() == Some(LEGACY_ARGUS_FEE_NANO.to_string().as_str())
                 && output["tokens"].as_array().is_some_and(Vec::is_empty)
         );
     }
@@ -488,11 +492,13 @@ mod tests {
                 .unwrap()
             })
             .collect();
-        let recipient = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        // The recipient is the old app-fee address with a fee switched on for this
+        // test only, which is the one output the review must flag.
+        let recipient = address_to_ergo_tree(crate::api::LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         // Preparation has no handle or secrets, including input selection and fees.
         let result: serde_json::Value = serde_json::from_str(
             &ergo_tx::dev_fee::with_test_dev_fee(
-                DevFeeConfig::custom(recipient.clone(), ARGUS_FEE_NANO),
+                DevFeeConfig::custom(recipient.clone(), 1_100_000),
                 || {
                     build_watch_session(
                         watch,
@@ -534,8 +540,8 @@ mod tests {
             serde_json::from_str(&review(cold.clone(), handle).unwrap()).unwrap();
         assert_eq!(shown["network"], "Mainnet");
         assert_eq!(shown["fee_nano"], TX_FEE_NANO.to_string());
-        // A deliberate larger payment to the developer is still a recipient,
-        // not mislabeled as the fixed application fee.
+        // A deliberate larger payment to the old fee address is still an ordinary
+        // recipient, not the fixed application fee.
         assert_eq!(shown["outputs"][0]["application_fee"], false);
         assert_eq!(
             shown["outputs"]
@@ -602,25 +608,19 @@ mod tests {
             } else {
                 HashMap::new()
             };
+            // No fee config wrapper: Argus charges no application fee, so the only
+            // cost of a cold send is the miner fee.
             let result: serde_json::Value = serde_json::from_str(
-                &ergo_tx::dev_fee::with_test_dev_fee(
-                    DevFeeConfig::custom(
-                        address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap(),
-                        ARGUS_FEE_NANO,
-                    ),
-                    || {
-                        build_watch_session(
-                            watch,
-                            0,
-                            address_to_ergo_tree(&recipient).unwrap(),
-                            2000000,
-                            tokens,
-                            "http://unused.invalid".into(),
-                            boxes,
-                            2000,
-                            &wallet_net::client::make_state_context(2000),
-                        )
-                    },
+                &build_watch_session(
+                    watch,
+                    0,
+                    address_to_ergo_tree(&recipient).unwrap(),
+                    2000000,
+                    tokens,
+                    "http://unused.invalid".into(),
+                    boxes,
+                    2000,
+                    &wallet_net::client::make_state_context(2000),
                 )
                 .unwrap(),
             )
@@ -631,10 +631,7 @@ mod tests {
             let outputs = result["review"]["outputs"].as_array().unwrap();
             let change = outputs.iter().find(|o| o["owned"] == true).unwrap();
             assert_eq!(change["address"], address);
-            assert_eq!(
-                change["nano_erg"],
-                (10000000 - 2000000 - TX_FEE_NANO - ARGUS_FEE_NANO).to_string()
-            );
+            assert_eq!(change["nano_erg"], (10000000 - 2000000 - TX_FEE_NANO).to_string());
             if with_token {
                 assert_eq!(outputs[0]["tokens"][0]["amount"], "12");
                 assert_eq!(change["tokens"][0]["amount"], "30");

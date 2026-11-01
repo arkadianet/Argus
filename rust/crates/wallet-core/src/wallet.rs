@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 
+use citadel_core::Network;
 use ergo_lib::wallet::ext_secret_key::ExtSecretKey;
 use ergo_lib::wallet::Wallet;
 use zeroize::Zeroize;
 
-use crate::derivation;
+use crate::derivation::{self, DerivationMode};
 use crate::seed::MnemonicPhrase;
 use crate::CoreError;
 
@@ -13,8 +14,18 @@ const MAX_OWN_SCAN: u32 = 512;
 
 pub struct UnlockedWallet {
     pub(crate) wallet: Wallet,
+    /// The standard BIP-32 master. Stealth identities and mix keys derive
+    /// from it in every mode: they are Argus's own constructions, with no
+    /// other wallet to stay compatible with, and a wallet whose mode is
+    /// changed by restoring again keeps the same ones.
     pub(crate) ext_secret_key: ExtSecretKey,
+    /// `m/44'/429'/0'` under [`Self::mode`]. Every EIP-3 address and
+    /// signing key derives from this, never from the master directly.
+    pub(crate) account_key: ExtSecretKey,
+    pub(crate) mode: DerivationMode,
     pub(crate) max_index: u32,
+    /// Which chain this handle's base58 addresses are encoded for.
+    pub(crate) network: Network,
     /// How many stealth identities this session scans and spends with:
     /// indices `0..stealth_frontier`.
     ///
@@ -32,7 +43,11 @@ fn cache_address(unlocked: &mut UnlockedWallet, index: u32) -> Result<String, Co
     if let Some(addr) = unlocked.addresses_by_index.get(&index) {
         return Ok(addr.clone());
     }
-    let addr = derivation::derive_address_from_ext_secret_key(&unlocked.ext_secret_key, index)?;
+    let addr = derivation::derive_address_from_ext_secret_key_on(
+        unlocked.network,
+        &unlocked.account_key,
+        index,
+    )?;
     unlocked.addresses_by_index.insert(index, addr.clone());
     unlocked.index_by_address.insert(addr.clone(), index);
     Ok(addr)
@@ -48,36 +63,84 @@ fn recover<T>(result: std::sync::LockResult<T>) -> T {
 
 impl WalletHandle {
     pub fn create(mnemonic: MnemonicPhrase, passphrase: &str) -> Result<Self, CoreError> {
+        Self::create_on_with_mode(Network::Mainnet, mnemonic, passphrase, DerivationMode::Standard)
+    }
+
+    pub fn create_with_mode(
+        mnemonic: MnemonicPhrase,
+        passphrase: &str,
+        mode: DerivationMode,
+    ) -> Result<Self, CoreError> {
+        Self::create_on_with_mode(Network::Mainnet, mnemonic, passphrase, mode)
+    }
+
+    pub fn create_on(
+        network: Network,
+        mnemonic: MnemonicPhrase,
+        passphrase: &str,
+    ) -> Result<Self, CoreError> {
+        Self::create_on_with_mode(network, mnemonic, passphrase, DerivationMode::Standard)
+    }
+
+    pub fn create_on_with_mode(
+        network: Network,
+        mnemonic: MnemonicPhrase,
+        passphrase: &str,
+        mode: DerivationMode,
+    ) -> Result<Self, CoreError> {
         let mut seed = mnemonic.to_seed(passphrase)?;
-        let handle = Self::from_seed(&seed)?;
+        let handle = Self::from_seed(network, &seed, mode);
         seed.zeroize();
-        Ok(handle)
+        handle
     }
 
     pub fn restore_from_seed(seed_bytes: &[u8]) -> Result<Self, CoreError> {
+        Self::restore_from_seed_on_with_mode(Network::Mainnet, seed_bytes, DerivationMode::Standard)
+    }
+
+    pub fn restore_from_seed_with_mode(
+        seed_bytes: &[u8],
+        mode: DerivationMode,
+    ) -> Result<Self, CoreError> {
+        Self::restore_from_seed_on_with_mode(Network::Mainnet, seed_bytes, mode)
+    }
+
+    pub fn restore_from_seed_on(network: Network, seed_bytes: &[u8]) -> Result<Self, CoreError> {
+        Self::restore_from_seed_on_with_mode(network, seed_bytes, DerivationMode::Standard)
+    }
+
+    pub fn restore_from_seed_on_with_mode(
+        network: Network,
+        seed_bytes: &[u8],
+        mode: DerivationMode,
+    ) -> Result<Self, CoreError> {
         if seed_bytes.len() != 64 {
             return Err(CoreError::Mnemonic("seed must be 64 bytes".into()));
         }
         let mut seed_arr = [0u8; 64];
         seed_arr.copy_from_slice(seed_bytes);
-        let handle = Self::from_seed(&seed_arr)?;
+        let handle = Self::from_seed(network, &seed_arr, mode);
         seed_arr.zeroize();
-        Ok(handle)
+        handle
     }
 
-    fn from_seed(seed: &[u8; 64]) -> Result<Self, CoreError> {
+    fn from_seed(network: Network, seed: &[u8; 64], mode: DerivationMode) -> Result<Self, CoreError> {
         let ext_secret_key =
             ExtSecretKey::derive_master(*seed).map_err(|e| CoreError::Derivation(e.to_string()))?;
+        let account_key = derivation::account_key(seed, mode)?;
         let mut unlocked = UnlockedWallet {
             wallet: Wallet::from_secrets(Vec::new()),
             ext_secret_key,
+            account_key,
+            mode,
             max_index: PRELOAD_INDICES,
+            network,
             stealth_frontier: 1,
             addresses_by_index: HashMap::new(),
             index_by_address: HashMap::new(),
         };
         for i in 0..=PRELOAD_INDICES {
-            let child = derivation::derive_child(&unlocked.ext_secret_key, i)?;
+            let child = derivation::derive_child(&unlocked.account_key, i)?;
             unlocked.wallet.add_secret(child.secret_key());
             cache_address(&mut unlocked, i)?;
         }
@@ -92,6 +155,12 @@ impl WalletHandle {
 
     pub fn is_unlocked(&self) -> bool {
         recover(self.inner.lock()).is_some()
+    }
+
+    /// The key derivation this session was opened with.
+    pub fn derivation_mode(&self) -> Result<DerivationMode, CoreError> {
+        let guard = recover(self.inner.lock());
+        Ok(guard.as_ref().ok_or(CoreError::WalletLocked)?.mode)
     }
 
     pub fn derive_address(&self, index: u32) -> Result<String, CoreError> {
@@ -111,7 +180,7 @@ impl WalletHandle {
         let unlocked = guard.as_mut().ok_or(CoreError::WalletLocked)?;
         while unlocked.max_index < index {
             let next = unlocked.max_index + 1;
-            let child = derivation::derive_child(&unlocked.ext_secret_key, next)?;
+            let child = derivation::derive_child(&unlocked.account_key, next)?;
             unlocked.wallet.add_secret(child.secret_key());
             unlocked.max_index = next;
         }
@@ -176,7 +245,7 @@ impl WalletHandle {
         let unlocked = guard.as_ref().ok_or(CoreError::WalletLocked)?;
         let mut secrets = Vec::with_capacity(unlocked.max_index as usize + 1);
         for i in 0..=unlocked.max_index {
-            secrets.push(derivation::derive_child(&unlocked.ext_secret_key, i)?.secret_key());
+            secrets.push(derivation::derive_child(&unlocked.account_key, i)?.secret_key());
         }
         secrets.extend(extra_secrets);
         Wallet::from_secrets(secrets)
@@ -295,6 +364,26 @@ mod tests {
             .owns_address("9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8")
             .unwrap());
         assert!(!handle.owns_address("not-a-wallet-address").unwrap());
+    }
+
+    #[test]
+    fn testnet_create_derives_a_testnet_prefix_address() {
+        let phrase = MnemonicPhrase::parse(APPKIT).unwrap();
+        let mainnet = WalletHandle::create(phrase, "").unwrap();
+        let phrase = MnemonicPhrase::parse(APPKIT).unwrap();
+        let testnet = WalletHandle::create_on(Network::Testnet, phrase, "").unwrap();
+
+        let mainnet_addr = mainnet.derive_address(0).unwrap();
+        let testnet_addr = testnet.derive_address(0).unwrap();
+        assert!(testnet_addr.starts_with('3'));
+        assert!(mainnet_addr.starts_with('9'));
+        // Same EIP-3 key, only the base58 network prefix differs.
+        assert_eq!(
+            ergo_tx::address_to_ergo_tree(&testnet_addr).unwrap(),
+            ergo_tx::address_to_ergo_tree(&mainnet_addr).unwrap()
+        );
+        assert!(testnet.owns_address(&testnet_addr).unwrap());
+        assert!(!testnet.owns_address(&mainnet_addr).unwrap());
     }
 
     #[test]

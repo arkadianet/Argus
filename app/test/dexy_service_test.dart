@@ -1,4 +1,3 @@
-import 'package:argus_wallet/services/app_fee.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:argus_wallet/services/dexy_service.dart';
@@ -60,7 +59,7 @@ void main() {
   _lpRateTests();
   // 1 display USE == 1000 raw units at 3 decimals.
   const oneUse = 1000;
-  const minerFeeReserveNano = 1100000 + argusFeeNano; // miner + Argus app fee
+  const minerFeeReserveNano = 1100000; // miner fee only; Argus charges no app fee
 
   group('quotesForState', () {
     test('FreeMint prices the oracle rate per display token, not per raw unit',

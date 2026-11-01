@@ -242,6 +242,20 @@ class _WalletSettingsPageState extends State<WalletSettingsPage> {
               style: Theme.of(context).textTheme.bodyMedium,
             ),
           ),
+          FutureBuilder<WalletInfo?>(
+            future: _info(),
+            builder: (context, snap) {
+              if (snap.data?.legacyDerivation != true) return const SizedBox.shrink();
+              return Padding(
+                padding: const EdgeInsets.fromLTRB(4, 12, 4, 0),
+                child: Text(
+                  legacyDerivationBackupNote,
+                  key: const ValueKey('legacy-derivation-note'),
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              );
+            },
+          ),
           const SizedBox(height: 24),
           SettingsGroup(
             title: 'Remove',

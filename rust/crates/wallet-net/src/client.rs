@@ -198,15 +198,28 @@ pub fn parse_parameters(value: &serde_json::Value) -> Result<Parameters, String>
 }
 
 /// Convert an Ergo base58 address to an ErgoTree hex string.
+///
+/// The tree is the same on both chains; only the base58 network prefix
+/// differs, so accept either and let the caller validate which one belongs to
+/// the active wallet.
 pub fn address_to_ergo_tree(address: &str) -> Result<String, String> {
-    let encoder = AddressEncoder::new(NetworkPrefix::Mainnet);
-    let addr = encoder.parse_address_from_str(address)
-        .map_err(|e| format!("Invalid address: {e}"))?;
-    let tree = addr.script()
-        .map_err(|e| format!("Address script error: {e}"))?;
-    let bytes = tree.sigma_serialize_bytes()
-        .map_err(|e| format!("Serialization error: {e}"))?;
-    Ok(base16::encode_lower(&bytes))
+    let mut last_error = String::from("Invalid address");
+    for prefix in [NetworkPrefix::Mainnet, NetworkPrefix::Testnet] {
+        let encoder = AddressEncoder::new(prefix);
+        match encoder.parse_address_from_str(address) {
+            Ok(addr) => {
+                let tree = addr
+                    .script()
+                    .map_err(|e| format!("Address script error: {e}"))?;
+                let bytes = tree
+                    .sigma_serialize_bytes()
+                    .map_err(|e| format!("Serialization error: {e}"))?;
+                return Ok(base16::encode_lower(&bytes));
+            }
+            Err(e) => last_error = format!("Invalid address: {e}"),
+        }
+    }
+    Err(last_error)
 }
 
 #[derive(Clone)]

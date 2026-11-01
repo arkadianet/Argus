@@ -199,7 +199,7 @@ enum AddWalletChoice {
       AddWalletChoice.restore => (
           icon: Icons.settings_backup_restore,
           title: 'Restore a wallet',
-          blurb: 'From its 12, 15 or 24-word recovery phrase.',
+          blurb: 'From its 12 to 24-word recovery phrase (15 is the Ergo standard).',
         ),
       AddWalletChoice.watchAddress => (
           icon: Icons.visibility_outlined,

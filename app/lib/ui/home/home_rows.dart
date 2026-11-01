@@ -136,11 +136,30 @@ class OverviewWalletRow extends StatelessWidget {
       ].join(', ')),
       leading: WalletMark(name: w.name, kind: w.kind),
       // Each wallet's name in the serif, as its own page's title is.
-      title: Text(
-        w.name,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: t.primary.copyWith(fontFamily: 'Newsreader', fontSize: 16.5, fontWeight: FontWeight.w500, height: 1.25),
+      title: Row(
+        children: [
+          Expanded(
+            child: Text(
+              w.name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: t.primary.copyWith(fontFamily: 'Newsreader', fontSize: 16.5, fontWeight: FontWeight.w500, height: 1.25),
+            ),
+          ),
+          if (w.network.isTestnet)
+            Container(
+              margin: const EdgeInsets.only(left: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade700,
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                'TESTNET',
+                style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800),
+              ),
+            ),
+        ],
       ),
       subtitle: facts.isEmpty ? null : TextSpan(children: facts),
       figure: TextSpan(

@@ -1,6 +1,5 @@
 import 'widgets/tx_result_view.dart';
 import 'widgets/error_sheet.dart';
-import '../services/app_fee.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -229,7 +228,6 @@ class _AgeUsdScreenState extends State<AgeUsdScreen> with TxReceiptOwner {
         else
           ConfirmTxRow('ERG back', formatErg(build.ergAmountNano)),
         ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
-        argusFeeRow(),
       ],
       detail: isMint
           ? 'Minted against the bank at the oracle rate.'

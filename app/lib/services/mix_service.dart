@@ -30,7 +30,12 @@ class MixRecord {
     this.acknowledged = false,
     this.tokensLeft,
     this.mixedBoxId,
+    this.stuck,
   });
+
+  /// Why the mix cannot move: its box left the pool without a move this
+  /// app recorded, and the chain did not say plainly where it went.
+  String? stuck;
 
   /// The box a withdrawal delivered to the destination, once seen: the
   /// mixed money, which coin selection keeps apart from the rest. Empty
@@ -131,6 +136,7 @@ class MixRecord {
         if (acknowledged) 'acknowledged': true,
         if (tokensLeft != null) 'tokens_left': tokensLeft,
         if (mixedBoxId != null) 'mixed_box_id': mixedBoxId,
+        if (stuck != null) 'stuck': stuck,
       };
 
   static MixRecord fromJson(Map<String, dynamic> m) => MixRecord(
@@ -145,6 +151,7 @@ class MixRecord {
         acknowledged: m['acknowledged'] == true,
         tokensLeft: (m['tokens_left'] as num?)?.toInt(),
         mixedBoxId: m['mixed_box_id'] as String?,
+        stuck: m['stuck'] as String?,
         lastCheckedAt: (m['last_checked_at'] as num?) == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch((m['last_checked_at'] as num).toInt()),
@@ -767,6 +774,37 @@ class MixService extends ChangeNotifier {
     }
   }
 
+  static int _updatedAt(MixRecord r) => (r.state['updated_at'] as num?)?.toInt() ?? 0;
+
+  /// Take what the background job recorded since this isolate last read.
+  /// A move it made must not be overwritten by the older copy here, or the
+  /// record keeps pointing at a box the chain has already spent.
+  Future<void> _mergeFromDisk() async {
+    final id = _walletId;
+    if (id == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    final stored = _decode(prefs.getString(_recordsKey(id)));
+    if (stored == null) return;
+    final mine = {for (final r in records) r.mixId: r};
+    final added = <MixRecord>[];
+    for (final s in stored) {
+      final m = mine[s.mixId];
+      if (m == null) {
+        added.add(s);
+      } else if (_updatedAt(s) > _updatedAt(m)) {
+        m
+          ..state = s.state
+          ..lastError = s.lastError
+          ..lastCheckedAt = s.lastCheckedAt
+          ..entryAttempt = s.entryAttempt
+          ..mixedBoxId = s.mixedBoxId
+          ..stuck = s.stuck;
+      }
+    }
+    if (added.isNotEmpty) records = [...added, ...records];
+  }
+
   Future<bool> _persist() async {
     final id = _walletId;
     if (id == null) return false;
@@ -1366,11 +1404,15 @@ class MixService extends ChangeNotifier {
     _ticking = true;
     final gen = _generation;
     try {
+      await _mergeFromDisk();
+      if (gen != _generation) return;
       final snap = await snapshot();
       if (gen != _generation) return;
       lastTickError = null;
+      final pool = _poolIds(snap);
+      final found = _foundOnce(snap);
       for (final r in active) {
-        await _step(r, snap);
+        await _step(r, snap, pool, found);
         if (gen != _generation) return;
       }
       final confirmed = <MixRecord>[];
@@ -1400,7 +1442,12 @@ class MixService extends ChangeNotifier {
   }
 
   /// Advance one mix by one move.
-  Future<void> _step(MixRecord r, MixSnapshot snap) async {
+  Future<void> _step(
+    MixRecord r,
+    MixSnapshot snap,
+    Set<String> pool,
+    Future<List<MixRecord>> Function() found,
+  ) async {
     final before = r.roundsDone;
     r.lastCheckedAt = _clock();
     try {
@@ -1421,8 +1468,14 @@ class MixService extends ChangeNotifier {
       final action = plan['action'] as String? ?? 'wait';
       if (action == 'wait') {
         r.lastError = null;
+        if (plan['reason'] != 'box_not_seen') {
+          r.stuck = null;
+        } else if (_shouldResolve(r.mixId)) {
+          r.stuck = await _resolveMissing(r, pool, found);
+        }
         return;
       }
+      r.stuck = null;
       if (action == 'withdraw' && r.destinationErgoTree.isEmpty) {
         // A recovered mix: the user must say where it goes.
         r.lastError = null;
@@ -1478,7 +1531,28 @@ class MixService extends ChangeNotifier {
     // Exclusive with the tick: both would try to spend the same box, and
     // whichever lost on the node must not be the state that survives.
     return _exclusive(() async {
+      await _mergeFromDisk();
+      if (!r.inPool || r.awaitingWithdrawal || r.boxId == null) {
+        throw StateError('This mix moved while you were away; check it again');
+      }
       final snap = await snapshot();
+      final pool = _poolIds(snap);
+      if (!pool.contains(r.boxId)) {
+        // Its box left the pool by a move this app never recorded, or the
+        // last move is still confirming. Find out before building anything.
+        final before = jsonEncode(r.state);
+        final note = await _resolveMissing(r, pool, _foundOnce(snap));
+        r.stuck = note;
+        if (jsonEncode(r.state) != before || note != null) {
+          await _persist();
+          if (r.finished) await _dropKey(r);
+          notifyListeners();
+        }
+        throw StateError(note ??
+            (jsonEncode(r.state) != before
+                ? 'This mix had moved on chain without the app knowing. It is up to date now; try again.'
+                : 'Its last move is still confirming. Try again in a few minutes.'));
+      }
       final raw =
           await _gw.leave(jsonEncode(r.state), snap.json, destinationAddress, _gw.nodeUrl, _now);
       final result = (jsonDecode(raw) as Map).cast<String, dynamic>();
@@ -1528,7 +1602,7 @@ class MixService extends ChangeNotifier {
       final walletId = entry.key;
       final records = _decode(prefs.getString(_recordsKey(walletId)));
       if (records == null) continue;
-      final baseline = {for (final r in records) r.mixId: jsonEncode(r.toJson())};
+      final baseline = {for (final r in records) r.mixId: jsonEncode(r.state)};
       final roundsBefore = {for (final r in records) r.mixId: r.roundsDone};
       final own = [
         for (final r in records)
@@ -1589,12 +1663,17 @@ class MixService extends ChangeNotifier {
         final merged = <MixRecord>[];
         for (final r in stored) {
           final update = touched[r.mixId];
-          if (update != null && jsonEncode(r.toJson()) == baseline[r.mixId]) {
-            accepted.add(update);
-            merged.add(update);
-          } else {
-            merged.add(r);
+          // Only a state the app changed meanwhile wins over this job's:
+          // a check time or an error written by the app must not discard
+          // a move this job has already broadcast.
+          if (update != null && jsonEncode(r.state) == baseline[r.mixId]) {
+            r
+              ..state = update.state
+              ..lastError = update.lastError
+              ..lastCheckedAt = update.lastCheckedAt;
+            accepted.add(r);
           }
+          merged.add(r);
         }
         final saved = await prefs.setString(_recordsKey(walletId), jsonEncode([for (final r in merged) r.toJson()]));
         if (saved) {
@@ -1613,34 +1692,192 @@ class MixService extends ChangeNotifier {
 
   // Recovery needs positive spend evidence. Absence from an unspent list
   // is insufficient, and a whole-chain historical scan is unaffordable.
-  Future<bool> _boxIsSpent(String id) async {
+  Future<bool> _boxIsSpent(String id) async => (await _boxStatus(id)).spentBy != null;
+
+  /// What the node or the explorer knows of one box: whether either has
+  /// it at all, and the transaction that spent it.
+  Future<({bool known, String? spentBy})> _boxStatus(String id) async {
     final node = _nodeBase;
+    var known = false;
     for (final url in [
       if (node != null) '$node/blockchain/box/byId/$id',
       '$_explorerBase/api/v1/boxes/$id',
     ]) {
       try {
         final box = _boxBody(await _get(Uri.parse(url)), id);
-        if ((box['spentTransactionId']?.toString() ?? '').isNotEmpty) return true;
+        known = true;
+        final spent = box['spentTransactionId']?.toString() ?? '';
+        if (spent.isNotEmpty) return (known: true, spentBy: spent);
       } catch (_) {
         // An unknown box or missing spend metadata cannot prove a spend.
       }
     }
-    return false;
+    return (known: known, spentBy: null);
   }
 
+  final _resolvedAt = <int, DateTime>{};
+
+  /// A missing box is chased at most every ten minutes per mix: each try
+  /// costs lookups and, at worst, a scan of the seed's mix keys.
+  bool _shouldResolve(int mixId) {
+    final now = _clock();
+    final last = _resolvedAt[mixId];
+    if (last != null && now.difference(last) < const Duration(minutes: 10)) return false;
+    _resolvedAt[mixId] = now;
+    return true;
+  }
+
+  /// Same grace as the engine's: a move unseen for this long is lost.
+  static const _lostMoveGraceSecs = 30 * 60;
+
+  /// Every box id in the pool lists of [snap].
+  static Set<String> _poolIds(MixSnapshot snap) {
+    final m = jsonDecode(snap.json) as Map;
+    return {
+      for (final key in const ['half_boxes', 'full_boxes'])
+        for (final b in (m[key] as List? ?? const []))
+          if (b is Map && b['boxId'] != null) b['boxId'] as String,
+    };
+  }
+
+  /// Point [have] at the chain's live box for it. Keep the destination and
+  /// target only we know.
+  void _adopt(MixRecord have, MixRecord f) {
+    have.state = {
+      ...f.state,
+      'destination_ergo_tree': have.destinationErgoTree,
+      'rounds_target': have.roundsTarget,
+      'level': have.state['level'] ?? f.state['level'],
+    };
+    have.entryAttempt = null;
+    have.mixedBoxId = null;
+    have.lastError = null;
+    have.stuck = null;
+  }
+
+  /// Every mix the seed has in the pool now, for [_resolveMissing]. Derives
+  /// thousands of secrets, so it runs at most once per call site.
+  Future<List<MixRecord>> Function() _foundOnce(MixSnapshot snap) {
+    Future<List<MixRecord>>? found;
+    return () => found ??= _gw.isUnlocked
+        ? _gw.recover(snap.json, _now).then((raw) => (jsonDecode(raw) as List)
+            .map((m) => MixRecord(state: (m as Map).cast<String, dynamic>()))
+            .toList())
+        : Future.value(const <MixRecord>[]);
+  }
+
+  /// A mix whose box left the pool by no move this app recorded: follow
+  /// the chain to where its money is and repair the record when the chain
+  /// says plainly. Returns why it is stuck when it does not; null when the
+  /// record is fine, repaired, or its last move may still be confirming.
+  Future<String?> _resolveMissing(
+    MixRecord r,
+    Set<String> pool,
+    Future<List<MixRecord>> Function() found,
+  ) async {
+    final id = r.boxId;
+    if (!r.inPool || r.awaitingWithdrawal || id == null || pool.contains(id)) return null;
+    // The engine rolls back to a box that is still there by itself.
+    final prev = r.previousBoxId;
+    if (prev != null && pool.contains(prev)) return null;
+    final events = r.events;
+    final lastAt = events.isEmpty ? 0 : (events.last['at'] as num?)?.toInt() ?? 0;
+    final settled = _now - lastAt >= _lostMoveGraceSecs;
+    final status = await _boxStatus(id);
+    final spentBy = status.spentBy;
+    if (spentBy == null && (status.known || !settled)) {
+      return status.known && settled
+          ? 'The node lists its box $id as unspent, but the pool list left it out. Try again shortly.'
+          : null;
+    }
+    MixRecord? live;
+    for (final f in await found()) {
+      if (f.mixId == r.mixId && f.boxId != null && pool.contains(f.boxId)) live = f;
+    }
+    if (live != null) {
+      _adopt(r, live);
+      return null;
+    }
+    if (spentBy != null) {
+      final dest = r.destinationErgoTree;
+      if (dest.isNotEmpty) {
+        try {
+          final mixed = mixedOutputId(await _txOutputs(_explorerBase, spentBy), dest);
+          if (mixed != null) {
+            _markWithdrawn(r, spentBy, mixed);
+            return null;
+          }
+        } catch (_) {
+          // Unreadable: say what is known instead.
+        }
+      }
+      return 'Its box $id was spent in transaction $spentBy, which this app did not '
+          'record, and no pool box from this seed holds the money now.';
+    }
+    if (prev == null && _onlyEntry(r)) {
+      _markEntryLost(r);
+      return null;
+    }
+    return 'Its box $id never reached the chain, and no pool box from this seed holds '
+        'the money now.';
+  }
+
+  /// The mix's only transaction is its entry.
+  static bool _onlyEntry(MixRecord r) {
+    final moves = r.events.where((e) => (e['tx_id']?.toString() ?? '').isNotEmpty).toList();
+    return moves.length == 1 && (moves.single['action']?.toString() ?? '').startsWith('entered');
+  }
+
+  /// The chain shows a withdrawal this app did not record: it is finished.
+  void _markWithdrawn(MixRecord r, String txId, String mixedBox) {
+    r.state = {
+      ...r.state,
+      'phase': {'kind': 'withdrawn', 'tx_id': txId},
+      'previous': null,
+      'updated_at': _now,
+      'events': [
+        ...r.events,
+        {'at': _now, 'action': 'withdrawn', 'round': r.state['round'] ?? 0, 'tx_id': txId},
+      ],
+    };
+    r.mixedBoxId = mixedBox;
+    r.lastError = null;
+    r.stuck = null;
+  }
+
+  /// The entry never reached the chain, so the money never left the
+  /// wallet: back to pending, which can be continued or removed.
+  void _markEntryLost(MixRecord r) {
+    r.state = {
+      ...r.state,
+      'phase': {'kind': 'pending'},
+      'previous': null,
+      'round': 0,
+      'rounds_done': 0,
+      'updated_at': _now,
+    };
+    r.entryTxId = null;
+    r.lastError = null;
+    r.stuck = null;
+  }
+
+  /// What the last [recover] could not repair, one line per mix.
+  List<String> lastRecoveryNotes = const [];
+
   /// Find mixes of this wallet the records do not know about, from the
-  /// seed and every unspent pool box. Returns how many were added.
+  /// seed and every unspent pool box, and repair known mixes whose box
+  /// left the pool by a move that was not recorded. Returns how many were
+  /// added or repaired; [lastRecoveryNotes] says what could not be.
   Future<int> recover() async {
     if (!_gw.isUnlocked || _walletId == null) return 0;
     return _exclusive(() async {
+      await _mergeFromDisk();
       final snap = await snapshot();
-      final found = (jsonDecode(await _gw.recover(snap.json, _now)) as List)
-          .map((m) => MixRecord(state: (m as Map).cast<String, dynamic>()))
-          .toList();
+      final foundOnce = _foundOnce(snap);
+      final found = await foundOnce();
       final known = {for (final r in records) r.mixId: r};
       final fresh = <MixRecord>[];
-      var reconciled = 0;
+      final repaired = <int>{};
       for (final f in found) {
         final have = known[f.mixId];
         if (have == null) {
@@ -1653,20 +1890,22 @@ class MixService extends ChangeNotifier {
             (have.inPool && have.boxId != null && f.boxId != null &&
                 f.boxId != have.boxId && f.round >= have.round && await _boxIsSpent(have.boxId!))) {
           // Recovery can repair a lost broadcast result or roll back a
-          // dropped move. Keep the destination and target only we know.
-          have.state = {
-            ...f.state,
-            'destination_ergo_tree': have.destinationErgoTree,
-            'rounds_target': have.roundsTarget,
-            'level': have.state['level'] ?? f.state['level'],
-          };
-          have.entryAttempt = null;
-          have.mixedBoxId = null;
-          have.lastError = null;
-          reconciled++;
+          // dropped move.
+          _adopt(have, f);
+          repaired.add(have.mixId);
         }
       }
-      if (fresh.isEmpty && reconciled == 0) return 0;
+      final pool = _poolIds(snap);
+      final notes = <String>[];
+      for (final r in records) {
+        if (repaired.contains(r.mixId)) continue;
+        final before = jsonEncode(r.state);
+        final note = await _resolveMissing(r, pool, foundOnce);
+        if (jsonEncode(r.state) != before) repaired.add(r.mixId);
+        r.stuck = note;
+        if (note != null) notes.add('Mix #${r.mixId}: $note');
+      }
+      lastRecoveryNotes = notes;
       records = [...fresh, ...records];
       // A recovered index is taken: nothing new may derive on it.
       final prefs = await SharedPreferences.getInstance();
@@ -1675,7 +1914,10 @@ class MixService extends ChangeNotifier {
       }
       await prefs.setInt(_nextIdKey(_walletId!), _nextId);
       await _persist();
-      return fresh.length + reconciled;
+      for (final r in records) {
+        if (r.finished) await _dropKey(r);
+      }
+      return fresh.length + repaired.length;
     });
   }
 }

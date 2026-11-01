@@ -125,7 +125,7 @@ class _MixScreenState extends State<MixScreen> with TxReceiptOwner {
                 rows: [
                   ConfirmTxRow('Mixing', record == null ? formatErg(prepared.amountNano) : mixAmountText(record), bold: true),
                   ConfirmTxRow('Rounds', 'about ${record?.roundsTarget ?? ''}'),
-                  ConfirmTxRow('Operator fee', formatErg(prepared.appFeeNano)),
+                  ConfirmTxRow('Operator fee', formatErg(prepared.operatorFeeNano)),
                   ConfirmTxRow('Miner fee', formatErg(prepared.minerFeeNano)),
                 ],
               ),
@@ -362,7 +362,26 @@ class _MixScreenState extends State<MixScreen> with TxReceiptOwner {
 
   Future<void> _recover() => _guard('Could not scan for mixes', () async {
         final n = await mixService.recover();
-        _snack(n == 0 ? 'No unknown mixes found' : 'Found $n ${n == 1 ? 'mix' : 'mixes'}');
+        final notes = mixService.lastRecoveryNotes;
+        if (notes.isEmpty) {
+          _snack(n == 0 ? 'Every mix matches the chain' : 'Found or repaired $n ${n == 1 ? 'mix' : 'mixes'}');
+          return;
+        }
+        if (!mounted) return;
+        await showDialog<void>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text(n == 0 ? 'Some mixes need a look' : 'Repaired $n; some need a look'),
+            content: SingleChildScrollView(child: SelectableText(notes.join('\n\n'))),
+            actions: [
+              TextButton(
+                onPressed: () => Clipboard.setData(ClipboardData(text: notes.join('\n\n'))),
+                child: const Text('Copy'),
+              ),
+              FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Close')),
+            ],
+          ),
+        );
       });
 
   Future<void> _remove(MixRecord r) async {
@@ -715,7 +734,10 @@ class _MixCard extends StatelessWidget {
             Text('Checked ${formatSyncAge(r.lastCheckedAt!)}',
                 style: TextStyle(color: muted, fontSize: 12)),
           ],
-          if (r.lastError != null) ...[
+          if (r.stuck != null) ...[
+            const SizedBox(height: 6),
+            _ErrorLine('Not moving', r.stuck!),
+          ] else if (r.lastError != null) ...[
             const SizedBox(height: 6),
             _ErrorLine('Last move failed', r.lastError!),
           ],

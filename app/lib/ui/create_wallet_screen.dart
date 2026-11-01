@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../bridge/argus_error.dart';
 import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
+import '../services/wallet_network.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'pin_fields.dart';
@@ -25,6 +26,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
   bool _busy = false;
   bool _revealed = false;
   int _step = 0;
+  WalletNetwork _network = WalletNetwork.mainnet;
 
   @override
   void initState() {
@@ -90,6 +92,7 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
         passphrase: '',
         pin: _pinCtrl.text,
         name: _nameCtrl.text,
+        network: _network,
       );
       if (!mounted) return null;
       await offerBiometricUnlock(context, walletId: walletId, pin: _pinCtrl.text);
@@ -166,6 +169,42 @@ class _CreateWalletScreenState extends State<CreateWalletScreen> {
         const Text(
           'Paper only. They are the only way to recover this wallet. Android blocks screenshots here; iOS hides the app in the switcher and during screen recording.',
         ),
+        const SizedBox(height: 20),
+        Text('Network', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        SegmentedButton<WalletNetwork>(
+          segments: const [
+            ButtonSegment(
+              value: WalletNetwork.mainnet,
+              label: Text('Mainnet'),
+              icon: Icon(Icons.public),
+            ),
+            ButtonSegment(
+              value: WalletNetwork.testnet,
+              label: Text('Testnet'),
+              icon: Icon(Icons.science_outlined),
+            ),
+          ],
+          selected: {_network},
+          onSelectionChanged: (selection) =>
+              setState(() => _network = selection.first),
+        ),
+        if (_network.isTestnet) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.errorContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              testnetWarning,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onErrorContainer,
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 20),
         if (_mnemonic == null)
           FilledButton(

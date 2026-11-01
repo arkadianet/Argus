@@ -1,3 +1,4 @@
+import 'package:argus_wallet/services/app_fee.dart';
 import 'package:argus_wallet/services/storage_rent.dart';
 import 'package:argus_wallet/services/utxo_plans.dart';
 import 'package:argus_wallet/services/utxo_tools_controller.dart';
@@ -68,7 +69,7 @@ void main() {
         expect(s.atRiskCount, 0);
         expect(s.leftAtAddress, 1);
         expect(s.totalNano, BigInt.from(9001000000));
-        expect(s.afterFeesNano, BigInt.from(9001000000 - 2200000));
+        expect(s.afterFeesNano, BigInt.from(9001000000 - minerFeeDefaultNano));
         expect(s.tokens, {'nft': BigInt.one});
       },
     );
@@ -267,10 +268,12 @@ void main() {
     });
 
     test('the merged value must fund every box the tokens need', () {
+      // Four 0.001 ERG boxes less the miner fee. Argus charges no app fee,
+      // so 2.9 mERG of the 4 mERG survives.
       final s = suggestCleanup(boxes: nfts, rent: atRisk)!;
-      expect(s.afterFeesNano, BigInt.from(1800000));
-      // The builder would raise the layout to 2 mERG of floors.
-      expect(cleanupIsViable(s, measured(2000000, covered: true)), isFalse);
+      expect(s.afterFeesNano, BigInt.from(2900000));
+      // The builder would raise the layout past what is left.
+      expect(cleanupIsViable(s, measured(3000000, covered: true)), isFalse);
     });
 
     test('a cleanup for box count alone may leave rent to the review', () {

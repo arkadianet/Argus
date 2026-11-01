@@ -41,9 +41,10 @@ Map<String, dynamic> opportunityJson({int net = 25000000, bool trusted = true}) 
       ],
       'input_nano': 46300000000,
       'output_nano': 46329400000,
-      'gross_profit_nano': net + 4400000,
+      'gross_profit_nano': net + 2200000,
       'miner_fees_nano': 2200000,
-      'app_fees_nano': 2200000,
+      // Argus charges no application fee, so no leg pays one.
+      'app_fees_nano': 0,
       'net_profit_nano': net,
       'profit_pct': 0.054,
       'box_min_in_transit_nano': 1000000,
@@ -125,7 +126,6 @@ class FakeApi extends ArbitrageApi {
         'input_amount': 4629000000,
         'output_amount': 46010000000,
         'miner_fee': 1100000,
-        'app_fee': 1100000,
         'price_impact_pct': 4.4,
       });
 }
@@ -140,7 +140,7 @@ void main() {
     expect(o.legs.first.fromTokenId, isNull);
     expect(o.legs.first.toTokenId, tok);
     expect(o.netProfitNano, 25000000);
-    expect(o.grossProfitNano - o.minerFeesNano - o.appFeesNano, o.netProfitNano, reason: 'every fee is accounted for');
+    expect(o.grossProfitNano - o.minerFeesNano, o.netProfitNano, reason: 'every fee is accounted for');
     expect(o.unwindLossNano, 280000000);
     expect(o.key, '${'a' * 64}>${'c' * 64}');
     expect(r.skippedBusy, 1);

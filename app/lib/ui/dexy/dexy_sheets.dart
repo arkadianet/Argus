@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
-import '../../services/app_fee.dart';
 
 import '../../format.dart';
 import '../../services/dexy_service.dart';
@@ -94,7 +93,7 @@ class DexyMintSheetState extends State<DexyMintSheet> {
   void _applyMax() {
     final spendable = widget.spendableNano;
     if (spendable == null || _effectiveRate <= 0) return;
-    final maxNano = spendable - minerFeeNano - argusFeeNano - minBoxNano;
+    final maxNano = spendable - minerFeeNano - minBoxNano;
     if (maxNano > 0) {
       _ergCtrl.text = formatErg(maxNano, unit: false, maxFrac: 4);
       _onErgChanged();
@@ -896,15 +895,14 @@ String? mintRoundingNote({
 }
 
 /// Cost breakdown for the mint preview: token cost, box minimum when the
-/// preview reserves one, miner fee, Argus fee, and the total you spend.
+/// preview reserves one, the miner fee, and the total you spend.
 List<(String, String)> mintCostRows(DexyMintPreview p, {required String shortName}) {
   final boxMin = p.totalCostNano - p.ergCostNano - p.txFeeNano;
   return [
     ('$shortName cost', formatErg(p.ergCostNano)),
     if (boxMin > 0) ('Token box minimum', formatErg(boxMin, unit: false)),
     ('Miner fee', formatErg(p.txFeeNano, unit: false)),
-    ('Argus fee', formatErg(argusFeeNano, unit: false)),
-    ('Total', formatErg(p.totalCostNano + argusFeeNano)),
+    ('Total', formatErg(p.totalCostNano)),
   ];
 }
 

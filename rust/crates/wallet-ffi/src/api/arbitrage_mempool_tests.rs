@@ -162,7 +162,7 @@ async fn the_stranded_token_is_gathered_the_ordinary_way() {
         // free box and left the token at the wallet's address.
         let leg_tx = tx_id(4);
         let pool_out = boxed(
-            &address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap(),
+            &address_to_ergo_tree(crate::api::LEGACY_ARGUS_FEE_ADDRESS).unwrap(),
             &leg_tx,
             0,
             ERG,
@@ -209,7 +209,7 @@ async fn the_stranded_token_is_gathered_the_ordinary_way() {
         // Sold elsewhere meanwhile: a pending transaction paying someone
         // else spends the stranded box.
         let buyer = boxed(
-            &address_to_ergo_tree(crate::api::ARGUS_FEE_ADDRESS).unwrap(),
+            &address_to_ergo_tree(crate::api::LEGACY_ARGUS_FEE_ADDRESS).unwrap(),
             &tx_id(5),
             0,
             2_000_000,

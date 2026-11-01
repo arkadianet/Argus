@@ -1,6 +1,5 @@
 import 'widgets/tx_result_view.dart';
 import 'widgets/error_sheet.dart';
-import '../services/app_fee.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -489,7 +488,6 @@ class _SwapScreenState extends State<SwapScreen> with TxReceiptOwner {
             bold: quote.priceImpactPct > priceImpactWarnPct,
           ),
           ConfirmTxRow('Miner fee', formatErg(build.minerFee)),
-          argusFeeRow(),
           ConfirmTxRow('ERG cost including fees', formatErg(build.totalErgCost)),
         ],
         detail: [

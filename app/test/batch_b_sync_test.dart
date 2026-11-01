@@ -22,6 +22,7 @@ class SessionApi extends RustLibApi {
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
     String? wrapKey,
+    required String network,
   }) async => BigInt.from(++handles);
   @override
   Future<void> crateApiWalletLock({required BigInt handleId}) =>

@@ -26,7 +26,7 @@ void main() {
     expect(note, contains('0.0025 ERG stays'));
   });
 
-  test('cost rows list token cost, box minimum, both fees and a total that includes the Argus fee', () {
+  test('cost rows list token cost, box minimum, the miner fee and the total spent', () {
     final p = DexyMintPreview(
       ergCostNano: 541909519,
       txFeeNano: 1100000,
@@ -36,9 +36,10 @@ void main() {
       canExecute: true,
     );
     final rows = mintCostRows(p, shortName: 'DexyGold');
-    expect(rows.map((r) => r.$1), ['DexyGold cost', 'Token box minimum', 'Miner fee', 'Argus fee', 'Total']);
-    expect(rows.last.$2, '0.545109519 ERG');
-    expect(rows[3].$2, '0.0011');
+    // No app fee row: Argus charges none, so the total is the preview's.
+    expect(rows.map((r) => r.$1), ['DexyGold cost', 'Token box minimum', 'Miner fee', 'Total']);
+    expect(rows.last.$2, '0.544009519 ERG');
+    expect(rows[2].$2, '0.0011');
   });
 }
 

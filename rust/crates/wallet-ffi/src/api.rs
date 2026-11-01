@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use citadel_core::constants::{MIN_BOX_VALUE_NANO, TX_FEE_NANO};
+use citadel_core::Network;
 use ergo_lib::chain::transaction::reduced::ReducedTransaction;
 use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
@@ -11,6 +12,7 @@ use ergo_tx::{build_send_tx_with_fee, DevFeeConfig};
 use ergopay_core::reduce_transaction_with_context;
 use once_cell::sync::Lazy;
 use rand::{rngs::SysRng, TryRng};
+use wallet_core::derivation::DerivationMode;
 use wallet_core::seed::MnemonicPhrase;
 use wallet_core::spend::{select_exact, select_preferring_one_pocket};
 use wallet_core::wallet::WalletHandle;
@@ -27,31 +29,46 @@ pub mod pricing;
 /// Circular arbitrage across Spectrum pools, on the chained-legs design.
 pub mod arbitrage;
 
-/// Argus app fee: paid on every transaction the wallet builds (sends, UTXO
-/// tools, swaps, mints). ErgoPay transactions are built by the dApp and are
-/// not touched. Disclosed on every confirm sheet and in Settings → About.
-pub const ARGUS_FEE_ADDRESS: &str = "9iArkadiaZAPVxbUp2XQ8SVA1zGA29rCPhbpVuUaaKW6fWspUZA";
-pub const ARGUS_FEE_NANO: i64 = 1_100_000;
+/// Where the Argus app fee used to be paid, and how much.
+///
+/// Argus charges no fee now (see [`init_app`]), so nothing creates an output
+/// matching this pair. They are kept solely to recognise the fee output in
+/// transactions this wallet broadcast before the fee was dropped, so history
+/// still labels those payments instead of showing them as ordinary sends.
+pub const LEGACY_ARGUS_FEE_ADDRESS: &str =
+    "9iArkadiaZAPVxbUp2XQ8SVA1zGA29rCPhbpVuUaaKW6fWspUZA";
+pub const LEGACY_ARGUS_FEE_NANO: i64 = 1_100_000;
 
-/// Runs at bridge start (`frb(init)`) and is also called explicitly from
-/// Dart right after `RustLib.init`, so the fee config is installed before
-/// any builder resolves it. The attribute used to sit above the constants
-/// and never applied, which left the vendored default in force.
+/// Argus charges no application fee. It used to pay a flat fee on every
+/// transaction the wallet built, which was wrong twice over: a transaction
+/// that touches a stealth address or the mixer should not carry an output
+/// identifying the wallet that built it, and on the mixer paths the fee
+/// cannot exist at all because the deployed contracts pin `OUTPUTS.size`.
+///
+/// The fee is therefore disabled process-wide rather than suppressed at each
+/// privacy-sensitive call site. Every builder already resolves
+/// [`ergo_tx::resolved_dev_fee_config`] before it appends a fee output, so
+/// one disabled config installed here removes the output from sends, UTXO
+/// tools, mints, burns, swaps, multi-sends and the stealth sweep alike.
+/// The `resolved_…` call sites stay: they are the guard that keeps a fee
+/// from creeping back in if the vendored default is ever re-enabled.
 #[flutter_rust_bridge::frb(init)]
 pub fn init_app() {
-    // Never the inherited Citadel fee; the Argus fee is installed instead.
+    // Belt and braces: never the inherited Citadel fee either, whatever the
+    // vendored loader would otherwise fall back to.
     std::env::set_var("CITADEL_DEV_FEE_ENABLED", "false");
-    if let Ok(tree) = address_to_ergo_tree(ARGUS_FEE_ADDRESS) {
-        ergo_tx::install_dev_fee_config(DevFeeConfig::custom(tree, ARGUS_FEE_NANO));
-    }
+    ergo_tx::install_dev_fee_config(DevFeeConfig::disabled());
 }
 
 /// The app fee as the UI should display it.
+///
+/// Kept so the Dart mirror cannot drift into showing a fee that is not
+/// charged: it reports the disabled config the builders actually see.
 #[flutter_rust_bridge::frb(sync)]
 pub fn app_fee_info() -> String {
     let cfg = ergo_tx::resolved_dev_fee_config();
     serde_json::json!({
-        "address": ARGUS_FEE_ADDRESS,
+        "address": "",
         "amount_nano": cfg.budget(),
         "enabled": cfg.enabled,
     })
@@ -60,6 +77,19 @@ pub fn app_fee_info() -> String {
 
 fn err_str<E: Into<ArgusError>>(e: E) -> String {
     e.into().to_json_string()
+}
+
+/// Parse the wire name of a chain. Kept strict so a typo cannot silently
+/// produce a mainnet address for a testnet wallet.
+fn parse_network(network: &str) -> Result<Network, String> {
+    match network {
+        "mainnet" => Ok(Network::Mainnet),
+        "testnet" => Ok(Network::Testnet),
+        other => Err(ArgusError::Generic(format!(
+            "unknown network {other:?}; expected mainnet or testnet"
+        ))
+        .to_json_string()),
+    }
 }
 
 fn recover<T>(r: std::sync::LockResult<T>) -> T {
@@ -290,41 +320,158 @@ fn session_json(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
-fn open_wallet(mnemonic_phrase: String, passphrase: &str) -> Result<(u64, String, String), String> {
+fn open_wallet(
+    network: Network,
+    mnemonic_phrase: String,
+    passphrase: &str,
+    mode: DerivationMode,
+) -> Result<(u64, String, String), String> {
+    use zeroize::Zeroize;
     let phrase = MnemonicPhrase::parse(mnemonic_phrase).map_err(err_str)?;
-    let encrypted =
-        wallet_core::EncryptedSeed::encrypt(&phrase.to_seed(passphrase).map_err(err_str)?)
-            .map_err(err_str)?;
+    let mut seed = phrase.to_seed(passphrase).map_err(err_str)?;
+    let encrypted = wallet_core::EncryptedSeed::encrypt_with_mode(&seed, mode);
+    seed.zeroize();
+    let encrypted = encrypted.map_err(err_str)?;
     let json = serde_json::to_string(&encrypted.to_json().map_err(err_str)?)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
     let wrap_key = encrypted.wrap_key_hex();
-    let handle = WalletHandle::create(phrase, passphrase).map_err(err_str)?;
+    let handle = WalletHandle::create_on_with_mode(network, phrase, passphrase, mode).map_err(err_str)?;
     Ok((register_handle(handle), json, wrap_key))
 }
 
-/// Create a wallet from a BIP-39 mnemonic. Returns `{handle_id, encrypted_seed_json, wrap_key}`.
+/// Create a wallet from a BIP-39 mnemonic on `network` (`mainnet` or
+/// `testnet`). Returns `{handle_id, encrypted_seed_json, wrap_key}`.
+///
+/// `use_pre1627_derivation` restores a phrase made by an Ergo wallet with
+/// the pre-1627 BIP-32 bug (see `wallet_core::derivation::DerivationMode`).
+/// The mode is sealed into `encrypted_seed_json`, so every later unlock
+/// derives the same keys without being told again.
 #[flutter_rust_bridge::frb]
-pub fn wallet_create(mnemonic_phrase: String, passphrase: String) -> Result<String, String> {
-    let (id, json, wrap_key) = open_wallet(mnemonic_phrase, &passphrase)?;
+pub fn wallet_create(
+    mnemonic_phrase: String,
+    passphrase: String,
+    network: String,
+    use_pre1627_derivation: bool,
+) -> Result<String, String> {
+    let network = parse_network(&network)?;
+    let (id, json, wrap_key) = open_wallet(
+        network,
+        mnemonic_phrase,
+        &passphrase,
+        DerivationMode::from_pre1627_flag(use_pre1627_derivation),
+    )?;
     session_json(id, json, wrap_key)
 }
 
-/// Restore from a Keystore blob plus the separately stored wrap key.
-/// v1 blobs that still embed `k` accept a null wrap key.
+/// `"standard"` or `"pre1627"`: the key derivation of an open wallet.
+#[flutter_rust_bridge::frb]
+pub fn wallet_derivation_mode(handle_id: u64) -> Result<String, String> {
+    with_handle(handle_id, "wallet_derivation_mode", |h| {
+        h.derivation_mode().map(|m| m.as_str().to_owned()).map_err(err_str)
+    })
+}
+
+/// Live check of a recovery phrase as it is typed: the normalised words,
+/// the list they come from, each word not in it (1-based position, with
+/// suggestions), and whether count and checksum hold. Sync: it is pure
+/// and fast, and the restore screen calls it on every edit.
+///
+/// The phrase is never logged; the result lives only in the caller.
+#[flutter_rust_bridge::frb(sync)]
+pub fn check_mnemonic(mnemonic_phrase: String) -> String {
+    use zeroize::Zeroize;
+    let mut raw = mnemonic_phrase;
+    let check = wallet_core::bip39::check_phrase(&raw);
+    raw.zeroize();
+    serde_json::to_string(&check).unwrap_or_else(|_| "{}".into())
+}
+
+/// How many addresses per derivation the restore probe asks about.
+const RESTORE_PROBE_ADDRESSES: u32 = 5;
+
+/// Which key derivation should a phrase being restored use?
+///
+/// Derives the first addresses under standard and pre-1627 derivation.
+/// For the ~127 in 128 phrases where they are the same, answers at once,
+/// with no network call. Otherwise, when `query_node`, asks the node
+/// whether each set has any transactions — the node learns only addresses
+/// that are the user's own either way — and recommends legacy only when
+/// legacy alone has history. Returns
+/// `{affected, standard_used, legacy_used, recommended, standard_address, legacy_address}`.
+#[flutter_rust_bridge::frb]
+pub async fn probe_restore_derivation(
+    mnemonic_phrase: String,
+    passphrase: String,
+    node_url: Option<String>,
+    query_node: bool,
+) -> Result<String, String> {
+    use wallet_core::derivation::{choose_restore_mode, first_addresses};
+    use zeroize::Zeroize;
+    let phrase = MnemonicPhrase::parse(mnemonic_phrase).map_err(err_str)?;
+    let mut passphrase = passphrase;
+    let mut seed = phrase.to_seed(&passphrase).map_err(err_str)?;
+    passphrase.zeroize();
+    drop(phrase);
+    let standard = first_addresses(&seed, DerivationMode::Standard, RESTORE_PROBE_ADDRESSES);
+    let legacy = first_addresses(&seed, DerivationMode::Pre1627, RESTORE_PROBE_ADDRESSES);
+    seed.zeroize();
+    let (standard, legacy) = (standard.map_err(err_str)?, legacy.map_err(err_str)?);
+    let affected = standard != legacy;
+    let mut out = serde_json::json!({
+        "affected": affected,
+        "standard_used": serde_json::Value::Null,
+        "legacy_used": serde_json::Value::Null,
+        "recommended": DerivationMode::Standard.as_str(),
+        "standard_address": standard[0],
+        "legacy_address": legacy[0],
+    });
+    if affected && query_node {
+        let client = node_client(node_url).await?;
+        let any_used = |addresses: Vec<String>| {
+            let client = client.clone();
+            async move {
+                let checks = addresses
+                    .iter()
+                    .map(|a| client.address_has_transactions(a))
+                    .collect::<Vec<_>>();
+                let mut used = false;
+                for r in futures::future::join_all(checks).await {
+                    used |= r.map_err(|e| ArgusError::NodeError(e).to_json_string())?;
+                }
+                Ok::<bool, String>(used)
+            }
+        };
+        let (standard_used, legacy_used) =
+            futures::future::join(any_used(standard), any_used(legacy)).await;
+        let (standard_used, legacy_used) = (standard_used?, legacy_used?);
+        out["standard_used"] = standard_used.into();
+        out["legacy_used"] = legacy_used.into();
+        out["recommended"] = choose_restore_mode(standard_used, legacy_used).as_str().into();
+    }
+    serde_json::to_string(&out)
+        .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
+}
+
+/// Restore from a Keystore blob plus the separately stored wrap key, on
+/// `network` (`mainnet` or `testnet`). v1 blobs that still embed `k` accept a
+/// null wrap key.
 #[flutter_rust_bridge::frb]
 pub fn wallet_restore(
     encrypted_seed_json: String,
     wrap_key: Option<String>,
+    network: String,
 ) -> Result<u64, String> {
+    let network = parse_network(&network)?;
     let json: serde_json::Value = serde_json::from_str(&encrypted_seed_json)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
     let encrypted =
         wallet_core::EncryptedSeed::from_json(&json, wrap_key.as_deref()).map_err(err_str)?;
     let mut seed_bytes = encrypted.decrypt().map_err(err_str)?;
-    let handle = WalletHandle::restore_from_seed(&seed_bytes).map_err(err_str)?;
+    let handle =
+        WalletHandle::restore_from_seed_on_with_mode(network, &seed_bytes, encrypted.derivation());
     use zeroize::Zeroize;
     seed_bytes.zeroize();
-    Ok(register_handle(handle))
+    Ok(register_handle(handle.map_err(err_str)?))
 }
 
 #[flutter_rust_bridge::frb]
@@ -354,12 +501,17 @@ pub fn derive_address(handle_id: u64, index: u32) -> Result<String, String> {
 pub fn create_encrypted_seed(
     mnemonic_phrase: String,
     passphrase: String,
+    use_pre1627_derivation: bool,
 ) -> Result<String, String> {
     let phrase = MnemonicPhrase::parse(mnemonic_phrase).map_err(err_str)?;
     let mut seed = phrase.to_seed(&passphrase).map_err(err_str)?;
-    let encrypted = wallet_core::EncryptedSeed::encrypt(&seed).map_err(err_str)?;
+    let encrypted = wallet_core::EncryptedSeed::encrypt_with_mode(
+        &seed,
+        DerivationMode::from_pre1627_flag(use_pre1627_derivation),
+    );
     use zeroize::Zeroize;
     seed.zeroize();
+    let encrypted = encrypted.map_err(err_str)?;
     let json = encrypted.to_json().map_err(err_str)?;
     serde_json::to_string(&serde_json::json!({
         "encrypted_seed_json": json,
@@ -4862,8 +5014,62 @@ pub async fn amm_build_swap(
 mod tests {
     use super::*;
 
+    /// A non-zero fee the tests below switch on deliberately. Argus itself
+    /// charges none, but input selection has to fund whatever the resolved
+    /// config says: these tests would go stale if the budget helpers learned
+    /// to assume zero instead of reading the config.
+    const TEST_FEE_NANO: i64 = 1_100_000;
+
     mod concurrent_gather;
     mod selected_lookup;
+
+    /// The reason the fee is gone, as a test rather than a comment: a send
+    /// built after `init_app` must carry no output identifying this wallet.
+    ///
+    /// The mixer's funding transaction is an ordinary send, so it goes
+    /// through this same builder. The entry, remix and withdraw transactions
+    /// never reach it — their contracts pin `OUTPUTS.size` and an extra
+    /// output fails validation — but the funding box was the one mixer
+    /// transaction that did carry the fee.
+    #[test]
+    fn an_ordinary_send_after_init_pays_no_application_fee() {
+        crate::api::init_app();
+
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
+        let inputs = vec![ergo_tx::Eip12InputBox {
+            box_id: "box".into(),
+            transaction_id: "tx".into(),
+            index: 0,
+            value: "1000000000".into(),
+            ergo_tree: tree.clone(),
+            assets: vec![],
+            creation_height: 1,
+            additional_registers: Default::default(),
+            extension: Default::default(),
+        }];
+        let built = build_send_tx_with_fee(
+            &inputs,
+            &tree,
+            &tree,
+            500_000_000,
+            None,
+            1_000,
+            &ergo_tx::resolved_dev_fee_config(),
+        )
+        .unwrap();
+
+        assert_eq!(built.summary.citadel_fee_nano, 0);
+        // Recipient, change, miner fee. Nothing to the fee address.
+        assert_eq!(built.unsigned_tx.outputs.len(), 3);
+        assert!(!crate::api_amm_impl::pays_citadel_dev_fee(
+            &built
+                .unsigned_tx
+                .outputs
+                .iter()
+                .map(|o| o.ergo_tree.clone())
+                .collect::<Vec<_>>()
+        ));
+    }
 
     // Documents the mechanism and pins the arithmetic: with the old budget a
     // MAX send selects one box short and the builder returns the exact error
@@ -4873,9 +5079,9 @@ mod tests {
     // and this test stayed green.
     #[test]
     fn single_send_max_selects_enough_for_the_reported_shortfall() {
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         ergo_tx::dev_fee::with_test_dev_fee(
-            DevFeeConfig::custom(tree.clone(), ARGUS_FEE_NANO),
+            DevFeeConfig::custom(tree.clone(), TEST_FEE_NANO),
             || {
                 let make_box = |id: &str, value: i64| ergo_tx::Eip12InputBox {
                     box_id: id.into(),
@@ -4890,7 +5096,7 @@ mod tests {
                 };
                 let inputs = vec![make_box("large", 996_727_888), make_box("small", 1_072_065)];
                 let balance = 997_799_953;
-                let amount = balance - TX_FEE_NANO - ARGUS_FEE_NANO - MIN_BOX_VALUE_NANO;
+                let amount = balance - TX_FEE_NANO - TEST_FEE_NANO - MIN_BOX_VALUE_NANO;
                 let old_required = (amount + TX_FEE_NANO + MIN_BOX_VALUE_NANO) as u64;
                 let (old, _) = select_preferring_one_pocket(&inputs, &[], old_required, None).unwrap();
                 let fee = ergo_tx::resolved_dev_fee_config();
@@ -4899,7 +5105,7 @@ mod tests {
                     Err(ergo_tx::send::SendError::InsufficientErg { have: 996_727_888, need: 996_799_953 })
                 ));
                 for miner in [TX_FEE_NANO, TX_FEE_NANO + 500_000] {
-                    let amount = balance - miner - ARGUS_FEE_NANO - MIN_BOX_VALUE_NANO;
+                    let amount = balance - miner - TEST_FEE_NANO - MIN_BOX_VALUE_NANO;
                     let required = multi_send_required_erg(amount, miner, false).unwrap();
                     assert_eq!(required, balance as u64);
                     // Public, stealth-only and combined-pocket selection all
@@ -4918,9 +5124,9 @@ mod tests {
 
     #[test]
     fn multi_send_exact_selection_budget_covers_the_argus_fee() {
-        let tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS).unwrap();
+        let tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS).unwrap();
         ergo_tx::dev_fee::with_test_dev_fee(
-            DevFeeConfig::custom(tree.clone(), ARGUS_FEE_NANO),
+            DevFeeConfig::custom(tree.clone(), TEST_FEE_NANO),
             || {
                 let amount = 2_000_000_000;
                 let required = multi_send_required_erg(amount, TX_FEE_NANO, false).unwrap();
@@ -4938,7 +5144,7 @@ mod tests {
                 // Selection visits the last box first. The old budget stops
                 // there, leaving the builder short of the app fee.
                 let inputs = vec![
-                    make_box("app-fee", ARGUS_FEE_NANO),
+                    make_box("app-fee", TEST_FEE_NANO),
                     make_box("send", amount + TX_FEE_NANO + MIN_BOX_VALUE_NANO),
                 ];
                 let selected = select_for_multi_send(&inputs, required, &HashMap::new()).unwrap();
@@ -4951,7 +5157,7 @@ mod tests {
                 let built = ergo_tx::build_multi_send_tx_with_fee(
                     &selected, &recipients, &tree, TX_FEE_NANO, 100,
                 ).unwrap();
-                assert_eq!(built.summary.citadel_fee_nano, ARGUS_FEE_NANO);
+                assert_eq!(built.summary.citadel_fee_nano, TEST_FEE_NANO);
                 assert_eq!(built.summary.change_erg, MIN_BOX_VALUE_NANO);
                 assert!(select_for_multi_send(&inputs[1..], required, &HashMap::new()).is_err());
                 assert_eq!(
@@ -5216,7 +5422,7 @@ mod tests {
     #[test]
     fn dapp_prepare_sign_refuses_empty_and_foreign_transactions() {
         let session: serde_json::Value =
-            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into()).unwrap()).unwrap();
+            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into(), "mainnet".into(), false).unwrap()).unwrap();
         let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
         let own_tree = address_to_ergo_tree(&derive_address(handle_id, 0).unwrap()).unwrap();
         let foreign_tree = "0008cd03a11d3028b9bc57b6ac724485e99960b89c278db6bab5d2b961b01aee29405a02";
@@ -5270,7 +5476,7 @@ mod tests {
     #[test]
     fn create_restore_lock() {
         let session: serde_json::Value =
-            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into()).unwrap()).unwrap();
+            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into(), "mainnet".into(), false).unwrap()).unwrap();
         let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
         assert!(wallet_is_unlocked(handle_id).unwrap());
         let addr = derive_address(handle_id, 0).unwrap();
@@ -5285,7 +5491,7 @@ mod tests {
         wallet_lock(handle_id).unwrap();
         assert!(wallet_is_unlocked(handle_id).is_err());
 
-        let restored = wallet_restore(blob, Some(wrap_key)).unwrap();
+        let restored = wallet_restore(blob, Some(wrap_key), "mainnet".into()).unwrap();
         assert_eq!(
             derive_address(restored, 0).unwrap(),
             "9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8"
@@ -5293,8 +5499,134 @@ mod tests {
     }
 
     #[test]
+    fn testnet_wallet_create_and_restore_keep_the_prefix() {
+        let session: serde_json::Value = serde_json::from_str(
+            &wallet_create(APPKIT.to_string(), "".into(), "testnet".into(), false).unwrap(),
+        )
+        .unwrap();
+        let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
+        let addr = derive_address(handle_id, 0).unwrap();
+        assert!(addr.starts_with('3'), "got {addr}");
+
+        let blob = session["encrypted_seed_json"].as_str().unwrap().to_string();
+        let wrap_key = session["wrap_key"].as_str().unwrap().to_string();
+        let restored = wallet_restore(blob, Some(wrap_key), "testnet".into()).unwrap();
+        assert_eq!(derive_address(restored, 0).unwrap(), addr);
+    }
+
+    #[test]
     fn rejects_bad_mnemonic() {
-        assert!(wallet_create("not a real mnemonic phrase at all".into(), "".into()).is_err());
+        assert!(wallet_create("not a real mnemonic phrase at all".into(), "".into(), "mainnet".into(), false).is_err());
+    }
+
+    const RACE: &str = "race relax argue hair sorry riot there spirit ready fetch food hedgehog hybrid mobile pretty";
+
+    /// A wallet restored with pre-1627 derivation keeps it through lock and
+    /// unlock: the mode rides in the sealed blob, not in the caller.
+    #[test]
+    fn pre1627_mode_survives_lock_and_restore() {
+        let session: serde_json::Value =
+            serde_json::from_str(&wallet_create(RACE.into(), "".into(), "mainnet".into(), true).unwrap()).unwrap();
+        let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
+        let legacy0 = "9ewv8sxJ1jfr6j3WUSbGPMTVx3TZgcJKdnjKCbJWhiJp5U62uhP";
+        assert_eq!(derive_address(handle_id, 0).unwrap(), legacy0);
+        assert_eq!(wallet_derivation_mode(handle_id).unwrap(), "pre1627");
+
+        let blob = session["encrypted_seed_json"].as_str().unwrap().to_string();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&blob).unwrap()["d"], "pre1627");
+        let wrap_key = session["wrap_key"].as_str().unwrap().to_string();
+        wallet_lock(handle_id).unwrap();
+        let restored = wallet_restore(blob, Some(wrap_key), "mainnet".into()).unwrap();
+        assert_eq!(derive_address(restored, 0).unwrap(), legacy0);
+        assert_eq!(wallet_derivation_mode(restored).unwrap(), "pre1627");
+
+        let standard: serde_json::Value =
+            serde_json::from_str(&wallet_create(RACE.into(), "".into(), "mainnet".into(), false).unwrap()).unwrap();
+        let standard_id: u64 = standard["handle_id"].as_str().unwrap().parse().unwrap();
+        assert_eq!(
+            derive_address(standard_id, 0).unwrap(),
+            "9eYMpbGgBf42bCcnB2nG3wQdqPzpCCw5eB1YaWUUen9uCaW3wwm"
+        );
+        assert_eq!(wallet_derivation_mode(standard_id).unwrap(), "standard");
+        assert!(serde_json::from_str::<serde_json::Value>(
+            standard["encrypted_seed_json"].as_str().unwrap()
+        )
+        .unwrap()
+        .get("d")
+        .is_none());
+    }
+
+    /// Network and derivation mode are independent: a legacy testnet
+    /// wallet derives the legacy key under the testnet prefix, and keeps
+    /// both through lock and restore.
+    #[test]
+    fn pre1627_mode_and_testnet_combine() {
+        let id_of = |s: &serde_json::Value| -> u64 { s["handle_id"].as_str().unwrap().parse().unwrap() };
+        let session: serde_json::Value =
+            serde_json::from_str(&wallet_create(RACE.into(), "".into(), "testnet".into(), true).unwrap()).unwrap();
+        let legacy = derive_address(id_of(&session), 0).unwrap();
+        let standard: serde_json::Value =
+            serde_json::from_str(&wallet_create(RACE.into(), "".into(), "testnet".into(), false).unwrap()).unwrap();
+        assert!(legacy.starts_with('3'), "testnet prefix: {legacy}");
+        assert_ne!(legacy, derive_address(id_of(&standard), 0).unwrap());
+        let mainnet_legacy = "9ewv8sxJ1jfr6j3WUSbGPMTVx3TZgcJKdnjKCbJWhiJp5U62uhP";
+        let tree = |a: &str| address_to_ergo_tree(a).unwrap();
+        assert_eq!(tree(&legacy), tree(mainnet_legacy), "same key, other prefix");
+
+        let blob = session["encrypted_seed_json"].as_str().unwrap().to_string();
+        let wrap_key = session["wrap_key"].as_str().unwrap().to_string();
+        let restored = wallet_restore(blob, Some(wrap_key), "testnet".into()).unwrap();
+        assert_eq!(derive_address(restored, 0).unwrap(), legacy);
+    }
+
+    /// An unaffected phrase is answered without a node: the probe must not
+    /// reach for the network at all (no node is configured here).
+    #[test]
+    fn restore_probe_skips_the_node_for_unaffected_phrases() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let out: serde_json::Value = serde_json::from_str(
+            &rt.block_on(probe_restore_derivation(
+                APPKIT.into(),
+                "".into(),
+                Some("http://127.0.0.1:9".into()),
+                true,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(out["affected"], false);
+        assert_eq!(out["recommended"], "standard");
+        assert!(out["legacy_used"].is_null());
+
+        let affected: serde_json::Value = serde_json::from_str(
+            &rt.block_on(probe_restore_derivation(RACE.into(), "".into(), None, false))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(affected["affected"], true);
+        assert_eq!(affected["legacy_address"], "9ewv8sxJ1jfr6j3WUSbGPMTVx3TZgcJKdnjKCbJWhiJp5U62uhP");
+        assert_eq!(affected["standard_address"], "9eYMpbGgBf42bCcnB2nG3wQdqPzpCCw5eB1YaWUUen9uCaW3wwm");
+        // Not asked to query: no verdict on history, standard by default.
+        assert!(affected["standard_used"].is_null());
+        assert_eq!(affected["recommended"], "standard");
+
+        assert!(rt
+            .block_on(probe_restore_derivation("slow silly".into(), "".into(), None, false))
+            .is_err());
+    }
+
+    #[test]
+    fn check_mnemonic_reports_positions_and_checksum() {
+        let out: serde_json::Value = serde_json::from_str(&check_mnemonic(
+            "1. slow 2. silly 3. start 4. wash 5. bundel 6. suffer 7. bulb 8. ancient 9. height 10. spin 11. express 12. remind 13. today 14. effort 15. helmet".into(),
+        ))
+        .unwrap();
+        assert_eq!(out["count_ok"], true);
+        assert_eq!(out["checksum_ok"], false);
+        assert_eq!(out["language"], "english");
+        assert_eq!(out["unknown"][0]["position"], 5);
+        assert_eq!(out["unknown"][0]["suggestions"][0], "bundle");
+        assert_eq!(out["words"].as_array().unwrap().len(), 15);
     }
 
     #[test]
@@ -6747,7 +7079,13 @@ pub async fn sigmafi_prepare_spend(
             .to_json_string());
         }
     }
-    let ui_fee_tree = address_to_ergo_tree(ARGUS_FEE_ADDRESS)
+    // Filling someone else's SigmaFi order pays a 0.4% interface fee, named by
+    // context variable 0 of the fill. This is a lending-protocol fee inside the
+    // repayment the borrower agreed to, not the app fee `init_app` switches off:
+    // the amount comes out of the order's own registers, so no filler can drop
+    // it, only choose where it goes. It is the one place a payment still reaches
+    // the Argus address.
+    let ui_fee_tree = address_to_ergo_tree(LEGACY_ARGUS_FEE_ADDRESS)
         .map_err(|e| ArgusError::InvalidAddress(e).to_json_string())?;
     let mut spend_from: Vec<String> = if spend_addresses.is_empty() {
         vec![user_address.clone()]
@@ -7031,7 +7369,6 @@ pub async fn stake_recovery_prepare_direct(
     let rows = serde_json::json!([
         {"label": "You receive", "value": amount},
         {"label": "Stake key", "value": "Returns to your wallet (not burned)"},
-        {"label": "Argus fee", "value": "0.0011 ERG (flat)"},
         {"label": "Miner fee", "value": format!("{:.9} ERG", miner_fee as f64 / 1_000_000_000.0)},
         {"label": "Payout and key return", "value": "At least 0.001 ERG in each output; remains yours"}
     ]);
@@ -7054,7 +7391,7 @@ pub async fn stake_recovery_prepare_direct(
         recipient_erg: stake_recovery::direct::MIN_VALUE,
         node_url,
     });
-    Ok(serde_json::json!({"preparation_id": preparation_id, "unsigned_tx": unsigned_json, "rows": rows, "input_boxes": input_boxes, "miner_fee": miner_fee, "app_fee": ARGUS_FEE_NANO}).to_string())
+    Ok(serde_json::json!({"preparation_id": preparation_id, "unsigned_tx": unsigned_json, "rows": rows, "input_boxes": input_boxes, "miner_fee": miner_fee, "app_fee": 0}).to_string())
 }
 
 async fn revalidate_stake_recovery(
@@ -7181,14 +7518,12 @@ pub async fn stake_recovery_prepare_proxy(
         serde_json::json!([
             {"label":"Stake key", "value":"Returns to the recipient wallet"},
             {"label":"Refund ERG (nanoERG)","value":unsigned_tx.outputs[0].value},
-            {"label":"Miner fee","value":"0.001 ERG"},
-            {"label":"Argus fee","value":"None — contract-pinned refund"}
+            {"label":"Miner fee","value":"0.001 ERG"}
         ])
     } else {
         serde_json::json!([
             {"label":"Stake key","value":"Burned on successful unstake; refundable beforehand"},
             {"label":"Proxy funding (nanoERG)","value":unsigned_tx.outputs[0].value},
-            {"label":"Argus fee","value":"0.0011 ERG (flat)"},
             {"label":"Creation miner fee","value":"0.0011 ERG"},
             {"label":"Refund","value":"Returns key and proxy ERG minus 0.001 ERG, without pool state"}
         ])
@@ -7208,7 +7543,7 @@ pub async fn stake_recovery_prepare_proxy(
     revalidate_paideia(&prep, &client, &context).await?;
     let input_boxes = input_boxes_json(&prep.unsigned_tx.inputs);
     let preparation_id = store_preparation(prep);
-    Ok(serde_json::json!({"preparation_id":preparation_id,"unsigned_tx":unsigned_json,"input_boxes":input_boxes,"rows":rows,"creation_tx_id":tx_id,"expected_proxy":expected_proxy,"recipient":user_address,"app_fee":if refund {0} else {ARGUS_FEE_NANO},"miner_fee":miner_fee}).to_string())
+    Ok(serde_json::json!({"preparation_id":preparation_id,"unsigned_tx":unsigned_json,"input_boxes":input_boxes,"rows":rows,"creation_tx_id":tx_id,"expected_proxy":expected_proxy,"recipient":user_address,"app_fee":0,"miner_fee":miner_fee}).to_string())
 }
 
 async fn revalidate_paideia(
@@ -7386,7 +7721,7 @@ mod paideia_tracking_tests {
         assert_eq!(record["recipient"], address);
         assert_eq!(record["recipient_tree"], trees[0]);
         assert_eq!(record["network"], "mainnet");
-        assert!(stake_recovery_proxy_record(id, signed_json, ARGUS_FEE_ADDRESS.into()).is_err());
+        assert!(stake_recovery_proxy_record(id, signed_json, LEGACY_ARGUS_FEE_ADDRESS.into()).is_err());
         wallet_lock(id).unwrap();
     }
 }

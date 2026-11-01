@@ -8,14 +8,15 @@ import 'package:uuid/uuid.dart';
 
 import '../bridge/argus_error.dart';
 import '../bridge/frb_generated.dart';
-import 'app_fee.dart';
 import 'network_controller.dart';
 import 'privacy_service.dart';
 import 'token_catalog.dart';
 import 'token_decimals.dart';
 import 'token_descriptor_store.dart';
+import 'mnemonic_check.dart';
 import 'token_evidence.dart';
 export 'token_evidence.dart';
+export 'mnemonic_check.dart';
 import 'verified_tokens.dart' show knownToken;
 import 'mix_service.dart';
 import 'spend_policy.dart';
@@ -25,6 +26,7 @@ import 'stealth_service.dart';
 import 'wallet_sync_controller.dart';
 import 'secure_storage.dart';
 import 'wallet_database_service.dart';
+import 'wallet_network.dart';
 
 /// Metadata for a stored wallet.
 /// [wallets] in the order of [order] (wallet ids); any not listed keep
@@ -46,10 +48,18 @@ class WalletInfo {
   final String? address0;
   final int? pinnedAddressIndex;
 
+  /// The chain this wallet belongs to. Wallets stored before networks were
+  /// recorded are mainnet, which is what they were.
+  final WalletNetwork network;
+
   /// The pinned address itself, stored when pinning so a locked wallet can
   /// still show and query its primary address.
   final String? pinnedAddress;
   final bool isUnlocked;
+
+  /// Restored with the pre-1627 key derivation. Display only: the sealed
+  /// seed carries the mode the keys are actually derived with.
+  final bool legacyDerivation;
 
   WalletInfo({
     required this.walletId,
@@ -57,8 +67,10 @@ class WalletInfo {
     required this.createdAt,
     this.address0,
     this.pinnedAddressIndex,
+    this.network = WalletNetwork.mainnet,
     this.pinnedAddress,
     this.isUnlocked = false,
+    this.legacyDerivation = false,
   });
 
   /// Address to show for this wallet when it is not the active one.
@@ -71,8 +83,10 @@ class WalletInfo {
         createdAt: createdAt,
         address0: address0,
         pinnedAddressIndex: pinnedAddressIndex,
+        network: network,
         pinnedAddress: pinnedAddress,
         isUnlocked: isUnlocked ?? this.isUnlocked,
+        legacyDerivation: legacyDerivation,
       );
 
   Map<String, dynamic> toJson() => {
@@ -81,7 +95,9 @@ class WalletInfo {
         'createdAt': createdAt.toIso8601String(),
         'address0': address0,
         'pinnedAddressIndex': pinnedAddressIndex,
+        'network': network.wireName,
         'pinnedAddress': pinnedAddress,
+        if (legacyDerivation) 'derivation': 'pre1627',
       };
 
   factory WalletInfo.fromJson(Map<String, dynamic> json) => WalletInfo(
@@ -91,7 +107,9 @@ class WalletInfo {
             DateTime.now(),
         address0: json['address0'] as String?,
         pinnedAddressIndex: json['pinnedAddressIndex'] as int?,
+        network: WalletNetwork.fromWireName(json['network']),
         pinnedAddress: json['pinnedAddress'] as String?,
+        legacyDerivation: json['derivation'] == 'pre1627',
       );
 }
 
@@ -338,7 +356,6 @@ class SendPreview {
   final String? changeAddress;
   final int amountNanoErg;
   final int minerFee;
-  final int appFeeNano;
   final int changeNanoErg;
   final int inputCount;
   final String? tokenId;
@@ -357,7 +374,6 @@ class SendPreview {
     required this.recipient,
     required this.amountNanoErg,
     required this.minerFee,
-    this.appFeeNano = 0,
     required this.changeNanoErg,
     required this.inputCount,
     this.changeAddress,
@@ -389,7 +405,6 @@ class SendPreview {
       changeAddress: json['change_address'] as String?,
       amountNanoErg: _requireInt(json, 'amount_nano_erg'),
       minerFee: _requireInt(json, 'miner_fee'),
-      appFeeNano: (json['citadel_fee_nano'] as num?)?.toInt() ?? 0,
       changeNanoErg: _requireInt(json, 'change_nano_erg'),
       inputCount: _requireInt(json, 'input_count'),
       tokenId: json['token_id'] as String?,
@@ -722,11 +737,20 @@ String? validatePin(String pin) {
   return null;
 }
 
+/// Invisible format characters a paste can carry: soft hyphen, zero-width
+/// space/joiners, direction marks, word joiner, BOM.
+final _invisible = RegExp('[\u00AD\u180E\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF]');
+
+/// Anything that is not part of a word: spaces of every kind (NBSP,
+/// ideographic, …), digits, punctuation. Mirrors `bip39::normalize_words`
+/// in Rust, which stays the authority (it also applies NFKD).
+final _nonWord = RegExp(r'[^\p{L}\p{M}]+', unicode: true);
+
 List<String> mnemonicWords(String raw) {
   return raw
-      .trim()
+      .replaceAll(_invisible, '')
       .toLowerCase()
-      .split(RegExp(r'\s+'))
+      .split(_nonWord)
       .where((w) => w.isNotEmpty)
       .toList();
 }
@@ -1593,6 +1617,11 @@ class WalletService with WidgetsBindingObserver {
   /// The wallet ID of the currently active wallet.
   String? get activeWalletId => _currentWalletId;
 
+  Future<WalletNetwork> walletNetwork(String? walletId) async {
+    if (walletId == null) return WalletNetwork.mainnet;
+    return (await _loadWalletMeta(walletId)).network;
+  }
+
   Future<String> generateMnemonic({int strength = 256}) async {
     return RustLib.instance.api.crateApiGenerateMnemonic(strength: strength);
   }
@@ -1605,6 +1634,8 @@ class WalletService with WidgetsBindingObserver {
     required String passphrase,
     required String pin,
     String? name,
+    bool legacyDerivation = false,
+    WalletNetwork network = WalletNetwork.mainnet,
   }) async {
     final walletId = const Uuid().v4();
     final chosen = name?.trim();
@@ -1613,6 +1644,8 @@ class WalletService with WidgetsBindingObserver {
       phrase,
       passphrase: passphrase,
       walletId: walletId,
+      legacyDerivation: legacyDerivation,
+      network: network,
     );
     try {
       final pinWrap = await wrapKeyWithPin(session.wrapKey, pin);
@@ -1626,7 +1659,9 @@ class WalletService with WidgetsBindingObserver {
         walletId,
         name: walletName,
         createdAt: DateTime.now().toUtc(),
+        network: network,
         address0: address0,
+        legacyDerivation: legacyDerivation,
       );
     } catch (_) {
       await lock(walletId);
@@ -1640,10 +1675,15 @@ class WalletService with WidgetsBindingObserver {
     String mnemonic, {
     String passphrase = '',
     String? walletId,
+    bool legacyDerivation = false,
+    WalletNetwork network = WalletNetwork.mainnet,
   }) async {
+    await networkController.useNetwork(network);
     final raw = await RustLib.instance.api.crateApiWalletCreate(
       mnemonicPhrase: mnemonic,
       passphrase: passphrase,
+      usePre1627Derivation: legacyDerivation,
+      network: network.wireName,
     );
     final map = jsonDecode(raw) as Map<String, dynamic>;
     final id = walletId ?? const Uuid().v4();
@@ -1658,6 +1698,31 @@ class WalletService with WidgetsBindingObserver {
     // incoming wallet's first sync, which may never come.
     await _loadActivatedTable();
     return session;
+  }
+
+  /// Live BIP-39 check of a phrase being typed (sync, in Rust).
+  PhraseCheck checkMnemonic(String raw) {
+    if (raw.trim().isEmpty) return PhraseCheck.empty;
+    final json = RustLib.instance.api.crateApiCheckMnemonic(mnemonicPhrase: raw);
+    return PhraseCheck.fromJson(jsonDecode(json) as Map<String, dynamic>);
+  }
+
+  /// Which key derivation a phrase being restored should use. Asks the
+  /// node only when the two derivations differ for this phrase, and only
+  /// when [queryNode].
+  Future<RestoreDerivationProbe> probeRestoreDerivation({
+    required String phrase,
+    required String passphrase,
+    String? nodeUrl,
+    bool queryNode = true,
+  }) async {
+    final json = await RustLib.instance.api.crateApiProbeRestoreDerivation(
+      mnemonicPhrase: phrase,
+      passphrase: passphrase,
+      nodeUrl: nodeUrl,
+      queryNode: queryNode,
+    );
+    return RestoreDerivationProbe.fromJson(jsonDecode(json) as Map<String, dynamic>);
   }
 
   Future<String> wrapKeyWithPin(String wrapKey, String pin) {
@@ -1680,10 +1745,17 @@ class WalletService with WidgetsBindingObserver {
     String encryptedSeedJson, {
     String? wrapKey,
     String? walletId,
+    WalletNetwork? network,
   }) async {
+    final resolved = network ??
+        (walletId == null
+            ? WalletNetwork.mainnet
+            : (await _loadWalletMeta(walletId)).network);
+    await networkController.useNetwork(resolved);
     final raw = await RustLib.instance.api.crateApiWalletRestore(
       encryptedSeedJson: encryptedSeedJson,
       wrapKey: wrapKey,
+      network: resolved.wireName,
     );
     final id = walletId ?? const Uuid().v4();
     _setHandle(id, raw);
@@ -1763,7 +1835,12 @@ class WalletService with WidgetsBindingObserver {
       final meta = all[id];
       final info = meta != null
           ? WalletInfo.fromJson(meta)
-          : WalletInfo(walletId: id, name: 'Wallet', createdAt: DateTime.now());
+          : WalletInfo(
+              walletId: id,
+              name: 'Wallet',
+              createdAt: DateTime.now(),
+              network: WalletNetwork.mainnet,
+            );
       infos.add(info.copyWith(isUnlocked: _handles.containsKey(id)));
     }
     return orderWallets(infos, await walletOrder());
@@ -1804,15 +1881,19 @@ class WalletService with WidgetsBindingObserver {
     String walletId, {
     required String name,
     required DateTime createdAt,
+    WalletNetwork? network,
     String? address0,
     int? pinnedAddressIndex,
+    bool? legacyDerivation,
   }) async {
     await _upsertWalletMeta(
       walletId,
       name: name,
       createdAt: createdAt,
+      network: network,
       address0: address0,
       pinnedAddressIndex: pinnedAddressIndex,
+      legacyDerivation: legacyDerivation,
     );
   }
 
@@ -3241,7 +3322,7 @@ class WalletService with WidgetsBindingObserver {
     _requireUnlocked();
     if (addresses.isEmpty) return [];
 
-    final reserve = BigInt.from(minerFeeNano + argusFeeNano + minBoxNano);
+    final reserve = BigInt.from(minerFeeNano + minBoxNano);
     final txIds = <String>[];
 
     while (true) {
@@ -3398,6 +3479,7 @@ class WalletService with WidgetsBindingObserver {
       walletId: walletId,
       name: 'Wallet',
       createdAt: DateTime.now(),
+      network: WalletNetwork.mainnet,
     );
   }
 
@@ -3417,9 +3499,11 @@ class WalletService with WidgetsBindingObserver {
     String walletId, {
     required String name,
     required DateTime createdAt,
+    WalletNetwork? network,
     String? address0,
     int? pinnedAddressIndex,
     String? pinnedAddress,
+    bool? legacyDerivation,
   }) => _withMetaWrite(() async {
     final prior = await _loadAllWalletMeta();
     final next = Map<String, dynamic>.from(prior);
@@ -3430,9 +3514,16 @@ class WalletService with WidgetsBindingObserver {
       'createdAt': createdAt.toIso8601String(),
       'address0': address0,
       'pinnedAddressIndex': pinnedAddressIndex,
+      // A rename or pin preserves the chain; a new wallet states it.
+      'network': (network ??
+              WalletNetwork.fromWireName(existing is Map ? existing['network'] : null))
+          .wireName,
       // Keep a stored pinned address unless this write sets or clears it.
       'pinnedAddress': pinnedAddress ??
           ((pinnedAddressIndex ?? 0) > 0 && existing is Map ? existing['pinnedAddress'] : null),
+      // Kept across renames and pins; only provisioning sets it.
+      if (legacyDerivation ?? (existing is Map && existing['derivation'] == 'pre1627'))
+        'derivation': 'pre1627',
     };
     await _persistMetaCache(next);
   });
