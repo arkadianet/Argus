@@ -6,7 +6,7 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `add_change_shortfall`, `apply_custom_fee`, `apply_mixed_rule`, `babel_json`, `balance_from_inputs`, `broadcast_mix_move_with`, `broadcast_mix_move`, `build_funded_multi_send`, `build_preferring_one_pocket`, `clear_node_clients`, `covers`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent_all`, `gather_unspent_ordered`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_leave_destination`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `mixed_rule`, `multi_send_required_erg`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_recipient_tokens`, `pending_from_inputs`, `pool_setup_params`, `prepare_management`, `prepare`, `protocol_selection_error`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `revalidate_paideia`, `revalidate_stake_recovery`, `select_for_multi_send`, `selected_ergo_boxes`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `wallet_delta_nano_erg`, `with_handle`, `without_reserved`
+// These functions are ignored because they are not marked as `pub`: `add_change_shortfall`, `apply_custom_fee`, `apply_mixed_rule`, `babel_json`, `balance_from_inputs`, `broadcast_mix_move_with`, `broadcast_mix_move`, `build_funded_multi_send`, `build_preferring_one_pocket`, `clear_node_clients`, `covers`, `drop_preparations_for`, `ensure_token`, `err_str`, `filter_selected_inputs`, `find_babel`, `gather_unspent_all`, `gather_unspent_ordered`, `gather_unspent`, `gather_wallet_boxes`, `input_boxes_json`, `liquidity_context`, `mix_leave_destination`, `mix_miner_fee`, `mix_move_result`, `mix_now`, `mixed_rule`, `multi_send_required_erg`, `node_client`, `open_wallet`, `ordered_user_boxes`, `parse_network`, `parse_recipient_tokens`, `pending_from_inputs`, `pool_setup_params`, `prepare_management`, `prepare`, `protocol_selection_error`, `recover`, `register_handle`, `resolve_dexy_destinations`, `resolve_send_token`, `resolve_spend_addresses`, `revalidate_paideia`, `revalidate_stake_recovery`, `select_for_multi_send`, `selected_ergo_boxes`, `session_json`, `sign_prepared_tx`, `store_pool_tx`, `store_preparation`, `take_preparation`, `tokens_json`, `user_change_erg`, `wallet_can_spend_change`, `wallet_delta_nano_erg`, `with_handle`, `without_reserved`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `BabelPick`, `CachedPreparation`, `FundingReservation`, `ManagementBuild`, `PaideiaPreflight`, `ParsedRecipient`, `PreparedManagement`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `assert_fields_are_eq`, `clone`, `eq`, `fmt`
 
@@ -23,23 +23,29 @@ Future<void> setNetwork({
 
 Future<String> probeNetwork() => RustLib.instance.api.crateApiProbeNetwork();
 
-/// Create a wallet from a BIP-39 mnemonic. Returns `{handle_id, encrypted_seed_json, wrap_key}`.
+/// Create a wallet from a BIP-39 mnemonic on `network` (`mainnet` or
+/// `testnet`). Returns `{handle_id, encrypted_seed_json, wrap_key}`.
 Future<String> walletCreate({
   required String mnemonicPhrase,
   required String passphrase,
+  required String network,
 }) => RustLib.instance.api.crateApiWalletCreate(
   mnemonicPhrase: mnemonicPhrase,
   passphrase: passphrase,
+  network: network,
 );
 
-/// Restore from a Keystore blob plus the separately stored wrap key.
-/// v1 blobs that still embed `k` accept a null wrap key.
+/// Restore from a Keystore blob plus the separately stored wrap key, on
+/// `network` (`mainnet` or `testnet`). v1 blobs that still embed `k` accept a
+/// null wrap key.
 Future<BigInt> walletRestore({
   required String encryptedSeedJson,
   String? wrapKey,
+  required String network,
 }) => RustLib.instance.api.crateApiWalletRestore(
   encryptedSeedJson: encryptedSeedJson,
   wrapKey: wrapKey,
+  network: network,
 );
 
 Future<void> walletLock({required BigInt handleId}) =>

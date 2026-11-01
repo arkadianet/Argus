@@ -67,7 +67,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.dragUntilVisible(
         find.textContaining('Back to https://cruxfinance.io'),
-        find.ancestor(of: find.text('SigmaFi'), matching: find.byType(Scrollable)).first,
+        find.byType(Scrollable).first,
         const Offset(0, -120));
     await tester.pumpAndSettle();
     await tester.tap(find.textContaining('Back to https://cruxfinance.io'));

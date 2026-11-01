@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 use citadel_core::constants::{MIN_BOX_VALUE_NANO, TX_FEE_NANO};
+use citadel_core::Network;
 use ergo_lib::chain::transaction::reduced::ReducedTransaction;
 use ergo_lib::ergotree_ir::chain::ergo_box::ErgoBox;
 use ergo_lib::ergotree_ir::serialization::SigmaSerializable;
@@ -60,6 +61,19 @@ pub fn app_fee_info() -> String {
 
 fn err_str<E: Into<ArgusError>>(e: E) -> String {
     e.into().to_json_string()
+}
+
+/// Parse the wire name of a chain. Kept strict so a typo cannot silently
+/// produce a mainnet address for a testnet wallet.
+fn parse_network(network: &str) -> Result<Network, String> {
+    match network {
+        "mainnet" => Ok(Network::Mainnet),
+        "testnet" => Ok(Network::Testnet),
+        other => Err(ArgusError::Generic(format!(
+            "unknown network {other:?}; expected mainnet or testnet"
+        ))
+        .to_json_string()),
+    }
 }
 
 fn recover<T>(r: std::sync::LockResult<T>) -> T {
@@ -290,7 +304,11 @@ fn session_json(
     .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())
 }
 
-fn open_wallet(mnemonic_phrase: String, passphrase: &str) -> Result<(u64, String, String), String> {
+fn open_wallet(
+    network: Network,
+    mnemonic_phrase: String,
+    passphrase: &str,
+) -> Result<(u64, String, String), String> {
     let phrase = MnemonicPhrase::parse(mnemonic_phrase).map_err(err_str)?;
     let encrypted =
         wallet_core::EncryptedSeed::encrypt(&phrase.to_seed(passphrase).map_err(err_str)?)
@@ -298,30 +316,39 @@ fn open_wallet(mnemonic_phrase: String, passphrase: &str) -> Result<(u64, String
     let json = serde_json::to_string(&encrypted.to_json().map_err(err_str)?)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
     let wrap_key = encrypted.wrap_key_hex();
-    let handle = WalletHandle::create(phrase, passphrase).map_err(err_str)?;
+    let handle = WalletHandle::create_on(network, phrase, passphrase).map_err(err_str)?;
     Ok((register_handle(handle), json, wrap_key))
 }
 
-/// Create a wallet from a BIP-39 mnemonic. Returns `{handle_id, encrypted_seed_json, wrap_key}`.
+/// Create a wallet from a BIP-39 mnemonic on `network` (`mainnet` or
+/// `testnet`). Returns `{handle_id, encrypted_seed_json, wrap_key}`.
 #[flutter_rust_bridge::frb]
-pub fn wallet_create(mnemonic_phrase: String, passphrase: String) -> Result<String, String> {
-    let (id, json, wrap_key) = open_wallet(mnemonic_phrase, &passphrase)?;
+pub fn wallet_create(
+    mnemonic_phrase: String,
+    passphrase: String,
+    network: String,
+) -> Result<String, String> {
+    let network = parse_network(&network)?;
+    let (id, json, wrap_key) = open_wallet(network, mnemonic_phrase, &passphrase)?;
     session_json(id, json, wrap_key)
 }
 
-/// Restore from a Keystore blob plus the separately stored wrap key.
-/// v1 blobs that still embed `k` accept a null wrap key.
+/// Restore from a Keystore blob plus the separately stored wrap key, on
+/// `network` (`mainnet` or `testnet`). v1 blobs that still embed `k` accept a
+/// null wrap key.
 #[flutter_rust_bridge::frb]
 pub fn wallet_restore(
     encrypted_seed_json: String,
     wrap_key: Option<String>,
+    network: String,
 ) -> Result<u64, String> {
+    let network = parse_network(&network)?;
     let json: serde_json::Value = serde_json::from_str(&encrypted_seed_json)
         .map_err(|e| ArgusError::SerializationError(e.to_string()).to_json_string())?;
     let encrypted =
         wallet_core::EncryptedSeed::from_json(&json, wrap_key.as_deref()).map_err(err_str)?;
     let mut seed_bytes = encrypted.decrypt().map_err(err_str)?;
-    let handle = WalletHandle::restore_from_seed(&seed_bytes).map_err(err_str)?;
+    let handle = WalletHandle::restore_from_seed_on(network, &seed_bytes).map_err(err_str)?;
     use zeroize::Zeroize;
     seed_bytes.zeroize();
     Ok(register_handle(handle))
@@ -5216,7 +5243,7 @@ mod tests {
     #[test]
     fn dapp_prepare_sign_refuses_empty_and_foreign_transactions() {
         let session: serde_json::Value =
-            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into()).unwrap()).unwrap();
+            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into(), "mainnet".into()).unwrap()).unwrap();
         let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
         let own_tree = address_to_ergo_tree(&derive_address(handle_id, 0).unwrap()).unwrap();
         let foreign_tree = "0008cd03a11d3028b9bc57b6ac724485e99960b89c278db6bab5d2b961b01aee29405a02";
@@ -5270,7 +5297,7 @@ mod tests {
     #[test]
     fn create_restore_lock() {
         let session: serde_json::Value =
-            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into()).unwrap()).unwrap();
+            serde_json::from_str(&wallet_create(APPKIT.to_string(), "".into(), "mainnet".into()).unwrap()).unwrap();
         let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
         assert!(wallet_is_unlocked(handle_id).unwrap());
         let addr = derive_address(handle_id, 0).unwrap();
@@ -5285,7 +5312,7 @@ mod tests {
         wallet_lock(handle_id).unwrap();
         assert!(wallet_is_unlocked(handle_id).is_err());
 
-        let restored = wallet_restore(blob, Some(wrap_key)).unwrap();
+        let restored = wallet_restore(blob, Some(wrap_key), "mainnet".into()).unwrap();
         assert_eq!(
             derive_address(restored, 0).unwrap(),
             "9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8"
@@ -5293,8 +5320,29 @@ mod tests {
     }
 
     #[test]
+    fn testnet_wallet_create_and_restore_keep_the_prefix() {
+        let session: serde_json::Value = serde_json::from_str(
+            &wallet_create(APPKIT.to_string(), "".into(), "testnet".into()).unwrap(),
+        )
+        .unwrap();
+        let handle_id: u64 = session["handle_id"].as_str().unwrap().parse().unwrap();
+        let addr = derive_address(handle_id, 0).unwrap();
+        assert!(addr.starts_with('3'), "got {addr}");
+
+        let blob = session["encrypted_seed_json"].as_str().unwrap().to_string();
+        let wrap_key = session["wrap_key"].as_str().unwrap().to_string();
+        let restored = wallet_restore(blob, Some(wrap_key), "testnet".into()).unwrap();
+        assert_eq!(derive_address(restored, 0).unwrap(), addr);
+    }
+
+    #[test]
     fn rejects_bad_mnemonic() {
-        assert!(wallet_create("not a real mnemonic phrase at all".into(), "".into()).is_err());
+        assert!(wallet_create(
+            "not a real mnemonic phrase at all".into(),
+            "".into(),
+            "mainnet".into()
+        )
+        .is_err());
     }
 
     #[test]

@@ -53,6 +53,8 @@ const knownDapps = [
   DappEntry('Duckpools', 'https://www.duckpools.io', 'Lending pools'),
   DappEntry('Rosen Bridge', 'https://app.rosen.tech', 'Bridge to other chains'),
   DappEntry('Mew Finance', 'https://mewfinance.com', 'Mew Finance dApps'),
+  DappEntry('Kadia DEX', 'https://dex.kadia.io', 'Decentralized exchange'),
+  DappEntry('Kadia DEX (Testnet)', 'https://dex.kadia.io/?network=testnet', 'Decentralized exchange on testnet'),
 ];
 
 /// A desktop browser's identity. Several Ergo dApps hide the Nautilus

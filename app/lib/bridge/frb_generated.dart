@@ -956,6 +956,7 @@ abstract class RustLibApi extends BaseApi {
   Future<String> crateApiWalletCreate({
     required String mnemonicPhrase,
     required String passphrase,
+    required String network,
   });
 
   Future<bool> crateApiWalletIsUnlocked({required BigInt handleId});
@@ -970,6 +971,7 @@ abstract class RustLibApi extends BaseApi {
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
     String? wrapKey,
+    required String network,
   });
 
   Future<String> crateApiWrapKeyWithPin({
@@ -6719,6 +6721,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<String> crateApiWalletCreate({
     required String mnemonicPhrase,
     required String passphrase,
+    required String network,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -6726,6 +6729,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(mnemonicPhrase, serializer);
           sse_encode_String(passphrase, serializer);
+          sse_encode_String(network, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -6738,7 +6742,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiWalletCreateConstMeta,
-        argValues: [mnemonicPhrase, passphrase],
+        argValues: [mnemonicPhrase, passphrase, network],
         apiImpl: this,
       ),
     );
@@ -6746,7 +6750,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiWalletCreateConstMeta => const TaskConstMeta(
     debugName: "wallet_create",
-    argNames: ["mnemonicPhrase", "passphrase"],
+    argNames: ["mnemonicPhrase", "passphrase", "network"],
   );
 
   @override
@@ -6845,6 +6849,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
     String? wrapKey,
+    required String network,
   }) {
     return handler.executeNormal(
       NormalTask(
@@ -6852,6 +6857,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           final serializer = SseSerializer(generalizedFrbRustBinding);
           sse_encode_String(encryptedSeedJson, serializer);
           sse_encode_opt_String(wrapKey, serializer);
+          sse_encode_String(network, serializer);
           pdeCallFfi(
             generalizedFrbRustBinding,
             serializer,
@@ -6864,7 +6870,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           decodeErrorData: sse_decode_String,
         ),
         constMeta: kCrateApiWalletRestoreConstMeta,
-        argValues: [encryptedSeedJson, wrapKey],
+        argValues: [encryptedSeedJson, wrapKey, network],
         apiImpl: this,
       ),
     );
@@ -6872,7 +6878,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   TaskConstMeta get kCrateApiWalletRestoreConstMeta => const TaskConstMeta(
     debugName: "wallet_restore",
-    argNames: ["encryptedSeedJson", "wrapKey"],
+    argNames: ["encryptedSeedJson", "wrapKey", "network"],
   );
 
   @override

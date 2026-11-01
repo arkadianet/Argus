@@ -10,6 +10,7 @@ import '../../services/pending_balance.dart';
 import '../../services/portfolio.dart';
 import '../../services/public_wallet_sync.dart';
 import '../../services/wallet_database_service.dart';
+import '../../services/wallet_network.dart';
 import '../../services/wallet_service.dart';
 import '../../services/wallet_sync_controller.dart';
 import '../../services/watch_account_service.dart';
@@ -81,6 +82,7 @@ class OverviewEntry {
     this.elsewhere,
     this.unavailable,
     this.pending,
+    this.network = WalletNetwork.mainnet,
   });
 
   final WalletRef ref;
@@ -122,6 +124,7 @@ class OverviewEntry {
   /// no read since pending summaries, or one that could not value the
   /// mempool.
   final PendingBalance? pending;
+  final WalletNetwork network;
 
   bool get watched => ref.watched;
 }
@@ -321,6 +324,7 @@ OverviewEntry _activeEntry(WalletInfo w, ActiveWalletFigures active) {
       ),
       identity: identity,
     ),
+    network: w.network,
   );
 }
 
@@ -365,6 +369,7 @@ OverviewEntry _lockedEntry(
         : identity == null
         ? 'Open to load'
         : 'Not loaded yet',
+    network: w.network,
   );
 }
 

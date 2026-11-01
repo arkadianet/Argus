@@ -148,6 +148,7 @@ OverviewData overviewData(WalletsOverviewModel model, {required bool hidden, Erg
       unlocked: e.state == OverviewRowState.unlocked,
       asOf: e.asOf == null ? null : formatSyncAge(now.subtract(e.asOf!)),
       address: e.address,
+      network: e.network,
     );
   }
 

@@ -65,7 +65,9 @@ String shorten(String value, {int head = 8, int tail = 6}) {
 }
 
 bool looksLikeErgoAddress(String value) {
-  return RegExp(r'^9[1-9A-HJ-NP-Za-km-z]{50,60}$').hasMatch(value.trim());
+  // Mainnet addresses start with 9, testnet ones with 3; both are valid
+  // shapes, and the active wallet's network decides which one is usable.
+  return RegExp(r'^[39][1-9A-HJ-NP-Za-km-z]{50,60}$').hasMatch(value.trim());
 }
 
 /// Shape check for a published stealth address: the `stealth` marker plus

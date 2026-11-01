@@ -5686,10 +5686,15 @@ fn wire__crate__api__wallet_create_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_mnemonic_phrase = <String>::sse_decode(&mut deserializer);
             let api_passphrase = <String>::sse_decode(&mut deserializer);
+            let api_network = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok = crate::api::wallet_create(api_mnemonic_phrase, api_passphrase)?;
+                    let output_ok = crate::api::wallet_create(
+                        api_mnemonic_phrase,
+                        api_passphrase,
+                        api_network,
+                    )?;
                     std::result::Result::Ok(output_ok)
                 })())
             }
@@ -5820,11 +5825,15 @@ fn wire__crate__api__wallet_restore_impl(
                 flutter_rust_bridge::for_generated::SseDeserializer::new(message);
             let api_encrypted_seed_json = <String>::sse_decode(&mut deserializer);
             let api_wrap_key = <Option<String>>::sse_decode(&mut deserializer);
+            let api_network = <String>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, String>((move || {
-                    let output_ok =
-                        crate::api::wallet_restore(api_encrypted_seed_json, api_wrap_key)?;
+                    let output_ok = crate::api::wallet_restore(
+                        api_encrypted_seed_json,
+                        api_wrap_key,
+                        api_network,
+                    )?;
                     std::result::Result::Ok(output_ok)
                 })())
             }

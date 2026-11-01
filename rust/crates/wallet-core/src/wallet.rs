@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use citadel_core::Network;
 use ergo_lib::wallet::ext_secret_key::ExtSecretKey;
 use ergo_lib::wallet::Wallet;
 use zeroize::Zeroize;
@@ -15,6 +16,8 @@ pub struct UnlockedWallet {
     pub(crate) wallet: Wallet,
     pub(crate) ext_secret_key: ExtSecretKey,
     pub(crate) max_index: u32,
+    /// Which chain this handle's base58 addresses are encoded for.
+    pub(crate) network: Network,
     /// How many stealth identities this session scans and spends with:
     /// indices `0..stealth_frontier`.
     ///
@@ -32,7 +35,11 @@ fn cache_address(unlocked: &mut UnlockedWallet, index: u32) -> Result<String, Co
     if let Some(addr) = unlocked.addresses_by_index.get(&index) {
         return Ok(addr.clone());
     }
-    let addr = derivation::derive_address_from_ext_secret_key(&unlocked.ext_secret_key, index)?;
+    let addr = derivation::derive_address_from_ext_secret_key_on(
+        unlocked.network,
+        &unlocked.ext_secret_key,
+        index,
+    )?;
     unlocked.addresses_by_index.insert(index, addr.clone());
     unlocked.index_by_address.insert(addr.clone(), index);
     Ok(addr)
@@ -48,30 +55,43 @@ fn recover<T>(result: std::sync::LockResult<T>) -> T {
 
 impl WalletHandle {
     pub fn create(mnemonic: MnemonicPhrase, passphrase: &str) -> Result<Self, CoreError> {
+        Self::create_on(Network::Mainnet, mnemonic, passphrase)
+    }
+
+    pub fn create_on(
+        network: Network,
+        mnemonic: MnemonicPhrase,
+        passphrase: &str,
+    ) -> Result<Self, CoreError> {
         let mut seed = mnemonic.to_seed(passphrase)?;
-        let handle = Self::from_seed(&seed)?;
+        let handle = Self::from_seed(network, &seed)?;
         seed.zeroize();
         Ok(handle)
     }
 
     pub fn restore_from_seed(seed_bytes: &[u8]) -> Result<Self, CoreError> {
+        Self::restore_from_seed_on(Network::Mainnet, seed_bytes)
+    }
+
+    pub fn restore_from_seed_on(network: Network, seed_bytes: &[u8]) -> Result<Self, CoreError> {
         if seed_bytes.len() != 64 {
             return Err(CoreError::Mnemonic("seed must be 64 bytes".into()));
         }
         let mut seed_arr = [0u8; 64];
         seed_arr.copy_from_slice(seed_bytes);
-        let handle = Self::from_seed(&seed_arr)?;
+        let handle = Self::from_seed(network, &seed_arr)?;
         seed_arr.zeroize();
         Ok(handle)
     }
 
-    fn from_seed(seed: &[u8; 64]) -> Result<Self, CoreError> {
+    fn from_seed(network: Network, seed: &[u8; 64]) -> Result<Self, CoreError> {
         let ext_secret_key =
             ExtSecretKey::derive_master(*seed).map_err(|e| CoreError::Derivation(e.to_string()))?;
         let mut unlocked = UnlockedWallet {
             wallet: Wallet::from_secrets(Vec::new()),
             ext_secret_key,
             max_index: PRELOAD_INDICES,
+            network,
             stealth_frontier: 1,
             addresses_by_index: HashMap::new(),
             index_by_address: HashMap::new(),
@@ -295,6 +315,26 @@ mod tests {
             .owns_address("9eatpGQdYNjTi5ZZLK7Bo7C3ms6oECPnxbQTRn6sDcBNLMYSCa8")
             .unwrap());
         assert!(!handle.owns_address("not-a-wallet-address").unwrap());
+    }
+
+    #[test]
+    fn testnet_create_derives_a_testnet_prefix_address() {
+        let phrase = MnemonicPhrase::parse(APPKIT).unwrap();
+        let mainnet = WalletHandle::create(phrase, "").unwrap();
+        let phrase = MnemonicPhrase::parse(APPKIT).unwrap();
+        let testnet = WalletHandle::create_on(Network::Testnet, phrase, "").unwrap();
+
+        let mainnet_addr = mainnet.derive_address(0).unwrap();
+        let testnet_addr = testnet.derive_address(0).unwrap();
+        assert!(testnet_addr.starts_with('3'));
+        assert!(mainnet_addr.starts_with('9'));
+        // Same EIP-3 key, only the base58 network prefix differs.
+        assert_eq!(
+            ergo_tx::address_to_ergo_tree(&testnet_addr).unwrap(),
+            ergo_tx::address_to_ergo_tree(&mainnet_addr).unwrap()
+        );
+        assert!(testnet.owns_address(&testnet_addr).unwrap());
+        assert!(!testnet.owns_address(&mainnet_addr).unwrap());
     }
 
     #[test]

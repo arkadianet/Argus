@@ -40,6 +40,7 @@ class CleanupApi extends RustLibApi {
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
     String? wrapKey,
+    required String network,
   }) async => BigInt.one;
   @override
   Future<void> crateApiWalletLock({required BigInt handleId}) async {}

@@ -1,4 +1,5 @@
 import '../../services/activity_classifier.dart';
+import '../../services/wallet_network.dart';
 import '../../services/address_holdings.dart';
 import '../../services/pending_balance.dart';
 import '../../services/pockets.dart';
@@ -128,6 +129,7 @@ class WalletSummary {
     this.asOf,
     this.address,
     this.pinnedIndex,
+    this.network = WalletNetwork.mainnet,
   });
 
   final WalletRef ref;
@@ -181,6 +183,7 @@ class WalletSummary {
 
   /// Set when [address] is a pinned address, shown as "#275".
   final int? pinnedIndex;
+  final WalletNetwork network;
 
   String get id => ref.id;
   WalletKind get kind => ref.kind;

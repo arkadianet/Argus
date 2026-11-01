@@ -29,8 +29,9 @@ void _presetTests() {
     expect(ergExplorerSite.token('t'), 'https://ergexplorer.com/token/t');
     expect(kadiaSite.token('t'), 'https://explorer.kadia.io/token/t');
   });
-  test('only SigmaSpace and Ergo Platform can be the API', () {
-    expect(explorerApiSites.map((s) => s.id), ['sigmaspace', 'ergoplatform']);
+  test('only SigmaSpace, Ergo Platform and its testnet can be the API', () {
+    expect(explorerApiSites.map((s) => s.id),
+        ['sigmaspace', 'ergoplatform', 'testnet-ergoplatform']);
   });
   test('a saved API maps to its own site, unknown ones to none', () {
     expect(explorerSiteForApi('https://api.sigmaspace.io'), sigmaSpaceSite);

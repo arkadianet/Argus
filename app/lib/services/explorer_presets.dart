@@ -69,11 +69,21 @@ const kadiaSite = ExplorerSite(
   tokenPath: '/token/',
 );
 
+const testnetErgoPlatformSite = ExplorerSite(
+  id: 'testnet-ergoplatform',
+  name: 'Ergo Platform Testnet',
+  web: 'https://testnet.ergoplatform.com',
+  txPath: '/en/transactions/',
+  tokenPath: '/en/token/',
+  api: 'https://api-testnet.ergoplatform.com',
+);
+
 const explorerSites = [
   sigmaSpaceSite,
   ergoPlatformSite,
   ergExplorerSite,
   kadiaSite,
+  testnetErgoPlatformSite,
 ];
 
 /// Sites that can also be the explorer API.

@@ -25,6 +25,7 @@ import 'stealth_service.dart';
 import 'wallet_sync_controller.dart';
 import 'secure_storage.dart';
 import 'wallet_database_service.dart';
+import 'wallet_network.dart';
 
 /// Metadata for a stored wallet.
 /// [wallets] in the order of [order] (wallet ids); any not listed keep
@@ -46,6 +47,10 @@ class WalletInfo {
   final String? address0;
   final int? pinnedAddressIndex;
 
+  /// The chain this wallet belongs to. Wallets stored before networks were
+  /// recorded are mainnet, which is what they were.
+  final WalletNetwork network;
+
   /// The pinned address itself, stored when pinning so a locked wallet can
   /// still show and query its primary address.
   final String? pinnedAddress;
@@ -57,6 +62,7 @@ class WalletInfo {
     required this.createdAt,
     this.address0,
     this.pinnedAddressIndex,
+    this.network = WalletNetwork.mainnet,
     this.pinnedAddress,
     this.isUnlocked = false,
   });
@@ -71,6 +77,7 @@ class WalletInfo {
         createdAt: createdAt,
         address0: address0,
         pinnedAddressIndex: pinnedAddressIndex,
+        network: network,
         pinnedAddress: pinnedAddress,
         isUnlocked: isUnlocked ?? this.isUnlocked,
       );
@@ -81,6 +88,7 @@ class WalletInfo {
         'createdAt': createdAt.toIso8601String(),
         'address0': address0,
         'pinnedAddressIndex': pinnedAddressIndex,
+        'network': network.wireName,
         'pinnedAddress': pinnedAddress,
       };
 
@@ -91,6 +99,7 @@ class WalletInfo {
             DateTime.now(),
         address0: json['address0'] as String?,
         pinnedAddressIndex: json['pinnedAddressIndex'] as int?,
+        network: WalletNetwork.fromWireName(json['network']),
         pinnedAddress: json['pinnedAddress'] as String?,
       );
 }
@@ -1593,6 +1602,11 @@ class WalletService with WidgetsBindingObserver {
   /// The wallet ID of the currently active wallet.
   String? get activeWalletId => _currentWalletId;
 
+  Future<WalletNetwork> walletNetwork(String? walletId) async {
+    if (walletId == null) return WalletNetwork.mainnet;
+    return (await _loadWalletMeta(walletId)).network;
+  }
+
   Future<String> generateMnemonic({int strength = 256}) async {
     return RustLib.instance.api.crateApiGenerateMnemonic(strength: strength);
   }
@@ -1605,6 +1619,7 @@ class WalletService with WidgetsBindingObserver {
     required String passphrase,
     required String pin,
     String? name,
+    WalletNetwork network = WalletNetwork.mainnet,
   }) async {
     final walletId = const Uuid().v4();
     final chosen = name?.trim();
@@ -1613,6 +1628,7 @@ class WalletService with WidgetsBindingObserver {
       phrase,
       passphrase: passphrase,
       walletId: walletId,
+      network: network,
     );
     try {
       final pinWrap = await wrapKeyWithPin(session.wrapKey, pin);
@@ -1626,6 +1642,7 @@ class WalletService with WidgetsBindingObserver {
         walletId,
         name: walletName,
         createdAt: DateTime.now().toUtc(),
+        network: network,
         address0: address0,
       );
     } catch (_) {
@@ -1640,10 +1657,13 @@ class WalletService with WidgetsBindingObserver {
     String mnemonic, {
     String passphrase = '',
     String? walletId,
+    WalletNetwork network = WalletNetwork.mainnet,
   }) async {
+    await networkController.useNetwork(network);
     final raw = await RustLib.instance.api.crateApiWalletCreate(
       mnemonicPhrase: mnemonic,
       passphrase: passphrase,
+      network: network.wireName,
     );
     final map = jsonDecode(raw) as Map<String, dynamic>;
     final id = walletId ?? const Uuid().v4();
@@ -1680,10 +1700,17 @@ class WalletService with WidgetsBindingObserver {
     String encryptedSeedJson, {
     String? wrapKey,
     String? walletId,
+    WalletNetwork? network,
   }) async {
+    final resolved = network ??
+        (walletId == null
+            ? WalletNetwork.mainnet
+            : (await _loadWalletMeta(walletId)).network);
+    await networkController.useNetwork(resolved);
     final raw = await RustLib.instance.api.crateApiWalletRestore(
       encryptedSeedJson: encryptedSeedJson,
       wrapKey: wrapKey,
+      network: resolved.wireName,
     );
     final id = walletId ?? const Uuid().v4();
     _setHandle(id, raw);
@@ -1763,7 +1790,12 @@ class WalletService with WidgetsBindingObserver {
       final meta = all[id];
       final info = meta != null
           ? WalletInfo.fromJson(meta)
-          : WalletInfo(walletId: id, name: 'Wallet', createdAt: DateTime.now());
+          : WalletInfo(
+              walletId: id,
+              name: 'Wallet',
+              createdAt: DateTime.now(),
+              network: WalletNetwork.mainnet,
+            );
       infos.add(info.copyWith(isUnlocked: _handles.containsKey(id)));
     }
     return orderWallets(infos, await walletOrder());
@@ -1804,6 +1836,7 @@ class WalletService with WidgetsBindingObserver {
     String walletId, {
     required String name,
     required DateTime createdAt,
+    WalletNetwork? network,
     String? address0,
     int? pinnedAddressIndex,
   }) async {
@@ -1811,6 +1844,7 @@ class WalletService with WidgetsBindingObserver {
       walletId,
       name: name,
       createdAt: createdAt,
+      network: network,
       address0: address0,
       pinnedAddressIndex: pinnedAddressIndex,
     );
@@ -3398,6 +3432,7 @@ class WalletService with WidgetsBindingObserver {
       walletId: walletId,
       name: 'Wallet',
       createdAt: DateTime.now(),
+      network: WalletNetwork.mainnet,
     );
   }
 
@@ -3417,6 +3452,7 @@ class WalletService with WidgetsBindingObserver {
     String walletId, {
     required String name,
     required DateTime createdAt,
+    WalletNetwork? network,
     String? address0,
     int? pinnedAddressIndex,
     String? pinnedAddress,
@@ -3430,6 +3466,10 @@ class WalletService with WidgetsBindingObserver {
       'createdAt': createdAt.toIso8601String(),
       'address0': address0,
       'pinnedAddressIndex': pinnedAddressIndex,
+      // A rename or pin preserves the chain; a new wallet states it.
+      'network': (network ??
+              WalletNetwork.fromWireName(existing is Map ? existing['network'] : null))
+          .wireName,
       // Keep a stored pinned address unless this write sets or clears it.
       'pinnedAddress': pinnedAddress ??
           ((pinnedAddressIndex ?? 0) > 0 && existing is Map ? existing['pinnedAddress'] : null),
