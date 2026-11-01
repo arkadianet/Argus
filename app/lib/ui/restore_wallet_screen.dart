@@ -5,6 +5,7 @@ import '../bridge/argus_error.dart';
 import '../services/network_controller.dart';
 import '../services/privacy_service.dart';
 import '../services/secure_storage.dart';
+import '../services/wallet_network.dart';
 import '../services/wallet_service.dart';
 import '../theme/argus_theme.dart';
 import 'create_wallet_screen.dart';
@@ -72,6 +73,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
   /// What Continue decided; used by Restore.
   bool _useLegacy = false;
   String? _derivationNotice;
+  WalletNetwork _network = WalletNetwork.mainnet;
 
   @override
   void initState() {
@@ -138,7 +140,8 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
       probe = await widget.gateway.probe(
         phrase: check.phrase,
         passphrase: _passCtrl.text,
-        queryNode: !_forceLegacy,
+        // The probe derives and looks up mainnet addresses only.
+        queryNode: !_forceLegacy && !_network.isTestnet,
       );
     } catch (_) {
       // Only the node can fail here: the phrase already passed. The
@@ -174,6 +177,7 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
         pin: _pinCtrl.text,
         name: _nameCtrl.text,
         legacyDerivation: _useLegacy,
+        network: _network,
       );
       if (!mounted) return null;
       await offerBiometricUnlock(context, walletId: walletId, pin: _pinCtrl.text);
@@ -317,6 +321,42 @@ class _RestoreWalletScreenState extends State<RestoreWalletScreen> {
           autocorrect: false,
           enableIMEPersonalizedLearning: false,
         ),
+        const SizedBox(height: 20),
+        Text('Network', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 8),
+        SegmentedButton<WalletNetwork>(
+          segments: const [
+            ButtonSegment(
+              value: WalletNetwork.mainnet,
+              label: Text('Mainnet'),
+              icon: Icon(Icons.public),
+            ),
+            ButtonSegment(
+              value: WalletNetwork.testnet,
+              label: Text('Testnet'),
+              icon: Icon(Icons.science_outlined),
+            ),
+          ],
+          selected: {_network},
+          onSelectionChanged: (selection) =>
+              setState(() => _network = selection.first),
+        ),
+        if (_network.isTestnet) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.errorContainer,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              testnetWarning,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onErrorContainer,
+              ),
+            ),
+          ),
+        ],
         const SizedBox(height: 8),
         Theme(
           data: theme.copyWith(dividerColor: Colors.transparent),

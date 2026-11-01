@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../bridge/frb_generated.dart';
 import 'explorer_presets.dart';
+import 'wallet_network.dart';
 
 class NodeEntry {
   String url;
@@ -141,12 +142,22 @@ class NetworkController extends ChangeNotifier {
     'https://node.sigmaspace.io',
   ];
   static const defaultExplorer = 'https://api.sigmaspace.io';
+  static const testnetDefaultNodes = [
+    'http://176.9.15.237:9052',
+  ];
+  static const testnetDefaultExplorer = 'https://api-testnet.ergoplatform.com';
   static const _nodesKey = 'argus_nodes';
   static const _explorerKey = 'argus_explorer';
   static const _explorerSiteKey = 'argus_explorer_site';
   static const _explorerWebKey = 'argus_explorer_web';
   static const _lastGoodKey = 'argus_last_good_node';
   static const _preferredKey = 'argus_preferred_node';
+
+  /// Which chain the active profile belongs to.
+  WalletNetwork activeNetwork = WalletNetwork.mainnet;
+
+  /// Cached state for profiles that are not currently displayed.
+  final Map<WalletNetwork, _NetworkProfile> _profiles = {};
 
   /// Node the user chose in Settings; null means automatic selection.
   String? preferredUrl;
@@ -271,6 +282,8 @@ class NetworkController extends ChangeNotifier {
     lastGood = prefs.getString(_lastGoodKey);
     preferredUrl = prefs.getString(_preferredKey);
     await _loadFiatCurrency();
+    _profiles[WalletNetwork.testnet] =
+        await _loadProfile(WalletNetwork.testnet);
     try {
       await apply();
     } catch (_) {}
@@ -279,22 +292,82 @@ class NetworkController extends ChangeNotifier {
 
   Future<void> persist() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_nodesKey, jsonEncode(nodes.map((n) => n.toJson()).toList()));
-    await prefs.setString(_explorerKey, explorer);
-    await prefs.setString(_explorerSiteKey, explorerSiteId);
+    String k(String base) => _keyFor(activeNetwork, base);
+    await prefs.setString(
+        k(_nodesKey), jsonEncode(nodes.map((n) => n.toJson()).toList()));
+    await prefs.setString(k(_explorerKey), explorer);
+    await prefs.setString(k(_explorerSiteKey), explorerSiteId);
     if (explorerWeb == null) {
-      await prefs.remove(_explorerWebKey);
+      await prefs.remove(k(_explorerWebKey));
     } else {
-      await prefs.setString(_explorerWebKey, explorerWeb!);
+      await prefs.setString(k(_explorerWebKey), explorerWeb!);
     }
     if (lastGood != null && lastGood!.isNotEmpty) {
-      await prefs.setString(_lastGoodKey, lastGood!);
+      await prefs.setString(k(_lastGoodKey), lastGood!);
+    } else {
+      await prefs.remove(k(_lastGoodKey));
     }
     if (preferredUrl == null) {
-      await prefs.remove(_preferredKey);
+      await prefs.remove(k(_preferredKey));
     } else {
-      await prefs.setString(_preferredKey, preferredUrl!);
+      await prefs.setString(k(_preferredKey), preferredUrl!);
     }
+  }
+
+  String _keyFor(WalletNetwork network, String base) =>
+      network == WalletNetwork.mainnet ? base : '${base}_testnet';
+
+  Future<_NetworkProfile> _loadProfile(WalletNetwork network) async {
+    final prefs = await SharedPreferences.getInstance();
+    String k(String base) => _keyFor(network, base);
+    final raw = prefs.getString(k(_nodesKey));
+    final nodes = <NodeEntry>[];
+    if (raw != null) {
+      try {
+        final list = jsonDecode(raw) as List;
+        nodes.addAll(list
+            .whereType<Map>()
+            .map((e) => NodeEntry.fromJson(Map<String, dynamic>.from(e)))
+            .where((e) => e.url.isNotEmpty));
+      } catch (_) {}
+    }
+    if (nodes.isEmpty) {
+      final defaults = network == WalletNetwork.mainnet
+          ? defaultNodes
+          : testnetDefaultNodes;
+      nodes.addAll([for (final url in defaults) NodeEntry(url: url)]);
+    }
+    final explorer = prefs.getString(k(_explorerKey)) ??
+        (network == WalletNetwork.mainnet
+            ? defaultExplorer
+            : testnetDefaultExplorer);
+    final explorerWeb = prefs.getString(k(_explorerWebKey));
+    final explorerSiteId = prefs.getString(k(_explorerSiteKey)) ??
+        (network == WalletNetwork.testnet
+            ? testnetErgoPlatformSite.id
+            : (explorerSiteForApi(explorer)?.id ?? customExplorerSiteId));
+    return _NetworkProfile(
+      nodes: nodes,
+      explorer: explorer,
+      explorerSiteId: explorerSiteId,
+      explorerWeb: explorerWeb,
+      lastGood: prefs.getString(k(_lastGoodKey)),
+      preferredUrl: prefs.getString(k(_preferredKey)),
+    );
+  }
+
+  Future<void> useNetwork(WalletNetwork network) async {
+    if (network == activeNetwork) return;
+    _profiles[activeNetwork] = _NetworkProfile.fromController(this);
+    activeNetwork = network;
+    final profile = _profiles[network] ?? await _loadProfile(network);
+    _profiles[network] = profile;
+    profile.applyTo(this);
+    _appliedConfiguration = null;
+    notifyListeners();
+    try {
+      await probe();
+    } catch (_) {}
   }
 
   Future<void> setPreferredNode(String? url) async {
@@ -389,7 +462,7 @@ class NetworkController extends ChangeNotifier {
       final urls = orderedUrls;
       if (urls.isEmpty) return;
       final explorerUrl = explorer;
-      final configuration = jsonEncode([urls, explorerUrl]);
+      final configuration = jsonEncode([activeNetwork.wireName, urls, explorerUrl]);
       if (configuration == _appliedConfiguration) return;
       final operation = Future<void>.sync(() => _configure(urls, explorerUrl));
       _configurationInFlight = operation;
@@ -430,7 +503,13 @@ class NetworkController extends ChangeNotifier {
       probing = false;
       notifyListeners();
     }
-    await refreshPrice();
+    if (activeNetwork.isTestnet) {
+      fiatPerErg = null;
+      usdPerErg = null;
+      notifyListeners();
+    } else {
+      await refreshPrice();
+    }
   }
 
   Future<NodeProbe> probeNodeDetails(String url) async {
@@ -445,6 +524,14 @@ class NetworkController extends ChangeNotifier {
       final info = jsonDecode(infoRes.body);
       if (info is! Map) {
         return NodeProbe(url: clean, ok: false, error: 'bad /info');
+      }
+      final reportedNetwork = info['network']?.toString();
+      if (reportedNetwork != null && reportedNetwork != activeNetwork.wireName) {
+        return NodeProbe(
+          url: clean,
+          ok: false,
+          error: 'wrong network: $reportedNetwork',
+        );
       }
       final chain = chainHeightFromInfo(info);
       bool? extraIndex;
@@ -483,6 +570,12 @@ class NetworkController extends ChangeNotifier {
   Future<void> Function({bool force})? priceRefresher;
 
   Future<void> refreshPrice({bool force = false}) async {
+    if (activeNetwork.isTestnet) {
+      fiatPerErg = null;
+      usdPerErg = null;
+      notifyListeners();
+      return;
+    }
     final r = priceRefresher;
     if (r == null) return;
     try {
@@ -491,6 +584,12 @@ class NetworkController extends ChangeNotifier {
   }
 
   void setErgRate({required double? fiatPerErg, required double? usdPerErg}) {
+    if (activeNetwork.isTestnet) {
+      this.fiatPerErg = null;
+      this.usdPerErg = null;
+      notifyListeners();
+      return;
+    }
     this.fiatPerErg = fiatPerErg;
     this.usdPerErg = usdPerErg;
     notifyListeners();
@@ -505,8 +604,8 @@ class NetworkController extends ChangeNotifier {
     return '≈ $fiatSymbol${v.toStringAsFixed(digits)}';
   }
 
-  Future<String?> addNode(String url) async {
-    final clean = normalizeNodeUrl(url);
+  Future<String?> addNode(String url, {bool allowHttp = false}) async {
+    final clean = normalizeNodeUrl(url, allowHttp: allowHttp || activeNetwork.isTestnet);
     if (clean == null) return 'Enter https://host or http://ip:port';
     if (nodes.any((n) => n.url == clean)) return 'Node already added';
     nodes.add(NodeEntry(url: clean));
@@ -607,14 +706,14 @@ String explorerTokenUrl(String explorer, String tokenId) => explorerTokenLink(
 /// Explicit `http://` is accepted only for loopback/LAN hosts: Dart's
 /// dart:io HTTP client bypasses the platform cleartext policy, so TLS is
 /// enforced here for anything reachable beyond the local network.
-String? normalizeNodeUrl(String raw) {
+String? normalizeNodeUrl(String raw, {bool allowHttp = false}) {
   var clean = raw.trim().replaceAll(RegExp(r'/$'), '');
   if (clean.isEmpty) return null;
   if (!clean.contains('://')) clean = 'https://$clean';
   if (!isAbsoluteHttpUrl(clean)) return null;
   final uri = Uri.tryParse(clean);
   if (uri == null) return null;
-  if (uri.scheme == 'http' && !isLocalNetworkHost(uri.host)) return null;
+  if (uri.scheme == 'http' && !(allowHttp || isLocalNetworkHost(uri.host))) return null;
   return clean;
 }
 
@@ -630,6 +729,42 @@ bool isLocalNetworkHost(String host) {
     if (n >= 16 && n <= 31) return true;
   }
   return false;
+}
+
+class _NetworkProfile {
+  _NetworkProfile({
+    required this.nodes,
+    required this.explorer,
+    required this.explorerSiteId,
+    required this.explorerWeb,
+    required this.lastGood,
+    required this.preferredUrl,
+  });
+
+  final List<NodeEntry> nodes;
+  final String explorer;
+  final String explorerSiteId;
+  final String? explorerWeb;
+  final String? lastGood;
+  final String? preferredUrl;
+
+  factory _NetworkProfile.fromController(NetworkController c) => _NetworkProfile(
+        nodes: [for (final n in c.nodes) NodeEntry(url: n.url, enabled: n.enabled)],
+        explorer: c.explorer,
+        explorerSiteId: c.explorerSiteId,
+        explorerWeb: c.explorerWeb,
+        lastGood: c.lastGood,
+        preferredUrl: c.preferredUrl,
+      );
+
+  void applyTo(NetworkController c) {
+    c.nodes = [for (final n in nodes) NodeEntry(url: n.url, enabled: n.enabled)];
+    c.explorer = explorer;
+    c.explorerSiteId = explorerSiteId;
+    c.explorerWeb = explorerWeb;
+    c.lastGood = lastGood;
+    c.preferredUrl = preferredUrl;
+  }
 }
 
 final networkController = NetworkController();

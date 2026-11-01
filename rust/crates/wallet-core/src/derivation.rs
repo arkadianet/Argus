@@ -1,3 +1,4 @@
+use citadel_core::Network;
 use ergo_lib::ergotree_ir::chain::address::{Address, NetworkAddress, NetworkPrefix};
 use ergo_lib::ergotree_interpreter::sigma_protocol::wscalar::Wscalar;
 use ergo_lib::wallet::derivation_path::{DerivationPath, DerivationPathError};
@@ -7,6 +8,13 @@ use sha2::{Digest, Sha512};
 use zeroize::Zeroize;
 
 use crate::CoreError;
+
+pub fn network_prefix(network: Network) -> NetworkPrefix {
+    match network {
+        Network::Mainnet => NetworkPrefix::Mainnet,
+        Network::Testnet => NetworkPrefix::Testnet,
+    }
+}
 
 pub const ACCOUNT_PATH: &str = "m/44'/429'/0'/0";
 
@@ -268,12 +276,28 @@ pub fn derive_child(ext_sk: &ExtSecretKey, index: u32) -> Result<ExtSecretKey, C
 }
 
 pub fn derive_address_from_seed(seed: [u8; 64], index: u32) -> Result<String, CoreError> {
+    derive_address_from_seed_on(Network::Mainnet, seed, index)
+}
+
+pub fn derive_address_from_seed_on(
+    network: Network,
+    seed: [u8; 64],
+    index: u32,
+) -> Result<String, CoreError> {
     let root =
         ExtSecretKey::derive_master(seed).map_err(|e| CoreError::Derivation(e.to_string()))?;
-    derive_address_from_ext_secret_key(&root, index)
+    derive_address_from_ext_secret_key_on(network, &root, index)
 }
 
 pub fn derive_address_from_ext_secret_key(
+    ext_sk: &ExtSecretKey,
+    index: u32,
+) -> Result<String, CoreError> {
+    derive_address_from_ext_secret_key_on(Network::Mainnet, ext_sk, index)
+}
+
+pub fn derive_address_from_ext_secret_key_on(
+    network: Network,
     ext_sk: &ExtSecretKey,
     index: u32,
 ) -> Result<String, CoreError> {
@@ -282,7 +306,7 @@ pub fn derive_address_from_ext_secret_key(
         .public_key()
         .map_err(|e| CoreError::Derivation(e.to_string()))?;
     let address: Address = ext_pub_key.into();
-    Ok(NetworkAddress::new(NetworkPrefix::Mainnet, &address).to_base58())
+    Ok(NetworkAddress::new(network_prefix(network), &address).to_base58())
 }
 
 pub fn derive_address(

@@ -19,6 +19,7 @@ import '../services/secure_storage.dart';
 import '../services/session_lock.dart';
 import '../services/sigmafi_service.dart';
 import '../services/stealth_service.dart';
+import '../services/wallet_network.dart';
 import '../services/wallet_service.dart';
 import '../services/wallet_sync_controller.dart';
 import '../services/watch_account_service.dart';
@@ -101,6 +102,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   /// ledger belong to. Null until a seed wallet is opened.
   String? _walletId;
   bool _walletUnlocked = false;
+  WalletNetwork _activeNetwork = WalletNetwork.mainnet;
 
   /// Unlock methods of [_methodsFor]; stale until it equals [_walletId].
   String? _methodsFor;
@@ -586,6 +588,7 @@ class _DashboardScreenState extends State<DashboardScreen>
 
   void _resetLocked() {
     _walletUnlocked = false;
+    _activeNetwork = WalletNetwork.mainnet;
     _incoming.reset();
     _tab = 0;
     _visitedTabs
@@ -641,6 +644,8 @@ class _DashboardScreenState extends State<DashboardScreen>
     }
     final walletId = walletService.activeWalletId;
     if (walletId == null || walletId != _walletId) return;
+    final network = await walletService.walletNetwork(walletId);
+    if (mounted) setState(() => _activeNetwork = network);
     _incoming.reset();
     stealthService.reset();
     mixService.reset();
@@ -1157,15 +1162,36 @@ class _DashboardScreenState extends State<DashboardScreen>
             ),
           ],
         ],
-        body: ListenableBuilder(
-          listenable: Listenable.merge([addressLabelService, privacyService]),
-          builder: (context, _) => WalletViewBoundary(
-            controller: _sync,
-            walletId: walletId,
-            unlocked: unlocked,
-            ledger: (_) => _tabs(walletId),
-            gate: (_) => _gate(walletId, info),
-          ),
+        body: Column(
+          children: [
+            if (_activeNetwork.isTestnet)
+              Container(
+                width: double.infinity,
+                color: Colors.orange.shade700,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: const Text(
+                  'TESTNET — funds have no value',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            Expanded(
+              child: ListenableBuilder(
+                listenable: Listenable.merge([addressLabelService, privacyService]),
+                builder: (context, _) => WalletViewBoundary(
+                  controller: _sync,
+                  walletId: walletId,
+                  unlocked: unlocked,
+                  ledger: (_) => _tabs(walletId),
+                  gate: (_) => _gate(walletId, info),
+                ),
+              ),
+            ),
+          ],
         ),
         navBar: owns
             ? ListenableBuilder(

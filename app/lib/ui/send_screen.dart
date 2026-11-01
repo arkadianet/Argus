@@ -305,9 +305,14 @@ class _SendScreenState extends State<SendScreen> with TxReceiptOwner {
         : [if (args.senderAddress.isNotEmpty) args.senderAddress];
   }
 
-  bool get _recipientValid =>
-      _recipientCtrl.text.trim().isNotEmpty &&
-      looksLikeRecipient(_recipientCtrl.text.trim());
+  bool get _recipientValid {
+    final addr = _recipientCtrl.text.trim();
+    if (addr.isEmpty || !looksLikeRecipient(addr)) return false;
+    // A mainnet wallet may not send to a testnet address and vice versa.
+    final isTestnetAddress = addr.startsWith('3');
+    if (isTestnetAddress != networkController.activeNetwork.isTestnet) return false;
+    return true;
+  }
 
   /// True when the typed recipient is a published stealth address, so the
   /// form can explain that a one-time address is derived at send time.

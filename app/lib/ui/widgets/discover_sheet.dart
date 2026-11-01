@@ -12,6 +12,27 @@ enum DiscoverFeature { dexy, ageusd, spectrum, liquidity, duckpools, sigmafi, ro
 /// explainer but appears on no card and in no list.
 bool discoverAvailable(DiscoverFeature f, {bool dexy = dexyEnabled}) => f != DiscoverFeature.dexy || dexy;
 
+/// Features whose protocols only exist on mainnet. On a testnet wallet they
+/// are not shown at all: there is no point offering a swap or a loan against
+/// tokens that do not exist there.
+const mainnetOnlyDiscoverFeatures = <DiscoverFeature>{
+  DiscoverFeature.dexy,
+  DiscoverFeature.ageusd,
+  DiscoverFeature.spectrum,
+  DiscoverFeature.liquidity,
+  DiscoverFeature.duckpools,
+  DiscoverFeature.sigmafi,
+  DiscoverFeature.rosen,
+  DiscoverFeature.mix,
+  DiscoverFeature.stakes,
+  DiscoverFeature.arbitrage,
+};
+
+/// Whether [f] should be listed for a wallet on [testnet].
+bool discoverAvailableOn(DiscoverFeature f, {required bool testnet}) =>
+    discoverAvailable(f) &&
+    !(testnet && mainnetOnlyDiscoverFeatures.contains(f));
+
 /// The protocols the Discover tab lists, in its order.
 const discoverProtocols = [
   DiscoverFeature.dexy,

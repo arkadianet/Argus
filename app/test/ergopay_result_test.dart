@@ -26,6 +26,7 @@ class ErgoPayApi extends RustLibApi {
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
     String? wrapKey,
+    required String network,
   }) async => BigInt.one;
 
   @override

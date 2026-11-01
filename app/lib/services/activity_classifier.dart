@@ -52,11 +52,13 @@ enum ActivityCategory {
   contract,
 }
 
-/// Mainnet P2PK addresses are 51 base58 characters starting with 9; anything
-/// longer is a script (pool, bank, dApp contract).
+/// A plain P2PK address is 51 base58 characters starting with 9 on mainnet
+/// or 3 on testnet; anything else (a script, a stealth address) is treated
+/// as a contract address.
 bool isContractAddress(String? address) {
   if (address == null || address.isEmpty) return false;
-  return !(address.startsWith('9') && address.length == 51);
+  return !((address.startsWith('9') || address.startsWith('3')) &&
+      address.length == 51);
 }
 
 BigInt _big(Object? v) => switch (v) {

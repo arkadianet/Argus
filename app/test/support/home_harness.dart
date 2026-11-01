@@ -46,6 +46,7 @@ class HomeApi extends RustLibApi {
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
     String? wrapKey,
+    required String network,
   }) async {
     restored.add(wrapKey);
     return BigInt.from(++handles);

@@ -13,6 +13,7 @@ import '../../services/privacy_service.dart';
 import '../../services/sigmafi_service.dart';
 import '../../services/sigmausd_service.dart';
 import '../../services/token_pricer.dart';
+import '../../services/wallet_network.dart';
 import '../../services/wallet_service.dart';
 import '../../services/wallet_sync_controller.dart';
 import '../swap_hub_screen.dart';
@@ -217,6 +218,7 @@ class WalletLedger extends StatelessWidget {
         unlocked: true,
         address: identity,
         pinnedIndex: w?.pinnedAddressIndex,
+        network: w?.network ?? WalletNetwork.mainnet,
       ),
       currency: homeCurrency(),
       status: NetworkStatus(
@@ -278,9 +280,11 @@ class WalletDiscover extends StatelessWidget {
                   mixService.enabled && active > 0 ? '$active ${active == 1 ? 'mix' : 'mixes'} in the pool.' : null,
                 _ => null,
               };
+        final testnet = networkController.activeNetwork.isTestnet;
         List<DiscoverCardData> cards(List<DiscoverFeature> features) => [
               for (final f in features)
-                if (discoverAvailable(f)) DiscoverCardData(f, subtitle: position(f)),
+                if (discoverAvailableOn(f, testnet: testnet))
+                  DiscoverCardData(f, subtitle: position(f)),
             ];
         return DiscoverView(onExplain: onExplain, protocols: cards(discoverProtocols), tools: cards(discoverTools));
       },

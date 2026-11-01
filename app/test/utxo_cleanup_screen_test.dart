@@ -40,6 +40,7 @@ class CleanupApi extends RustLibApi {
   Future<BigInt> crateApiWalletRestore({
     required String encryptedSeedJson,
     String? wrapKey,
+    required String network,
   }) async => BigInt.one;
   @override
   Future<void> crateApiWalletLock({required BigInt handleId}) async {}
@@ -324,11 +325,16 @@ void main() {
       ('Miner fee', '0.0011 ERG'),
       ('Total value in', '42.001 ERG'),
       ('Value after fees', '41.9999 ERG'),
-      ('New box rent', '0.13875 ERG, due ~Oct 2030'),
     ]) {
       expect(find.text(label), findsOneWidget, reason: label);
       expect(find.text(value), findsWidgets, reason: label);
     }
+    // The due month moves with today's date; four years out is what holds.
+    expect(find.text('New box rent'), findsOneWidget);
+    expect(
+      find.textContaining(RegExp('^0\\.13875 ERG, due ~[A-Z][a-z]{2} (${DateTime.now().year + 4}|${DateTime.now().year + 5})\$')),
+      findsWidgets,
+    );
     await tester.ensureVisible(find.text('Sign & broadcast'));
     await tester.tap(find.text('Sign & broadcast'));
     await tester.pump(const Duration(seconds: 2));
